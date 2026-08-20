@@ -1,0 +1,1608 @@
+{
+  "schema": "sentia.tiles.board-map",
+  "schema_version": 1,
+  "hardware_revision": "TILES PRE-PRODUCTION Rev A0 / production export 2026-08-01",
+  "logical_numbering": "Pads 1-24 are row-major, left-to-right, top-to-bottom in a 6x4 grid.",
+  "sources": {
+    "motherboard_bom": "/Users/matiascevallos/Downloads/BOM_Board1_PCB1_2026-08-01.xlsx",
+    "motherboard_pnp": "/Users/matiascevallos/Downloads/PickAndPlace_PCB1_2026_08_01.xlsx",
+    "motherboard_flying_probe": ".tmp_audit/main_gerber_0801/FlyingProbeTesting.json",
+    "daughterboard_flying_probe": ".tmp_audit/daughter_gerber_0801/FlyingProbeTesting.json",
+    "flex_archive": "/Users/matiascevallos/Downloads/flex.zip"
+  },
+  "controller": {
+    "module": "Raspberry Pi Pico 2",
+    "recommended_sdk": "Raspberry Pi Pico SDK C/C++ with TinyUSB",
+    "gpio": [
+      {
+        "gpio": 0,
+        "pico_pin": 1,
+        "net": "NET_57",
+        "role": "DIN MIDI OUT line A",
+        "direction": "output",
+        "boot": "drive high before enabling MIDI OUT"
+      },
+      {
+        "gpio": 1,
+        "pico_pin": 2,
+        "net": "MIDI IN RX",
+        "role": "DIN MIDI IN",
+        "direction": "input",
+        "boot": "input"
+      },
+      {
+        "gpio": 2,
+        "pico_pin": 4,
+        "net": "NET_58",
+        "role": "DIN MIDI OUT line B",
+        "direction": "output",
+        "boot": "drive high before enabling MIDI OUT"
+      },
+      {
+        "gpio": 3,
+        "pico_pin": 5,
+        "net": "NET_50",
+        "role": "pad LED serialized data",
+        "direction": "output",
+        "boot": "low"
+      },
+      {
+        "gpio": 4,
+        "pico_pin": 6,
+        "net": "I2C0_SDA",
+        "role": "I2C0 Hall muxes + touch",
+        "direction": "i2c"
+      },
+      {
+        "gpio": 5,
+        "pico_pin": 7,
+        "net": "I2C0_SCL",
+        "role": "I2C0 Hall muxes + touch",
+        "direction": "i2c"
+      },
+      {
+        "gpio": 6,
+        "pico_pin": 9,
+        "net": "I2C1_SDA",
+        "role": "I2C1 haptics + LED mux control",
+        "direction": "i2c"
+      },
+      {
+        "gpio": 7,
+        "pico_pin": 10,
+        "net": "I2C1_SCL",
+        "role": "I2C1 haptics + LED mux control",
+        "direction": "i2c"
+      },
+      {
+        "gpio": 8,
+        "pico_pin": 11,
+        "net": "UNDERGLOW",
+        "role": "four-LED underglow chain",
+        "direction": "output",
+        "boot": "low"
+      },
+      {
+        "gpio": 9,
+        "pico_pin": 12,
+        "net": "NET_59",
+        "role": "unused",
+        "direction": "input",
+        "boot": "input/no-pull"
+      },
+      {
+        "gpio": 10,
+        "pico_pin": 14,
+        "net": "SCLK",
+        "role": "DAC80502 SPI clock",
+        "direction": "spi"
+      },
+      {
+        "gpio": 11,
+        "pico_pin": 15,
+        "net": "SDIN",
+        "role": "DAC80502 SPI MOSI",
+        "direction": "spi"
+      },
+      {
+        "gpio": 12,
+        "pico_pin": 16,
+        "net": "GATE_PWM",
+        "role": "gate output driver",
+        "direction": "output",
+        "boot": "low"
+      },
+      {
+        "gpio": 13,
+        "pico_pin": 17,
+        "net": "SYNC",
+        "role": "DAC80502 active-low chip select",
+        "direction": "output",
+        "boot": "high"
+      },
+      {
+        "gpio": 14,
+        "pico_pin": 19,
+        "net": "NET_56",
+        "role": "SW6 circle",
+        "direction": "input",
+        "active": "active low"
+      },
+      {
+        "gpio": 15,
+        "pico_pin": 20,
+        "net": "NET_55",
+        "role": "SW5 square",
+        "direction": "input",
+        "active": "active low"
+      },
+      {
+        "gpio": 16,
+        "pico_pin": 21,
+        "net": "NET_53",
+        "role": "SW3 triangle",
+        "direction": "input",
+        "active": "active low"
+      },
+      {
+        "gpio": 17,
+        "pico_pin": 22,
+        "net": "NET_54",
+        "role": "SW4 diamond",
+        "direction": "input",
+        "active": "active low"
+      },
+      {
+        "gpio": 18,
+        "pico_pin": 24,
+        "net": "NET_52",
+        "role": "SW2 right capsule",
+        "direction": "input",
+        "active": "active low"
+      },
+      {
+        "gpio": 19,
+        "pico_pin": 25,
+        "net": "NET_51",
+        "role": "SW1 left capsule",
+        "direction": "input",
+        "active": "active low"
+      },
+      {
+        "gpio": 20,
+        "pico_pin": 26,
+        "net": "NET_25",
+        "role": "PCA9685 A5 address strap",
+        "direction": "input",
+        "boot": "input/high-Z",
+        "critical": "Never drive this GPIO. It is a hardware address strap pulled to 3V3."
+      },
+      {
+        "gpio": 21,
+        "pico_pin": 27,
+        "net": "TOUCH_IRQ",
+        "role": "shared MPR121 active-low IRQ",
+        "direction": "input",
+        "active": "active low"
+      },
+      {
+        "gpio": 22,
+        "pico_pin": 29,
+        "net": "GP22",
+        "role": "TPS2121 ST power-source status",
+        "direction": "input",
+        "active": "low means external IN2 selected"
+      },
+      {
+        "gpio": 26,
+        "pico_pin": 31,
+        "net": "PEDAL_ADC",
+        "role": "pedal analog input ADC0",
+        "direction": "adc"
+      },
+      {
+        "gpio": 27,
+        "pico_pin": 32,
+        "net": "NET_61",
+        "role": "unused",
+        "direction": "input",
+        "boot": "input/no-pull"
+      },
+      {
+        "gpio": 28,
+        "pico_pin": 34,
+        "net": "NET_62",
+        "role": "unused",
+        "direction": "input",
+        "boot": "input/no-pull"
+      }
+    ],
+    "module_pins": {
+      "VSYS_pin_39": "+5V selected by TPS2121",
+      "VBUS_pin_40": "not connected on motherboard",
+      "3V3_OUT_pin_36": "3V3_OUT logic/sensor rail; recommended external load below 300mA",
+      "ADC_VREF_pin_35": "not connected externally; use Pico onboard filtered ADC reference",
+      "SWDIO_pin_41": "debug pad NET_66",
+      "SWCLK_pin_43": "debug pad NET_67",
+      "TP2": "USB D-",
+      "TP3": "USB D+",
+      "TP1": "unused Pico USB ground test pad; board common ground is present elsewhere"
+    }
+  },
+  "major_components": {
+    "controller": [
+      {
+        "quantity": 1,
+        "part": "Raspberry Pi Pico 2",
+        "role": "main MCU / USB device"
+      }
+    ],
+    "sensing": [
+      {
+        "quantity": 24,
+        "part": "TMAG5273A1QDBVR",
+        "role": "3-axis Hall sensors"
+      },
+      {
+        "quantity": 3,
+        "part": "TCA9548APWR",
+        "role": "Hall I2C channel muxes"
+      },
+      {
+        "quantity": 2,
+        "part": "MPR121QR2",
+        "role": "24 capacitive electrodes"
+      }
+    ],
+    "outputs": [
+      {
+        "quantity": 2,
+        "part": "PCA9685PW,118",
+        "role": "24 motor PWM + 6 function-button LED PWM channels"
+      },
+      {
+        "quantity": 24,
+        "part": "AO3400A",
+        "role": "motor low-side switching"
+      },
+      {
+        "quantity": 1,
+        "part": "TCA9554PWR",
+        "role": "pad-LED mux selector/enable control"
+      },
+      {
+        "quantity": 3,
+        "part": "CD74HCT4051M96",
+        "role": "route serialized data to one of 24 pad LEDs"
+      },
+      {
+        "quantity": 2,
+        "part": "74AHCT1G126GV",
+        "role": "5V level buffers for pad LEDs and underglow"
+      },
+      {
+        "quantity": 28,
+        "part": "SK6805-EC15",
+        "role": "24 daughterboard pixels + 4 motherboard underglow pixels"
+      }
+    ],
+    "power": [
+      {
+        "quantity": 1,
+        "part": "TPS259470ARPWR",
+        "role": "USB eFuse/OV protection"
+      },
+      {
+        "quantity": 1,
+        "part": "TPS2121RUXR",
+        "role": "USB/external 5V power mux"
+      },
+      {
+        "quantity": 2,
+        "part": "TPS563201DDCR",
+        "role": "12V-to-5V and 5V-to-motor-rail bucks"
+      }
+    ],
+    "interfaces": [
+      {
+        "quantity": 1,
+        "part": "DAC80502DRXR",
+        "role": "dual 16-bit CV DAC"
+      },
+      {
+        "quantity": 1,
+        "part": "OPA2990IDR",
+        "role": "dual CV output amplifier"
+      },
+      {
+        "quantity": 1,
+        "part": "H11L1M",
+        "role": "DIN MIDI IN isolation"
+      },
+      {
+        "quantity": 1,
+        "part": "74AHCT2G125DC,125",
+        "role": "polarity-selectable DIN MIDI OUT buffer"
+      },
+      {
+        "quantity": 1,
+        "part": "TPD2EUSB30DRTR",
+        "role": "USB D+/D- ESD protection"
+      }
+    ],
+    "interconnect": [
+      {
+        "quantity": 48,
+        "part": "FH34SRJ-6S-0.5SH(50)",
+        "role": "24 motherboard + 24 daughterboard flex connectors"
+      }
+    ]
+  },
+  "i2c": {
+    "I2C0": {
+      "gpio_sda": 4,
+      "gpio_scl": 5,
+      "frequency_hz": 400000,
+      "devices": {
+        "hall_muxes": [
+          {
+            "ref": "U3",
+            "part": "TCA9548APWR",
+            "address": 112
+          },
+          {
+            "ref": "U4",
+            "part": "TCA9548APWR",
+            "address": 113
+          },
+          {
+            "ref": "U5",
+            "part": "TCA9548APWR",
+            "address": 114
+          }
+        ],
+        "touch": [
+          {
+            "ref": "U_TOUCH1",
+            "part": "MPR121QR2",
+            "address": 90
+          },
+          {
+            "ref": "U_TOUCH2",
+            "part": "MPR121QR2",
+            "address": 91
+          }
+        ]
+      },
+      "rules": [
+        "All TMAG5273 sensors use address 0x35.",
+        "Enable at most one Hall mux channel across all three TCA9548A devices at a time.",
+        "Close every Hall mux channel before switching to the next sensor.",
+        "TCA_RESET is hardware-pulled high and is not connected to a Pico GPIO.",
+        "Use the shared active-low TOUCH_IRQ on GP21; do not continuously poll both MPR121 devices."
+      ]
+    },
+    "I2C1": {
+      "gpio_sda": 6,
+      "gpio_scl": 7,
+      "frequency_hz": 400000,
+      "devices": {
+        "haptic_pwm": [
+          {
+            "ref": "U_HAPTIC1",
+            "part": "PCA9685PW,118",
+            "address": 96
+          },
+          {
+            "ref": "U_HAPTIC2",
+            "part": "PCA9685PW,118",
+            "address": 97
+          }
+        ],
+        "led_mux_control": {
+          "ref": "U12",
+          "part": "TCA9554PWR",
+          "address": 32
+        }
+      },
+      "rules": [
+        "Configure PCA9685 MODE2.OUTDRV=1 (totem-pole); motor MOSFET gates require driven-high outputs.",
+        "PCA9685 OE is tied to ground, so firmware cannot use OE as a kill switch.",
+        "PCA9685 EXTCLK is grounded; use the internal oscillator.",
+        "GP20 is the shared A5 address strap and must remain input/high-Z.",
+        "Motor channels are active-high; function-button LED channels are active-low current sinks."
+      ]
+    }
+  },
+  "pads": [
+    {
+      "pad": 1,
+      "row": 1,
+      "column": 1,
+      "center_mm": {
+        "x": -65.0,
+        "y": 38.886
+      },
+      "fpc": 1,
+      "touch": {
+        "mpr121_address": 90,
+        "electrode": 11
+      },
+      "hall": {
+        "mux_address": 112,
+        "channel": 4,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 1,
+        "channel": 4,
+        "tca9554_enable_port": 3,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 96,
+        "channel": 3,
+        "active": "high"
+      },
+      "demo_chromatic_note": 48
+    },
+    {
+      "pad": 2,
+      "row": 1,
+      "column": 2,
+      "center_mm": {
+        "x": -39.0,
+        "y": 38.886
+      },
+      "fpc": 2,
+      "touch": {
+        "mpr121_address": 90,
+        "electrode": 10
+      },
+      "hall": {
+        "mux_address": 112,
+        "channel": 3,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 1,
+        "channel": 2,
+        "tca9554_enable_port": 3,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 96,
+        "channel": 4,
+        "active": "high"
+      },
+      "demo_chromatic_note": 49
+    },
+    {
+      "pad": 3,
+      "row": 1,
+      "column": 3,
+      "center_mm": {
+        "x": -13.0,
+        "y": 38.886
+      },
+      "fpc": 3,
+      "touch": {
+        "mpr121_address": 90,
+        "electrode": 8
+      },
+      "hall": {
+        "mux_address": 113,
+        "channel": 4,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 2,
+        "channel": 4,
+        "tca9554_enable_port": 4,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 96,
+        "channel": 5,
+        "active": "high"
+      },
+      "demo_chromatic_note": 50
+    },
+    {
+      "pad": 4,
+      "row": 1,
+      "column": 4,
+      "center_mm": {
+        "x": 13.0,
+        "y": 38.886
+      },
+      "fpc": 4,
+      "touch": {
+        "mpr121_address": 91,
+        "electrode": 3
+      },
+      "hall": {
+        "mux_address": 113,
+        "channel": 3,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 2,
+        "channel": 2,
+        "tca9554_enable_port": 4,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 97,
+        "channel": 0,
+        "active": "high"
+      },
+      "demo_chromatic_note": 51
+    },
+    {
+      "pad": 5,
+      "row": 1,
+      "column": 5,
+      "center_mm": {
+        "x": 39.0,
+        "y": 38.886
+      },
+      "fpc": 5,
+      "touch": {
+        "mpr121_address": 91,
+        "electrode": 2
+      },
+      "hall": {
+        "mux_address": 114,
+        "channel": 4,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 3,
+        "channel": 4,
+        "tca9554_enable_port": 5,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 97,
+        "channel": 1,
+        "active": "high"
+      },
+      "demo_chromatic_note": 52
+    },
+    {
+      "pad": 6,
+      "row": 1,
+      "column": 6,
+      "center_mm": {
+        "x": 65.0,
+        "y": 38.886
+      },
+      "fpc": 6,
+      "touch": {
+        "mpr121_address": 91,
+        "electrode": 1
+      },
+      "hall": {
+        "mux_address": 114,
+        "channel": 3,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 3,
+        "channel": 2,
+        "tca9554_enable_port": 5,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 97,
+        "channel": 6,
+        "active": "high"
+      },
+      "demo_chromatic_note": 53
+    },
+    {
+      "pad": 7,
+      "row": 2,
+      "column": 1,
+      "center_mm": {
+        "x": -65.0,
+        "y": 12.886
+      },
+      "fpc": 7,
+      "touch": {
+        "mpr121_address": 90,
+        "electrode": 9
+      },
+      "hall": {
+        "mux_address": 112,
+        "channel": 5,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 1,
+        "channel": 6,
+        "tca9554_enable_port": 3,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 96,
+        "channel": 2,
+        "active": "high"
+      },
+      "demo_chromatic_note": 54
+    },
+    {
+      "pad": 8,
+      "row": 2,
+      "column": 2,
+      "center_mm": {
+        "x": -39.0,
+        "y": 12.886
+      },
+      "fpc": 8,
+      "touch": {
+        "mpr121_address": 90,
+        "electrode": 6
+      },
+      "hall": {
+        "mux_address": 112,
+        "channel": 2,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 1,
+        "channel": 1,
+        "tca9554_enable_port": 3,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 96,
+        "channel": 15,
+        "active": "high"
+      },
+      "demo_chromatic_note": 55
+    },
+    {
+      "pad": 9,
+      "row": 2,
+      "column": 3,
+      "center_mm": {
+        "x": -13.0,
+        "y": 12.886
+      },
+      "fpc": 9,
+      "touch": {
+        "mpr121_address": 90,
+        "electrode": 7
+      },
+      "hall": {
+        "mux_address": 113,
+        "channel": 5,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 2,
+        "channel": 6,
+        "tca9554_enable_port": 4,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 96,
+        "channel": 7,
+        "active": "high"
+      },
+      "demo_chromatic_note": 56
+    },
+    {
+      "pad": 10,
+      "row": 2,
+      "column": 4,
+      "center_mm": {
+        "x": 13.0,
+        "y": 12.886
+      },
+      "fpc": 10,
+      "touch": {
+        "mpr121_address": 91,
+        "electrode": 5
+      },
+      "hall": {
+        "mux_address": 113,
+        "channel": 2,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 2,
+        "channel": 1,
+        "tca9554_enable_port": 4,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 97,
+        "channel": 15,
+        "active": "high"
+      },
+      "demo_chromatic_note": 57
+    },
+    {
+      "pad": 11,
+      "row": 2,
+      "column": 5,
+      "center_mm": {
+        "x": 39.0,
+        "y": 12.886
+      },
+      "fpc": 11,
+      "touch": {
+        "mpr121_address": 91,
+        "electrode": 4
+      },
+      "hall": {
+        "mux_address": 114,
+        "channel": 5,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 3,
+        "channel": 6,
+        "tca9554_enable_port": 5,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 97,
+        "channel": 14,
+        "active": "high"
+      },
+      "demo_chromatic_note": 58
+    },
+    {
+      "pad": 12,
+      "row": 2,
+      "column": 6,
+      "center_mm": {
+        "x": 65.0,
+        "y": 12.886
+      },
+      "fpc": 12,
+      "touch": {
+        "mpr121_address": 91,
+        "electrode": 0
+      },
+      "hall": {
+        "mux_address": 114,
+        "channel": 2,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 3,
+        "channel": 1,
+        "tca9554_enable_port": 5,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 97,
+        "channel": 7,
+        "active": "high"
+      },
+      "demo_chromatic_note": 59
+    },
+    {
+      "pad": 13,
+      "row": 3,
+      "column": 1,
+      "center_mm": {
+        "x": -65.0,
+        "y": -13.114
+      },
+      "fpc": 13,
+      "touch": {
+        "mpr121_address": 90,
+        "electrode": 3
+      },
+      "hall": {
+        "mux_address": 112,
+        "channel": 6,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 1,
+        "channel": 7,
+        "tca9554_enable_port": 3,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 96,
+        "channel": 14,
+        "active": "high"
+      },
+      "demo_chromatic_note": 60
+    },
+    {
+      "pad": 14,
+      "row": 3,
+      "column": 2,
+      "center_mm": {
+        "x": -39.0,
+        "y": -13.114
+      },
+      "fpc": 14,
+      "touch": {
+        "mpr121_address": 90,
+        "electrode": 4
+      },
+      "hall": {
+        "mux_address": 112,
+        "channel": 1,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 1,
+        "channel": 0,
+        "tca9554_enable_port": 3,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 96,
+        "channel": 13,
+        "active": "high"
+      },
+      "demo_chromatic_note": 61
+    },
+    {
+      "pad": 15,
+      "row": 3,
+      "column": 3,
+      "center_mm": {
+        "x": -13.0,
+        "y": -13.114
+      },
+      "fpc": 15,
+      "touch": {
+        "mpr121_address": 90,
+        "electrode": 5
+      },
+      "hall": {
+        "mux_address": 113,
+        "channel": 6,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 2,
+        "channel": 7,
+        "tca9554_enable_port": 4,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 96,
+        "channel": 8,
+        "active": "high"
+      },
+      "demo_chromatic_note": 62
+    },
+    {
+      "pad": 16,
+      "row": 3,
+      "column": 4,
+      "center_mm": {
+        "x": 13.0,
+        "y": -13.114
+      },
+      "fpc": 16,
+      "touch": {
+        "mpr121_address": 91,
+        "electrode": 6
+      },
+      "hall": {
+        "mux_address": 113,
+        "channel": 1,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 2,
+        "channel": 0,
+        "tca9554_enable_port": 4,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 97,
+        "channel": 13,
+        "active": "high"
+      },
+      "demo_chromatic_note": 63
+    },
+    {
+      "pad": 17,
+      "row": 3,
+      "column": 5,
+      "center_mm": {
+        "x": 39.0,
+        "y": -13.114
+      },
+      "fpc": 17,
+      "touch": {
+        "mpr121_address": 91,
+        "electrode": 8
+      },
+      "hall": {
+        "mux_address": 114,
+        "channel": 6,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 3,
+        "channel": 7,
+        "tca9554_enable_port": 5,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 97,
+        "channel": 11,
+        "active": "high"
+      },
+      "demo_chromatic_note": 64
+    },
+    {
+      "pad": 18,
+      "row": 3,
+      "column": 6,
+      "center_mm": {
+        "x": 65.0,
+        "y": -13.114
+      },
+      "fpc": 18,
+      "touch": {
+        "mpr121_address": 91,
+        "electrode": 10
+      },
+      "hall": {
+        "mux_address": 114,
+        "channel": 1,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 3,
+        "channel": 0,
+        "tca9554_enable_port": 5,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 97,
+        "channel": 9,
+        "active": "high"
+      },
+      "demo_chromatic_note": 65
+    },
+    {
+      "pad": 19,
+      "row": 4,
+      "column": 1,
+      "center_mm": {
+        "x": -65.0,
+        "y": -39.114
+      },
+      "fpc": 19,
+      "touch": {
+        "mpr121_address": 90,
+        "electrode": 0
+      },
+      "hall": {
+        "mux_address": 112,
+        "channel": 7,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 1,
+        "channel": 5,
+        "tca9554_enable_port": 3,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 96,
+        "channel": 12,
+        "active": "high"
+      },
+      "demo_chromatic_note": 66
+    },
+    {
+      "pad": 20,
+      "row": 4,
+      "column": 2,
+      "center_mm": {
+        "x": -39.0,
+        "y": -39.114
+      },
+      "fpc": 20,
+      "touch": {
+        "mpr121_address": 90,
+        "electrode": 1
+      },
+      "hall": {
+        "mux_address": 112,
+        "channel": 0,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 1,
+        "channel": 3,
+        "tca9554_enable_port": 3,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 96,
+        "channel": 11,
+        "active": "high"
+      },
+      "demo_chromatic_note": 67
+    },
+    {
+      "pad": 21,
+      "row": 4,
+      "column": 3,
+      "center_mm": {
+        "x": -13.0,
+        "y": -39.114
+      },
+      "fpc": 21,
+      "touch": {
+        "mpr121_address": 90,
+        "electrode": 2
+      },
+      "hall": {
+        "mux_address": 113,
+        "channel": 7,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 2,
+        "channel": 5,
+        "tca9554_enable_port": 4,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 96,
+        "channel": 9,
+        "active": "high"
+      },
+      "demo_chromatic_note": 68
+    },
+    {
+      "pad": 22,
+      "row": 4,
+      "column": 4,
+      "center_mm": {
+        "x": 13.0,
+        "y": -39.114
+      },
+      "fpc": 22,
+      "touch": {
+        "mpr121_address": 91,
+        "electrode": 7
+      },
+      "hall": {
+        "mux_address": 113,
+        "channel": 0,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 2,
+        "channel": 3,
+        "tca9554_enable_port": 4,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 97,
+        "channel": 12,
+        "active": "high"
+      },
+      "demo_chromatic_note": 69
+    },
+    {
+      "pad": 23,
+      "row": 4,
+      "column": 5,
+      "center_mm": {
+        "x": 39.0,
+        "y": -39.114
+      },
+      "fpc": 23,
+      "touch": {
+        "mpr121_address": 91,
+        "electrode": 9
+      },
+      "hall": {
+        "mux_address": 114,
+        "channel": 7,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 3,
+        "channel": 5,
+        "tca9554_enable_port": 5,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 97,
+        "channel": 10,
+        "active": "high"
+      },
+      "demo_chromatic_note": 70
+    },
+    {
+      "pad": 24,
+      "row": 4,
+      "column": 6,
+      "center_mm": {
+        "x": 65.0,
+        "y": -39.114
+      },
+      "fpc": 24,
+      "touch": {
+        "mpr121_address": 91,
+        "electrode": 11
+      },
+      "hall": {
+        "mux_address": 114,
+        "channel": 0,
+        "sensor_address": 53
+      },
+      "led": {
+        "mux": 3,
+        "channel": 3,
+        "tca9554_enable_port": 5,
+        "active_enable": "low"
+      },
+      "haptic": {
+        "pca9685_address": 97,
+        "channel": 8,
+        "active": "high"
+      },
+      "demo_chromatic_note": 71
+    }
+  ],
+  "buttons": [
+    {
+      "id": 1,
+      "shape": "left capsule",
+      "gpio": 19,
+      "pca9685_address": 96,
+      "pca_channel": 0,
+      "input_active": "low",
+      "led_active": "low",
+      "x_mm": -60.981
+    },
+    {
+      "id": 2,
+      "shape": "right capsule",
+      "gpio": 18,
+      "pca9685_address": 96,
+      "pca_channel": 1,
+      "input_active": "low",
+      "led_active": "low",
+      "x_mm": -42.731
+    },
+    {
+      "id": 3,
+      "shape": "triangle",
+      "gpio": 16,
+      "pca9685_address": 97,
+      "pca_channel": 2,
+      "input_active": "low",
+      "led_active": "low",
+      "x_mm": 9.022
+    },
+    {
+      "id": 4,
+      "shape": "diamond",
+      "gpio": 17,
+      "pca9685_address": 97,
+      "pca_channel": 3,
+      "input_active": "low",
+      "led_active": "low",
+      "x_mm": 29.083
+    },
+    {
+      "id": 5,
+      "shape": "square",
+      "gpio": 15,
+      "pca9685_address": 97,
+      "pca_channel": 4,
+      "input_active": "low",
+      "led_active": "low",
+      "x_mm": 49.019
+    },
+    {
+      "id": 6,
+      "shape": "circle",
+      "gpio": 14,
+      "pca9685_address": 97,
+      "pca_channel": 5,
+      "input_active": "low",
+      "led_active": "low",
+      "x_mm": 68.961
+    }
+  ],
+  "fpc_pinout": {
+    "1": "TOUCHnn",
+    "2": "GND",
+    "3": "Lnn pad LED data",
+    "4": "+5V",
+    "5": "MOTOR_V+ (nominal 3.30V)",
+    "6": "MOTORnn- switched low side",
+    "shell_7_8": "GND"
+  },
+  "led_systems": {
+    "pad_leds": {
+      "part": "SK6805-EC15, one non-cascaded pixel per daughterboard",
+      "gpio": 3,
+      "buffer": "U13 74AHCT1G126GV, always enabled",
+      "series_ohm_motherboard": 330,
+      "series_ohm_daughterboard": 150,
+      "daughter_din_pulldown_ohm": 10000,
+      "protocol": {
+        "bit_rate_hz_typ": 800000,
+        "color_order": "GRB",
+        "reset_low_us_min": 80,
+        "firmware_reset_low_us": 300
+      },
+      "mux_control": {
+        "s0_port": 0,
+        "s1_port": 1,
+        "s2_port": 2,
+        "enable_ports": {
+          "1": 3,
+          "2": 4,
+          "3": 5
+        }
+      },
+      "rules": [
+        "Set every mux /EN high before changing S0-S2.",
+        "Enable exactly one mux bank at a time.",
+        "Transmit exactly one 24-bit pixel word, hold data low for the reset interval, then disable the bank.",
+        "Each daughter LED DOUT is unconnected; this is not a 24-pixel daisy chain."
+      ]
+    },
+    "underglow": {
+      "gpio": 8,
+      "buffer": "U14 74AHCT1G126GV, always enabled",
+      "series_ohm": 330,
+      "pixels": 4,
+      "topology": "LED1 -> LED2 -> LED3 -> LED4"
+    },
+    "current_model": {
+      "sk6805_idle_ma_each_typ": 1.0,
+      "sk6805_channel_ma_each_typ": 5.0,
+      "sk6805_full_white_ma_each_est": 16.0,
+      "function_led_peak_is_resistor_limited": "150 ohm from +5V; begin with <=50% PWM until measured"
+    }
+  },
+  "haptics": {
+    "motor_rail_v": 3.302,
+    "driver": "24x AO3400A low-side MOSFET, 100 ohm gate resistor, 100k pulldown, SS14 flyback",
+    "pwm_frequency_hz_default": 1000,
+    "motor_start_stagger_ms_default": 15,
+    "measured_current_required": [
+      "running current per motor",
+      "stall/start current per motor",
+      "minimum reliable PWM duty",
+      "maximum useful PWM duty"
+    ]
+  },
+  "interfaces": {
+    "usb": {
+      "data": "Pico TP2=D-, TP3=D+ through TPD2EUSB30 ESD device",
+      "role": "USB 2.0 device only; USB MIDI/MPE and firmware update",
+      "cable_presence": "Use TinyUSB mounted/suspended state. Pico VBUS pin 40 and GPIO24 VBUS sense are not connected to the custom connector."
+    },
+    "din_midi_in": {
+      "gpio": 1,
+      "baud": 31250,
+      "hardware": "polarity-tolerant bridge + H11L1M"
+    },
+    "din_midi_out": {
+      "gpios": [
+        0,
+        2
+      ],
+      "hardware": "U15 dual 74AHCT2G125, both outputs through 220 ohm to the two TRS signal contacts",
+      "implementation": "PIO/software UART on the selected signal GPIO; keep the other GPIO high. Swap which GPIO carries the waveform for the alternate TRS polarity.",
+      "boot_rule": "Drive both GP0 and GP2 high before enabling an output stream."
+    },
+    "pedal": {
+      "gpio_adc": 26,
+      "adc_channel": 0,
+      "series_ohm": 1000,
+      "filter_nf": 100,
+      "pullup_ohm": 100000,
+      "rule": "Calibrate min/max and polarity; no-pedal reading tends high."
+    },
+    "cv": {
+      "requires_external_power": true,
+      "dac": "DAC80502DRXR, SPI GP10/GP11/GP13, configured 0-2.5V",
+      "pitch": "DAC VOUTA -> 10k series -> OPA2990 gain 4 -> 1k output -> jack; nominal 0-10V",
+      "pressure": "DAC VOUTB -> 10k series -> OPA2990 gain 4 -> 1k output -> jack; nominal 0-10V",
+      "gate": "GP12 through two 2N7002 stages, 4.7k pull-up to CV_A+, 1k output; logical active-high"
+    }
+  },
+  "power": {
+    "external_adapter": "12V DC, 3A, center-positive",
+    "usb_path": "USB VBUS -> TPS259470A eFuse -> USB_5V_SAFE -> TPS2121 IN1",
+    "external_path": "12V -> 3A PTC + SMBJ15A -> TPS563201 4.984V -> EXT_5V_SAFE -> TPS2121 IN2",
+    "selected_5v": "TPS2121 OUT -> +5V -> Pico VSYS and loads",
+    "motor_path": "+5V -> TPS563201 3.302V -> 0-ohm isolation link -> MOTOR_V+",
+    "critical_values": {
+      "usb_efuse": {
+        "ovlo_top_ohm": 402000,
+        "ovlo_bottom_ohm": 100000,
+        "ovlo_trip_v_approx": 6.02,
+        "ilm_ohm": 1130,
+        "limit_a_approx": 2.95,
+        "dvdt_f": 3.3e-09
+      },
+      "external_buck": {
+        "feedback_top_ohm": 54900,
+        "feedback_bottom_ohm": 10000,
+        "output_v_calculated": 4.984
+      },
+      "motor_buck": {
+        "feedback_top_ohm": 33000,
+        "feedback_bottom_ohm": 10000,
+        "output_v_calculated": 3.302
+      },
+      "mux_priority": {
+        "pr1_usb_top_ohm": 10200,
+        "pr1_bottom_ohm": 5000,
+        "pr1_at_5v": 1.645,
+        "cp2_external_top_ohm": 10000,
+        "cp2_bottom_ohm": 10000,
+        "cp2_at_5v": 2.5,
+        "result": "IN2/external wins when both are present"
+      },
+      "mux_ilm_ohm": 29800,
+      "mux_limit_a_typ": 3.5
+    },
+    "status_gpio": 22,
+    "status_truth": {
+      "0": "external IN2 is powering the board (external-only or USB+external)",
+      "1": "USB IN1 or TPS2121 output Hi-Z; while firmware is running treat this as USB-only unless in a transition/fault"
+    },
+    "limits": {
+      "external_input_w": 36.0,
+      "external_5v_buck_a_nominal": 3.0,
+      "usb_efuse_a_approx": 2.95,
+      "tps2121_current_limit_a_typ": 3.5,
+      "main_5v_continuous_design_target_a": 2.5,
+      "pico_3v3_external_load_ma_recommended_max": 300,
+      "flex_contact_continuous_a": 0.35,
+      "flex_contact_absolute_published_a": 0.5
+    },
+    "rules": [
+      "The 2.95A USB eFuse value is fault protection, not permission to draw 2.95A from an unknown USB source.",
+      "The board does not measure USB Type-C advertised current. A >500mA USB budget must be an explicit user/demo override for a validated source.",
+      "CV_A+ exists only with the external 12V adapter, so CV and gate must fail off in USB-only mode.",
+      "Use GP22 for selected-source status and TinyUSB state for actual USB data connection state."
+    ]
+  },
+  "mechanical": {
+    "main_pcb_mm": {
+      "width": 171.577,
+      "height": 143.828,
+      "layers": 4
+    },
+    "enclosure_plan_mm": {
+      "width": 183.0,
+      "height": 149.8
+    },
+    "pad_grid": {
+      "columns": 6,
+      "rows": 4,
+      "pitch_x_mm": 26.0,
+      "pitch_y_mm": 26.0
+    },
+    "daughterboard_mm": {
+      "width": 17.6,
+      "height": 17.6,
+      "thickness": 1.6,
+      "corner_radius": 3.0
+    },
+    "keycap_outer_mm": {
+      "width": 20.0,
+      "height": 20.0
+    },
+    "daughterboard_pocket_clearance_mm_each_side": 0.26,
+    "switch": {
+      "part": "Gateron KS-20 Dual-rail Magnetic Orange, KS-20UO10B045NW-X14",
+      "magnet_pole_toward_sensor": "N",
+      "initial_force_gf": {
+        "nominal": 30,
+        "tolerance": 10
+      },
+      "total_travel_mm": {
+        "nominal": 4.1,
+        "tolerance": 0.2
+      },
+      "manufacturer_flux_g": {
+        "rest": {
+          "nominal": 75,
+          "tolerance": 15
+        },
+        "bottom": {
+          "nominal": 700,
+          "tolerance": 80
+        }
+      },
+      "warning": "Manufacturer flux numbers assume Gateron's reference sensor geometry and are not direct SENTIA calibration values."
+    },
+    "sensor_stack": {
+      "pcb_to_acrylic_bottom_clearance_mm": 3.0,
+      "acrylic_support_mm": 5.0,
+      "foam_tape_rest_mm": 1.2,
+      "foam_tape_compressed_mm": 0.2,
+      "tmag_package_height_mm_approx": 1.4,
+      "switch_bottom_to_sensor_top_gap_rest_mm_approx": 7.8,
+      "switch_bottom_to_sensor_top_gap_foam_compressed_mm_approx": 6.8,
+      "lateral_tilt_target_mm_approx": 1.5
+    },
+    "flex": {
+      "layers": 2,
+      "body_thickness_mm": 0.1,
+      "copper": "18um / 0.5oz rolled-annealed",
+      "trace_width_mm": 0.15,
+      "moving_neck_width_mm_nominal": 1.4,
+      "moving_neck_width_mm_measured_min": 1.381,
+      "developed_tip_to_tip_centerline_mm": 56.657,
+      "tongue_width_mm": 3.5,
+      "finger_width_mm": 0.3,
+      "finger_pitch_mm": 0.5,
+      "finished_tongue_thickness_mm": {
+        "nominal": 0.3,
+        "tolerance": 0.03
+      },
+      "power_loop_resistance_ohm_copper_approx": {
+        "five_v": 0.681,
+        "motor": 0.665
+      }
+    }
+  },
+  "firmware": {
+    "logical_pad_policy": "Every module consumes logical pad IDs 1-24. Only this map translates controller channels to logical pads.",
+    "feature_flags": [
+      "usb_midi",
+      "din_midi_in",
+      "din_midi_out",
+      "hall",
+      "touch",
+      "haptics",
+      "pad_leds",
+      "underglow",
+      "buttons",
+      "pedal",
+      "cv",
+      "gate",
+      "diagnostics"
+    ],
+    "profiles": {
+      "SAFE_BRINGUP": {
+        "outputs": "all off",
+        "features": [
+          "usb_midi",
+          "buttons",
+          "diagnostics"
+        ],
+        "operating_budget_ma": 500,
+        "max_haptic_voices": 0
+      },
+      "SENSOR_TEST": {
+        "features": [
+          "usb_midi",
+          "hall",
+          "touch",
+          "buttons",
+          "pedal",
+          "diagnostics"
+        ],
+        "operating_budget_ma": 600,
+        "max_haptic_voices": 0
+      },
+      "USB_DEMO_SAFE": {
+        "features": [
+          "usb_midi",
+          "din_midi_in",
+          "hall",
+          "touch",
+          "haptics",
+          "pad_leds",
+          "underglow",
+          "buttons",
+          "pedal"
+        ],
+        "operating_budget_ma": 500,
+        "max_haptic_voices": 5,
+        "note": "Five voices is an allocation ceiling; a current governor must still reduce duty or concurrent starts."
+      },
+      "USB_DEMO_VALIDATED_1P5A": {
+        "selection": "manual only",
+        "operating_budget_ma": 1500,
+        "max_haptic_voices": 5
+      },
+      "FULL_DEMO_EXTERNAL": {
+        "requires_gp22_low": true,
+        "operating_budget_ma": 2500,
+        "max_haptic_voices": 12,
+        "features": "all including CV/gate"
+      },
+      "MANUFACTURING_TEST": {
+        "outputs": "one channel at a time",
+        "max_haptic_voices": 1,
+        "purpose": "continuity, orientation and mapping test"
+      }
+    },
+    "scheduler_defaults": {
+      "hall_frame_hz_target": 120,
+      "button_debounce_ms": 10,
+      "motor_start_stagger_ms": 15,
+      "sk6805_reset_low_us": 300,
+      "configuration_storage": "Pico flash, versioned schema + CRC + two alternating slots"
+    },
+    "mpe_default": {
+      "zone": "lower",
+      "master_channel": 1,
+      "member_channels": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "pitch_bend_range_semitones": 48,
+      "x_tilt": "per-note pitch bend",
+      "y_tilt": "CC74/timbre",
+      "pressure": "channel pressure",
+      "note_map": "demo chromatic C3-B4 via pads 1-24; replace with a profile table when the musical layout is locked"
+    },
+    "demo_button_actions_recommended_not_hardware_locked": {
+      "SW1": "previous scene/octave",
+      "SW2": "next scene/octave",
+      "SW3": "toggle haptics",
+      "SW4": "toggle pad LEDs",
+      "SW5": "toggle underglow",
+      "SW6": "panic / all notes off (long press: diagnostics)"
+    }
+  },
+  "bringup": {
+    "boot_order": [
+      "Set GP0/GP2 high; GP3/GP8/GP12 low; GP13 high; GP20 input/high-Z.",
+      "Start watchdog and diagnostics transport.",
+      "Initialize I2C buses at 100kHz for detection, then raise to 400kHz after all expected devices ACK.",
+      "Disable every TCA9548A Hall channel.",
+      "Set TCA9554 P3/P4/P5 high so all LED mux banks are disabled, then set selector bits.",
+      "Initialize both PCA9685 devices with all channels at zero/off and MODE2.OUTDRV=1.",
+      "Read GP22 and TinyUSB state; select the safe profile unless a stored, CRC-valid explicit override exists.",
+      "Initialize sensors and outputs module-by-module; a failed module remains disabled without blocking USB diagnostics."
+    ],
+    "calibration": [
+      "Configure every TMAG5273 A1 sensor for the +/-80mT range first.",
+      "For each pad record raw XYZ at rest, half press, bottom, and four tilt directions.",
+      "Save rest offset, full-scale point, axis signs, cross-axis compensation, dead zones and curves per pad.",
+      "Only change to +/-40mT after measurements prove every pad stays comfortably below saturation across temperature and assembly tolerance.",
+      "Calibrate pedal min/max/polarity and touch baselines after the enclosure is fully assembled."
+    ],
+    "measure_before_full_power": [
+      "Motor running and stall current through one real daughterboard + flex.",
+      "3.3V rail current with every sensor and controller active.",
+      "5V input current for worst-case LED colors/brightness.",
+      "USB-only brownout margin on each intended demo computer/cable.",
+      "Hall raw XYZ ranges at rest, half press, bottom and maximum tilt for all 24 assembled keys."
+    ]
+  }
+}
