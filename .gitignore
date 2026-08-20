@@ -1,0 +1,18 @@
+# Firmware build output
+firmware/build/
+firmware/cmake-build-*/
+
+# Node / Electron
+node_modules/
+companion-app/dist/
+companion-app/out/
+companion-app/.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
