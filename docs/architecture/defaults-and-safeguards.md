@@ -79,20 +79,58 @@ two-stage driver design, nothing to configure here.
 - Re-check on wake from standby, in case a pedal was plugged in while the
   device was idle.
 
-## LED brightness
+## LED color and brightness
 
-Needs an actual ceiling, not just "cap it somewhere" — full-white across
-24 pad LEDs + 4 underglow is ~448mA against a 500mA USB-only budget
-before anything else on the board draws current.
+**Color (V1 default):** white on both pad LEDs and underglow. No color
+themes/palettes yet — that's a `profiles/` feature once it exists. White
+also lets brightness be reasoned about as one scalar instead of per-
+channel, which matters for the power governor below.
+
+**Behavior (V1 default):**
+
+- Underglow: always on, solid white, fixed at the idle baseline level
+  (see below). Not reactive to anything — it's the ambient halo per the
+  product's visual language (a soft perimeter, not a focal point), so it
+  doesn't compete for attention with pad state.
+- Pad LEDs: always on at a dim white **idle baseline** (~10% of the
+  active ceiling) rather than off, so the grid reads as "alive" at rest.
+  A touched/pressed pad ramps up toward the active profile's brightness
+  **ceiling** (below) — full brightness means "this pad is active," not
+  a fixed absolute value, since the ceiling itself moves with the power
+  profile.
+- The press→brightness curve should key off whatever's actually
+  available first: touch state now (once `drivers/mpr121` exists), Hall
+  depth once that's live too. Until either driver exists, pads simply
+  sit at idle baseline — there's nothing to react to yet.
+
+**Brightness ceiling** — needs an actual number, not just "cap it
+somewhere": full-white across 24 pad LEDs + 4 underglow is ~448mA
+against a 500mA USB-only budget before anything else on the board draws
+current.
 
 - USB-only: global brightness ceiling **35–40%**.
 - External power (FULL_DEMO_EXTERNAL or equivalent): ceiling **70–80%**.
 - Enforced in the lighting service as a hard clamp regardless of what a
-  profile or animation requests — a profile can ask for 100%, the power
-  governor still clamps it to the active budget's ceiling.
+  profile, animation, or press state requests — something can ask for
+  100%, the power governor still clamps it to the active budget's
+  ceiling. The idle baseline (~10% of ceiling) is comfortably under this
+  even summed across all 24 pads + underglow simultaneously.
 - These two numbers are engineering estimates, not hardware-mandated —
   revisit once real 5V input current is measured per
   `docs/hardware/.../measure_before_full_power`.
+
+**Standby animations — still open, not V1.** Once the device has been
+idle long enough to enter a standby profile, pad/underglow behavior
+should switch to some animated pattern instead of the static idle
+baseline. The legacy prototype's `standbySmoothWave()` /
+`standbyCenterRipple()` (see
+`docs/reference/legacy-prototype-v1/legacy_tiles_prototype.ino`) are
+reasonable starting inspiration for the *shape* of this, but need
+redesigning for a 6×4 addressable-RGB grid instead of a 4×4 shift-
+register on/off LED bar — this needs its own design pass (idle timeout
+duration, wake trigger, whether animations run through the same muxed
+LED path or need a different refresh strategy given the mux can only
+show one pixel at a time).
 
 ## Pad baseline calibration and drift compensation
 

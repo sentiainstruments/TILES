@@ -41,13 +41,31 @@ intact.
 
 ## Status
 
-`board/` is implemented: the GPIO/I2C-address constants, the `PadConfig[24]`
-table (verified unique by `test/test_pad_config.c`), and the GPIO-safe-state
-+ I2C-bus-init half of the boot sequence. `main.c` calls it and idles.
+- `board/` — done for this phase: GPIO/I2C-address constants, the
+  `PadConfig[24]` table (verified unique by `test/test_pad_config.c`),
+  GPIO-safe-state + I2C-bus-init.
+- `diagnostics/` — I2C bus discovery (`i2c_scan`), looped in `main.c`
+  every 2s over the temporary USB-CDC stdio.
+- `drivers/` — `sk6805` (PIO one-wire RGB) and `tca9554` (LED mux
+  control) are done; everything else in this module is not built.
+- `services/` — `lighting` is done for the V1 default (solid white,
+  underglow + pad idle baseline, hardcoded USB-only brightness
+  ceiling); everything else is not built.
+- `midi/`, `usb_vendor/`, `profiles/`, `storage/` are still empty
+  module skeletons.
 
-Not yet buildable end-to-end on this machine — needs `cmake` and a
-pico-sdk checkout; see `BUILD.md`. The pad-table test has no such
-dependency and passes today.
+Builds clean end-to-end against a real pico-sdk checkout (`cmake` +
+`arm-none-eabi-gcc`; see `BUILD.md`) with zero warnings, and produces a
+flashable `.uf2`. Not yet flashed to real hardware — see the open items
+below.
 
-Everything past `board/` (drivers, services, midi, usb_vendor, profiles,
-diagnostics, storage) is still an empty module skeleton.
+**Known gaps to close before flashing to real hardware:**
+- The LED brightness ceiling and idle-baseline percentages in
+  `services/lighting.c` are the estimates from
+  `docs/architecture/defaults-and-safeguards.md`, not measured values.
+- `sk6805.pio`'s bit timing mirrors Raspberry Pi's reference `ws2812.pio`
+  program but has only been verified by `pioasm` (syntax), not on a
+  scope/logic analyzer against real SK6805 parts.
+- `tiles_lighting_init()`'s return value is checked in `main.c` (prints
+  a failure message) but nothing yet falls back to a safe/degraded
+  lighting state on failure.
