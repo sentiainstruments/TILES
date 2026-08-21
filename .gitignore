@@ -2,6 +2,9 @@
 firmware/build/
 firmware/cmake-build-*/
 
+# Copied in from the pico-sdk checkout per firmware/BUILD.md, not project code
+firmware/pico_sdk_import.cmake
+
 # Node / Electron
 node_modules/
 companion-app/dist/

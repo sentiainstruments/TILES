@@ -41,5 +41,13 @@ intact.
 
 ## Status
 
-Not yet implemented. This is the module skeleton; `CMakeLists.txt` and
-`src/main.c` are placeholders pending the board/ design pass.
+`board/` is implemented: the GPIO/I2C-address constants, the `PadConfig[24]`
+table (verified unique by `test/test_pad_config.c`), and the GPIO-safe-state
++ I2C-bus-init half of the boot sequence. `main.c` calls it and idles.
+
+Not yet buildable end-to-end on this machine — needs `cmake` and a
+pico-sdk checkout; see `BUILD.md`. The pad-table test has no such
+dependency and passes today.
+
+Everything past `board/` (drivers, services, midi, usb_vendor, profiles,
+diagnostics, storage) is still an empty module skeleton.
