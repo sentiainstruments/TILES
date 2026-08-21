@@ -5,7 +5,10 @@ add_executable(sentia_tiles_firmware
     diagnostics/i2c_scan.c
     drivers/sk6805.c
     drivers/tca9554.c
+    drivers/tca9548a.c
+    drivers/tmag5273.c
     services/lighting.c
+    services/hall.c
 )
 
 pico_generate_pio_header(sentia_tiles_firmware ${CMAKE_CURRENT_SOURCE_DIR}/drivers/sk6805.pio)

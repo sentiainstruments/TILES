@@ -20,4 +20,13 @@ bit-banged over PIO), `dac80502` (CV DAC).
 - `tca9554.h`/`.c` — done, scoped specifically to the pad-LED mux
   control use (S0-S2 select + three active-low enables), not a general
   8-bit-expander driver.
-- `tca9548a`, `tmag5273`, `mpr121`, `pca9685`, `dac80502` — not built yet.
+- `tca9548a.h`/`.c` — done. Generic 8-channel I2C mux driver (one
+  control-register byte); the three chips' instances and the "only one
+  channel open across all three at once" policy live in
+  `services/hall.c`, not here.
+- `tmag5273.h`/`.c` — done for V1: continuous-measure mode, X/Y/Z
+  enabled, ±80mT range on every axis, raw (uncalibrated) 16-bit reads.
+  Register map transcribed directly from the TI datasheet (local copy),
+  not from memory — see the file header. No gain/offset/threshold/angle
+  features configured; that's the calibration layer, not built yet.
+- `mpr121`, `pca9685`, `dac80502` — not built yet.

@@ -46,11 +46,13 @@ intact.
   GPIO-safe-state + I2C-bus-init.
 - `diagnostics/` — I2C bus discovery (`i2c_scan`), looped in `main.c`
   every 2s over the temporary USB-CDC stdio.
-- `drivers/` — `sk6805` (PIO one-wire RGB) and `tca9554` (LED mux
-  control) are done; everything else in this module is not built.
-- `services/` — `lighting` is done for the V1 default (solid white,
-  underglow + pad idle baseline, hardcoded USB-only brightness
-  ceiling); everything else is not built.
+- `drivers/` — `sk6805` (PIO one-wire RGB), `tca9554` (LED mux control),
+  `tca9548a` (Hall I2C mux), and `tmag5273` (3-axis Hall sensor, V1: raw
+  reads only) are done; `mpr121`, `pca9685`, `dac80502` are not built.
+- `services/` — `lighting` (V1 default: solid white, underglow + pad
+  idle baseline, hardcoded USB-only brightness ceiling) and `hall` (V1:
+  round-robin raw XYZ scan of all 24 pads) are done; everything else is
+  not built.
 - `midi/`, `usb_vendor/`, `profiles/`, `storage/` are still empty
   module skeletons.
 
@@ -69,3 +71,14 @@ below.
 - `tiles_lighting_init()`'s return value is checked in `main.c` (prints
   a failure message) but nothing yet falls back to a safe/degraded
   lighting state on failure.
+- `tmag5273.c`'s register configuration is transcribed from the real TI
+  datasheet (not guessed), but has never talked to a real TMAG5273 --
+  the identify/init/read sequence is unverified against actual silicon.
+- `hall.c`'s scan rate is whatever the main loop's `sleep_ms(10)` and
+  round-robin happen to produce -- not measured, and almost certainly
+  well under the 120Hz full-sweep target, since nothing budgets loop
+  timing yet. Revisit once Hall + touch + lighting are all integrated.
+- No axis-selection or calibration logic exists yet -- `hall.c` reports
+  raw X/Y/Z; deciding which axis is vertical press depth per pad, and
+  turning raw counts into calibrated engineering values, is the next
+  layer.

@@ -29,5 +29,16 @@ not its code.
   **Not done:** standby animations (needs its own design pass — see the
   defaults doc), any power-profile awareness beyond the hardcoded
   ceiling.
-- Everything else (Hall scan, touch fusion, expression mapping, haptics,
-  pedal, power governance, calibration) is not built yet.
+- `hall.h`/`.c` — done for V1: round-robins all 24 pads' TMAG5273
+  sensors through their Hall mux channels (one pad serviced per
+  `tiles_hall_scan()` call), storing raw uncalibrated X/Y/Z. Structurally
+  enforces "only one Hall mux channel across all three TCA9548A devices
+  at a time" (every selection disables all three first). A pad whose
+  sensor fails identify/init at boot is skipped by future scans rather
+  than blocking the other 23.
+  **Not done:** deciding which raw axis is actually vertical press depth
+  per pad, calibration (rest/half/bottom capture, offsets, dead zones),
+  any filtering, and the ~120Hz full-sweep rate target isn't measured or
+  tuned yet -- see `firmware/README.md`'s known gaps.
+- Everything else (touch fusion, expression mapping, haptics, pedal,
+  power governance) is not built yet.
