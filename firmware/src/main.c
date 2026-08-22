@@ -54,6 +54,12 @@ int main(void) {
         printf("[buttons] one or both PCA9685 devices failed init\n");
     }
 
+    /* Both PCA9685 chips' outputs stay hardware-disabled (OE high, see
+     * board_pins.h) until this runs -- must come after tiles_buttons_init()
+     * so every channel is already in its intended state (motors off,
+     * button LEDs dark) before the physical outputs go live. */
+    board_pca9685_enable_outputs();
+
     /* Phase 3/5 bring-up: capacitive touch. */
     if (!tiles_touch_init()) {
         printf("[touch] one or both MPR121 controllers failed init\n");
@@ -70,6 +76,7 @@ int main(void) {
     }
 
     uint32_t last_scan_ms = to_ms_since_boot(get_absolute_time());
+    uint32_t last_full_scan_ms = to_ms_since_boot(get_absolute_time());
 
     while (true) {
         tiles_buttons_scan();
@@ -90,6 +97,18 @@ int main(void) {
             printf("[hall] pad 1: x=%d y=%d z=%d valid=%d\n", s.x, s.y, s.z, s.valid);
 
             last_scan_ms = now_ms;
+        }
+
+        /* Full bus scan repeats every 10s rather than running once at
+         * boot -- USB CDC serial commonly drops output written before a
+         * host terminal has actually opened the port, so a one-shot
+         * boot-time print is unreliable to catch. Only useful while
+         * diagnosing a device that isn't at its expected address (e.g.
+         * the PCA9685 devices' GP20 address-strap net) -- remove once
+         * that's resolved. */
+        if (now_ms - last_full_scan_ms >= 10000) {
+            tiles_diag_i2c_full_scan();
+            last_full_scan_ms = now_ms;
         }
 
         sleep_ms(10);

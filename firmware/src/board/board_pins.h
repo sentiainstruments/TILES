@@ -52,10 +52,28 @@
 
 /* ---- Hazard / status pins ----------------------------------------------- */
 
-/* PCA9685 A5 address strap. Configure input/high-impedance at boot and
- * NEVER change direction or drive this pin — doing so corrupts the I2C
- * address of both haptic PWM controllers. */
-#define TILES_GPIO_PCA9685_ADDR_STRAP 20u
+/* CORRECTED 2026-08-21: NOT an A5 address strap, despite the original
+ * hardware handoff doc's claim (and this constant's old name --
+ * TILES_GPIO_PCA9685_ADDR_STRAP -- kept as a historical note, don't
+ * reintroduce it). The real fabricated board's flying-probe netlist
+ * (Gerber_PCB1_2026-08-21.zip/FlyingProbeTesting.json) shows this net
+ * (NET_25) lands on pin 23 of both PCA9685 chips, which per the real
+ * TSSOP-28 datasheet pinout is OE (active-low output enable), not A5
+ * (pin 24, tied to GND on both chips per the same netlist -- the real
+ * address pins are fixed by hardwired GND/3V3_OUT straps unrelated to
+ * this net, giving addresses 0x40/0x41, confirmed against real hardware).
+ *
+ * NET_25 also has a 10k pull-up to 3V3_OUT (R66) and nothing else on it
+ * besides these two OE *inputs* -- so driving this pin low only has to
+ * overcome a weak 10k pull (~0.33mA), with no other active driver to
+ * contend with. Left as input/high-Z at boot (OE sits disabled, every
+ * PCA9685 output on both chips forced off) until
+ * board_pca9685_enable_outputs() is called -- only safe to call after
+ * every PCA9685 channel has already been configured to its intended
+ * state, since enabling OE makes each chip's current register content
+ * (or its POR default, LEDn=0/pin-low, if a chip's I2C init failed)
+ * immediately live on the physical pins. */
+#define TILES_GPIO_PCA9685_OE 20u
 
 #define TILES_GPIO_TOUCH_IRQ_N 21u      /* shared MPR121 IRQ, active low */
 
@@ -89,8 +107,14 @@
 
 /* ---- I2C1 device addresses (haptics + LED mux control) -------------------- */
 
-#define TILES_I2C1_ADDR_HAPTIC_PCA9685_1 0x60u
-#define TILES_I2C1_ADDR_HAPTIC_PCA9685_2 0x61u
+/* Corrected from the originally-documented 0x60/0x61. The real fabricated
+ * board's flying-probe netlist (docs/hardware/ didn't have this level of
+ * detail; see Gerber_PCB1_2026-08-21.zip/FlyingProbeTesting.json) shows
+ * both PCA9685 chips' A1-A5 address pins tied to GND and only U_HAPTIC2's
+ * A0 tied to 3V3_OUT -- giving 0x40 and 0x41, which is exactly what the
+ * real board ACKs at. Confirmed against real hardware on 2026-08-21. */
+#define TILES_I2C1_ADDR_HAPTIC_PCA9685_1 0x40u
+#define TILES_I2C1_ADDR_HAPTIC_PCA9685_2 0x41u
 #define TILES_I2C1_ADDR_LED_MUX_TCA9554 0x20u
 
 /* ---- Counts ---------------------------------------------------------------- */

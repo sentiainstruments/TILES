@@ -26,6 +26,12 @@ static bool probe(i2c_inst_t *bus, uint8_t addr) {
     return ret >= 0;
 }
 
+/* Mirrors pico-sdk's internal i2c_reserved_addr() (hardware_i2c/i2c.c) --
+ * not exposed publicly, so reproduced here rather than worked around. */
+static bool is_reserved_addr(uint8_t addr) {
+    return ((addr & 0x78u) == 0u) || ((addr & 0x78u) == 0x78u);
+}
+
 static bool check_device(const char *label, i2c_inst_t *bus, uint8_t addr) {
     bool ok = probe(bus, addr);
     printf("[i2c-scan] %-30s addr=0x%02X bus=%s : %s\n", label, addr,
@@ -54,4 +60,27 @@ bool tiles_diag_i2c_scan_expected_devices(void) {
 
     printf("[i2c-scan] %s\n", all_ok ? "all expected devices present" : "one or more expected devices missing");
     return all_ok;
+}
+
+static void full_scan_bus(i2c_inst_t *bus, const char *bus_name) {
+    bool found_any = false;
+    for (uint8_t addr = 0x08u; addr <= 0x77u; addr++) {
+        if (is_reserved_addr(addr)) {
+            continue;
+        }
+        if (probe(bus, addr)) {
+            printf("[i2c-scan] %s: found device at 0x%02X\n", bus_name, addr);
+            found_any = true;
+        }
+    }
+    if (!found_any) {
+        printf("[i2c-scan] %s: no devices found at any address\n", bus_name);
+    }
+}
+
+void tiles_diag_i2c_full_scan(void) {
+    printf("[i2c-scan] --- full bus scan (0x08-0x77) ---\n");
+    full_scan_bus(i2c0, "I2C0");
+    full_scan_bus(i2c1, "I2C1");
+    printf("[i2c-scan] --- full bus scan done ---\n");
 }

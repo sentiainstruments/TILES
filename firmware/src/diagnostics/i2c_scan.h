@@ -17,3 +17,10 @@
  * every expected device ACKed. Safe to call repeatedly -- it never
  * writes device state, only tests for an ACK. */
 bool tiles_diag_i2c_scan_expected_devices(void);
+
+/* Probes every valid 7-bit address (0x08-0x77, skipping reserved
+ * addresses) on both I2C0 and I2C1 and prints every one that ACKs,
+ * expected or not. For diagnosing a device that isn't answering at its
+ * expected address -- e.g. a mis-set hardware address strap -- rather
+ * than for routine bring-up. */
+void tiles_diag_i2c_full_scan(void);

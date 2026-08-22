@@ -36,10 +36,11 @@ void board_gpio_init(void) {
     /* DAC80502 chip select: active-low, so "high" means deselected. */
     init_output(TILES_GPIO_DAC_SYNC_N, true);
 
-    /* PCA9685 A5 address strap. Input, no pull, and never touched again
-     * by any other code path -- driving this corrupts both haptic PWM
-     * controllers' I2C addresses. */
-    init_input(TILES_GPIO_PCA9685_ADDR_STRAP, false);
+    /* PCA9685 shared OE (see board_pins.h -- NOT an address strap).
+     * Input/high-Z at boot so both chips' outputs stay disabled until
+     * board_pca9685_enable_outputs() is called once channels are
+     * actually configured. */
+    init_input(TILES_GPIO_PCA9685_OE, false);
 
     /* DIN MIDI IN RX: plain input for now. The DIN MIDI IN service
      * reconfigures this pin's function to UART when it starts. */
@@ -92,6 +93,15 @@ void board_i2c_init(void) {
 void board_i2c_set_run_speed(void) {
     i2c_set_baudrate(i2c0, TILES_I2C_RUN_HZ);
     i2c_set_baudrate(i2c1, TILES_I2C_RUN_HZ);
+}
+
+void board_pca9685_enable_outputs(void) {
+    /* Only ever transitions this pin from input to output here, once,
+     * after the caller has already configured every PCA9685 channel.
+     * See board_pins.h for why this is safe: the only other thing on
+     * this net is a 10k pull-up to 3V3_OUT, no other active driver. */
+    gpio_set_dir(TILES_GPIO_PCA9685_OE, GPIO_OUT);
+    gpio_put(TILES_GPIO_PCA9685_OE, false);
 }
 
 void board_init(void) {

@@ -24,6 +24,14 @@ void board_i2c_init(void);
  * speed -- see the boot order in the firmware bring-up docs. */
 void board_i2c_set_run_speed(void);
 
+/* Drives the PCA9685 shared OE pin (GP20 -- see board_pins.h) low,
+ * enabling both chips' outputs. Call ONLY after every PCA9685 channel
+ * has already been configured to its intended state (services/buttons.c
+ * and, later, haptics) -- enabling OE makes each chip's current
+ * register content immediately live on its physical output pins. Not
+ * safe to call before that configuration has happened. */
+void board_pca9685_enable_outputs(void);
+
 /* Runs board_gpio_init() then board_i2c_init(). Convenience wrapper for
  * main.c; does not raise I2C speed or touch any device. */
 void board_init(void);
