@@ -15,6 +15,13 @@
 #define TILES_LIGHTING_CEILING_PERCENT_USB 37u
 #define TILES_LIGHTING_IDLE_BASELINE_PERCENT 10u
 
+/* Underglow is deliberately much brighter than the pad idle baseline --
+ * it's a fixed ambient halo, not a per-pad state indicator, so "way
+ * brighter" doesn't compete with touch/press feedback the way raising
+ * every pad's baseline would. Tuned against real hardware; adjust if it
+ * still doesn't read as bright enough. */
+#define TILES_LIGHTING_UNDERGLOW_PERCENT 65u
+
 static tiles_sk6805_chain_t s_underglow_chain;
 static tiles_sk6805_chain_t s_pad_chain;
 static tiles_tca9554_t s_led_mux;
@@ -28,6 +35,10 @@ static uint8_t ceiling_level(void) {
 
 static uint8_t idle_baseline_level(void) {
     return (uint8_t)(((uint32_t)ceiling_level() * TILES_LIGHTING_IDLE_BASELINE_PERCENT) / 100u);
+}
+
+static uint8_t underglow_level(void) {
+    return (uint8_t)(((uint32_t)ceiling_level() * TILES_LIGHTING_UNDERGLOW_PERCENT) / 100u);
 }
 
 static uint8_t pad_level_for_press(float press_0_to_1) {
@@ -78,7 +89,7 @@ bool tiles_lighting_init(void) {
         return false;
     }
 
-    uint8_t lvl = idle_baseline_level();
+    uint8_t lvl = underglow_level();
     uint32_t underglow_pixel = tiles_sk6805_pack_rgb(lvl, lvl, lvl);
     uint32_t underglow_pixels[4] = {underglow_pixel, underglow_pixel, underglow_pixel, underglow_pixel};
     tiles_sk6805_write(&s_underglow_chain, underglow_pixels, 4);
@@ -96,7 +107,23 @@ void tiles_lighting_set_pad_press(uint8_t logical_pad, float press_0_to_1) {
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
         return;
     }
-    s_pad_press[logical_pad - 1u] = press_0_to_1;
+
+    uint8_t pad_index = (uint8_t)(logical_pad - 1u);
+    if (s_pad_press[pad_index] == press_0_to_1) {
+        return;
+    }
+    s_pad_press[pad_index] = press_0_to_1;
+
+    /* Write immediately rather than waiting for tiles_lighting_service()'s
+     * round-robin to reach this pad -- with 24 pads serviced one per
+     * main-loop iteration, a touch change could otherwise take up to
+     * ~24 loop iterations to actually reach the LED, which reads as
+     * sluggish. The round-robin still runs continuously as a background
+     * "keep everything current" sweep, this just short-circuits the
+     * common case (touch/release) to feel immediate. */
+    if (s_initialized) {
+        write_pad(pad_index);
+    }
 }
 
 void tiles_lighting_service(void) {
