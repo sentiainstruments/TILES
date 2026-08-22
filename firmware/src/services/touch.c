@@ -5,6 +5,7 @@
 
 #include "mpr121.h"
 #include "lighting.h"
+#include "midi_out.h"
 
 static tiles_mpr121_t s_touch1; /* TILES_I2C0_ADDR_TOUCH1 */
 static tiles_mpr121_t s_touch2; /* TILES_I2C0_ADDR_TOUCH2 */
@@ -47,6 +48,15 @@ void tiles_touch_scan(void) {
             touched = (mask1 & (1u << cfg->touch.electrode)) != 0;
         } else if (cfg->touch.mpr121_i2c_addr == TILES_I2C0_ADDR_TOUCH2 && ok2) {
             touched = (mask2 & (1u << cfg->touch.electrode)) != 0;
+        }
+
+        /* V1 MIDI scope: touch alone drives note on/off, fixed velocity
+         * (see midi/midi_out.h) -- only fire on an actual state change,
+         * not every scan. */
+        if (touched && !s_pad_touched[i]) {
+            tiles_midi_note_on(cfg->demo_chromatic_note);
+        } else if (!touched && s_pad_touched[i]) {
+            tiles_midi_note_off(cfg->demo_chromatic_note);
         }
 
         s_pad_touched[i] = touched;

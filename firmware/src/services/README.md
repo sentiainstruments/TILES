@@ -20,11 +20,14 @@ not its code.
 
 - `lighting.h`/`.c` — done for the V1 default behavior in
   `docs/architecture/defaults-and-safeguards.md` ("LED color and
-  brightness"): underglow solid white at a fixed idle baseline (written
-  once at init, never changes), all 24 pads solid white at idle baseline
-  by default, brightening toward the ceiling when `touch.c` reports that
-  pad touched. Brightness hard-clamped to a hardcoded USB-only ceiling
-  (no power-profile governor yet).
+  brightness"): underglow solid white, brighter than pad idle baseline
+  (separately tunable, both confirmed working and legible on real
+  hardware), all 24 pads solid white at idle baseline by default,
+  brightening toward the ceiling when `touch.c` reports that pad
+  touched -- written immediately on a press-value change rather than
+  waiting for the round-robin, so touch reads as responsive rather than
+  laggy. Brightness hard-clamped to a hardcoded USB-only ceiling (no
+  power-profile governor yet).
   **Not done:** standby animations (needs its own design pass — see the
   defaults doc), any power-profile awareness beyond the hardcoded
   ceiling, Hall-driven (as opposed to touch-driven) brightness.
@@ -34,10 +37,13 @@ not its code.
   header for the ownership question this raises once haptics needs the
   same two chips for the 24 motor channels.
 - `touch.h`/`.c` — done for V1: reads both MPR121 controllers, derives
-  each pad's touched state from its board-map touch route, and pushes
-  that straight into `lighting.c`'s per-pad brightness (touched = full
-  ceiling, untouched = idle baseline). No touch+Hall fusion into real
-  velocity/pressure yet -- that's a later layer.
+  each pad's touched state from its board-map touch route, pushes that
+  into `lighting.c`'s per-pad brightness (touched = full ceiling,
+  untouched = idle baseline), and fires `midi/midi_out.c` note on/off
+  on the touch rising/falling edge using the pad's demo chromatic note.
+  No touch+Hall fusion into real velocity/pressure yet -- that's a
+  later layer, and MIDI stays single-channel/fixed-velocity until it
+  exists.
 - `hall.h`/`.c` — done for V1: round-robins all 24 pads' TMAG5273
   sensors through their Hall mux channels (one pad serviced per
   `tiles_hall_scan()` call), storing raw uncalibrated X/Y/Z. Structurally

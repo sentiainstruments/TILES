@@ -29,7 +29,12 @@ intact.
 
 ## Non-negotiables (see hardware docs for the full list)
 
-- Never drive GP20 (PCA9685 address strap).
+- Never drive GP20 to a *high* level -- GP20 is the shared PCA9685 OE
+  pin (see `board/board_pins.h`; the original hardware doc's "A5
+  address strap" claim was wrong, corrected 2026-08-21 against the real
+  fabricated board's flying-probe netlist). It's fine, and required, to
+  drive it *low* to enable outputs -- `board_pca9685_enable_outputs()`
+  does exactly that, but only once every channel is already configured.
 - Only one Hall mux channel enabled across all three TCA9548A devices at a
   time.
 - All LED mux banks disabled while changing selector bits.
@@ -41,68 +46,70 @@ intact.
 
 ## Status
 
-- `board/` — done for this phase: GPIO/I2C-address constants, the
-  `PadConfig[24]` table (verified unique by `test/test_pad_config.c`),
-  GPIO-safe-state + I2C-bus-init.
-- `diagnostics/` — I2C bus discovery (`i2c_scan`), looped in `main.c`
-  every 2s over the temporary USB-CDC stdio.
-- `drivers/` — `sk6805` (PIO one-wire RGB), `tca9554` (LED mux control),
-  `tca9548a` (Hall I2C mux), `tmag5273` (3-axis Hall sensor, V1: raw
-  reads only), `pca9685` (PWM/LED, button LEDs + future motors), and
-  `mpr121` (capacitive touch) are done; only `dac80502` (CV DAC) is not
-  built.
-- `services/` — `lighting` (V1 default: solid white, underglow always
-  on at idle baseline, pads at idle baseline brightening to the ceiling
-  when touched), `buttons` (debounced, LED lit while held), `touch`
-  (drives lighting brightness), and `hall` (V1: round-robin raw XYZ scan
-  of all 24 pads) are done; everything else is not built.
-- `midi/`, `usb_vendor/`, `profiles/`, `storage/` are still empty
-  module skeletons.
+**Real hardware, not just simulated/reasoned-through.** As of
+2026-08-21 this has been flashed to and run on an actual soldered Rev
+A0 board: all 8 expected I2C devices ACK, underglow and all 24 pad LEDs
+are lit white and touch-reactive, function buttons light while held,
+and Hall gives live changing raw XYZ. USB MIDI has not yet had its
+first on-hardware note-on test.
+
+- `board/` — done: GPIO/I2C-address constants, the `PadConfig[24]`
+  table (verified unique by `test/test_pad_config.c`), GPIO-safe-state
+  + I2C-bus-init, plus `board_pca9685_enable_outputs()` (see
+  non-negotiables above).
+- `diagnostics/` — `i2c_scan` (expected-device scan, looped every 2s)
+  and a full 0x08-0x77 bus scan (`tiles_diag_i2c_full_scan()`, not
+  currently called from `main.c` -- it did its job finding the real
+  PCA9685 addresses and is kept around for the next time something
+  isn't where it's expected).
+- `drivers/` — `sk6805`, `tca9554`, `tca9548a`, `tmag5273`, `pca9685`,
+  `mpr121` all done and now verified against real silicon (register
+  maps were datasheet-confirmed from the start; behavior confirmed
+  on hardware 2026-08-21). Only `dac80502` (CV DAC) is not built.
+- `services/` — `lighting`, `buttons`, `touch` (now also fires
+  `midi/midi_out` note on/off on touch edges), `hall` (V1: raw XYZ,
+  round-robin scan) all done and hardware-verified. Everything else
+  (touch+Hall fusion, expression mapping, haptics, pedal, power
+  governance, calibration) not built.
+- `midi/` — composite USB CDC+MIDI device done (see `midi/README.md`);
+  V1 note on/off (single channel, fixed velocity) wired to touch. Not
+  yet verified with a real MIDI-receiving host. DIN MIDI and MPE
+  channel allocation not built.
+- `usb_vendor/`, `profiles/`, `storage/` still empty module skeletons.
 
 Builds clean end-to-end against a real pico-sdk checkout (`cmake` +
 `arm-none-eabi-gcc`; see `BUILD.md`) with zero warnings, and produces a
-flashable `.uf2`. Not yet flashed to real hardware — see the open items
-below.
+flashable `.uf2`.
 
-**Known gaps to close before flashing to real hardware:**
-- The LED brightness ceiling and idle-baseline percentages in
-  `services/lighting.c` are the estimates from
-  `docs/architecture/defaults-and-safeguards.md`, not measured values.
+**Known gaps / open items:**
+- USB MIDI hasn't had a real on-hardware note-on/off test in a DAW or
+  MIDI monitor yet -- the composite descriptor builds and the device
+  should enumerate, but "builds clean" and "a host actually receives
+  the right notes" are different claims until checked.
+- The LED brightness ceiling and idle-baseline/underglow percentages in
+  `services/lighting.c` are engineering estimates (tuned once against
+  real hardware for "too dim" feedback, but not measured against an
+  actual current budget).
 - `sk6805.pio`'s bit timing mirrors Raspberry Pi's reference `ws2812.pio`
-  program but has only been verified by `pioasm` (syntax), not on a
-  scope/logic analyzer against real SK6805 parts.
-- `tiles_lighting_init()`'s return value is checked in `main.c` (prints
-  a failure message) but nothing yet falls back to a safe/degraded
-  lighting state on failure.
-- `tmag5273.c`'s register configuration is transcribed from the real TI
-  datasheet (not guessed), but has never talked to a real TMAG5273 --
-  the identify/init/read sequence is unverified against actual silicon.
+  program; confirmed working on real SK6805 parts (all pads + underglow
+  show correct white output on hardware), not independently verified on
+  a scope.
 - `hall.c`'s scan rate is whatever the main loop's `sleep_ms(10)` and
-  round-robin happen to produce -- not measured, and almost certainly
-  well under the 120Hz full-sweep target, since nothing budgets loop
-  timing yet. Revisit once Hall + touch + lighting are all integrated.
+  round-robin happen to produce -- not measured, likely under the
+  120Hz full-sweep target. `services/lighting.c`'s touch-triggered
+  writes now bypass the round-robin for immediate response (see its
+  `tiles_lighting_set_pad_press()`); Hall's round-robin has not had the
+  same treatment since nothing consumes calibrated Hall data yet.
 - No axis-selection or calibration logic exists yet -- `hall.c` reports
   raw X/Y/Z; deciding which axis is vertical press depth per pad, and
   turning raw counts into calibrated engineering values, is the next
   layer.
-- `pca9685.c`'s register map and the "full on"/"full off" bit behavior
-  are confirmed against the real NXP datasheet, and `mpr121.c`'s
-  against the real Freescale/NXP datasheet -- but neither has talked to
-  real silicon yet.
-- **PCA9685 power-on characteristic to expect, not a bug:** the chip's
-  own reset/init state drives every pin low, which briefly lights the
-  active-low-wired function-button LEDs before `services/buttons.c`'s
-  post-init correction runs (a handful of I2C writes after
-  `tiles_pca9685_init()` returns). Expect a very brief flash of all 6
-  button LEDs right at boot before they settle dark. Cosmetic only --
-  well within the LED current budget, and does not affect the motor
-  channels on the same chips (their "off" state is correct from the
-  first write).
 - MPR121 touch thresholds (12/6) are Freescale's generic quickstart
   defaults, not tuned for this board's actual electrode/keycap/acrylic
-  stack -- expect touch sensitivity to need real calibration once the
-  full assembly exists, per the hardware handoff.
-- I2C now correctly raises to 400kHz after the initial discovery scan
-  (`board_i2c_set_run_speed()`, called from `main.c`) -- this was
-  previously wired up in `board_init.h` but never actually called;
-  fixed during this review pass.
+  stack. Touch works and feels responsive on hardware as of the
+  latency fix in `services/lighting.c`, but sensitivity tuning is still
+  open.
+- No MPE (per-note channel allocation) or real velocity/pressure yet --
+  V1 MIDI is touch-only, single channel, fixed velocity. Needs Hall
+  calibration first to have a depth signal to derive velocity/pressure
+  from.

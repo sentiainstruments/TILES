@@ -3,12 +3,14 @@
  *
  * Current scope: board bring-up, I2C discovery, LEDs (pad + underglow,
  * white, idle baseline + touch-driven brightness), function buttons
- * (debounced, LED lit while held), capacitive touch, and a raw Hall
- * scan (uncalibrated XYZ). Not yet built: MIDI, haptics/motors, DIN,
- * CV/gate, the diagnostics/usb_vendor interface, calibration -- added
- * module by module per the bring-up order in
- * docs/hardware/SENTIA_FIRMWARE_CODEX_START.md. Each phase must leave
- * this file building and the previous phase's safety guarantees intact.
+ * (debounced, LED lit while held), capacitive touch, USB MIDI (V1:
+ * touch-triggered note on/off, single channel, fixed velocity -- see
+ * midi/midi_out.h), and a raw Hall scan (uncalibrated XYZ). Not yet
+ * built: MPE, haptics/motors, DIN, CV/gate, the usb_vendor diagnostics
+ * interface, calibration -- added module by module per the bring-up
+ * order in docs/hardware/SENTIA_FIRMWARE_CODEX_START.md. Each phase
+ * must leave this file building and the previous phase's safety
+ * guarantees intact.
  */
 
 #include <stdio.h>
@@ -17,12 +19,19 @@
 
 #include "board/board_init.h"
 #include "diagnostics/i2c_scan.h"
+#include "midi/usb_device.h"
 #include "services/buttons.h"
 #include "services/hall.h"
 #include "services/lighting.h"
 #include "services/touch.h"
 
 int main(void) {
+    /* Must run before stdio_init_all(): with tinyusb_device linked
+     * explicitly (see CMakeLists.txt), pico_stdio_usb expects us to have
+     * already called tusb_init() with our own composite CDC+MIDI
+     * descriptors -- see midi/usb_device.h. */
+    tiles_usb_device_init();
+
     stdio_init_all();
 
     board_init();
@@ -76,7 +85,6 @@ int main(void) {
     }
 
     uint32_t last_scan_ms = to_ms_since_boot(get_absolute_time());
-    uint32_t last_full_scan_ms = to_ms_since_boot(get_absolute_time());
 
     while (true) {
         tiles_buttons_scan();
@@ -97,18 +105,6 @@ int main(void) {
             printf("[hall] pad 1: x=%d y=%d z=%d valid=%d\n", s.x, s.y, s.z, s.valid);
 
             last_scan_ms = now_ms;
-        }
-
-        /* Full bus scan repeats every 10s rather than running once at
-         * boot -- USB CDC serial commonly drops output written before a
-         * host terminal has actually opened the port, so a one-shot
-         * boot-time print is unreliable to catch. Only useful while
-         * diagnosing a device that isn't at its expected address (e.g.
-         * the PCA9685 devices' GP20 address-strap net) -- remove once
-         * that's resolved. */
-        if (now_ms - last_full_scan_ms >= 10000) {
-            tiles_diag_i2c_full_scan();
-            last_full_scan_ms = now_ms;
         }
 
         sleep_ms(10);
