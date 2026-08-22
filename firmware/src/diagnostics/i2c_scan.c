@@ -5,11 +5,24 @@
 #include "board_pins.h"
 #include "hardware/i2c.h"
 
-/* Standard pico-sdk bus-scan technique: a zero-length write only sends
- * the address byte and waits for ACK/NACK, never touching device state. */
+/* Bus-scan technique: a 1-byte read of whatever register a device's
+ * internal pointer currently sits on -- non-destructive (no register
+ * write), and a real transaction that actually appears on the bus.
+ *
+ * NOT a zero-length write: the RP2350's I2C hardware cannot perform a
+ * 0-byte transfer at all (pico-sdk's own comment: "Synopsys hw accepts
+ * start/stop flags alongside data items in the same FIFO word, so no 0
+ * byte transfers"), and i2c_write_blocking's len==0 case is only
+ * guarded by an assert() that's compiled out in a Release build (this
+ * project's default). A zero-length write silently skips the entire
+ * bus transaction and returns "success" unconditionally -- it reports
+ * every device present regardless of what's actually connected. That
+ * was this function's original implementation; caught it because it
+ * kept reporting all 8 devices ACKing with the Pico sitting
+ * disconnected from the board. */
 static bool probe(i2c_inst_t *bus, uint8_t addr) {
     uint8_t dummy = 0;
-    int ret = i2c_write_blocking(bus, addr, &dummy, 0, false);
+    int ret = i2c_read_blocking(bus, addr, &dummy, 1, false);
     return ret >= 0;
 }
 
