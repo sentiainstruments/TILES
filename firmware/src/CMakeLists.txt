@@ -7,8 +7,12 @@ add_executable(sentia_tiles_firmware
     drivers/tca9554.c
     drivers/tca9548a.c
     drivers/tmag5273.c
+    drivers/pca9685.c
+    drivers/mpr121.c
     services/lighting.c
     services/hall.c
+    services/buttons.c
+    services/touch.c
 )
 
 pico_generate_pio_header(sentia_tiles_firmware ${CMAKE_CURRENT_SOURCE_DIR}/drivers/sk6805.pio)

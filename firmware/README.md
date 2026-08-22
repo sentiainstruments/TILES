@@ -47,12 +47,15 @@ intact.
 - `diagnostics/` — I2C bus discovery (`i2c_scan`), looped in `main.c`
   every 2s over the temporary USB-CDC stdio.
 - `drivers/` — `sk6805` (PIO one-wire RGB), `tca9554` (LED mux control),
-  `tca9548a` (Hall I2C mux), and `tmag5273` (3-axis Hall sensor, V1: raw
-  reads only) are done; `mpr121`, `pca9685`, `dac80502` are not built.
-- `services/` — `lighting` (V1 default: solid white, underglow + pad
-  idle baseline, hardcoded USB-only brightness ceiling) and `hall` (V1:
-  round-robin raw XYZ scan of all 24 pads) are done; everything else is
-  not built.
+  `tca9548a` (Hall I2C mux), `tmag5273` (3-axis Hall sensor, V1: raw
+  reads only), `pca9685` (PWM/LED, button LEDs + future motors), and
+  `mpr121` (capacitive touch) are done; only `dac80502` (CV DAC) is not
+  built.
+- `services/` — `lighting` (V1 default: solid white, underglow always
+  on at idle baseline, pads at idle baseline brightening to the ceiling
+  when touched), `buttons` (debounced, LED lit while held), `touch`
+  (drives lighting brightness), and `hall` (V1: round-robin raw XYZ scan
+  of all 24 pads) are done; everything else is not built.
 - `midi/`, `usb_vendor/`, `profiles/`, `storage/` are still empty
   module skeletons.
 
@@ -82,3 +85,24 @@ below.
   raw X/Y/Z; deciding which axis is vertical press depth per pad, and
   turning raw counts into calibrated engineering values, is the next
   layer.
+- `pca9685.c`'s register map and the "full on"/"full off" bit behavior
+  are confirmed against the real NXP datasheet, and `mpr121.c`'s
+  against the real Freescale/NXP datasheet -- but neither has talked to
+  real silicon yet.
+- **PCA9685 power-on characteristic to expect, not a bug:** the chip's
+  own reset/init state drives every pin low, which briefly lights the
+  active-low-wired function-button LEDs before `services/buttons.c`'s
+  post-init correction runs (a handful of I2C writes after
+  `tiles_pca9685_init()` returns). Expect a very brief flash of all 6
+  button LEDs right at boot before they settle dark. Cosmetic only --
+  well within the LED current budget, and does not affect the motor
+  channels on the same chips (their "off" state is correct from the
+  first write).
+- MPR121 touch thresholds (12/6) are Freescale's generic quickstart
+  defaults, not tuned for this board's actual electrode/keycap/acrylic
+  stack -- expect touch sensitivity to need real calibration once the
+  full assembly exists, per the hardware handoff.
+- I2C now correctly raises to 400kHz after the initial discovery scan
+  (`board_i2c_set_run_speed()`, called from `main.c`) -- this was
+  previously wired up in `board_init.h` but never actually called;
+  fixed during this review pass.

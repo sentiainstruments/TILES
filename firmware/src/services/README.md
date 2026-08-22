@@ -20,15 +20,24 @@ not its code.
 
 - `lighting.h`/`.c` — done for the V1 default behavior in
   `docs/architecture/defaults-and-safeguards.md` ("LED color and
-  brightness"): underglow solid white at a fixed idle baseline, all 24
-  pads solid white at the same idle baseline, brightness hard-clamped to
-  a hardcoded USB-only ceiling (no power-profile governor yet).
-  `tiles_lighting_set_pad_press()` is the hook for touch/Hall to drive
-  per-pad brightness once those exist — nothing calls it yet, so all
-  pads currently sit at idle baseline permanently.
+  brightness"): underglow solid white at a fixed idle baseline (written
+  once at init, never changes), all 24 pads solid white at idle baseline
+  by default, brightening toward the ceiling when `touch.c` reports that
+  pad touched. Brightness hard-clamped to a hardcoded USB-only ceiling
+  (no power-profile governor yet).
   **Not done:** standby animations (needs its own design pass — see the
   defaults doc), any power-profile awareness beyond the hardcoded
-  ceiling.
+  ceiling, Hall-driven (as opposed to touch-driven) brightness.
+- `buttons.h`/`.c` — done for V1: reads all 6 function buttons
+  (debounced, 10ms), lights each one's PCA9685-driven LED while (and
+  only while) it's held. Owns both physical PCA9685 chips; see the file
+  header for the ownership question this raises once haptics needs the
+  same two chips for the 24 motor channels.
+- `touch.h`/`.c` — done for V1: reads both MPR121 controllers, derives
+  each pad's touched state from its board-map touch route, and pushes
+  that straight into `lighting.c`'s per-pad brightness (touched = full
+  ceiling, untouched = idle baseline). No touch+Hall fusion into real
+  velocity/pressure yet -- that's a later layer.
 - `hall.h`/`.c` — done for V1: round-robins all 24 pads' TMAG5273
   sensors through their Hall mux channels (one pad serviced per
   `tiles_hall_scan()` call), storing raw uncalibrated X/Y/Z. Structurally
@@ -40,5 +49,5 @@ not its code.
   per pad, calibration (rest/half/bottom capture, offsets, dead zones),
   any filtering, and the ~120Hz full-sweep rate target isn't measured or
   tuned yet -- see `firmware/README.md`'s known gaps.
-- Everything else (touch fusion, expression mapping, haptics, pedal,
-  power governance) is not built yet.
+- Everything else (touch+Hall fusion, expression mapping, haptics,
+  pedal, power governance, calibration) is not built yet.

@@ -29,4 +29,18 @@ bit-banged over PIO), `dac80502` (CV DAC).
   Register map transcribed directly from the TI datasheet (local copy),
   not from memory — see the file header. No gain/offset/threshold/angle
   features configured; that's the calibration layer, not built yet.
-- `mpr121`, `pca9685`, `dac80502` — not built yet.
+- `pca9685.h`/`.c` — done. Register map and the "full on"/"full off"
+  bit behavior confirmed against the real NXP datasheet (Rev 4), fetched
+  and read directly. Important, datasheet-confirmed fact baked into the
+  driver: the chip's own power-on/init "every channel off" state drives
+  every pin LOW, which is correct for this board's active-high motor
+  channels but actually *lights* the active-low-wired function-button
+  LEDs — `services/buttons.c` corrects those specific channels
+  immediately after init. See the file header for the full reasoning.
+- `mpr121.h`/`.c` — done. Register map and init sequence (soft reset,
+  baseline filter, per-electrode touch/release thresholds, Run Mode)
+  confirmed against the real Freescale/NXP datasheet. Threshold values
+  (12/6) are Freescale's own published quickstart defaults, not final
+  per-key tuning — real thresholds still need calibration once the
+  enclosure/keycaps are assembled, per the hardware handoff.
+- `dac80502` — not built yet.
