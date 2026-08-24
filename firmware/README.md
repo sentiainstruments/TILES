@@ -66,15 +66,17 @@ first on-hardware note-on test.
   `mpr121` all done and now verified against real silicon (register
   maps were datasheet-confirmed from the start; behavior confirmed
   on hardware 2026-08-21). Only `dac80502` (CV DAC) is not built.
-- `services/` — `lighting`, `buttons`, `touch` (now also fires
-  `midi/midi_out` note on/off on touch edges), `hall` (V1: raw XYZ,
-  round-robin scan) all done and hardware-verified. Everything else
-  (touch+Hall fusion, expression mapping, haptics, pedal, power
-  governance, calibration) not built.
+- `services/` — `lighting`, `buttons`, `touch` (fires `midi/midi_out`
+  note on/off on touch edges), `hall` (V1: raw XYZ, round-robin scan)
+  all done and hardware-verified. `pedal` done: sustain (CC64) on by
+  default, expression (CC11) built but off by default and runtime-
+  toggleable -- see `services/README.md`. Not yet hardware-tested.
+  Everything else (touch+Hall fusion beyond MIDI note triggering,
+  haptics, power governance, calibration) not built.
 - `midi/` — composite USB CDC+MIDI device done (see `midi/README.md`);
-  V1 note on/off (single channel, fixed velocity) wired to touch. Not
-  yet verified with a real MIDI-receiving host. DIN MIDI and MPE
-  channel allocation not built.
+  V1 note on/off + CC (single channel, fixed velocity) wired to touch
+  and pedal. Not yet verified with a real MIDI-receiving host. DIN
+  MIDI and MPE channel allocation not built.
 - `usb_vendor/`, `profiles/`, `storage/` still empty module skeletons.
 
 Builds clean end-to-end against a real pico-sdk checkout (`cmake` +

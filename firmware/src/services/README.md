@@ -55,5 +55,14 @@ not its code.
   per pad, calibration (rest/half/bottom capture, offsets, dead zones),
   any filtering, and the ~120Hz full-sweep rate target isn't measured or
   tuned yet -- see `firmware/README.md`'s known gaps.
-- Everything else (touch+Hall fusion, expression mapping, haptics,
-  pedal, power governance, calibration) is not built yet.
+- `pedal.h`/`.c` — done: sustain (MIDI CC64) on by default, debounced
+  with hysteresis, polarity defaults to the usual normally-open
+  footswitch convention and is switchable at runtime
+  (`tiles_pedal_set_polarity()`). Expression (CC11, continuous) is
+  built but **disabled by default** -- `tiles_pedal_set_expression_enabled()`
+  is the runtime toggle, meant as the hook the companion app will
+  eventually control once `usb_vendor/` exists. Real auto-sensing of
+  polarity/disconnected-pedal state is still a later layer, see
+  `docs/architecture/defaults-and-safeguards.md` "Pedal polarity".
+- Everything else (touch+Hall fusion, expression mapping beyond the
+  pedal, haptics, power governance, calibration) is not built yet.

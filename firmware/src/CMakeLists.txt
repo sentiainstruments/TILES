@@ -13,6 +13,7 @@ add_executable(sentia_tiles_firmware
     services/hall.c
     services/buttons.c
     services/touch.c
+    services/pedal.c
     midi/usb_device.c
     midi/usb_descriptors.c
     midi/midi_out.c
@@ -35,6 +36,7 @@ target_link_libraries(sentia_tiles_firmware
     hardware_i2c
     hardware_pio
     hardware_clocks
+    hardware_adc
     tinyusb_device
     pico_unique_id
 )

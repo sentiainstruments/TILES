@@ -5,12 +5,13 @@
  * white, idle baseline + touch-driven brightness), function buttons
  * (debounced, LED lit while held), capacitive touch, USB MIDI (V1:
  * touch-triggered note on/off, single channel, fixed velocity -- see
- * midi/midi_out.h), and a raw Hall scan (uncalibrated XYZ). Not yet
- * built: MPE, haptics/motors, DIN, CV/gate, the usb_vendor diagnostics
- * interface, calibration -- added module by module per the bring-up
- * order in docs/hardware/SENTIA_FIRMWARE_CODEX_START.md. Each phase
- * must leave this file building and the previous phase's safety
- * guarantees intact.
+ * midi/midi_out.h), pedal (sustain CC64 on by default, expression CC11
+ * built but off by default -- see services/pedal.h), and a raw Hall
+ * scan (uncalibrated XYZ). Not yet built: MPE, haptics/motors, DIN,
+ * CV/gate, the usb_vendor diagnostics interface, calibration -- added
+ * module by module per the bring-up order in
+ * docs/hardware/SENTIA_FIRMWARE_CODEX_START.md. Each phase must leave
+ * this file building and the previous phase's safety guarantees intact.
  */
 
 #include <stdio.h>
@@ -23,6 +24,7 @@
 #include "services/buttons.h"
 #include "services/hall.h"
 #include "services/lighting.h"
+#include "services/pedal.h"
 #include "services/touch.h"
 
 int main(void) {
@@ -74,6 +76,10 @@ int main(void) {
         printf("[touch] one or both MPR121 controllers failed init\n");
     }
 
+    /* Pedal: sustain (CC64) on by default; expression (CC11) built but
+     * disabled by default -- see services/pedal.h. */
+    tiles_pedal_init();
+
     /* Phase 4 bring-up: one Hall sensor at a time, then the full 24-pad
      * scan (see SENTIA_FIRMWARE_CODEX_START.md). A false return means
      * at least one pad's sensor failed identify/init -- tiles_hall_scan()
@@ -89,6 +95,7 @@ int main(void) {
     while (true) {
         tiles_buttons_scan();
         tiles_touch_scan();
+        tiles_pedal_scan();
         tiles_lighting_service();
         tiles_hall_scan();
 

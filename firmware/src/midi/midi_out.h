@@ -16,3 +16,9 @@
 
 void tiles_midi_note_on(uint8_t note);
 void tiles_midi_note_off(uint8_t note);
+
+/* Sends a Control Change message (0xB0 | channel, controller, value)
+ * on the same V1 single channel. Used for the pedal (sustain = CC64,
+ * expression = CC11) and available for anything else that needs a raw
+ * CC later. */
+void tiles_midi_send_cc(uint8_t controller, uint8_t value);
