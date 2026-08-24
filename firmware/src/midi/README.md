@@ -20,11 +20,11 @@ rate limiting for continuous expression data.
   `tusb_init()` and USB descriptor provision to us
   (`LIB_TINYUSB_DEVICE`-gated, pico-sdk's own documented mechanism for
   this) -- see the comment in `tusb_config.h` for the full reasoning.
-- `midi_out.{h,c}` — done for V1 only: `tiles_midi_note_on/off(note)`,
-  single MIDI channel (channel 1), fixed velocity. Wired to
-  `services/touch.c` -- a pad's touch rising/falling edge sends
-  note-on/off using its `demo_chromatic_note`. No MPE (per-note channel
-  allocation), no real velocity/pressure (Hall isn't calibrated yet, so
-  there's no depth signal to derive it from) -- see
-  `docs/architecture/defaults-and-safeguards.md` "V1 sensing scope".
+- `midi_out.{h,c}` — done: `tiles_midi_note_on(note, velocity)`,
+  `tiles_midi_note_off(note)`, `tiles_midi_send_poly_aftertouch(note, pressure)`,
+  `tiles_midi_send_cc(controller, value)` -- all on a single V1 MIDI
+  channel (channel 1). Driven by `services/expression.c` (note
+  on/off/aftertouch, from touch+Hall fusion) and `services/pedal.c`
+  (sustain/expression CC). No MPE (per-note channel allocation) yet --
+  see `docs/architecture/defaults-and-safeguards.md`.
 - DIN MIDI IN/OUT, MPE channel allocation -- not built yet.

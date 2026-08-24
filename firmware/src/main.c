@@ -3,13 +3,15 @@
  *
  * Current scope: board bring-up, I2C discovery, LEDs (pad + underglow,
  * white, idle baseline + touch-driven brightness), function buttons
- * (debounced, LED lit while held), capacitive touch, USB MIDI (V1:
- * touch-triggered note on/off, single channel, fixed velocity -- see
- * midi/midi_out.h), pedal (sustain CC64 on by default, expression CC11
- * built but off by default -- see services/pedal.h), and a raw Hall
- * scan (uncalibrated XYZ). Not yet built: MPE, haptics/motors, DIN,
- * CV/gate, the usb_vendor diagnostics interface, calibration -- added
- * module by module per the bring-up order in
+ * (debounced, LED lit while held), capacitive touch, USB MIDI (single
+ * channel; note-on velocity from Hall strike acceleration and ongoing
+ * aftertouch from press depth -- see services/expression.h; chromatic
+ * pad->note layout with a scale-mode architecture ready for more
+ * scales later -- see services/note_map.h), pedal (sustain CC64 on by
+ * default, expression CC11 built but off by default -- see
+ * services/pedal.h). Not yet built: MPE, haptics/motors, DIN, CV/gate,
+ * the usb_vendor diagnostics interface, per-pad Hall calibration --
+ * added module by module per the bring-up order in
  * docs/hardware/SENTIA_FIRMWARE_CODEX_START.md. Each phase must leave
  * this file building and the previous phase's safety guarantees intact.
  */
@@ -22,6 +24,7 @@
 #include "diagnostics/i2c_scan.h"
 #include "midi/usb_device.h"
 #include "services/buttons.h"
+#include "services/expression.h"
 #include "services/hall.h"
 #include "services/lighting.h"
 #include "services/pedal.h"
@@ -90,6 +93,10 @@ int main(void) {
         printf("[hall] one or more pads failed sensor init -- see per-pad status\n");
     }
 
+    /* Touch + Hall fusion: strike velocity + aftertouch. See
+     * services/expression.h. */
+    tiles_expression_init();
+
     uint32_t last_scan_ms = to_ms_since_boot(get_absolute_time());
 
     while (true) {
@@ -98,6 +105,9 @@ int main(void) {
         tiles_pedal_scan();
         tiles_lighting_service();
         tiles_hall_scan();
+        /* Must run after both tiles_touch_scan() and tiles_hall_scan()
+         * above so it sees this iteration's fresh data from both. */
+        tiles_expression_scan();
 
         uint32_t now_ms = to_ms_since_boot(get_absolute_time());
         if (now_ms - last_scan_ms >= 2000) {
@@ -114,7 +124,15 @@ int main(void) {
             last_scan_ms = now_ms;
         }
 
-        sleep_ms(10);
+        /* Was sleep_ms(10); reduced because services/expression.c's
+         * strike-detection window (15-60ms) needs several loop
+         * iterations to land inside it to get enough Hall samples --
+         * at 10ms per iteration that's only 1-6 samples, marginal. The
+         * actual resulting loop period is still unmeasured (depends on
+         * real I2C transaction timing, and grows when multiple pads
+         * are held via the Hall priority-scan pass) -- this is a
+         * direction, not a measured number. */
+        sleep_ms(1);
     }
 
     return 0;

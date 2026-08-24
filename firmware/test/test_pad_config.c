@@ -108,15 +108,12 @@ static void check_haptic_routes_unique(void) {
     }
 }
 
-static void check_fpc_and_notes_unique(void) {
+static void check_fpc_unique(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         for (uint8_t j = i + 1; j < TILES_NUM_PADS; j++) {
             CHECK(g_tiles_pad_config[i].fpc_index != g_tiles_pad_config[j].fpc_index,
                   "pads %u and %u share fpc_index %u", g_tiles_pad_config[i].logical_pad,
                   g_tiles_pad_config[j].logical_pad, g_tiles_pad_config[i].fpc_index);
-            CHECK(g_tiles_pad_config[i].demo_chromatic_note != g_tiles_pad_config[j].demo_chromatic_note,
-                  "pads %u and %u share demo_chromatic_note %u", g_tiles_pad_config[i].logical_pad,
-                  g_tiles_pad_config[j].logical_pad, g_tiles_pad_config[i].demo_chromatic_note);
         }
     }
 }
@@ -136,7 +133,7 @@ int main(void) {
     check_hall_routes_unique();
     check_led_routes_unique();
     check_haptic_routes_unique();
-    check_fpc_and_notes_unique();
+    check_fpc_unique();
     check_board_pad_config_accessor();
 
     if (g_failures == 0) {

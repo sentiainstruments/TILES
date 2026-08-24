@@ -4,11 +4,13 @@
  * Touch event service: reads both MPR121 controllers and derives each
  * logical pad's touched state from board_pad_config()'s touch route.
  *
- * V1 scope: touch drives pad LED brightness only -- a touched pad
- * brightens to the lighting service's ceiling, an untouched pad sits at
- * idle baseline (see docs/architecture/defaults-and-safeguards.md).
- * Fusing touch with Hall depth for real velocity/pressure/aftertouch is
- * a later layer once both are proven on hardware.
+ * This module owns touch state and pad LED brightness only (a touched
+ * pad brightens to the lighting service's ceiling, an untouched pad
+ * sits at idle baseline -- see
+ * docs/architecture/defaults-and-safeguards.md). MIDI note on/off/
+ * velocity/aftertouch are owned by services/expression.c, which reads
+ * tiles_touch_is_touched() (below) itself rather than this module
+ * reaching into MIDI -- keeps touch's own responsibility narrow.
  */
 
 #include <stdbool.h>

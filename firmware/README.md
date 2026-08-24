@@ -66,17 +66,24 @@ first on-hardware note-on test.
   `mpr121` all done and now verified against real silicon (register
   maps were datasheet-confirmed from the start; behavior confirmed
   on hardware 2026-08-21). Only `dac80502` (CV DAC) is not built.
-- `services/` — `lighting`, `buttons`, `touch` (fires `midi/midi_out`
-  note on/off on touch edges), `hall` (V1: raw XYZ, round-robin scan)
-  all done and hardware-verified. `pedal` done: sustain (CC64) on by
-  default, expression (CC11) built but off by default and runtime-
-  toggleable -- see `services/README.md`. Not yet hardware-tested.
-  Everything else (touch+Hall fusion beyond MIDI note triggering,
-  haptics, power governance, calibration) not built.
+- `services/` — `lighting`, `buttons`, `touch`, `hall` (raw XYZ + rest
+  baseline + depth, touched-pad-priority scan) all done and
+  hardware-verified. `pedal` done (sustain on by default, expression
+  built but off) but not yet hardware-tested. `note_map` done: pad ->
+  MIDI note layout confirmed against real hardware's stated pattern
+  (pad 19 = lowest note, bottom-to-top/left-to-right), scale-mode
+  architecture in place with only chromatic implemented, verified by
+  `firmware/test/test_note_map.c`. `expression` done for V1: touch+Hall
+  fusion deriving real velocity (from strike acceleration) and
+  aftertouch (from press depth) -- see `services/README.md` for the
+  state machine and the explicitly-unmeasured scaling constants.
+  Everything else (haptics, power governance, per-pad Hall calibration)
+  not built.
 - `midi/` — composite USB CDC+MIDI device done (see `midi/README.md`);
-  V1 note on/off + CC (single channel, fixed velocity) wired to touch
-  and pedal. Not yet verified with a real MIDI-receiving host. DIN
-  MIDI and MPE channel allocation not built.
+  note on/off with real velocity, poly aftertouch, and CC (sustain/
+  expression) all wired up, single MIDI channel. Not yet verified with
+  a real MIDI-receiving host. DIN MIDI and MPE channel allocation not
+  built.
 - `usb_vendor/`, `profiles/`, `storage/` still empty module skeletons.
 
 Builds clean end-to-end against a real pico-sdk checkout (`cmake` +
@@ -96,22 +103,30 @@ flashable `.uf2`.
   program; confirmed working on real SK6805 parts (all pads + underglow
   show correct white output on hardware), not independently verified on
   a scope.
-- `hall.c`'s scan rate is whatever the main loop's `sleep_ms(10)` and
-  round-robin happen to produce -- not measured, likely under the
-  120Hz full-sweep target. `services/lighting.c`'s touch-triggered
-  writes now bypass the round-robin for immediate response (see its
-  `tiles_lighting_set_pad_press()`); Hall's round-robin has not had the
-  same treatment since nothing consumes calibrated Hall data yet.
-- No axis-selection or calibration logic exists yet -- `hall.c` reports
-  raw X/Y/Z; deciding which axis is vertical press depth per pad, and
-  turning raw counts into calibrated engineering values, is the next
-  layer.
+- `hall.c` now prioritizes touched pads (scanned every call) over the
+  background round-robin for untouched ones, and the main loop's
+  throttle was cut from `sleep_ms(10)` to `sleep_ms(1)` specifically so
+  `services/expression.c`'s strike-detection window gets more samples
+  -- but the actual achieved sample rate for a touched pad is still
+  unmeasured (depends on real I2C transaction timing, and on how many
+  other pads are touched at once). This is a direction, not a verified
+  number.
+- No per-pad axis-selection or calibration curve exists yet -- Z is
+  assumed to be the vertical-press axis for every pad (unverified per-
+  pad), and `hall.c`'s depth is a raw, uncalibrated magnitude with no
+  dead zone, offset correction, or saturation margin.
+- `services/expression.c`'s acceleration->velocity scale, depth->
+  aftertouch range, and strike-detection window durations are all
+  explicitly-flagged placeholder constants -- there is no calibrated
+  mT/LSB relationship to derive them from yet, so they're starting
+  guesses that will need real-hardware tuning once this can actually be
+  played and heard.
 - MPR121 touch thresholds (12/6) are Freescale's generic quickstart
   defaults, not tuned for this board's actual electrode/keycap/acrylic
   stack. Touch works and feels responsive on hardware as of the
   latency fix in `services/lighting.c`, but sensitivity tuning is still
   open.
-- No MPE (per-note channel allocation) or real velocity/pressure yet --
-  V1 MIDI is touch-only, single channel, fixed velocity. Needs Hall
-  calibration first to have a depth signal to derive velocity/pressure
-  from.
+- No MPE (per-note channel allocation) yet -- V1 MIDI is single
+  channel. Velocity and aftertouch are now real (Hall-derived), not
+  fixed, but unverified against actual playing since USB MIDI itself
+  hasn't been hardware-tested.

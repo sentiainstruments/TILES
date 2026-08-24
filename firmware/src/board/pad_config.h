@@ -59,10 +59,6 @@ typedef struct {
     tiles_hall_route_t hall;
     tiles_led_route_t led;
     tiles_haptic_route_t haptic;
-
-    /* V1 demo note map only (chromatic C3-B4, row-major). Not used once a
-     * real profile/scale layout exists -- see profiles/. */
-    uint8_t demo_chromatic_note;
 } tiles_pad_config_t;
 
 extern const tiles_pad_config_t g_tiles_pad_config[TILES_NUM_PADS];
