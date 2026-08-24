@@ -124,15 +124,17 @@ int main(void) {
             last_scan_ms = now_ms;
         }
 
-        /* Was sleep_ms(10); reduced because services/expression.c's
-         * strike-detection window (15-60ms) needs several loop
-         * iterations to land inside it to get enough Hall samples --
-         * at 10ms per iteration that's only 1-6 samples, marginal. The
-         * actual resulting loop period is still unmeasured (depends on
-         * real I2C transaction timing, and grows when multiple pads
-         * are held via the Hall priority-scan pass) -- this is a
-         * direction, not a measured number. */
-        sleep_ms(1);
+        /* No sleep here (was sleep_ms(10), then sleep_ms(1)): removed
+         * entirely for latency -- it bought nothing. pico_stdio_usb's
+         * tud_task() runs from its own background IRQ regardless of
+         * what this loop does (see midi/usb_device.c's header comment),
+         * there's no watchdog yet to starve, and
+         * services/expression.c's strike-detection window needs as
+         * many loop iterations as possible landing inside it. The
+         * resulting loop period is still unmeasured (depends on real
+         * I2C transaction timing, and grows when multiple pads are held
+         * via the Hall priority-scan pass) -- this is a direction, not
+         * a measured number. */
     }
 
     return 0;

@@ -42,5 +42,14 @@ bit-banged over PIO), `dac80502` (CV DAC).
   confirmed against the real Freescale/NXP datasheet. Threshold values
   (12/6) are Freescale's own published quickstart defaults, not final
   per-key tuning — real thresholds still need calibration once the
-  enclosure/keycaps are assembled, per the hardware handoff.
+  enclosure/keycaps are assembled, per the hardware handoff. One
+  deviation from the quickstart defaults, for latency: ESI (electrode
+  sample interval) is set to 1ms instead of Freescale's 16ms default --
+  the chip's own internal sample interval is a real latency floor no
+  amount of firmware polling can beat, and 16ms alone was a meaningful
+  chunk of end-to-end touch latency. Verified safe given our FFI/CDT
+  settings (actual scan time ~72us, well under 1ms) rather than silently
+  overridden by scan time -- see the comment in `mpr121.c`. Tradeoff:
+  less noise averaging; revisit if touch gets jittery on the real
+  assembly.
 - `dac80502` — not built yet.

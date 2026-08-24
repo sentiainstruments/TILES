@@ -100,13 +100,24 @@ bool tiles_mpr121_init(tiles_mpr121_t *dev, i2c_inst_t *bus, uint8_t addr) {
     }
 
     /* Global charge current/time + filter iteration/sample-interval
-     * settings (Section 5.8). Written explicitly even though these
-     * match the chip's own post-reset defaults (0x10, 0x24), so this
-     * driver doesn't depend on that surviving a future reset. */
+     * settings (Section 5.8). CDC (0x5C) left at the chip's post-reset
+     * default (0x10: FFI=00/6 samples, CDC=16uA) -- FFI=00 is already
+     * the fastest option, nothing to gain there. CDT (0x5D) deviates
+     * from the chip's default (0x24, ESI=100b/16ms) to ESI=000b/1ms --
+     * the touch chip's own internal sample interval is a real latency
+     * floor no amount of firmware polling can beat, and 16ms alone was
+     * a meaningful chunk of end-to-end touch latency. 1ms is safe given
+     * our FFI/CDT settings: actual per-cycle scan time is ~6 samples x
+     * 1us x 12 electrodes = ~72us, comfortably under a 1ms period, so
+     * this genuinely changes the sample rate rather than being silently
+     * overridden by scan time (see the datasheet's own worked example
+     * of that failure mode, Section 5.8). Tradeoff: less noise
+     * averaging than Freescale's quickstart default -- revisit if touch
+     * gets jittery once the real keycap/enclosure assembly exists. */
     if (!write_reg(bus, addr, REG_FILTER_GLOBAL_CDC, 0x10u)) {
         return false;
     }
-    if (!write_reg(bus, addr, REG_FILTER_GLOBAL_CDT, 0x24u)) {
+    if (!write_reg(bus, addr, REG_FILTER_GLOBAL_CDT, 0x20u)) {
         return false;
     }
 
