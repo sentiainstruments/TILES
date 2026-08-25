@@ -18,3 +18,12 @@ Contents so far:
   100kHz. This is step 1 (and the bus half of step 3) of the boot order
   in `SENTIA_FIRMWARE_CODEX_START.md`. It does not touch any I2C device
   — that's `drivers/`, not built yet.
+- `board_layout.h` — header-only. How the 6 function buttons + 24 pads +
+  4 underglow pixels map onto one unified 5-row x 6-col logical grid
+  (row 0 = buttons, rows 1-4 = the pad grid), for any module that treats
+  the board as a single low-res animated display:
+  `services/standby.c`'s idle animations and `services/boot_sequence.c`'s
+  power-on animation both include it rather than each keeping their own
+  copy of this mapping. The underglow anchor points are based on the
+  user's verbal description of the physical board, not a hardware doc
+  (confirmed absent from `docs/hardware/`).

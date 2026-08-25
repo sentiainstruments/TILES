@@ -1,5 +1,6 @@
 #include "standby.h"
 
+#include "board_layout.h"
 #include "board_pins.h"
 #include "buttons.h"
 #include "hall.h"
@@ -19,6 +20,15 @@
  * against how it actually feels to watch. */
 #define TILES_STANDBY_IDLE_TIMEOUT_MS 60000u
 #define TILES_STANDBY_ANIMATION_CYCLE_MS 120000u
+
+/* After 15 minutes of TOTAL inactivity (same s_last_activity_ms clock
+ * that gates entering standby in the first place -- not 15 minutes of
+ * animation specifically, 15 minutes since the last real touch/button/
+ * pedal event), standby's animations stop and the board drops to a
+ * deeper power-saving indicator: everything dark except the circle
+ * button pulsing gently. See enter_power_saving() below. Explicit
+ * demo-mode default, like the other timings here. */
+#define TILES_STANDBY_POWER_SAVING_TIMEOUT_MS 900000u /* 15 * 60 * 1000 */
 
 /* ~25fps. Unmeasured against real I2C bus load (every pad write is a
  * mux-select-enable-disable dance, see lighting.c) -- if 24 pads + 6
@@ -55,48 +65,11 @@
 
 #define TILES_STANDBY_PI 3.14159265358979323846f
 
-#define GRID_MIN_ROW 0u /* function buttons */
-#define GRID_MAX_ROW 4u /* pad row 4, the bottom row */
-#define GRID_MIN_COL 1u
-#define GRID_MAX_COL 6u
-
-/* logical_pad = (row-1)*6 + col for row 1-4, col 1-6 -- the row-major
- * layout pad_config.c documents and its table's literal data confirms,
- * not re-derived via a table lookup here since it's a fixed invariant
- * of this board revision. */
-static uint8_t pad_for_row_col(uint8_t row, uint8_t col) {
-    return (uint8_t)((row - 1u) * 6u + col);
-}
-
-/* Column -> function button id. SW1-SW6 sit left-to-right directly
- * above pad columns 1-6 (docs/hardware/SENTIA_TILES_FIRMWARE_HANDOFF.md's
- * button x_mm order, already verified against services/buttons.c's own
- * comment) -- a clean 1:1 mapping, so button id == col here. */
-static uint8_t button_for_col(uint8_t col) {
-    return col;
-}
-
-/* The 4 underglow pixels' logical grid anchors, in SK6805 chain order
- * (LED1->LED2->LED3->LED4 per the board map) -- "under pad 3, pad 5,
- * pad 15, pad 17" per the user's description of the physical board,
- * not something documented in docs/hardware/ (confirmed absent there).
- * Each anchor just reuses that pad's (row, col) as a sample point in
- * the same brightness field the pad grid uses, so a wave/ripple/etc.
- * that reaches pad 3 or pad 5 reaches the matching underglow pixel at
- * the same time -- see render_frame(). If the physical LED1-4 order
- * turns out reversed or different once seen lit on real hardware, only
- * this array needs to change. */
-typedef struct {
-    uint8_t row;
-    uint8_t col;
-} grid_point_t;
-
-static const grid_point_t s_underglow_anchor[4] = {
-    {1u, 3u}, /* under pad 3 */
-    {1u, 5u}, /* under pad 5 */
-    {3u, 3u}, /* under pad 15 */
-    {3u, 5u}, /* under pad 17 */
-};
+/* Grid bounds, pad/button/underglow mapping (board_pad_for_row_col(),
+ * board_button_for_col(), g_tiles_underglow_anchor[]) now live in
+ * board/board_layout.h -- shared with services/boot_sequence.c, which
+ * needs the same "board as one 5x6 grid" model for the power-on
+ * animation. */
 
 static float clamp01(float v) {
     if (v < 0.0f) {
@@ -198,7 +171,7 @@ static star_t s_stars[NUM_STARS];
 static bool s_stars_inited;
 
 static void star_respawn(star_t *star, uint32_t spawn_ms) {
-    star->col = (uint8_t)(GRID_MIN_COL + (uint8_t)(rand() % (GRID_MAX_COL - GRID_MIN_COL + 1u)));
+    star->col = (uint8_t)(TILES_GRID_MIN_COL + (uint8_t)(rand() % (TILES_GRID_MAX_COL - TILES_GRID_MIN_COL + 1u)));
     star->spawn_ms = spawn_ms;
     star->tail_rows = STAR_TAIL_ROWS_MIN + rand01() * (STAR_TAIL_ROWS_MAX - STAR_TAIL_ROWS_MIN);
     star->speed_rows_per_ms =
@@ -221,7 +194,7 @@ static tiles_standby_color_t anim_shooting_stars(uint8_t row, uint8_t col, uint3
         star_t *star = &s_stars[i];
         float head_row = (float)(now_ms - star->spawn_ms) * star->speed_rows_per_ms - star->tail_rows;
 
-        if (head_row > (float)GRID_MAX_ROW + star->tail_rows) {
+        if (head_row > (float)TILES_GRID_MAX_ROW + star->tail_rows) {
             star_respawn(star, now_ms);
             continue;
         }
@@ -255,7 +228,7 @@ static tiles_standby_color_t anim_shooting_stars(uint8_t row, uint8_t col, uint3
 #define SNAKE_PATH_LENGTH 30u /* 5 rows (0-4) x 6 cols */
 
 static uint8_t snake_path_index(uint8_t row, uint8_t col) {
-    uint8_t col0 = (uint8_t)(col - GRID_MIN_COL); /* 0-5 */
+    uint8_t col0 = (uint8_t)(col - TILES_GRID_MIN_COL); /* 0-5 */
     /* Even rows walk left->right, odd rows right->left. */
     if ((row % 2u) == 0u) {
         return (uint8_t)(row * 6u + col0);
@@ -366,12 +339,190 @@ static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_
     return hsv_to_rgb(hue, value);
 }
 
+/* ---- Animation 6: graphic equalizer --------------------------------------
+ * Each column is a fake VU/EQ bar: a lively, purely synthetic level
+ * (layered sines, different period per column so bars don't move in
+ * lockstep) lights that column's bottom-up segments -- rows 3-4 (the
+ * bottom two) green, row 2 yellow, row 1 (top) red, like a classic
+ * hardware graphic equalizer. A per-column "redline" peak marker sticks
+ * at the highest segment reached and only falls slowly (EQ_PEAK_DECAY_PER_MS),
+ * independent of the bar's own faster motion -- the peak-hold behavior
+ * real EQ/VU hardware has. Function buttons stay minimal; underglow is a
+ * simple constant green accent (see eq_underglow below) rather than
+ * tracking the bars -- doesn't correspond to any one column, so there's
+ * nothing meaningful for it to track. */
+
+#define EQ_NUM_COLS 6u
+#define EQ_BUTTON_ROW_LEVEL 0.06f
+#define EQ_LIT_LEVEL 0.85f
+#define EQ_PEAK_LEVEL 1.0f
+#define EQ_UNDERGLOW_LEVEL 0.7f
+#define EQ_BAR_MIN_LEVEL 0.15f
+#define EQ_BAR_MAX_LEVEL 1.0f
+#define EQ_BAR_PERIOD1_BASE_MS 900.0f
+#define EQ_BAR_PERIOD2_BASE_MS 370.0f
+/* Full fall from a maxed-out peak to 0 takes about 5s -- "drops slowly". */
+#define EQ_PEAK_DECAY_PER_MS (1.0f / 5000.0f)
+
+static float s_eq_peak[EQ_NUM_COLS];
+static uint32_t s_eq_peak_update_ms[EQ_NUM_COLS];
+static bool s_eq_inited;
+
+/* Deterministic function of (col, time) -- two sine waves at different,
+ * per-column periods/phases blended together, purely to look like lively
+ * fake audio motion. No randomness/state needed for the bar itself, only
+ * for the peak below. */
+static float eq_bar_level(uint8_t col, uint32_t now_ms) {
+    float col_f = (float)col;
+    float period1 = EQ_BAR_PERIOD1_BASE_MS + col_f * 130.0f;
+    float period2 = EQ_BAR_PERIOD2_BASE_MS + col_f * 55.0f;
+    float phase = col_f * 1.7f;
+    float s1 = sinf(2.0f * TILES_STANDBY_PI * (float)now_ms / period1 + phase);
+    float s2 = sinf(2.0f * TILES_STANDBY_PI * (float)now_ms / period2 + phase * 1.3f);
+    float raw = clamp01(0.5f + 0.3f * s1 + 0.2f * s2);
+    return EQ_BAR_MIN_LEVEL + (EQ_BAR_MAX_LEVEL - EQ_BAR_MIN_LEVEL) * raw;
+}
+
+/* Advances every column's peak by however long it's been since that
+ * column was last updated, then only if this frame's bar level is
+ * higher. Guarded by s_eq_peak_update_ms[col] == now_ms so calling this
+ * once per (row, col) cell within the same render_frame() -- up to 4
+ * times per column, once per pad row -- only actually advances each
+ * column's peak once per frame, not once per cell (now_ms is identical
+ * across every cell queried within one frame, same self-limiting
+ * pattern anim_shooting_stars' respawn already relies on). */
+static void eq_update_peaks(uint32_t now_ms) {
+    if (!s_eq_inited) {
+        for (uint8_t i = 0; i < EQ_NUM_COLS; i++) {
+            s_eq_peak[i] = 0.0f;
+            s_eq_peak_update_ms[i] = now_ms;
+        }
+        s_eq_inited = true;
+    }
+    for (uint8_t i = 0; i < EQ_NUM_COLS; i++) {
+        if (s_eq_peak_update_ms[i] == now_ms) {
+            continue;
+        }
+        uint32_t dt = now_ms - s_eq_peak_update_ms[i];
+        s_eq_peak_update_ms[i] = now_ms;
+
+        uint8_t col = (uint8_t)(TILES_GRID_MIN_COL + i);
+        float level = eq_bar_level(col, now_ms);
+        float decayed = s_eq_peak[i] - EQ_PEAK_DECAY_PER_MS * (float)dt;
+        if (decayed < 0.0f) {
+            decayed = 0.0f;
+        }
+        s_eq_peak[i] = (level > decayed) ? level : decayed;
+    }
+}
+
+static tiles_standby_color_t eq_row_color(uint8_t row) {
+    if (row == 1u) {
+        tiles_standby_color_t red = {1.0f, 0.0f, 0.0f};
+        return red;
+    }
+    if (row == 2u) {
+        tiles_standby_color_t yellow = {1.0f, 1.0f, 0.0f};
+        return yellow;
+    }
+    tiles_standby_color_t green = {0.0f, 1.0f, 0.0f}; /* rows 3, 4 */
+    return green;
+}
+
+static tiles_standby_color_t anim_equalizer(uint8_t row, uint8_t col, uint32_t now_ms) {
+    eq_update_peaks(now_ms);
+
+    if (row == 0u) {
+        return white(EQ_BUTTON_ROW_LEVEL);
+    }
+
+    uint8_t col0 = (uint8_t)(col - TILES_GRID_MIN_COL);
+    float level = eq_bar_level(col, now_ms);
+    float peak = s_eq_peak[col0];
+
+    /* Same threshold quantization for both: row_threshold(row) is this
+     * row's height as a 0-1 fraction (row 4 = 0.25 ... row 1 = 1.0), and
+     * peak_segment is how many segments (1-4) the peak has reached,
+     * using the identical quantization so the two stay consistent. */
+    float row_threshold = (float)(5u - row) / 4.0f;
+    bool bar_lit = (level >= row_threshold);
+
+    uint8_t peak_segment = (uint8_t)(peak * 4.0f);
+    if (peak_segment > 4u) {
+        peak_segment = 4u;
+    }
+    uint8_t peak_row = (peak_segment >= 1u) ? (uint8_t)(5u - peak_segment) : 0u;
+
+    if (peak_row == row && !bar_lit) {
+        /* The "redline" -- always red regardless of this row's normal
+         * EQ color, matching the classic peak-hold LED. */
+        tiles_standby_color_t c = {EQ_PEAK_LEVEL, 0.0f, 0.0f};
+        return c;
+    }
+    if (bar_lit) {
+        tiles_standby_color_t c = eq_row_color(row);
+        tiles_standby_color_t scaled = {c.r * EQ_LIT_LEVEL, c.g * EQ_LIT_LEVEL, c.b * EQ_LIT_LEVEL};
+        return scaled;
+    }
+    return white(0.0f);
+}
+
+static tiles_standby_color_t eq_underglow(uint8_t pixel_index, uint32_t now_ms) {
+    (void)pixel_index;
+    (void)now_ms;
+    tiles_standby_color_t c = {0.0f, EQ_UNDERGLOW_LEVEL, 0.0f};
+    return c;
+}
+
+/* ---- Animation 7: circular underglow wave -------------------------------
+ * Only the underglow does anything -- a wave travels around the 4
+ * pixels in their actual physical circular order (see
+ * g_tiles_underglow_circular_position in board_layout.h), each pixel
+ * rising and dimming significantly as the wave passes through, going
+ * around and around continuously. Pads and buttons sit at a flat,
+ * minimal, non-animated brightness so the underglow motion is the whole
+ * focus without the rest of the board going fully dark. */
+
+#define CIRCLE_PERIOD_MS 2400.0f
+#define CIRCLE_MIN_LEVEL 0.05f
+#define CIRCLE_MAX_LEVEL 1.0f
+#define CIRCLE_CONTRAST_GAMMA 1.5f
+#define CIRCLE_AMBIENT_LEVEL 0.12f
+
+static tiles_standby_color_t anim_underglow_circle(uint8_t row, uint8_t col, uint32_t now_ms) {
+    (void)row;
+    (void)col;
+    (void)now_ms;
+    return white(CIRCLE_AMBIENT_LEVEL);
+}
+
+static tiles_standby_color_t circle_underglow(uint8_t pixel_index, uint32_t now_ms) {
+    float position = (float)g_tiles_underglow_circular_position[pixel_index];
+    float phase = (float)now_ms / CIRCLE_PERIOD_MS - position / (float)TILES_NUM_UNDERGLOW_ANCHORS;
+    float raw = 0.5f + 0.5f * sinf(2.0f * TILES_STANDBY_PI * phase);
+    float v = CIRCLE_MIN_LEVEL + (CIRCLE_MAX_LEVEL - CIRCLE_MIN_LEVEL) * powf(clamp01(raw), CIRCLE_CONTRAST_GAMMA);
+    return white(v);
+}
+
 /* ---- Animation registry + shared render -------------------------------- */
 
 typedef tiles_standby_color_t (*field_fn_t)(uint8_t row, uint8_t col, uint32_t now_ms);
+typedef tiles_standby_color_t (*underglow_fn_t)(uint8_t pixel_index, uint32_t now_ms);
 
 static const field_fn_t s_animations[] = {
-    anim_wave, anim_glow, anim_shooting_stars, anim_snake, anim_rgb_showcase,
+    anim_wave, anim_glow, anim_shooting_stars, anim_snake, anim_rgb_showcase, anim_equalizer,
+    anim_underglow_circle,
+};
+/* Parallel to s_animations[] -- NULL means underglow samples the same
+ * field the pads use at its anchor points (animations 1-5, where
+ * underglow mirroring the pad grid is exactly what's wanted). A
+ * non-NULL entry means underglow needs genuinely different behavior
+ * from whatever the pad field computes at that (row, col) -- the
+ * equalizer's underglow is a constant green unrelated to any one
+ * column's bar, and the circular-wave animation's whole point is
+ * underglow-specific motion indexed by pixel, not by row/col at all. */
+static const underglow_fn_t s_animation_underglow_override[] = {
+    NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow,
 };
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
 
@@ -386,8 +537,9 @@ static const field_fn_t s_animations[] = {
 
 static void render_frame(uint8_t animation_index, uint32_t now_ms) {
     field_fn_t field = s_animations[animation_index];
+    underglow_fn_t underglow_override = s_animation_underglow_override[animation_index];
 
-    for (uint8_t col = GRID_MIN_COL; col <= GRID_MAX_COL; col++) {
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         tiles_standby_color_t c = field(0u, col, now_ms);
         /* Buttons are monochrome -- collapse color to a single
          * brightness via the brightest channel, then apply the
@@ -399,16 +551,18 @@ static void render_frame(uint8_t animation_index, uint32_t now_ms) {
         if (c.b > luminance) {
             luminance = c.b;
         }
-        tiles_buttons_set_standby_led(button_for_col(col), luminance * BUTTON_STANDBY_BRIGHTNESS_SCALE);
+        tiles_buttons_set_standby_led(board_button_for_col(col), luminance * BUTTON_STANDBY_BRIGHTNESS_SCALE);
     }
-    for (uint8_t row = 1u; row <= GRID_MAX_ROW; row++) {
-        for (uint8_t col = GRID_MIN_COL; col <= GRID_MAX_COL; col++) {
+    for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
+        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             tiles_standby_color_t c = field(row, col, now_ms);
-            tiles_lighting_set_standby_pad_rgb(pad_for_row_col(row, col), c.r, c.g, c.b);
+            tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), c.r, c.g, c.b);
         }
     }
     for (uint8_t i = 0; i < 4u; i++) {
-        tiles_standby_color_t c = field(s_underglow_anchor[i].row, s_underglow_anchor[i].col, now_ms);
+        tiles_standby_color_t c = (underglow_override != NULL)
+                                       ? underglow_override(i, now_ms)
+                                       : field(g_tiles_underglow_anchor[i].row, g_tiles_underglow_anchor[i].col, now_ms);
         tiles_lighting_set_standby_underglow_rgb(i, c.r, c.g, c.b);
     }
 }
@@ -418,6 +572,7 @@ static void render_frame(uint8_t animation_index, uint32_t now_ms) {
 typedef enum {
     TILES_STANDBY_STATE_AWAKE = 0,
     TILES_STANDBY_STATE_STANDBY,
+    TILES_STANDBY_STATE_POWER_SAVING,
 } standby_state_t;
 
 static standby_state_t s_state;
@@ -504,10 +659,48 @@ static void enter_standby(uint32_t now_ms) {
     tiles_buttons_set_standby_active(true);
 }
 
+/* Wakes to AWAKE from either STANDBY or POWER_SAVING -- the same
+ * teardown either way (hand rendering back to touch-driven behavior),
+ * so one function covers both. */
 static void exit_standby(void) {
     s_state = TILES_STANDBY_STATE_AWAKE;
     tiles_lighting_set_standby_active(false);
     tiles_buttons_set_standby_active(false);
+}
+
+/* Deeper dormant state after TILES_STANDBY_POWER_SAVING_TIMEOUT_MS of
+ * total inactivity: animations stop, everything goes dark except the
+ * circle button (SW6, the rightmost -- see TILES_CIRCLE_BUTTON_COL in
+ * board_layout.h), which pulses gently to show how to wake it back up.
+ * lighting/buttons standby-active is already true from enter_standby()
+ * -- this only changes s_state, no need to re-claim the rendering
+ * path. */
+static void enter_power_saving(void) {
+    s_state = TILES_STANDBY_STATE_POWER_SAVING;
+    s_last_frame_ms = 0u; /* forces an immediate first frame */
+}
+
+#define POWER_SAVING_PULSE_PERIOD_MS 3000.0f
+#define POWER_SAVING_PULSE_MIN 0.03f
+#define POWER_SAVING_PULSE_MAX 0.35f
+
+static void render_power_saving_frame(uint32_t now_ms) {
+    float phase = (float)now_ms / POWER_SAVING_PULSE_PERIOD_MS;
+    float raw = 0.5f + 0.5f * sinf(2.0f * TILES_STANDBY_PI * phase);
+    float pulse = POWER_SAVING_PULSE_MIN + (POWER_SAVING_PULSE_MAX - POWER_SAVING_PULSE_MIN) * raw;
+
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        float level = (col == TILES_CIRCLE_BUTTON_COL) ? pulse : 0.0f;
+        tiles_buttons_set_standby_led(board_button_for_col(col), level);
+    }
+    for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
+        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+            tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), 0.0f, 0.0f, 0.0f);
+        }
+    }
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+    }
 }
 
 void tiles_standby_init(void) {
@@ -532,7 +725,7 @@ void tiles_standby_scan(void) {
 
     if (real_input_active()) {
         s_last_activity_ms = now_ms;
-        if (s_state == TILES_STANDBY_STATE_STANDBY) {
+        if (s_state != TILES_STANDBY_STATE_AWAKE) {
             exit_standby();
         }
         return;
@@ -545,13 +738,28 @@ void tiles_standby_scan(void) {
         return;
     }
 
-    /* STATE_STANDBY: real_input_active() above was false, so the only
-     * remaining wake path is Hall depth -- see
+    /* STANDBY or POWER_SAVING: real_input_active() above was false, so
+     * the only remaining wake path is Hall depth -- see
      * hall_depth_wake_triggered()'s comment for why it's checked only
-     * here, not folded into real_input_active(). */
+     * here, not folded into real_input_active(). Applies to both states
+     * equally -- same underlying "not fully awake" concern. */
     if (hall_depth_wake_triggered()) {
         s_last_activity_ms = now_ms;
         exit_standby();
+        return;
+    }
+
+    if (s_state == TILES_STANDBY_STATE_POWER_SAVING) {
+        if (now_ms - s_last_frame_ms >= TILES_STANDBY_FRAME_INTERVAL_MS) {
+            render_power_saving_frame(now_ms);
+            s_last_frame_ms = now_ms;
+        }
+        return;
+    }
+
+    /* STATE_STANDBY */
+    if (now_ms - s_last_activity_ms >= TILES_STANDBY_POWER_SAVING_TIMEOUT_MS) {
+        enter_power_saving();
         return;
     }
 
@@ -574,4 +782,8 @@ void tiles_standby_scan(void) {
 
 bool tiles_standby_is_active(void) {
     return s_state == TILES_STANDBY_STATE_STANDBY;
+}
+
+bool tiles_standby_is_power_saving(void) {
+    return s_state == TILES_STANDBY_STATE_POWER_SAVING;
 }

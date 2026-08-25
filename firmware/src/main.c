@@ -11,8 +11,11 @@
  * default, expression CC11 built but off by default -- see
  * services/pedal.h), per-pad haptic feedback (velocity-mapped kick on
  * strike, aftertouch-mapped sustain while held -- see
- * services/haptics.h), standby idle animations (see services/standby.h),
- * and a serial-driven Hall calibration capture tool (rest/full-press/
+ * services/haptics.h), standby idle animations plus a deeper
+ * power-saving state after 15 minutes of total inactivity (see
+ * services/standby.h), a power-on animation that doubles as a Hall
+ * baseline re-capture window (see services/boot_sequence.h), and a
+ * serial-driven Hall calibration capture tool (rest/full-press/
  * max-press snapshots -- see diagnostics/calibration.h). Not yet built:
  * MPE, DIN, CV/gate, the usb_vendor diagnostics interface, a real
  * per-pad Hall calibration curve (this is capture only, no curve is
@@ -30,6 +33,7 @@
 #include "diagnostics/calibration.h"
 #include "diagnostics/i2c_scan.h"
 #include "midi/usb_device.h"
+#include "services/boot_sequence.h"
 #include "services/buttons.h"
 #include "services/expression.h"
 #include "services/hall.h"
@@ -114,6 +118,14 @@ int main(void) {
         printf("[hall] one or more pads failed sensor init -- see per-pad status\n");
     }
 
+    /* Power-on animation (~2s, blocking) -- also re-captures the Hall
+     * rest baseline right as it ends, now that a couple of settled
+     * seconds have passed since tiles_hall_init()'s very-first-instant
+     * capture above. See services/boot_sequence.h. */
+    if (!tiles_boot_sequence_run()) {
+        printf("[boot_sequence] post-animation Hall baseline re-capture failed for at least one pad\n");
+    }
+
     /* Serial-driven Hall calibration capture -- needs tiles_hall_init()
      * above already run. See diagnostics/calibration.h. */
     tiles_calibration_init();
@@ -190,7 +202,8 @@ int main(void) {
             tiles_hall_sample_t s = tiles_hall_get_sample(1);
             printf("[hall] pad 1: x=%d y=%d z=%d valid=%d\n", s.x, s.y, s.z, s.valid);
 
-            printf("[standby] active=%d\n", tiles_standby_is_active());
+            printf("[standby] active=%d power_saving=%d\n", tiles_standby_is_active(),
+                   tiles_standby_is_power_saving());
 
             last_scan_ms = now_ms;
         }

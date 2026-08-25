@@ -6,7 +6,8 @@ events, and turns high-level intent into driver commands. Depends on
 
 Built: Hall scan, touch, lighting, buttons, pedal, note mapping,
 touch+Hall expression fusion (velocity/aftertouch), power source state,
-standby idle animations, and per-pad haptic feedback -- see Status
+standby idle animations (plus a power-saving state after 15 minutes),
+a power-on boot animation, and per-pad haptic feedback -- see Status
 below. Still planned: per-pad Hall calibration, X/Y tilt -> pitch/
 timbre, storage glue.
 
@@ -188,19 +189,20 @@ not its code.
   explicit demo-mode default, expected to change once this isn't just a
   demo) with no touch/button/pedal activity, the pad grid + 6 function
   buttons + underglow stop reflecting real input and instead run one of
-  5 rotating ambient animations (diagonal traveling wave; a sharp,
-  squared-contrast ring pulsing outward from center; comet-tailed
-  "shooting stars" with per-star randomized speed/tail/twinkle; a
-  fixed-length "snake" ping-ponging back and forth along a serpentine
-  path instead of teleport-resetting; and a blue/purple RGB showcase
-  animation where underglow shows the same moving color as the pads --
-  the whole point being to show off both), switching to a random one
-  every 2 minutes (also a starting guess, not tuned against how it
-  actually feels to watch) -- excludes both the animation ending and the
-  one before it, so a switch never immediately repeats itself and never
-  bounces straight back to the animation two ago either. Touch/button/pedal
-  activity exits standby
-  immediately. A Hall-depth wake fallback exists in the code
+  7 rotating ambient animations, switching to a random one every 2
+  minutes (also a starting guess, not tuned against how it actually
+  feels to watch) -- excludes both the animation ending and the one
+  before it, so a switch never immediately repeats itself and never
+  bounces straight back to the animation two ago either:
+  1. diagonal traveling wave
+  2. a sharp, squared-contrast ring pulsing outward from center
+  3. comet-tailed "shooting stars" with per-star randomized speed/tail/twinkle
+  4. a fixed-length "snake" ping-ponging back and forth along a serpentine path instead of teleport-resetting
+  5. a blue/purple RGB showcase where underglow shows the same moving color as the pads -- the whole point being to show off both
+  6. a graphic equalizer: each column is a fake, lively (layered-sine, never literally random) EQ/VU bar, bottom-up green/green/yellow/red, with a per-column red "peak-hold" marker that sticks at the highest segment reached and only falls slowly (`EQ_PEAK_DECAY_PER_MS`, ~5s full fall) independent of the bar's own faster motion -- classic hardware-equalizer behavior. Function buttons stay minimal; underglow is a constant green accent unrelated to any one column.
+  7. a circular underglow wave: only underglow moves, a wave traveling around the 4 pixels in their actual physical circular order (`g_tiles_underglow_circular_position` in `board/board_layout.h` -- chain order 0,1,2,3 zigzags diagonally, the real ring order is 0,1,3,2), each pixel rising and dimming significantly as the wave passes through, going around and around; pads/buttons sit at a flat, minimal, non-animated brightness.
+
+  Touch/button/pedal activity exits standby immediately. A Hall-depth wake fallback exists in the code
   (`hall_depth_wake_triggered()`, checked only while already in standby,
   never as part of deciding whether to *enter* it -- an early version
   that folded it into the entry check broke standby from ever
@@ -258,14 +260,56 @@ not its code.
   can't show the actual color, so following the wave's brightness swings
   would just look like an unrelated flicker; a quiet constant glow reads
   as "present but not the point" instead).
+  Underglow normally samples the same field the pad grid uses at its 4
+  anchor points (animations 1-5), but animations 6 and 7 need genuinely
+  different underglow behavior than any single pad shows -- gained
+  `s_animation_underglow_override[]`, a parallel table of optional
+  `underglow_fn_t(pixel_index, now_ms)` functions (NULL = old
+  pad-sampling behavior) indexed by pixel rather than (row, col), since
+  "a wave traveling around the loop" and "a constant accent color" are
+  both about the 4 pixels themselves, not any particular pad position.
+  The pad/button/underglow grid-mapping helpers (`board_pad_for_row_col()`,
+  `board_button_for_col()`, `g_tiles_underglow_anchor[]`,
+  `g_tiles_underglow_circular_position[]`) moved out to
+  `board/board_layout.h`, shared with `boot_sequence.c` below rather than
+  duplicated.
+  After `TILES_STANDBY_POWER_SAVING_TIMEOUT_MS` (15 minutes of *total*
+  inactivity, not 15 minutes of animation specifically -- same
+  `s_last_activity_ms` clock that gates entering standby in the first
+  place, just a longer threshold checked while already in standby)
+  standby's animations stop and the board drops to a third state,
+  power-saving: everything dark except the circle button (SW6, the
+  rightmost) pulsing gently to show how to wake it. Same wake conditions
+  as standby.
   **Not done / not hardware-verified:** the button-column and
-  underglow-anchor mappings (`button_for_col()`, `s_underglow_anchor[]`
-  in `standby.c`) are based on the user's verbal description of the
-  physical board, not a hardware doc (checked: not documented in
-  `docs/hardware/`) -- easy to correct in those two spots if the real
-  LED1-4 order or button alignment turns out different once seen lit.
-  The animation frame rate (~25fps) and every animation's own timing
-  constants are unmeasured against real I2C bus load / how it actually
-  looks. None of this has been flashed and watched on real hardware yet.
+  underglow-anchor mappings in `board/board_layout.h` are based on the
+  user's verbal description of the physical board, not a hardware doc
+  (checked: not documented in `docs/hardware/`) -- easy to correct there
+  if the real LED1-4 order or button alignment turns out different once
+  seen lit. The animation frame rate (~25fps) and every animation's own
+  timing constants (including the new power-saving pulse period and the
+  15-minute timeout itself) are unmeasured against real I2C bus load /
+  how it actually looks. None of this has been flashed and watched on
+  real hardware yet.
+- `boot_sequence.h`/`.c` — done for V1: a ~2-second, blocking power-on
+  animation run once from `main.c`, before the main loop starts (nothing
+  else needs to run concurrently -- USB stays alive via TinyUSB's own
+  background IRQ task regardless). A white ripple rises from the grid's
+  bottom-center (underglow off), fills the board (buttons, being
+  logically further from the origin than any pad, are naturally the last
+  thing it reaches -- no special-casing needed), fades to complete dark,
+  then a single "Sentia Instruments Magenta" (#FF00FF) pulse across pads
+  + underglow finishes it. Reuses the exact same standby-active rendering
+  path `standby.c`'s animations use (`tiles_lighting_set_standby_active()`,
+  the RGB pad/underglow/button setters) rather than a second mechanism,
+  and shares `board/board_layout.h`'s grid model with `standby.c`.
+  Also uses the time productively: `hall.c`'s rest baseline is captured
+  once at `tiles_hall_init()`, at the very first instant of boot before
+  anything has settled -- this sequence re-captures it
+  (`tiles_hall_recapture_baseline()`) right as the animation ends, a
+  couple of seconds later, at essentially no extra cost since the
+  animation was going to take that long anyway.
+  **Not hardware-verified:** none of the ripple/fade/pulse timing or
+  radius constants have been seen on real hardware yet.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

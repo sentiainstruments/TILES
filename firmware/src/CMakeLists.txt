@@ -20,6 +20,7 @@ add_executable(sentia_tiles_firmware
     services/power.c
     services/standby.c
     services/haptics.c
+    services/boot_sequence.c
     midi/usb_device.c
     midi/usb_descriptors.c
     midi/midi_out.c

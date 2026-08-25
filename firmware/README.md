@@ -89,16 +89,25 @@ first on-hardware note-on test.
   and `haptics.c`'s voice ceiling, not yet hardware-tested against a
   real source-switch transition.
   `standby` done for a demo V1: after 1 minute idle, pads + buttons +
-  underglow run one of 5 rotating ambient animations (diagonal wave,
-  sharp center-out ring, complex shooting stars, ping-pong snake, and a
+  underglow run one of 7 rotating ambient animations (diagonal wave,
+  sharp center-out ring, complex shooting stars, ping-pong snake, a
   blue/purple RGB showcase where underglow shows the same color as the
-  pads), in randomized order (never repeating the current animation or
-  the one before it), instead of reflecting touch state, until any
-  touch/button/pedal activity exits it -- see `services/README.md` for
+  pads, a graphic equalizer with per-column peak-hold, and a circular
+  underglow-only wave), in randomized order (never repeating the current
+  animation or the one before it), instead of reflecting touch state,
+  until any touch/button/pedal activity exits it. After 15 minutes of
+  total inactivity it drops further into power-saving: everything dark
+  except the circle button pulsing gently. See `services/README.md` for
   the button-column/underglow-anchor mapping assumptions this still
   needs verified on real hardware, and for a real bug this rework fixed
   (standby pads were routing through the touch-driven idle-baseline
-  floor, so they never actually reached true black). `haptics` done for
+  floor, so they never actually reached true black).
+  `boot_sequence` done for V1: a ~2-second power-on animation (white
+  ripple rising from bottom-center, fade to black, single magenta pulse)
+  that also re-captures Hall's rest baseline once the animation's given
+  the sensors a couple of settled seconds, instead of only ever trusting
+  the very-first-instant-of-boot capture.
+  `haptics` done for
   V1: an overdrive
   spike then velocity-mapped kick on strike, then a hard cutoff -- a
   single click. Continuous aftertouch-mapped sustain while held is
@@ -150,19 +159,27 @@ flashable `.uf2`.
   (`TILES_STANDBY_HALL_WAKE_ENABLED 0`) because the magnets aren't in
   their final position yet, making hall.c's baseline/depth meaningless
   until the mid-plate assembly is done. The button-column and
-  underglow-anchor mappings it uses (`button_for_col()`,
-  `s_underglow_anchor[]`) are based on the user's verbal description of
-  the physical board rather than a hardware doc -- confirmed absent from
-  `docs/hardware/`. The 1-minute idle timeout and 2-minute
-  animation-cycle period are explicit demo-mode defaults, not final
-  values. The reworked animations (diagonal wave, sharper ring, complex
-  stars, ping-pong snake, RGB showcase) and the button-brightness/
-  standby-baseline-floor fixes are all based on user feedback from
-  watching the previous version on real hardware, but the *new* version
-  hasn't itself been flashed and watched yet -- e.g.
-  `BUTTON_STANDBY_BRIGHTNESS_SCALE` (0.35) is an unmeasured guess at how
-  much dimmer buttons need to be, not a measured match to pad
-  brightness.
+  underglow-anchor mappings (`board/board_layout.h`) are based on the
+  user's verbal description of the physical board rather than a hardware
+  doc -- confirmed absent from `docs/hardware/`. The 1-minute idle
+  timeout, 2-minute animation-cycle period, and 15-minute power-saving
+  timeout are explicit demo-mode defaults, not final values. Animations
+  1-5 and the button-brightness/standby-baseline-floor fixes are based on
+  user feedback from watching an earlier version on real hardware, but
+  the two newest animations (6, the graphic equalizer; 7, the circular
+  underglow wave) and the power-saving state have NOT been seen on real
+  hardware at all yet -- every one of their constants
+  (`EQ_PEAK_DECAY_PER_MS`, `CIRCLE_PERIOD_MS`,
+  `POWER_SAVING_PULSE_PERIOD_MS`, etc.) is a first guess.
+  `BUTTON_STANDBY_BRIGHTNESS_SCALE` (0.35) is likewise still an
+  unmeasured guess at how much dimmer buttons need to be, not a measured
+  match to pad brightness.
+- `services/boot_sequence.c` has not been flashed and watched on real
+  hardware yet -- the ripple's rise/fade/pulse durations, the ripple's
+  origin/radius/edge-width, and the magenta pulse's envelope timing are
+  all first guesses. The Hall baseline re-capture at the end is a real
+  mechanism (reuses `hall.c`'s existing per-pad read path), but whether
+  ~2 seconds is actually enough settling time to matter is unverified.
 - `services/haptics.c` has not been hardware-tested at all -- every
   duty/timing constant (kick duration, overdrive duration, gap duration,
   min kick duty, max sustain duty, stagger gap) is an unmeasured
