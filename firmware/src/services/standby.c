@@ -26,44 +26,31 @@
  * anything else on the bus, raise this first. */
 #define TILES_STANDBY_FRAME_INTERVAL_MS 40u
 
-/* Hall-depth wake fallback: on real hardware, touching a pad during the
- * standby animation was observed to NOT reliably wake it, even though
- * MPR121 touch wakes it fine outside of standby and buttons/pedal wake
- * it fine during standby too -- pointing at the animation itself (most
- * likely the pad-LED SK6805 chain, continuously rewritten at ~25fps
- * while idle, vs. only writing reactively on a touch change during
- * normal play) interfering specifically with capacitive touch sensing.
- * Root cause isn't confirmed -- Hall (magnetic, not capacitive) isn't
- * subject to whatever that is, so it's used here as an independent
- * second path to detect a real press regardless of why touch alone
- * isn't enough. Matches this codebase's existing stance that touch
- * alone is foolable and Hall should be fused with it (see hall.h /
- * expression.c).
+/* Hall-depth wake fallback: touching a pad during the standby animation
+ * was observed to NOT reliably wake it (buttons/pedal woke it fine),
+ * pointing at the pad-LED animation itself interfering with capacitive
+ * touch sensing -- root cause unconfirmed, see git history for the
+ * fuller investigation. Hall (magnetic, not capacitive) isn't subject
+ * to whatever that is, so it's meant as an independent second wake
+ * path. Checked ONLY while already in standby (hall_depth_wake_triggered()
+ * below), never as part of deciding whether to enter standby -- folding
+ * it into that check first broke standby from ever entering at all,
+ * since hall.c's depth has no drift compensation and can look
+ * permanently "active" on its own.
  *
- * IMPORTANT: only ever check this while ALREADY in standby (see
- * hall_depth_wake_triggered() below) -- the first version of this fix
- * folded it into the same "is anything active" check used to decide
- * whether to enter standby at all, which broke standby entirely
- * (real symptom: it never triggered). hall.c's depth has no baseline
- * drift compensation yet, so treating it as part of the idle condition
- * meant any pad's ambient noise/drift could permanently look "active"
- * and the idle timer would never elapse.
- *
- * Even with that fix, real hardware still never showed an animation:
- * moving Hall to wake-ONLY isn't enough by itself if the threshold is
- * low enough that some pad's drift/noise crosses it within a scan or
- * two of entering standby -- that reads as an instant exit_standby(),
- * which looks identical to "never enters" from the outside (no
- * animation frame survives long enough to be seen). Raised from an
- * initial 150 (7.5% of expression.c's DEPTH_TO_AFTERTOUCH_FULL_SCALE,
- * itself an unmeasured "full press" guess) to 1000 (50% of that same
- * reference) at the user's explicit direction -- they'd rather standby
- * require an unambiguous, deliberate press to wake than risk it
- * bouncing back out on drift again. Still an unmeasured placeholder,
- * just a much more conservative one; lower it if this now misses real
- * presses, or report the raw depth values seen at rest (main.c's
- * periodic [hall] print) if it's still bouncing, so the next value is
- * chosen from real data instead of another guess. */
+ * DISABLED for now (TILES_STANDBY_HALL_WAKE_ENABLED 0): the magnets
+ * aren't in their final position yet (mid-plate assembly still being
+ * printed as of this change), so hall.c's rest baseline and every depth
+ * reading right now are against a physically incomplete, unrepresentative
+ * setup -- any threshold picked against that data would be meaningless,
+ * not just untuned, and was the reason standby kept bouncing right back
+ * out even after being moved to wake-only. Re-enable once the magnets
+ * are seated and hall.c's baseline/depth can be trusted -- pick
+ * TILES_STANDBY_HALL_WAKE_DEPTH from real rest-vs-pressed numbers at
+ * that point, not another guess. Until then, standby only wakes via
+ * touch/button/pedal (see real_input_active()) -- touch not reliably
+ * waking it is still open, tracked separately from this Hall path. */
+#define TILES_STANDBY_HALL_WAKE_ENABLED 0
 #define TILES_STANDBY_HALL_WAKE_DEPTH 1000u
 
 #define TILES_STANDBY_PI 3.14159265358979323846f
@@ -315,11 +302,13 @@ static bool real_input_active(void) {
  * unnecessary early exit from standby, not a permanently broken idle
  * timer. */
 static bool hall_depth_wake_triggered(void) {
+#if TILES_STANDBY_HALL_WAKE_ENABLED
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         if (tiles_hall_get_depth(pad) >= TILES_STANDBY_HALL_WAKE_DEPTH) {
             return true;
         }
     }
+#endif
     return false;
 }
 

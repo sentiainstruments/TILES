@@ -135,32 +135,25 @@ not its code.
   fixed-length "snake" crawling a serpentine path), switching to the
   next one every 2 minutes (also a starting guess, not tuned against how
   it actually feels to watch). Touch/button/pedal activity exits standby
-  immediately; while already in standby, Hall depth
-  (`TILES_STANDBY_HALL_WAKE_DEPTH`) is checked too, as a second wake
-  path, after real hardware showed MPR121 touch alone not reliably
-  waking standby while the pad animation is running (buttons/pedal woke
-  it fine); root cause isn't confirmed (most likely candidate: the
-  pad-LED SK6805 chain being continuously rewritten at ~25fps while
-  idle, vs. only writing reactively on a touch change during normal
-  play), but Hall's magnetic sensing isn't subject to whatever that is,
-  giving a robust second path regardless of why -- matches this
-  codebase's existing "touch alone is foolable, fuse with Hall" stance
-  (see `hall.h`/`expression.c`). Hall is deliberately checked only while
-  already in standby, never as part of deciding whether to *enter* it or
-  as the idle-timer reset condition -- an early version folded it into
-  that same check and broke standby entirely (it never triggered),
-  because hall.c's depth has no drift compensation yet and some pad's
-  ambient noise/drift alone was enough to look permanently "active".
-  Even wake-only wasn't enough at the original threshold (150, 7.5% of
-  expression.c's unmeasured "full press" reference) -- real hardware
-  still never showed an animation, because a low enough threshold lets
-  some pad's drift cross it within a scan or two of entering, which
-  reads as an instant exit right after entry (indistinguishable from
-  "never enters" -- no frame survives long enough to see). Raised to
-  1000 (50% of that reference) at the user's explicit direction: they'd
-  rather standby need an unambiguous press to wake than risk bouncing
-  on drift again. Still an unmeasured placeholder, just a much more
-  conservative one.
+  immediately. A Hall-depth wake fallback exists in the code
+  (`hall_depth_wake_triggered()`, checked only while already in standby,
+  never as part of deciding whether to *enter* it -- an early version
+  that folded it into the entry check broke standby from ever
+  triggering at all) but is currently **disabled**
+  (`TILES_STANDBY_HALL_WAKE_ENABLED 0`): the magnets aren't in their
+  final position yet (mid-plate assembly still being fabricated as of
+  this writing), so hall.c's rest baseline and every depth reading right
+  now are against a physically incomplete setup -- any threshold picked
+  against that data is meaningless, not just untuned, which is why
+  standby kept bouncing right back out of every entry even after being
+  moved to wake-only. Re-enable once the magnets are seated and real
+  rest-vs-pressed numbers exist to pick
+  `TILES_STANDBY_HALL_WAKE_DEPTH` from. Until then standby only wakes
+  via touch/button/pedal -- MPR121 touch alone not reliably waking it
+  while the pad animation runs (buttons/pedal wake it fine) is a
+  separate, still-open issue, most likely candidate being the pad-LED
+  SK6805 chain's continuous ~25fps rewrite interfering with capacitive
+  sensing, not confirmed.
   Deliberately a lighting-only concept: touch/Hall/
   expression/MIDI keep running completely unaware standby exists, so
   playing still works exactly as normal even while idle animations are
