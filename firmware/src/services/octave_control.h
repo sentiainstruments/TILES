@@ -36,10 +36,13 @@
  *     same rendering-ownership pattern services/standby.c and
  *     services/game_mode.h use) shows the current key's natural-note
  *     letter in caps, centered, via services/pixel_font.h. For a sharp
- *     key, the letter alternates with a plain "+"-shaped cross (a
- *     2-column-wide vertical bar and a 1-row-thick horizontal bar,
- *     centered) as a second flash, since there's no room to draw "#"
- *     into a 4-row glyph -- the letter always shows first for a moment
+ *     key, the letter alternates with a plain "+"-shaped cross as a
+ *     second flash, since there's no room to draw "#" into a 4x4 glyph
+ *     -- a proper plus contained in its own 4x4 box (2-column vertical
+ *     arm, full 4-row height; 1-row horizontal arm, 4 columns wide,
+ *     centered), not a bar spanning the full 6-wide grid (real
+ *     feedback: the horizontal arm was originally too long relative to
+ *     the vertical one). The letter always shows first for a moment
  *     after entering the mode or changing key, so the flash never
  *     starts mid-cross. Underglow goes dark while this is showing.
  * Holding SW1+SW2 together again exits back to normal octave-shift

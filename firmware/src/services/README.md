@@ -167,9 +167,12 @@ not its code.
   animations and `game_mode.c` use) and shows the current key's
   natural-note letter in caps, centered, via the shared font in
   `pixel_font.h`/`.c` (below). A sharp key alternates the letter with a
-  plain amber "+"-shaped cross (a 2-column vertical bar crossed with a
-  1-row horizontal bar, both centered) as a second flash, since a 4-row
-  glyph has no room to draw "#" -- the letter always shows first for a
+  plain amber "+"-shaped cross as a second flash, since a 4x4 glyph has
+  no room to draw "#" -- a proper plus contained in its own 4x4 box
+  (2-column vertical arm, full 4-row height; 1-row horizontal arm, 4
+  columns wide, centered), reworked from an initial version whose
+  horizontal arm spanned the full 6-wide grid (real feedback: "the
+  horizontal line is too long"). The letter always shows first for a
   moment (re-anchored on mode entry and on every key change) so the
   flash is never caught mid-cross. Underglow goes dark while this is
   showing. `tiles_octave_control_is_transpose_active()` lets `main.c`
@@ -187,22 +190,29 @@ not its code.
   **Not hardware-verified:** the combo-hold threshold, both flash
   durations, the cross's row/column placement, and the amber accent
   color are all first-pass judgment calls, not measurements.
-- `pixel_font.h`/`.c` — done for V1: a shared tiny pixel font, 4 rows
-  tall (one pixel per pad row 1-4), used by both `standby.c`'s scrolling
-  marquee animation and `octave_control.c`'s transpose key-letter
-  display above -- pulled out of `standby.c` (where the glyphs used to
-  live as a one-off, hand-guessed set with at least one real mistake: E
-  and F were nearly indistinguishable, E was missing its bottom bar) so
-  both callers share one already-checked font instead of each guessing
-  its own. Format: one byte per glyph column, bit0 = row 1 (top) ...
-  bit3 = row 4 (bottom). Covers exactly the letters needed -- A-G (the
-  seven natural note names) plus I/L/N/S/T (for "SENTIA - TILES -"), a
-  dash, and a space -- not a full alphabet, since nothing else uses this
-  yet. `tiles_pixel_font_glyph_for_note_letter()` is the runtime lookup
+- `pixel_font.h`/`.c` — done for V1: a shared tiny pixel font, a fixed
+  4x4 grid per glyph (one pixel per pad row 1-4, 4 columns wide), used
+  by both `standby.c`'s scrolling marquee animation and
+  `octave_control.c`'s transpose key-letter display above -- pulled out
+  of `standby.c` (where the glyphs used to live as a one-off,
+  hand-guessed set) so both callers share one already-checked font
+  instead of each guessing its own. Format: one byte per glyph column
+  (always 4 columns except `SPACE`), bit0 = row 1 (top) ... bit3 = row 4
+  (bottom). Covers exactly the letters needed -- A-G (the seven natural
+  note names) plus I/L/N/S/T (for "SENTIA - TILES -"), a dash, and a
+  space -- not a full alphabet, since nothing else uses this yet.
+  `tiles_pixel_font_glyph_for_note_letter()` is the runtime lookup
   `octave_control.c` needs for a variable key letter; `standby.c`'s
   marquee references the glyphs directly since its message is fixed.
-  **Not hardware-verified:** every glyph is hand-designed specifically
-  for 4 rows (there's no established "4-row font" to have copied
+  Reworked once: the original version used variable-width 3-column
+  glyphs with a separate gap column between letters and had a real
+  mistake (E and F were nearly indistinguishable, E was missing its
+  bottom bar); this version moved to a fixed 4x4 grid styled after the
+  user-supplied "FOUR BIT" reference font (bold, blocky, geometric) --
+  true monospacing, no gap column needed, and the extra column let N
+  get a real diagonal instead of the old H-like compromise.
+  **Not hardware-verified:** every glyph is hand-drawn specifically for
+  4x4 (there's no off-the-shelf font at exactly this size to have copied
   instead) and hasn't been seen lit yet -- legibility at actual LED
   brightness/diffusion is unconfirmed.
 - `game_mode.h`/`.c` — done for V1: real, player-controlled minigames --
@@ -228,32 +238,54 @@ not its code.
   Tetris: SW1/SW2 move the falling piece left/right, SW3 rotates it (2
   states per piece, not full 4-state SRS, and no wall kicks -- see the
   `gt_` section's own comment for why), SW4 hard-drops it, gravity also
-  steps it down automatically (`GT_STEP_MS`). Standard tetromino
-  shapes/colors; `gt_clear_lines()` shifts everything above a full row
-  down (handles multiple simultaneous clears in one bottom-up sweep) and
-  returns how many rows cleared, so `gt_lock()` can trigger a brief,
-  fast-toggling white underglow strobe (`GT_LINE_CLEAR_FLASH_MS`/
-  `_TOGGLE_MS`) only when something actually cleared -- real feedback:
-  "the underglow must flash white dramatically when a line is cleared."
-  Topping out (a freshly spawned piece already collides) ends the round
-  with a plain red blink instead of the usual red/purple (real feedback:
-  "when game is lost it should flash red") -- `gm_start_round_end()`
-  grew a `red_only` parameter for this, since Tetris is the only game
-  needing a different round-end color than snake/brick breaker.
+  steps it down automatically (`GT_STEP_MS`). A custom 5-piece set, NOT
+  the standard 7 tetrominoes -- real feedback that full tetrominoes (up
+  to 4 wide/tall) were too big for a board this size, one piece able to
+  span the entire width or height. Reworked to: a 1-cell dot, a 2-cell
+  domino, a 3-cell straight tromino ("long piece," capped at 3 instead
+  of 4), a 3-cell corner tromino, and a compact 2x2 square (4 cells but
+  small footprint, so it stays the largest). `gt_piece_def_t` grew a
+  `num_cells` field (1-4) since pieces are no longer always exactly 4
+  cells -- every loop over a piece's cells (`gt_fits()`, `gt_lock()`,
+  `render_tetris()`) uses that field instead of a hardcoded 4.
+  `gt_clear_lines()` shifts everything above a full row down (handles
+  multiple simultaneous clears in one bottom-up sweep) and returns how
+  many rows cleared, so `gt_lock()` can trigger a brief, fast-toggling
+  white underglow strobe (`GT_LINE_CLEAR_FLASH_MS`/`_TOGGLE_MS`) only
+  when something actually cleared -- real feedback: "the underglow must
+  flash white dramatically when a line is cleared." Topping out (a
+  freshly spawned piece already collides) ends the round with a plain
+  red blink instead of the usual red/purple (real feedback: "when game
+  is lost it should flash red") -- `gm_start_round_end()` grew a
+  `red_only` parameter for this, since Tetris is the only game needing a
+  different round-end color than snake/brick breaker.
   Pong: two players, one board -- column 1 is the left paddle (SW1 up,
   SW2 down), column 6 is the right paddle (SW5 up, SW6 down -- the
   mirror pair to SW1/SW2; **unverified** whether "square" is actually
   the button the user meant by "the other one next to circle"). Both
   paddles 2 pads tall and white; the ball is a single blue dot, checked
   before either paddle in the render order so it draws on top during a
-  bounce (same precedent as brick breaker's ball). Deliberately does
-  NOT go through the shared round-end flow below -- a rally on a board
-  this small can end in a couple of seconds, so bouncing back to the
-  menu on every missed point would be far more disruptive than useful.
-  A miss instead flashes underglow white briefly (`gp_point_scored()`)
-  and re-serves immediately, staying in `GM_STATE_PLAYING_PONG` the
-  whole time; the only way out is the standard 4-button hold every game
-  shares.
+  bounce (same precedent as brick breaker's ball). First to
+  `GP_WIN_SCORE` (2) points wins -- real feedback: Pong wasn't tracking
+  who was winning at all. A non-winning miss (`gp_point_scored()`)
+  flashes underglow white briefly and re-serves immediately, staying in
+  `GM_STATE_PLAYING_PONG`; this part deliberately still doesn't go
+  through the shared round-end flow below, since a rally on a board
+  this small can end in a couple of seconds and bouncing to the menu
+  every point would be disruptive. The score itself renders on each
+  side's own movement-control buttons via `render_pong_score_buttons()`
+  -- a breathing glow, not flat-on: 0 points both dark, 1 point the "up"
+  button (SW1 left / SW5 right) glows, 2 points both glow -- "one point
+  one control lit, 2 points both buttons on." Reaching the winning
+  score is different from an ordinary miss: real feedback was "don't
+  reset the game immediately, return to the game menu," so
+  `s_gp_match_over` freezes the ball/paddles (rendering just stops being
+  updated, no special-case needed) for `GP_MATCH_END_DISPLAY_MS` while
+  the winner's controls keep glowing, then `tiles_game_mode_scan()`
+  calls `gm_enter_menu()` directly -- handled locally in the
+  `GM_STATE_PLAYING_PONG` branch rather than through the shared
+  `GM_STATE_ROUND_END` state, since Pong's "flash" here is on the button
+  LEDs, not underglow.
   Every other game's end (snake self-collision, brick breaker won/lost)
   flashes underglow red/purple for ~2s, then returns to the menu.
   Claims the same standby-active rendering path `standby.c`'s own
@@ -415,7 +447,7 @@ not its code.
   8. brick breaker: the function-button row is a wall of bricks, a 3-pad-wide cyan paddle (bottom pad row) tracks a warm-white/yellow ball with simple AI (moves at most one column per step toward the ball), the ball bounces around knocking orange bricks out until every brick is broken (won) or it gets past the paddle (lost) -- either way underglow flashes red and purple for a few seconds, then a fresh round starts. Ball checked before paddle in the render order so it draws on top during a bounce, when they briefly occupy the same cell.
   9. a scrolling marquee: "SENTIA - TILES - " scrolls across the pad grid using the shared font in `services/pixel_font.h`/`.c` (see its own entry above), with automatic inter-glyph spacing and seamless wraparound (`marquee_total_width()`) rather than a fixed animation; underglow and function buttons both stay off, keeping it purely a pad-grid text effect. Scroll speed slowed (`MARQUEE_MS_PER_COLUMN` 260ms -> 420ms per column) from real feedback, at the same time the font itself moved out to the shared module to fix a real mistake in the old one-off glyphs (E and F were nearly indistinguishable).
   10. bouncing glow: the "simple but elegant" one -- a single soft white point bounces diagonally around the pad grid like a screensaver ball, purely a closed-form position (a triangle wave per axis -- a bounce-off-the-walls reflection with no velocity/state to track) with a soft falloff around it, no particle array or game state at all. Row and col bounce at different, non-integer-ratio periods (`BOUNCE_ROW_PERIOD_MS`/`BOUNCE_COL_PERIOD_MS`) so the path slowly traces a Lissajous-like figure instead of repeating quickly. Function buttons stay off; underglow mirrors the pad field like animations 1-4, so the glow naturally spills into it near an anchor.
-  11. Tetris: the AI-played autonomous counterpart to `game_mode.h`'s real Tetris (below) -- same standard tetromino set/colors, deliberately separate state and code from the interactive version, matching this file's existing snake/brick-breaker precedent. A lightweight greedy AI (`tetris_ai_place()`) picks each piece's rotation and column at spawn by simulating every fitting placement and keeping whichever lands the piece's topmost cell deepest (a cheap "keep the stack low" proxy, no real hole-counting), then the piece visibly falls one row at a time toward that spot. A line clear triggers a brief, fast-toggling dramatic white underglow strobe (`TETRIS_LINE_CLEAR_FLASH_MS`/`_TOGGLE_MS`); topping out instead blinks plain red (not the red/purple alternation brick breaker's flash uses), then the well clears and a new game starts. Function buttons stay off.
+  11. Tetris: the AI-played autonomous counterpart to `game_mode.h`'s real Tetris (below) -- same custom 5-piece small set/colors (dot, domino, 3-cell straight tromino, 3-cell corner tromino, 2x2 square -- NOT the standard 7 tetrominoes, which real feedback said were too big for this board), deliberately separate state and code from the interactive version, matching this file's existing snake/brick-breaker precedent. Pieces carry a variable `num_cells` (1-4) rather than always 4. A lightweight greedy AI (`tetris_ai_place()`) picks each piece's rotation and column at spawn by simulating every fitting placement and keeping whichever lands the piece's topmost cell deepest (a cheap "keep the stack low" proxy, no real hole-counting), then the piece visibly falls one row at a time toward that spot. A line clear triggers a brief, fast-toggling dramatic white underglow strobe (`TETRIS_LINE_CLEAR_FLASH_MS`/`_TOGGLE_MS`); topping out instead blinks plain red (not the red/purple alternation brick breaker's flash uses), then the well clears and a new game starts. Function buttons stay off.
   12. Pong: the AI-vs-AI autonomous counterpart to `game_mode.h`'s real, two-player Pong (below) -- same court/paddle/ball layout and colors, deliberately separate state and code. Both paddles use the same "move at most one row per step toward the ball" simple AI animation 8's paddle already established, so rallies essentially never end on their own; on the rare miss, a brief white underglow flash plays and the ball re-serves immediately -- the same "stay in this animation and continue" behavior the interactive version uses instead of a win/lose round-end. Function buttons stay off.
 
   Touch/button/pedal activity exits standby immediately. A Hall-depth wake fallback exists in the code

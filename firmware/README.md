@@ -96,8 +96,11 @@ first on-hardware note-on test.
   Also owns transpose mode: holding SW1+SW2 together toggles a mode
   where "-"/"+" step the key center instead of the octave, both LEDs
   pulse together, and the pad grid shows the current key's letter (via
-  the new shared `pixel_font.h`/`.c`), flashing a cross for sharp keys
-  since a 4-row glyph can't draw "#". Not yet hardware-tested.
+  the shared `pixel_font.h`/`.c`, now a proper 4x4 grid per glyph styled
+  after a user-supplied reference font), flashing a cross for sharp keys
+  since a 4x4 glyph can't draw "#" -- the cross itself is now also
+  contained in a 4x4 box (real feedback that its horizontal arm was
+  originally too long). Not yet hardware-tested.
   `game_mode` done for V1: real, player-controlled snake, brick breaker,
   Tetris, and Pong (distinct from `standby`'s autonomous versions of the
   same four games below, which stay unchanged) -- hold SW3+SW4+SW5+SW6
@@ -106,12 +109,20 @@ first on-hardware note-on test.
   Snake: SW1-SW4 = left/right/up/down, eats food to grow, wraps at the
   edges, dies on self-collision. Brick Breaker: SW1/SW2 move the paddle.
   Tetris: SW1/SW2 move the piece, SW3 rotates (2 states per piece, no
-  wall kicks), SW4 hard-drops; a line clear flashes underglow white
-  dramatically, topping out flashes it plain red (both real feedback).
+  wall kicks), SW4 hard-drops; a custom 5-piece small set (dot, domino,
+  3-cell straight/corner trominoes, 2x2 square) replaces the standard 7
+  tetrominoes, which real feedback said were too big for this board; a
+  line clear flashes underglow white dramatically, topping out flashes
+  it plain red (both real feedback).
   Pong: two players on one board, column 1/6 paddles (SW1/SW2 up/down
   left, SW5/SW6 up/down right -- unverified guess at which button the
-  user meant by "circle and the other one"), blue ball; a miss flashes
-  white and re-serves immediately rather than ending the round.
+  user meant by "circle and the other one"), blue ball, first to 2
+  points wins (real feedback: it wasn't tracking a winner at all). Score
+  shows as a breathing glow on each side's own control buttons (0/1/2
+  points = 0/1/2 buttons lit); a non-winning miss flashes white and
+  re-serves immediately, but reaching 2 points freezes the board and
+  returns to the game menu after a couple of seconds instead (real
+  feedback: don't reset immediately).
   Every other game's ending flashes underglow red/purple, then returns
   to the menu.
   Since Tetris/brick breaker/Pong reuse SW1/SW2, `octave_control.c` now

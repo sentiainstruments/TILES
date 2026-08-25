@@ -114,13 +114,17 @@ static const tiles_key_info_t s_key_table[12] = {
 #define TRANSPOSE_CROSS_R 1.0f
 #define TRANSPOSE_CROSS_G 0.55f
 #define TRANSPOSE_CROSS_B 0.0f
-/* The cross: a 2-column-wide vertical bar (the two middle columns of
- * 1-6) crossed with a 1-row-thick horizontal bar (picked at row 2 of
- * 1-4 -- there's no exact center row on an even count, this is a first
- * judgment call, not a measurement). */
+/* The cross: a proper plus sign contained in a 4x4 box (matching the
+ * pixel font's own 4x4 glyph size), not a bar spanning the full 6-wide
+ * grid -- real feedback that the horizontal arm was too long relative
+ * to the vertical one. Vertical arm: the two middle columns (3, 4),
+ * full 4-row height. Horizontal arm: row 2, but only cols 2-5 (4 wide,
+ * centered) -- not the full 1-6 width. */
 #define TRANSPOSE_CROSS_ROW 2u
 #define TRANSPOSE_CROSS_COL_A 3u
 #define TRANSPOSE_CROSS_COL_B 4u
+#define TRANSPOSE_CROSS_HBAR_COL_MIN 2u
+#define TRANSPOSE_CROSS_HBAR_COL_MAX 5u
 
 static bool s_prev_minus_pressed;
 static bool s_prev_plus_pressed;
@@ -180,7 +184,10 @@ static void render_transpose_letter(const tiles_glyph_t *glyph) {
 static void render_transpose_cross(void) {
     for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-            bool lit = (row == TRANSPOSE_CROSS_ROW) || (col == TRANSPOSE_CROSS_COL_A) || (col == TRANSPOSE_CROSS_COL_B);
+            bool horiz_arm = (row == TRANSPOSE_CROSS_ROW) && (col >= TRANSPOSE_CROSS_HBAR_COL_MIN) &&
+                             (col <= TRANSPOSE_CROSS_HBAR_COL_MAX);
+            bool vert_arm = (col == TRANSPOSE_CROSS_COL_A) || (col == TRANSPOSE_CROSS_COL_B);
+            bool lit = horiz_arm || vert_arm;
             if (lit) {
                 tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), TRANSPOSE_CROSS_R,
                                                     TRANSPOSE_CROSS_G, TRANSPOSE_CROSS_B);

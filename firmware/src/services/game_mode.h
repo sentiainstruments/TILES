@@ -35,25 +35,39 @@
  *   Tetris controls: SW1/SW2 move the falling piece left/right, SW3
  *   rotates it (a simplified 2-orientation rotation per piece, not full
  *   4-state SRS -- the board is only 4 rows tall so the extra states
- *   would rarely matter), SW4 hard-drops it. Standard tetromino set and
- *   colors, line clears shift everything above down (and flash
- *   underglow white -- see below); topping out (a freshly spawned piece
- *   has nowhere to go) ends the round.
+ *   would rarely matter), SW4 hard-drops it. A custom small-piece set,
+ *   NOT the standard 7 tetrominoes -- real feedback was that full
+ *   tetrominoes (up to 4 wide/tall) were too big for a board this size.
+ *   5 pieces instead, smallest to largest: a 1-cell dot, a 2-cell
+ *   domino, a 3-cell straight tromino (the "long piece," capped at 3
+ *   instead of 4), a 3-cell corner tromino, and a compact 2x2 square.
+ *   Line clears shift everything above down (and flash underglow white
+ *   -- see below); topping out (a freshly spawned piece has nowhere to
+ *   go) ends the round.
  *   Pong controls, two players on one board: column 1 is the left
  *   paddle (SW1 up, SW2 down), column 6 is the right paddle (SW5 up,
  *   SW6 down -- the mirror-image pair to SW1/SW2; unverified against
  *   what the user actually meant by "circle and the other button next
  *   to it"). Both paddles 2 pads tall, white; the ball is a blue dot.
- *   Pong deliberately does NOT use the round-end flow below -- a rally
- *   on a board this small can end in seconds, so returning to the menu
- *   on every missed point would be disruptive. A miss instead flashes
- *   underglow white briefly and re-serves immediately, staying in play
- *   until the player deliberately exits via the entry/exit combo above.
- * Every other game's end (snake self-collision, brick breaker
- * won/lost) flashes underglow red/purple for a couple of seconds, then
- * returns to the menu; Tetris topping out flashes plain red instead
- * (real feedback: "when game is lost it should flash red," distinct
- * from its own white line-clear flash above).
+ *   First to 2 points wins. A non-winning miss flashes underglow white
+ *   briefly and re-serves immediately -- Pong deliberately doesn't use
+ *   the round-end flow below for individual points, since a rally on a
+ *   board this small can end in seconds and returning to the menu every
+ *   point would be disruptive. The score itself shows on each side's
+ *   own movement-control buttons, glowing (a breathing pulse, not
+ *   flat-on): 0 points = both dark, 1 = the "up" button glows, 2 (win)
+ *   = both glow. Reaching 2 points is different from an ordinary
+ *   miss -- real feedback: "don't reset the game immediately, return to
+ *   the game menu" -- so the match freezes (ball/paddles stay put,
+ *   winner's controls glow) for a couple of seconds, then returns to
+ *   the menu, same as every other game's round end.
+ * Snake self-collision and brick breaker won/lost flash underglow
+ * red/purple for a couple of seconds, then return to the menu; Tetris
+ * topping out flashes plain red instead (real feedback: "when game is
+ * lost it should flash red," distinct from its own white line-clear
+ * flash above). Pong's match-end doesn't route through this shared
+ * red/purple flow at all -- see above, its "flash" is the winner's
+ * controls glowing, not underglow.
  *
  * Claims the same standby-active rendering path standby.c's own
  * animations and boot_sequence.c use

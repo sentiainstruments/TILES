@@ -1,25 +1,30 @@
 #pragma once
 
 /*
- * Shared tiny pixel font -- 4 rows tall (one pixel per pad row 1-4),
- * variable width per glyph, monochrome (a glyph is just which pixels
- * are lit; callers apply their own color/brightness). Used by anything
- * that draws text or a single big letter across the pad grid:
+ * Shared tiny pixel font -- a fixed 4x4 grid per glyph (one pixel per
+ * pad row 1-4, 4 columns wide), monochrome (a glyph is just which
+ * pixels are lit; callers apply their own color/brightness). Used by
+ * anything that draws text or a single big letter across the pad grid:
  * services/standby.c's scrolling marquee animation, and
  * services/octave_control.c's transpose-mode key-letter display.
  *
- * Format: each glyph is an array of column bytes, one byte per column,
- * left to right; bit0 = row 1 (top) ... bit3 = row 4 (bottom).
- * Hand-designed specifically for 4 rows -- there's no 5th row on this
- * board to borrow from, so this isn't an off-the-shelf font shrunk
- * down. Only the letters actually needed exist: A-G (the seven natural
- * note names, for the transpose key display) plus I/L/N/S/T (for
- * "SENTIA - TILES -"), a dash, and a blank space. Reworked from an
- * earlier version that lived duplicated inside standby.c and had at
- * least one real mistake (E and F were nearly indistinguishable, E was
- * missing its bottom bar) -- pulled out into its own module so both
- * callers share one already-checked set of glyphs instead of each
- * hand-guessing their own.
+ * Format: each glyph is an array of 4 column bytes, left to right;
+ * bit0 = row 1 (top) ... bit3 = row 4 (bottom). Every glyph is exactly
+ * 4 columns wide -- true monospacing, letters that don't need the full
+ * width (I, T) just leave their unused columns dark rather than the
+ * previous version's per-glyph variable widths + explicit gap columns.
+ *
+ * Styled after the reference "FOUR BIT" pixel font (bold, blocky,
+ * geometric strokes) -- hand-drawn to fit this board's actual 4x4
+ * constraint rather than an off-the-shelf font shrunk down, since no
+ * existing font is designed for exactly 4 rows. Reworked once already:
+ * the original version used variable-width 3-column glyphs with a
+ * separate gap column between letters; this version moved to a fixed
+ * 4x4 grid per the "FOUR BIT" reference and widened N's diagonal (the
+ * extra column made a real diagonal possible instead of the old
+ * H-like compromise). Only the letters actually needed exist: A-G (the
+ * seven natural note names, for the transpose key display) plus
+ * I/L/N/S/T (for "SENTIA - TILES -"), a dash, and a blank space.
  */
 
 #include <stdint.h>

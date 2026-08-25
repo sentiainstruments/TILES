@@ -401,19 +401,31 @@ static void render_brick(uint32_t now_ms) {
 }
 
 /* ---- Interactive Tetris ----------------------------------------------------
- * Standard tetromino set falling into a 4-row x 6-col well (the pad
- * grid; function buttons stay off, same as the other two games).
- * Simplified from full Tetris to fit both the tiny board and this
- * board's control set: only 2 rotation states per piece (not full
- * 4-state SRS -- with only 4 rows of height the extra states would
- * rarely change anything) and no wall kicks (a rotation that doesn't
- * fit in place is just rejected). SW1/SW2 move left/right, SW3 rotates,
- * SW4 hard-drops. Gravity also steps the piece down automatically every
- * GT_STEP_MS. Landing locks the piece into the well; full rows shift
- * everything above them down (gt_clear_lines() below, handles multiple
- * simultaneous clears). Topping out -- a freshly spawned piece has
- * nowhere to fit -- ends the round via the same gm_start_round_end()
- * flash every other game uses. */
+ * A custom small-piece set falling into a 4-row x 6-col well (the pad
+ * grid; function buttons stay off, same as the other two games) --
+ * NOT the standard 7 tetrominoes. Real feedback on the original
+ * standard set: full tetrominoes (4 cells, up to 4 wide/tall) are too
+ * big for a board this size -- a single piece could span the entire
+ * width or height, leaving no room to actually play. Replaced with 5
+ * smaller pieces of increasing size (GT_PIECES below): a 1-cell dot, a
+ * 2-cell domino, a 3-cell straight tromino (the "long piece," capped at
+ * 3 instead of 4), a 3-cell corner tromino, and a 2x2 square (4 cells,
+ * but compact -- its footprint doesn't sprawl the way a 4-in-a-row
+ * piece does, so it stays as the largest piece). Pieces now have a
+ * variable cell count (`num_cells`, 1-4) rather than always exactly 4,
+ * so every loop over a piece's cells uses that field instead of a
+ * hardcoded 4.
+ *
+ * Only 2 rotation states per piece (not full 4-state SRS -- with only 4
+ * rows of height the extra states would rarely change anything) and no
+ * wall kicks (a rotation that doesn't fit in place is just rejected).
+ * SW1/SW2 move left/right, SW3 rotates, SW4 hard-drops. Gravity also
+ * steps the piece down automatically every GT_STEP_MS. Landing locks
+ * the piece into the well; full rows shift everything above them down
+ * (gt_clear_lines() below, handles multiple simultaneous clears).
+ * Topping out -- a freshly spawned piece has nowhere to fit -- ends the
+ * round via the same gm_start_round_end() flash every other game
+ * uses. */
 
 #define GT_MIN_ROW 1u /* row 0 is buttons, not part of the well */
 #define GT_MAX_ROW TILES_GRID_MAX_ROW
@@ -422,8 +434,9 @@ static void render_brick(uint32_t now_ms) {
 #define GT_ROWS 4u
 #define GT_COLS 6u
 #define GT_STEP_MS 550u
-#define GT_SPAWN_COL 3 /* leaves room either side for every piece's max width (4) */
-#define GT_NUM_PIECE_TYPES 7u
+#define GT_SPAWN_COL 3 /* leaves room either side for every piece's max width (3) */
+#define GT_NUM_PIECE_TYPES 5u
+#define GT_MAX_CELLS 4u
 /* Dramatic white underglow strobe on a line clear -- fast toggle, short
  * total duration, so it reads as a flash rather than a glow. */
 #define GT_LINE_CLEAR_FLASH_MS 450u
@@ -434,23 +447,30 @@ typedef struct {
     int8_t dc;
 } gt_offset_t;
 
-/* Two rotation states per piece, 4 cells each -- see the file comment
- * above for why only 2, not the usual 4. */
+/* Two rotation states per piece; only the first num_cells entries of
+ * each are used (1-4, GT_MAX_CELLS) -- see the file comment above for
+ * why pieces are no longer always exactly 4 cells. */
 typedef struct {
-    gt_offset_t state0[4];
-    gt_offset_t state1[4];
+    uint8_t num_cells;
+    gt_offset_t state0[GT_MAX_CELLS];
+    gt_offset_t state1[GT_MAX_CELLS];
     float r, g, b;
 } gt_piece_def_t;
 
-/* Classic Tetris piece colors, in classic piece order (I,O,T,S,Z,J,L). */
+/* Small custom piece set, smallest to largest -- see the file comment
+ * above for why these replace the standard 7 tetrominoes. */
 static const gt_piece_def_t GT_PIECES[GT_NUM_PIECE_TYPES] = {
-    {{{0, 0}, {0, 1}, {0, 2}, {0, 3}}, {{0, 0}, {1, 0}, {2, 0}, {3, 0}}, 0.0f, 1.0f, 1.0f},   /* I: cyan */
-    {{{0, 0}, {0, 1}, {1, 0}, {1, 1}}, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, 1.0f, 1.0f, 0.0f},   /* O: yellow */
-    {{{0, 0}, {0, 1}, {0, 2}, {1, 1}}, {{0, 0}, {1, 0}, {2, 0}, {1, 1}}, 0.6f, 0.0f, 1.0f},   /* T: purple */
-    {{{0, 1}, {0, 2}, {1, 0}, {1, 1}}, {{0, 0}, {1, 0}, {1, 1}, {2, 1}}, 0.0f, 1.0f, 0.0f},   /* S: green */
-    {{{0, 0}, {0, 1}, {1, 1}, {1, 2}}, {{0, 1}, {1, 0}, {1, 1}, {2, 0}}, 1.0f, 0.0f, 0.0f},   /* Z: red */
-    {{{0, 0}, {1, 0}, {1, 1}, {1, 2}}, {{0, 0}, {0, 1}, {1, 0}, {2, 0}}, 0.0f, 0.0f, 1.0f},   /* J: blue */
-    {{{0, 2}, {1, 0}, {1, 1}, {1, 2}}, {{0, 0}, {1, 0}, {2, 0}, {2, 1}}, 1.0f, 0.5f, 0.0f},   /* L: orange */
+    /* Dot: 1 cell, no real rotation (both states identical). */
+    {1u, {{0, 0}}, {{0, 0}}, 1.0f, 1.0f, 1.0f},
+    /* Domino: 2 cells, horizontal/vertical. */
+    {2u, {{0, 0}, {0, 1}}, {{0, 0}, {1, 0}}, 0.0f, 1.0f, 1.0f},
+    /* Straight tromino ("long piece," capped at 3): horizontal/vertical. */
+    {3u, {{0, 0}, {0, 1}, {0, 2}}, {{0, 0}, {1, 0}, {2, 0}}, 0.0f, 1.0f, 0.0f},
+    /* Corner tromino: two different bends, not a strict rotation pair,
+     * just two distinct 3-cell shapes for variety. */
+    {3u, {{0, 0}, {1, 0}, {1, 1}}, {{0, 0}, {0, 1}, {1, 0}}, 1.0f, 0.5f, 0.0f},
+    /* Square: 2x2, 4 cells but compact -- rotation is a no-op. */
+    {4u, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, 1.0f, 1.0f, 0.0f},
 };
 
 /* 0 = empty, else (piece type index + 1) -- indexed [row - GT_MIN_ROW][col - GT_MIN_COL]. */
@@ -472,7 +492,8 @@ static const gt_offset_t *gt_offsets(uint8_t piece_type, uint8_t rotation) {
 
 static bool gt_fits(uint8_t piece_type, uint8_t rotation, int8_t origin_row, int8_t origin_col) {
     const gt_offset_t *offsets = gt_offsets(piece_type, rotation);
-    for (uint8_t i = 0; i < 4u; i++) {
+    uint8_t num_cells = GT_PIECES[piece_type].num_cells;
+    for (uint8_t i = 0; i < num_cells; i++) {
         int8_t r = (int8_t)(origin_row + offsets[i].dr);
         int8_t c = (int8_t)(origin_col + offsets[i].dc);
         if (r < (int8_t)GT_MIN_ROW || r > (int8_t)GT_MAX_ROW) {
@@ -532,7 +553,8 @@ static uint8_t gt_clear_lines(void) {
 
 static void gt_lock(uint32_t now_ms) {
     const gt_offset_t *offsets = gt_offsets(s_gt_piece_type, s_gt_rotation);
-    for (uint8_t i = 0; i < 4u; i++) {
+    uint8_t num_cells = GT_PIECES[s_gt_piece_type].num_cells;
+    for (uint8_t i = 0; i < num_cells; i++) {
         int8_t r = (int8_t)(s_gt_origin_row + offsets[i].dr);
         int8_t c = (int8_t)(s_gt_origin_col + offsets[i].dc);
         s_gt_board[r - (int8_t)GT_MIN_ROW][c - (int8_t)GT_MIN_COL] = (uint8_t)(s_gt_piece_type + 1u);
@@ -641,7 +663,7 @@ static void render_tetris(uint32_t now_ms) {
      * cue distinguishing it from the already-locked stack. */
     const gt_piece_def_t *active = &GT_PIECES[s_gt_piece_type];
     const gt_offset_t *offsets = gt_offsets(s_gt_piece_type, s_gt_rotation);
-    for (uint8_t i = 0; i < 4u; i++) {
+    for (uint8_t i = 0; i < active->num_cells; i++) {
         int8_t r = (int8_t)(s_gt_origin_row + offsets[i].dr);
         int8_t c = (int8_t)(s_gt_origin_col + offsets[i].dc);
         if (r < 1 || r > (int8_t)TILES_GRID_MAX_ROW || c < (int8_t)TILES_GRID_MIN_COL ||
@@ -672,15 +694,28 @@ static void render_tetris(uint32_t now_ms) {
  * the six buttons); flag this to the user if "square" wasn't the button
  * they meant by "the other one next to circle."
  *
- * Deliberately does NOT go through the shared win/lose round-end
- * machinery every other game here uses -- a rally on a board this small
- * can end in a couple of seconds, and bouncing back out to the menu
- * after every single missed point would be far more disruptive than
- * useful. Instead a miss triggers a short local white underglow flash
- * (gp_point_scored()) and the ball re-serves immediately, staying in
- * GM_STATE_PLAYING_PONG the whole time; the only way out is the
- * standard SW3+SW4+SW5+SW6 hold every game shares (unambiguous since it
- * needs SW3/SW4 too, neither of which Pong uses). */
+ * A miss (real feedback: Pong wasn't tracking who was winning at all)
+ * scores the *other* side a point and triggers a short local white
+ * underglow flash (gp_point_scored()); first to GP_WIN_SCORE (2) wins
+ * the match. A side's score shows on its own movement-control buttons,
+ * glowing rather than flat-on: 0 points = both dark, 1 point = the
+ * "up" button (SW1 left / SW5 right) glows, 2 points = both glow --
+ * "one point one control lit, 2 points both buttons on." SW3/SW4 stay
+ * dark, unused by Pong.
+ *
+ * Individual points still don't go through the shared win/lose
+ * round-end machinery every other game here uses -- a rally on a board
+ * this small can end in a couple of seconds, so bouncing to the menu
+ * on every point would be disruptive -- the ball just re-serves
+ * immediately after a non-winning miss. Reaching the winning score is
+ * different: real feedback was "don't reset the game immediately,
+ * return to the game menu" -- so a match win freezes the board (ball
+ * and paddles stop where they are, the winner's controls glow) for
+ * GP_MATCH_END_DISPLAY_MS, then returns to GM_STATE_MENU via
+ * gm_enter_menu(), the same way every other game's round ends.
+ * Handled locally in tiles_game_mode_scan()'s PLAYING_PONG branch
+ * (checking s_gp_match_over) rather than through GM_STATE_ROUND_END,
+ * since the "flash" here is on the button LEDs, not underglow. */
 
 #define GP_MIN_ROW 1u /* row 0 is buttons, not part of the court */
 #define GP_MAX_ROW TILES_GRID_MAX_ROW
@@ -693,6 +728,13 @@ static void render_tetris(uint32_t now_ms) {
 #define GP_POINT_FLASH_TOGGLE_MS 110u
 #define GP_PADDLE_LEVEL 1.0f
 #define GP_BALL_LEVEL 1.0f
+#define GP_WIN_SCORE 2u
+#define GP_MATCH_END_DISPLAY_MS 2500u
+/* Breathing pulse for a lit score-indicator button -- "glowing," not
+ * flat-on. */
+#define GP_SCORE_GLOW_PERIOD_MS 900.0f
+#define GP_SCORE_GLOW_MIN 0.5f
+#define GP_SCORE_GLOW_MAX 1.0f
 
 static int8_t s_gp_left_paddle_top;  /* GP_PADDLE_TOP_MIN..GP_PADDLE_TOP_MAX */
 static int8_t s_gp_right_paddle_top;
@@ -702,6 +744,10 @@ static int8_t s_gp_ball_drow;
 static int8_t s_gp_ball_dcol;
 static uint32_t s_gp_last_step_ms;
 static uint32_t s_gp_point_flash_ms;
+static uint8_t s_gp_left_score;
+static uint8_t s_gp_right_score;
+static bool s_gp_match_over;
+static uint32_t s_gp_match_over_ms;
 static bool s_gp_prev_left_up;
 static bool s_gp_prev_left_down;
 static bool s_gp_prev_right_up;
@@ -718,6 +764,9 @@ static void gp_serve(uint32_t now_ms) {
 static void gp_start(uint32_t now_ms) {
     s_gp_left_paddle_top = 2;
     s_gp_right_paddle_top = 2;
+    s_gp_left_score = 0u;
+    s_gp_right_score = 0u;
+    s_gp_match_over = false;
     gp_serve(now_ms);
     /* "Already long past" rather than 0 -- see the same pattern/reasoning
      * on Tetris's line-clear flash above. */
@@ -727,6 +776,7 @@ static void gp_start(uint32_t now_ms) {
     s_gp_prev_right_up = false;
     s_gp_prev_right_down = false;
 }
+
 
 static void gp_handle_input(void) {
     bool left_up = tiles_button_is_pressed(1u);    /* SW1 "-" */
@@ -753,8 +803,22 @@ static void gp_handle_input(void) {
     s_gp_prev_right_down = right_down;
 }
 
-static void gp_point_scored(uint32_t now_ms) {
+/* left_missed: true if the ball got past the left paddle (so the right
+ * side scores), false if it got past the right paddle (left scores).
+ * On reaching GP_WIN_SCORE, freezes the match instead of re-serving --
+ * see the file header. */
+static void gp_point_scored(uint32_t now_ms, bool left_missed) {
     s_gp_point_flash_ms = now_ms;
+    if (left_missed) {
+        s_gp_right_score++;
+    } else {
+        s_gp_left_score++;
+    }
+    if (s_gp_left_score >= GP_WIN_SCORE || s_gp_right_score >= GP_WIN_SCORE) {
+        s_gp_match_over = true;
+        s_gp_match_over_ms = now_ms;
+        return;
+    }
     gp_serve(now_ms);
 }
 
@@ -771,7 +835,7 @@ static void gp_step(uint32_t now_ms) {
             s_gp_ball_dcol = 1;
             new_col = (int8_t)GP_PADDLE_COL_LEFT;
         } else {
-            gp_point_scored(now_ms);
+            gp_point_scored(now_ms, true);
             return;
         }
     } else if (new_col > (int8_t)GP_PADDLE_COL_RIGHT) {
@@ -779,7 +843,7 @@ static void gp_step(uint32_t now_ms) {
             s_gp_ball_dcol = -1;
             new_col = (int8_t)GP_PADDLE_COL_RIGHT;
         } else {
-            gp_point_scored(now_ms);
+            gp_point_scored(now_ms, false);
             return;
         }
     }
@@ -796,10 +860,24 @@ static void gp_update(uint32_t now_ms) {
     gp_step(now_ms);
 }
 
+/* Score indicator on each side's own movement-control buttons: 0
+ * points = both dark, 1 = the "up" button glows, 2 (win) = both glow --
+ * a breathing pulse, not flat-on, so it reads as "glowing." SW3/SW4
+ * stay dark, unused by Pong. */
+static void render_pong_score_buttons(uint32_t now_ms) {
+    float raw = 0.5f + 0.5f * sinf(2.0f * GAME_MODE_PI * (float)now_ms / GP_SCORE_GLOW_PERIOD_MS);
+    float glow = GP_SCORE_GLOW_MIN + (GP_SCORE_GLOW_MAX - GP_SCORE_GLOW_MIN) * raw;
+
+    tiles_buttons_set_standby_led(1u, (s_gp_left_score >= 1u) ? glow : 0.0f);  /* SW1 "-" */
+    tiles_buttons_set_standby_led(2u, (s_gp_left_score >= 2u) ? glow : 0.0f);  /* SW2 "+" */
+    tiles_buttons_set_standby_led(3u, 0.0f);
+    tiles_buttons_set_standby_led(4u, 0.0f);
+    tiles_buttons_set_standby_led(5u, (s_gp_right_score >= 1u) ? glow : 0.0f); /* SW5 square */
+    tiles_buttons_set_standby_led(6u, (s_gp_right_score >= 2u) ? glow : 0.0f); /* SW6 circle */
+}
+
 static void render_pong(uint32_t now_ms) {
-    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
-    }
+    render_pong_score_buttons(now_ms);
 
     for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
@@ -1004,8 +1082,19 @@ void tiles_game_mode_scan(void) {
         gt_handle_input(now_ms);
         gt_update(now_ms);
     } else if (s_gm_state == GM_STATE_PLAYING_PONG) {
-        gp_handle_input();
-        gp_update(now_ms);
+        if (s_gp_match_over) {
+            /* Frozen -- ball/paddles stay exactly where the match ended,
+             * winner's controls glow (render_pong_score_buttons()) --
+             * then back to the menu, same as every other game's round
+             * end. See the Pong file header for why this is handled
+             * locally rather than through GM_STATE_ROUND_END. */
+            if (now_ms - s_gp_match_over_ms >= GP_MATCH_END_DISPLAY_MS) {
+                gm_enter_menu();
+            }
+        } else {
+            gp_handle_input();
+            gp_update(now_ms);
+        }
     } else if (s_gm_state == GM_STATE_ROUND_END) {
         if (now_ms - s_gm_round_end_ms >= GM_ROUND_END_FLASH_MS) {
             gm_enter_menu();

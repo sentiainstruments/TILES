@@ -966,22 +966,30 @@ static tiles_standby_color_t anim_bounce(uint8_t row, uint8_t col, uint32_t now_
 }
 
 /* ---- Animation 11: Tetris --------------------------------------------------
- * Standard tetromino set, AI-placed and AI-played -- the autonomous
+ * A custom small-piece set, AI-placed and AI-played -- the autonomous
  * counterpart to game_mode.c's real, player-controlled Tetris (same
  * piece shapes/colors, deliberately separate state and code, per this
  * file's established precedent of not sharing anything between the
  * idle-loop and player-driven versions of the same game -- see
- * animations 4 and 8 above). A lightweight greedy AI picks each new
- * piece's rotation and column immediately at spawn: of every
- * (rotation, column) combination that fits, it simulates the drop and
- * keeps whichever lands the piece's topmost cell deepest (a cheap proxy
- * for "keeps the resulting stack lowest," without real hole-counting).
- * The piece then visibly falls one row at a time toward that chosen
- * landing spot, the same step-throttle pattern as every other stateful
- * animation here. Topping out (nowhere for a freshly spawned piece to
- * fit) triggers the same red/purple round-end flash brick breaker uses,
- * then the well clears and a fresh game starts. Function buttons stay
- * off. */
+ * animations 4 and 8 above). NOT the standard 7 tetrominoes -- real
+ * feedback was that full tetrominoes (4 cells, up to 4 wide/tall) were
+ * too big for a board this size, a single piece able to span the whole
+ * width or height. Replaced with 5 smaller pieces (TETRIS_PIECES below,
+ * mirroring game_mode.c's gt_ set): a 1-cell dot, a 2-cell domino, a
+ * 3-cell straight tromino ("long piece," capped at 3), a 3-cell corner
+ * tromino, and a compact 2x2 square. Pieces now carry a variable
+ * `num_cells` (1-4) instead of always exactly 4.
+ *
+ * A lightweight greedy AI picks each new piece's rotation and column
+ * immediately at spawn: of every (rotation, column) combination that
+ * fits, it simulates the drop and keeps whichever lands the piece's
+ * topmost cell deepest (a cheap proxy for "keeps the resulting stack
+ * lowest," without real hole-counting). The piece then visibly falls
+ * one row at a time toward that chosen landing spot, the same
+ * step-throttle pattern as every other stateful animation here.
+ * Topping out (nowhere for a freshly spawned piece to fit) triggers the
+ * same red/purple round-end flash brick breaker uses, then the well
+ * clears and a fresh game starts. Function buttons stay off. */
 
 #define TETRIS_MIN_ROW 1u /* row 0 is buttons, not part of the well */
 #define TETRIS_MAX_ROW TILES_GRID_MAX_ROW
@@ -997,7 +1005,8 @@ static tiles_standby_color_t anim_bounce(uint8_t row, uint8_t col, uint32_t now_
  * total duration, so it reads as a flash rather than a glow. */
 #define TETRIS_LINE_CLEAR_FLASH_MS 450u
 #define TETRIS_LINE_CLEAR_TOGGLE_MS 90u
-#define TETRIS_NUM_PIECE_TYPES 7u
+#define TETRIS_NUM_PIECE_TYPES 5u
+#define TETRIS_MAX_CELLS 4u
 
 typedef struct {
     int8_t dr;
@@ -1005,22 +1014,31 @@ typedef struct {
 } tetris_offset_t;
 
 /* Two rotation states per piece (not full 4-state SRS) -- with only 4
- * rows of height the extra states would rarely matter. Classic piece
- * colors, classic piece order (I,O,T,S,Z,J,L). */
+ * rows of height the extra states would rarely matter. Only the first
+ * num_cells entries of each state are used. */
 typedef struct {
-    tetris_offset_t state0[4];
-    tetris_offset_t state1[4];
+    uint8_t num_cells;
+    tetris_offset_t state0[TETRIS_MAX_CELLS];
+    tetris_offset_t state1[TETRIS_MAX_CELLS];
     float r, g, b;
 } tetris_piece_def_t;
 
+/* Small custom piece set, smallest to largest -- mirrors
+ * game_mode.c's gt_ set (see this animation's own comment above for
+ * why); duplicated rather than shared, per this file's established
+ * precedent for autonomous/interactive pairs. */
 static const tetris_piece_def_t TETRIS_PIECES[TETRIS_NUM_PIECE_TYPES] = {
-    {{{0, 0}, {0, 1}, {0, 2}, {0, 3}}, {{0, 0}, {1, 0}, {2, 0}, {3, 0}}, 0.0f, 1.0f, 1.0f}, /* I: cyan */
-    {{{0, 0}, {0, 1}, {1, 0}, {1, 1}}, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, 1.0f, 1.0f, 0.0f}, /* O: yellow */
-    {{{0, 0}, {0, 1}, {0, 2}, {1, 1}}, {{0, 0}, {1, 0}, {2, 0}, {1, 1}}, 0.6f, 0.0f, 1.0f}, /* T: purple */
-    {{{0, 1}, {0, 2}, {1, 0}, {1, 1}}, {{0, 0}, {1, 0}, {1, 1}, {2, 1}}, 0.0f, 1.0f, 0.0f}, /* S: green */
-    {{{0, 0}, {0, 1}, {1, 1}, {1, 2}}, {{0, 1}, {1, 0}, {1, 1}, {2, 0}}, 1.0f, 0.0f, 0.0f}, /* Z: red */
-    {{{0, 0}, {1, 0}, {1, 1}, {1, 2}}, {{0, 0}, {0, 1}, {1, 0}, {2, 0}}, 0.0f, 0.0f, 1.0f}, /* J: blue */
-    {{{0, 2}, {1, 0}, {1, 1}, {1, 2}}, {{0, 0}, {1, 0}, {2, 0}, {2, 1}}, 1.0f, 0.5f, 0.0f}, /* L: orange */
+    /* Dot: 1 cell, no real rotation (both states identical). */
+    {1u, {{0, 0}}, {{0, 0}}, 1.0f, 1.0f, 1.0f},
+    /* Domino: 2 cells, horizontal/vertical. */
+    {2u, {{0, 0}, {0, 1}}, {{0, 0}, {1, 0}}, 0.0f, 1.0f, 1.0f},
+    /* Straight tromino ("long piece," capped at 3): horizontal/vertical. */
+    {3u, {{0, 0}, {0, 1}, {0, 2}}, {{0, 0}, {1, 0}, {2, 0}}, 0.0f, 1.0f, 0.0f},
+    /* Corner tromino: two different bends, not a strict rotation pair,
+     * just two distinct 3-cell shapes for variety. */
+    {3u, {{0, 0}, {1, 0}, {1, 1}}, {{0, 0}, {0, 1}, {1, 0}}, 1.0f, 0.5f, 0.0f},
+    /* Square: 2x2, 4 cells but compact -- rotation is a no-op. */
+    {4u, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, 1.0f, 1.0f, 0.0f},
 };
 
 typedef enum {
@@ -1047,7 +1065,8 @@ static const tetris_offset_t *tetris_offsets(uint8_t piece_type, uint8_t rotatio
 
 static bool tetris_fits(uint8_t piece_type, uint8_t rotation, int8_t origin_row, int8_t origin_col) {
     const tetris_offset_t *offsets = tetris_offsets(piece_type, rotation);
-    for (uint8_t i = 0; i < 4u; i++) {
+    uint8_t num_cells = TETRIS_PIECES[piece_type].num_cells;
+    for (uint8_t i = 0; i < num_cells; i++) {
         int8_t r = (int8_t)(origin_row + offsets[i].dr);
         int8_t c = (int8_t)(origin_col + offsets[i].dc);
         if (r < (int8_t)TETRIS_MIN_ROW || r > (int8_t)TETRIS_MAX_ROW) {
@@ -1094,8 +1113,9 @@ static void tetris_ai_place(uint8_t piece_type, uint8_t *out_rotation, int8_t *o
                 continue;
             }
             const tetris_offset_t *offsets = tetris_offsets(piece_type, rotation);
+            uint8_t num_cells = TETRIS_PIECES[piece_type].num_cells;
             int8_t min_row = (int8_t)(landing_row + offsets[0].dr);
-            for (uint8_t i = 1; i < 4u; i++) {
+            for (uint8_t i = 1; i < num_cells; i++) {
                 int8_t r = (int8_t)(landing_row + offsets[i].dr);
                 if (r < min_row) {
                     min_row = r;
@@ -1172,7 +1192,8 @@ static void tetris_new_round(uint32_t now_ms) {
 
 static void tetris_lock(uint32_t now_ms) {
     const tetris_offset_t *offsets = tetris_offsets(s_tetris_piece_type, s_tetris_rotation);
-    for (uint8_t i = 0; i < 4u; i++) {
+    uint8_t num_cells = TETRIS_PIECES[s_tetris_piece_type].num_cells;
+    for (uint8_t i = 0; i < num_cells; i++) {
         int8_t r = (int8_t)(s_tetris_origin_row + offsets[i].dr);
         int8_t c = (int8_t)(s_tetris_origin_col + offsets[i].dc);
         s_tetris_board[r - (int8_t)TETRIS_MIN_ROW][c - (int8_t)TETRIS_MIN_COL] = (uint8_t)(s_tetris_piece_type + 1u);
@@ -1220,7 +1241,8 @@ static tiles_standby_color_t anim_tetris(uint8_t row, uint8_t col, uint32_t now_
 
     if (s_tetris_phase == TETRIS_PHASE_PLAYING) {
         const tetris_offset_t *offsets = tetris_offsets(s_tetris_piece_type, s_tetris_rotation);
-        for (uint8_t i = 0; i < 4u; i++) {
+        uint8_t num_cells = TETRIS_PIECES[s_tetris_piece_type].num_cells;
+        for (uint8_t i = 0; i < num_cells; i++) {
             int8_t r = (int8_t)(s_tetris_origin_row + offsets[i].dr);
             int8_t c = (int8_t)(s_tetris_origin_col + offsets[i].dc);
             if (r == (int8_t)row && c == (int8_t)col) {
