@@ -15,10 +15,12 @@
 #define OCTAVE_CONTROL_PI 3.14159265358979323846f
 
 /* Magnitude 2: a smooth, slow breathing pulse -- distinct from
- * magnitude 1's flat solid and magnitude 3's crisp blink pattern below.
+ * magnitude 1's flat solid and magnitude 3's faster triple-pulse below.
  * Never fully dark (min > 0) so it still reads clearly as "the active
- * direction," not as flickering off. Unmeasured -- a starting guess. */
-#define PULSE_PERIOD_MS 1600.0f
+ * direction," not as flickering off. Slowed from an initial 1600ms
+ * period after real feedback that it read as too fast -- unmeasured,
+ * still a starting guess at the new period. */
+#define PULSE_PERIOD_MS 3200.0f
 #define PULSE_MIN_LEVEL 0.15f
 #define PULSE_MAX_LEVEL 1.0f
 
@@ -28,23 +30,31 @@ static float magnitude2_level(uint32_t now_ms) {
     return PULSE_MIN_LEVEL + (PULSE_MAX_LEVEL - PULSE_MIN_LEVEL) * raw;
 }
 
-/* Magnitude 3: three quick blinks, then a solid hold, then the whole
- * cycle repeats -- deliberately busier/faster-reading than magnitude
- * 2's plain breathing pulse. Unmeasured -- a starting guess. */
-#define BLINK_ON_MS 150u
-#define BLINK_OFF_MS 150u
-#define BLINK_COUNT 3u
-#define HOLD_MS 800u
-#define BLINK_PHASE_MS (BLINK_COUNT * (BLINK_ON_MS + BLINK_OFF_MS))
-#define CYCLE_MS (BLINK_PHASE_MS + HOLD_MS)
+/* Magnitude 3: three smooth pulses (a raised-cosine bump each -- rises
+ * and falls smoothly, no instant on/off edge) in quick succession, then
+ * a brief dark rest, then the whole burst repeats -- reworked from an
+ * original hard on/off blink-then-solid-hold pattern after real
+ * feedback that it read as "flashing too hard, not pulsing": the fix is
+ * the shape of each transition (smooth raised-cosine instead of a
+ * square wave), not just the timing. Still meant to read as busier/
+ * faster than magnitude 2's single slow breath -- three quick pulses
+ * per burst instead of one long one. Unmeasured -- a starting guess. */
+#define PULSE3_ONE_MS 260.0f
+#define PULSE3_COUNT 3u
+#define PULSE3_REST_MS 700u
+#define PULSE3_BURST_MS ((uint32_t)(PULSE3_COUNT * PULSE3_ONE_MS))
+#define PULSE3_CYCLE_MS (PULSE3_BURST_MS + PULSE3_REST_MS)
 
 static float magnitude3_level(uint32_t now_ms) {
-    uint32_t t = now_ms % CYCLE_MS;
-    if (t < BLINK_PHASE_MS) {
-        uint32_t within_blink = t % (BLINK_ON_MS + BLINK_OFF_MS);
-        return (within_blink < BLINK_ON_MS) ? 1.0f : 0.0f;
+    uint32_t t = now_ms % PULSE3_CYCLE_MS;
+    if (t >= PULSE3_BURST_MS) {
+        return 0.0f; /* the rest between bursts */
     }
-    return 1.0f; /* the hold */
+    float within = (float)(t % (uint32_t)PULSE3_ONE_MS);
+    float phase = within / PULSE3_ONE_MS; /* 0..1 across one pulse */
+    /* Raised cosine: 0 at the edges, 1 at the pulse's midpoint, smooth
+     * the whole way -- no hard edge anywhere in the waveform. */
+    return 0.5f * (1.0f - cosf(2.0f * OCTAVE_CONTROL_PI * phase));
 }
 
 static float level_for_magnitude(uint8_t magnitude, uint32_t now_ms) {

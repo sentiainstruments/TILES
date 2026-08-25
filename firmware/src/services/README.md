@@ -121,15 +121,22 @@ not its code.
   override -- their LEDs stop following "lit while held" and instead
   show the active direction's shift magnitude via a distinct pattern:
   magnitude 1 solid, magnitude 2 a slow breathing pulse, magnitude 3
-  three quick blinks then a solid hold then repeat; the inactive
-  direction (and both, at shift 0) stay dark.
+  three smooth quick pulses then a brief dark rest then repeat; the
+  inactive direction (and both, at shift 0) stay dark. Reworked once
+  from real hardware feedback: magnitude 2's pulse read as too fast
+  (period roughly doubled), and magnitude 3's original hard on/off
+  blink-then-solid-hold read as "flashing too hard, not pulsing" --
+  every transition in magnitude 3 is now a smooth raised-cosine bump
+  (rises and falls continuously, no square-wave edge anywhere), not
+  just a timing tweak.
   Meant to become a general-purpose modifier eventually (held for other
   menus/combos, per the product's own direction) -- this module only
   implements the V1 default function, not a generic modifier framework;
   that's real future work, not built speculatively now.
   **Not hardware-verified:** every pattern timing constant
-  (`PULSE_PERIOD_MS`, the blink/hold durations) is a first guess, and
-  this hasn't been seen on real hardware at all yet.
+  (`PULSE_PERIOD_MS`, `PULSE3_ONE_MS`/`PULSE3_REST_MS`) is a first
+  guess -- this rework is reasoned through against the *previous*
+  version's real feedback, not itself seen on real hardware yet.
 - `game_mode.h`/`.c` — done for V1: real, player-controlled minigames --
   a genuinely separate feature from `standby.c`'s autonomous snake/
   brick-breaker animations (below), which stay exactly what they were
@@ -140,11 +147,13 @@ not its code.
   `octave_control.h`'s own note above about "-"/"+" becoming
   general-purpose modifiers eventually. The menu shows pad 1 (green) for
   Snake and pad 2 (orange) for Brick Breaker; touch either to launch it.
-  Snake: SW1/SW2/SW3/SW4 = left/right/up/down (absolute direction, not
-  relative turning; reversing straight into the snake's own neck is
-  ignored, the standard rule), eats a pulsing food dot to grow, wraps
-  around the grid's edges (friendlier than instant wall-death on a board
-  this small) and dies only on self-collision. Brick Breaker: SW1/SW2
+  Snake: starts 2 segments long (real feedback: 3 felt cramped on a
+  board this small), SW1/SW2/SW3/SW4 = left/right/up/down (absolute
+  direction, not relative turning; reversing straight into the snake's
+  own neck is ignored, the standard rule), eats a pulsing food dot to
+  grow, wraps around the grid's edges (friendlier than instant
+  wall-death on a board this small) and dies only on self-collision.
+  Brick Breaker: SW1/SW2
   move the paddle -- otherwise identical physics to `standby.c`'s
   autonomous version. Either game ending (self-collision, or brick
   breaker won/lost) flashes underglow red/purple for ~2s, then returns
@@ -292,7 +301,7 @@ not its code.
   1. diagonal traveling wave
   2. a sharp, squared-contrast ring pulsing outward from center
   3. comet-tailed "shooting stars" with per-star randomized speed/tail/twinkle
-  4. an actual game of snake: a pulsing red food dot appears, the snake (green, brighter head) moves toward it a cell at a time and eats it (grows by one segment, a new dot appears) -- direction each step is greedy-toward-the-food with a randomized perturbation (`SNAKE_RANDOM_TURN_WEIGHT`) so the path varies run to run, and it resets to a short length at a randomized start position/direction whenever it grows past `SNAKE_MAX_LENGTH` or traps itself with nowhere to go, so it doesn't settle into one repeating pattern long-term either. Reworked from an earlier version that was just a fixed-length segment ping-ponging a deterministic path -- real feedback was that it didn't feel like an actual game.
+  4. an actual game of snake: starts 2 segments long (real feedback: 3 felt cramped on a board this small), a pulsing red food dot appears, the snake (green, brighter head) moves toward it a cell at a time and eats it (grows by one segment, a new dot appears) -- direction each step is greedy-toward-the-food with a randomized perturbation (`SNAKE_RANDOM_TURN_WEIGHT`) so the path varies run to run, and it resets to a short length at a randomized start position/direction whenever it grows past `SNAKE_MAX_LENGTH` or traps itself with nowhere to go, so it doesn't settle into one repeating pattern long-term either. Reworked from an earlier version that was just a fixed-length segment ping-ponging a deterministic path -- real feedback was that it didn't feel like an actual game.
   5. a blue/purple RGB showcase where underglow shows the same moving color as the pads -- the whole point being to show off both
   6. a graphic equalizer: each column is a fake, slow (layered-sine, never literally random) EQ/VU bar, bottom-up blue/blue/yellow/red, with a per-column red "peak-hold" marker that sticks at the highest segment reached and only falls slowly (`EQ_PEAK_DECAY_PER_MS`, ~6s full fall) independent of the bar's own motion -- classic hardware-equalizer behavior. Each column also has its own slow, independent "phrase" envelope (`eq_bar_envelope()`) biased toward quiet, so columns spend real stretches fully dark rather than always showing a segment or two -- reworked from real feedback that an earlier version was too fast and too continuously lit to read as stylized. Function buttons are fully off; underglow is a constant blue accent unrelated to any one column.
   7. a circular underglow wave: only underglow moves, a wave traveling around the 4 pixels in their actual physical circular order (`g_tiles_underglow_circular_position` in `board/board_layout.h` -- chain order 0,1,2,3 zigzags diagonally, the real ring order is 0,1,3,2), each pixel rising and dimming significantly as the wave passes through, going around and around; pads/buttons sit at a flat, minimal, non-animated brightness.

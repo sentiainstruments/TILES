@@ -290,7 +290,12 @@ static void snake_reset(uint32_t now_ms) {
     int8_t dr = dir_row[dir_index];
     int8_t dc = dir_col[dir_index];
 
-    s_snake_length = 3u;
+    /* 2, not 3 -- real feedback (from the interactive version in
+     * game_mode.c, same concern applies here) that 3 felt cramped given
+     * how little space this board actually has, and with a randomized
+     * start position here a longer starting length also meant more
+     * segments could land clamped/bunched at a boundary. */
+    s_snake_length = 2u;
     for (uint8_t i = 0; i < s_snake_length; i++) {
         int8_t r = (int8_t)(start_row - dr * (int8_t)i);
         int8_t c = (int8_t)(start_col - dc * (int8_t)i);

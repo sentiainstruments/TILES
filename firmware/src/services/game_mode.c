@@ -87,7 +87,9 @@ static void gs_place_food(void) {
 }
 
 static void gs_start(uint32_t now_ms) {
-    s_gs_length = 3u;
+    /* 2, not 3 -- real feedback that 3 felt cramped starting out given
+     * how little space this board actually has (5x6 cells total). */
+    s_gs_length = 2u;
     int8_t start_row = 2;
     int8_t start_col = 3;
     s_gs_dir_row = 0;
