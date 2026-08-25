@@ -15,9 +15,12 @@
  * power-saving state after 15 minutes of total inactivity (see
  * services/standby.h), a power-on animation that doubles as a Hall
  * baseline re-capture window (see services/boot_sequence.h), SW1/SW2's
- * default octave-shift function (see services/octave_control.h), and a
- * serial-driven Hall calibration capture tool (rest/full-press/
- * max-press snapshots -- see diagnostics/calibration.h). Not yet built:
+ * default octave-shift function (see services/octave_control.h),
+ * player-controlled minigames toggled by holding SW3-SW6 (real snake +
+ * brick breaker, distinct from standby's autonomous versions of the
+ * same -- see services/game_mode.h), and a serial-driven Hall
+ * calibration capture tool (rest/full-press/max-press snapshots -- see
+ * diagnostics/calibration.h). Not yet built:
  * MPE, DIN, CV/gate, the usb_vendor diagnostics interface, a real
  * per-pad Hall calibration curve (this is capture only, no curve is
  * derived or applied yet) -- added module by module per the bring-up
@@ -37,6 +40,7 @@
 #include "services/boot_sequence.h"
 #include "services/buttons.h"
 #include "services/expression.h"
+#include "services/game_mode.h"
 #include "services/hall.h"
 #include "services/haptics.h"
 #include "services/lighting.h"
@@ -158,6 +162,11 @@ int main(void) {
      * activity check polls both). See services/standby.h. */
     tiles_standby_init();
 
+    /* Player-controlled minigames (hold SW3+SW4+SW5+SW6 to toggle) --
+     * needs lighting/buttons/touch already initialized, same as standby
+     * above, whose rendering path it shares. See services/game_mode.h. */
+    tiles_game_mode_init();
+
     uint32_t last_scan_ms = to_ms_since_boot(get_absolute_time());
 
     while (true) {
@@ -173,9 +182,19 @@ int main(void) {
         tiles_octave_control_scan();
         tiles_touch_scan();
         tiles_pedal_scan();
+        /* Must run after tiles_buttons_scan()/tiles_touch_scan() above
+         * so this iteration's entry-gesture/in-game-control/menu-
+         * selection input is fresh. See services/game_mode.h. */
+        tiles_game_mode_scan();
         /* Must run after the three scans above so this iteration's
-         * activity check sees fresh state -- see services/standby.h. */
-        tiles_standby_scan();
+         * activity check sees fresh state -- see services/standby.h.
+         * Skipped entirely while game mode owns the rendering path, so
+         * standby's own idle timer can't fire mid-game and fight
+         * game_mode.c over the same pads/buttons/underglow -- see
+         * services/game_mode.h's file header for the full reasoning. */
+        if (!tiles_game_mode_is_active()) {
+            tiles_standby_scan();
+        }
         tiles_lighting_service();
         tiles_hall_scan();
         /* Non-blocking (zero-timeout stdio read) -- cheap even when

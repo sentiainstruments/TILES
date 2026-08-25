@@ -217,41 +217,197 @@ static tiles_standby_color_t anim_shooting_stars(uint8_t row, uint8_t col, uint3
 }
 
 /* ---- Animation 4: snake --------------------------------------------------
- * A fixed-length lit segment crawling along a deterministic boustrophedon
- * (serpentine) path that visits every button and pad cell, then reverses
- * and crawls back -- a ping-pong bounce, so the snake's direction of
- * travel alternates each full traversal instead of teleport-resetting
- * back to the start. */
+ * An actual game of snake, not just a segment crawling a fixed path:
+ * a pulsing red food dot appears somewhere on the grid, the snake moves
+ * toward it a cell at a time, eats it (grows by one segment, a new dot
+ * appears), and keeps going. Movement is greedy-toward-the-food with a
+ * randomized perturbation each step (snake_step() below) so the path
+ * varies run to run instead of always taking the same route -- and the
+ * snake resets to a short length at a randomized start position/
+ * direction whenever it grows too long or traps itself with nowhere
+ * left to go, so it doesn't settle into one repeating pattern long-term
+ * either. Reworked from an earlier version that was just a fixed-length
+ * segment ping-ponging a deterministic path -- real feedback was that
+ * it didn't feel like an actual game of snake. */
 
-#define SNAKE_STEP_MS 150u
-#define SNAKE_TAIL_LENGTH 6u
-#define SNAKE_PATH_LENGTH 30u /* 5 rows (0-4) x 6 cols */
+#define SNAKE_STEP_MS 300u
+#define SNAKE_MAX_LENGTH 14u /* reset threshold -- well under the 30-cell grid */
+/* How strongly a step's direction choice gets perturbed away from the
+ * purely greedy (shortest-distance-to-food) choice, in the same units
+ * as cell distance -- higher means more wandering/varied paths, lower
+ * means more direct pathing to the food. Unmeasured, a starting guess. */
+#define SNAKE_RANDOM_TURN_WEIGHT 1.5f
 
-static uint8_t snake_path_index(uint8_t row, uint8_t col) {
-    uint8_t col0 = (uint8_t)(col - TILES_GRID_MIN_COL); /* 0-5 */
-    /* Even rows walk left->right, odd rows right->left. */
-    if ((row % 2u) == 0u) {
-        return (uint8_t)(row * 6u + col0);
+typedef struct {
+    int8_t row;
+    int8_t col;
+} snake_cell_t;
+
+static snake_cell_t s_snake_body[SNAKE_MAX_LENGTH]; /* [0] = head */
+static uint8_t s_snake_length;
+static snake_cell_t s_snake_food;
+static uint32_t s_snake_last_step_ms;
+static bool s_snake_inited;
+
+static bool snake_cell_in_body(int8_t row, int8_t col) {
+    for (uint8_t i = 0; i < s_snake_length; i++) {
+        if (s_snake_body[i].row == row && s_snake_body[i].col == col) {
+            return true;
+        }
     }
-    return (uint8_t)(row * 6u + (5u - col0));
+    return false;
 }
 
-static tiles_standby_color_t anim_snake(uint8_t row, uint8_t col, uint32_t now_ms) {
-    uint32_t half = SNAKE_PATH_LENGTH - 1u;
-    uint32_t cycle_len = 2u * half;
-    uint32_t t_mod = (now_ms / SNAKE_STEP_MS) % cycle_len;
-    bool forward = (t_mod <= half);
-    uint32_t head = forward ? t_mod : (cycle_len - t_mod);
-
-    uint8_t p = snake_path_index(row, col);
-    /* "diff" is how far this cell is behind the head in the CURRENT
-     * direction of travel -- sign flips with direction so the tail
-     * trails correctly on both the forward and backward pass. */
-    int32_t diff = forward ? ((int32_t)head - (int32_t)p) : ((int32_t)p - (int32_t)head);
-    if (diff < 0 || (uint32_t)diff >= SNAKE_TAIL_LENGTH) {
-        return white(0.0f);
+static void snake_place_food(void) {
+    /* Small board (30 cells), snake usually much shorter -- a bounded
+     * rejection-sampling loop finds an empty cell almost immediately in
+     * practice. The fallback after MAX_ATTEMPTS (place it somewhere
+     * regardless of overlap) only matters if the snake is nearly
+     * filling the board, in which case a reset is imminent anyway. */
+    for (uint8_t attempt = 0; attempt < 50u; attempt++) {
+        int8_t r = (int8_t)(TILES_GRID_MIN_ROW + (rand() % (TILES_GRID_MAX_ROW - TILES_GRID_MIN_ROW + 1u)));
+        int8_t c = (int8_t)(TILES_GRID_MIN_COL + (rand() % (TILES_GRID_MAX_COL - TILES_GRID_MIN_COL + 1u)));
+        if (!snake_cell_in_body(r, c)) {
+            s_snake_food.row = r;
+            s_snake_food.col = c;
+            return;
+        }
     }
-    return white(1.0f - (float)diff / (float)SNAKE_TAIL_LENGTH);
+    s_snake_food.row = (int8_t)TILES_GRID_MIN_ROW;
+    s_snake_food.col = (int8_t)TILES_GRID_MIN_COL;
+}
+
+/* Randomized start position/direction, short length -- "game over" (too
+ * long, or nowhere left to move) and the very first call both land
+ * here, so every run starts looking different. */
+static void snake_reset(uint32_t now_ms) {
+    static const int8_t dir_row[4] = {-1, 1, 0, 0};
+    static const int8_t dir_col[4] = {0, 0, -1, 1};
+
+    int8_t start_row = (int8_t)(1 + rand() % (int)TILES_GRID_MAX_ROW); /* rows 1-4 */
+    int8_t start_col = (int8_t)(TILES_GRID_MIN_COL + rand() % (TILES_GRID_MAX_COL - TILES_GRID_MIN_COL + 1u));
+    uint8_t dir_index = (uint8_t)(rand() % 4u);
+    int8_t dr = dir_row[dir_index];
+    int8_t dc = dir_col[dir_index];
+
+    s_snake_length = 3u;
+    for (uint8_t i = 0; i < s_snake_length; i++) {
+        int8_t r = (int8_t)(start_row - dr * (int8_t)i);
+        int8_t c = (int8_t)(start_col - dc * (int8_t)i);
+        if (r < (int8_t)TILES_GRID_MIN_ROW) {
+            r = (int8_t)TILES_GRID_MIN_ROW;
+        }
+        if (r > (int8_t)TILES_GRID_MAX_ROW) {
+            r = (int8_t)TILES_GRID_MAX_ROW;
+        }
+        if (c < (int8_t)TILES_GRID_MIN_COL) {
+            c = (int8_t)TILES_GRID_MIN_COL;
+        }
+        if (c > (int8_t)TILES_GRID_MAX_COL) {
+            c = (int8_t)TILES_GRID_MAX_COL;
+        }
+        s_snake_body[i].row = r;
+        s_snake_body[i].col = c;
+    }
+
+    snake_place_food();
+    s_snake_last_step_ms = now_ms;
+}
+
+static void snake_step(uint32_t now_ms) {
+    static const int8_t dir_row[4] = {-1, 1, 0, 0};
+    static const int8_t dir_col[4] = {0, 0, -1, 1};
+
+    snake_cell_t head = s_snake_body[0];
+    int8_t best_dir = -1;
+    float best_score = -1.0e9f;
+
+    for (uint8_t i = 0; i < 4u; i++) {
+        int8_t nr = (int8_t)(head.row + dir_row[i]);
+        int8_t nc = (int8_t)(head.col + dir_col[i]);
+        if (nr < (int8_t)TILES_GRID_MIN_ROW || nr > (int8_t)TILES_GRID_MAX_ROW) {
+            continue;
+        }
+        if (nc < (int8_t)TILES_GRID_MIN_COL || nc > (int8_t)TILES_GRID_MAX_COL) {
+            continue;
+        }
+        if (snake_cell_in_body(nr, nc)) {
+            continue;
+        }
+
+        float dr = (float)(s_snake_food.row - nr);
+        float dc = (float)(s_snake_food.col - nc);
+        float dist = sqrtf(dr * dr + dc * dc);
+        float score = -dist + (rand01() - 0.5f) * 2.0f * SNAKE_RANDOM_TURN_WEIGHT;
+        if (score > best_score) {
+            best_score = score;
+            best_dir = (int8_t)i;
+        }
+    }
+
+    if (best_dir < 0) {
+        /* Boxed in with nowhere to go -- "game over", start fresh. */
+        snake_reset(now_ms);
+        return;
+    }
+
+    snake_cell_t new_head = {(int8_t)(head.row + dir_row[best_dir]), (int8_t)(head.col + dir_col[best_dir])};
+    bool ate = (new_head.row == s_snake_food.row && new_head.col == s_snake_food.col);
+
+    uint8_t new_length = ate ? (uint8_t)(s_snake_length + 1u) : s_snake_length;
+    if (new_length > SNAKE_MAX_LENGTH) {
+        snake_reset(now_ms);
+        return;
+    }
+
+    for (uint8_t i = (uint8_t)(new_length - 1u); i > 0u; i--) {
+        s_snake_body[i] = s_snake_body[i - 1u];
+    }
+    s_snake_body[0] = new_head;
+    s_snake_length = new_length;
+
+    if (ate) {
+        snake_place_food();
+    }
+}
+
+static void snake_update(uint32_t now_ms) {
+    if (!s_snake_inited) {
+        snake_reset(now_ms);
+        s_snake_inited = true;
+        return;
+    }
+    if (now_ms - s_snake_last_step_ms >= SNAKE_STEP_MS) {
+        snake_step(now_ms);
+        s_snake_last_step_ms = now_ms;
+    }
+}
+
+#define SNAKE_HEAD_LEVEL 1.0f
+#define SNAKE_BODY_LEVEL 0.75f
+#define SNAKE_FOOD_PULSE_PERIOD_MS 700.0f
+#define SNAKE_FOOD_MIN_LEVEL 0.6f
+#define SNAKE_FOOD_MAX_LEVEL 1.0f
+
+static tiles_standby_color_t anim_snake(uint8_t row, uint8_t col, uint32_t now_ms) {
+    snake_update(now_ms);
+
+    if ((int8_t)row == s_snake_food.row && (int8_t)col == s_snake_food.col) {
+        float raw = 0.5f + 0.5f * sinf(2.0f * TILES_STANDBY_PI * (float)now_ms / SNAKE_FOOD_PULSE_PERIOD_MS);
+        float level = SNAKE_FOOD_MIN_LEVEL + (SNAKE_FOOD_MAX_LEVEL - SNAKE_FOOD_MIN_LEVEL) * raw;
+        tiles_standby_color_t c = {level, 0.0f, 0.0f};
+        return c;
+    }
+
+    for (uint8_t i = 0; i < s_snake_length; i++) {
+        if (s_snake_body[i].row == (int8_t)row && s_snake_body[i].col == (int8_t)col) {
+            float level = (i == 0u) ? SNAKE_HEAD_LEVEL : SNAKE_BODY_LEVEL;
+            tiles_standby_color_t c = {0.0f, level, 0.0f};
+            return c;
+        }
+    }
+
+    return white(0.0f);
 }
 
 /* ---- Animation 5: blue/purple RGB showcase ------------------------------
@@ -529,25 +685,295 @@ static tiles_standby_color_t circle_underglow(uint8_t pixel_index, uint32_t now_
     return white(v);
 }
 
+/* ---- Animation 8: brick breaker -------------------------------------------
+ * The function-button row is the wall of bricks; a 3-pad-wide paddle
+ * (bottom pad row) tracks the ball (simple AI: move at most one column
+ * per step toward the ball's current column); the ball bounces around
+ * knocking bricks out until either every brick is broken (won) or the
+ * ball gets past the paddle (lost) -- either way, underglow flashes red
+ * and purple for a few seconds, then a fresh round starts (bricks
+ * restored, ball and paddle reset). Ball and paddle are different
+ * colors so they read as distinct objects even mid-bounce, when they
+ * briefly overlap. */
+
+#define BB_NUM_COLS 6u
+#define BB_PADDLE_ROW 4u
+#define BB_STEP_MS 350u
+#define BB_FLASH_DURATION_MS 2200u
+#define BB_FLASH_TOGGLE_MS 260u
+#define BB_BRICK_LEVEL 0.85f
+#define BB_PADDLE_LEVEL 0.9f
+#define BB_BALL_LEVEL 1.0f
+
+typedef enum {
+    BB_PHASE_PLAYING = 0,
+    BB_PHASE_ROUND_END,
+} bb_phase_t;
+
+static bool s_bb_brick_alive[BB_NUM_COLS];
+static int8_t s_bb_ball_row;
+static int8_t s_bb_ball_col;
+static int8_t s_bb_ball_drow;
+static int8_t s_bb_ball_dcol;
+static int8_t s_bb_paddle_center; /* 2-5 -- paddle spans center-1..center+1 */
+static bb_phase_t s_bb_phase;
+static uint32_t s_bb_last_step_ms;
+static uint32_t s_bb_round_end_ms;
+static bool s_bb_inited;
+
+static void bb_new_round(uint32_t now_ms) {
+    for (uint8_t i = 0; i < BB_NUM_COLS; i++) {
+        s_bb_brick_alive[i] = true;
+    }
+    s_bb_paddle_center = 3;
+    s_bb_ball_row = (int8_t)(BB_PADDLE_ROW - 1u);
+    s_bb_ball_col = s_bb_paddle_center;
+    s_bb_ball_drow = -1; /* heads up toward the bricks first */
+    s_bb_ball_dcol = ((rand() % 2) == 0) ? -1 : 1;
+    s_bb_phase = BB_PHASE_PLAYING;
+    s_bb_last_step_ms = now_ms;
+}
+
+static void bb_step(uint32_t now_ms) {
+    int8_t new_col = (int8_t)(s_bb_ball_col + s_bb_ball_dcol);
+    if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
+        s_bb_ball_dcol = (int8_t)(-s_bb_ball_dcol);
+        new_col = (int8_t)(s_bb_ball_col + s_bb_ball_dcol);
+    }
+    int8_t new_row = (int8_t)(s_bb_ball_row + s_bb_ball_drow);
+
+    if (new_row < 1) {
+        /* Hit the brick wall (row 0) -- always bounces here regardless
+         * of whether this column's brick is still alive. */
+        uint8_t col_index = (uint8_t)(new_col - TILES_GRID_MIN_COL);
+        s_bb_brick_alive[col_index] = false;
+        s_bb_ball_drow = 1;
+        new_row = 1;
+
+        bool all_dead = true;
+        for (uint8_t i = 0; i < BB_NUM_COLS; i++) {
+            if (s_bb_brick_alive[i]) {
+                all_dead = false;
+                break;
+            }
+        }
+        if (all_dead) {
+            s_bb_phase = BB_PHASE_ROUND_END;
+            s_bb_round_end_ms = now_ms;
+        }
+    } else if (new_row > (int8_t)BB_PADDLE_ROW) {
+        int8_t paddle_min = (int8_t)(s_bb_paddle_center - 1);
+        int8_t paddle_max = (int8_t)(s_bb_paddle_center + 1);
+        if (new_col >= paddle_min && new_col <= paddle_max) {
+            s_bb_ball_drow = -1;
+            new_row = (int8_t)BB_PADDLE_ROW;
+        } else {
+            /* Missed -- lost. Ball is left just past the paddle row, off
+             * the renderable 0-4 range, so it naturally disappears from
+             * view rather than needing an explicit "hide it" case. */
+            s_bb_phase = BB_PHASE_ROUND_END;
+            s_bb_round_end_ms = now_ms;
+        }
+    }
+
+    s_bb_ball_col = new_col;
+    s_bb_ball_row = new_row;
+
+    if (s_bb_phase == BB_PHASE_PLAYING) {
+        if (s_bb_paddle_center < s_bb_ball_col) {
+            s_bb_paddle_center++;
+        } else if (s_bb_paddle_center > s_bb_ball_col) {
+            s_bb_paddle_center--;
+        }
+        if (s_bb_paddle_center < 2) {
+            s_bb_paddle_center = 2;
+        }
+        if (s_bb_paddle_center > 5) {
+            s_bb_paddle_center = 5;
+        }
+    }
+}
+
+static void bb_update(uint32_t now_ms) {
+    if (!s_bb_inited) {
+        bb_new_round(now_ms);
+        s_bb_inited = true;
+        return;
+    }
+    if (s_bb_phase == BB_PHASE_PLAYING) {
+        if (now_ms - s_bb_last_step_ms >= BB_STEP_MS) {
+            bb_step(now_ms);
+            s_bb_last_step_ms = now_ms;
+        }
+    } else if (now_ms - s_bb_round_end_ms >= BB_FLASH_DURATION_MS) {
+        bb_new_round(now_ms);
+    }
+}
+
+static tiles_standby_color_t anim_brick_breaker(uint8_t row, uint8_t col, uint32_t now_ms) {
+    bb_update(now_ms);
+
+    if (row == 0u) {
+        uint8_t idx = (uint8_t)(col - TILES_GRID_MIN_COL);
+        if (s_bb_brick_alive[idx]) {
+            /* Orange bricks -- distinct from both the ball and paddle. */
+            tiles_standby_color_t c = {1.0f * BB_BRICK_LEVEL, 0.4f * BB_BRICK_LEVEL, 0.0f};
+            return c;
+        }
+        return white(0.0f);
+    }
+
+    if (s_bb_ball_row >= 1 && s_bb_ball_row <= (int8_t)BB_PADDLE_ROW && (int8_t)row == s_bb_ball_row &&
+        (int8_t)col == s_bb_ball_col) {
+        /* Warm white/yellow ball -- checked before the paddle below so
+         * it draws on top during a bounce, when both occupy the same
+         * cell. */
+        tiles_standby_color_t c = {1.0f * BB_BALL_LEVEL, 1.0f * BB_BALL_LEVEL, 0.4f * BB_BALL_LEVEL};
+        return c;
+    }
+
+    if (row == BB_PADDLE_ROW) {
+        int8_t paddle_min = (int8_t)(s_bb_paddle_center - 1);
+        int8_t paddle_max = (int8_t)(s_bb_paddle_center + 1);
+        if ((int8_t)col >= paddle_min && (int8_t)col <= paddle_max) {
+            /* Cyan paddle. */
+            tiles_standby_color_t c = {0.0f, 0.6f * BB_PADDLE_LEVEL, 1.0f * BB_PADDLE_LEVEL};
+            return c;
+        }
+    }
+
+    return white(0.0f);
+}
+
+static tiles_standby_color_t bb_underglow(uint8_t pixel_index, uint32_t now_ms) {
+    (void)pixel_index;
+    if (s_bb_phase != BB_PHASE_ROUND_END) {
+        return white(0.0f);
+    }
+    uint32_t toggle = (now_ms - s_bb_round_end_ms) / BB_FLASH_TOGGLE_MS;
+    if ((toggle % 2u) == 0u) {
+        tiles_standby_color_t red = {1.0f, 0.0f, 0.0f};
+        return red;
+    }
+    tiles_standby_color_t purple = {0.6f, 0.0f, 1.0f};
+    return purple;
+}
+
+/* ---- Animation 9: scrolling marquee ---------------------------------------
+ * "SENTIA - TILES - " scrolls across the pad grid in a tiny 4-pixel-high
+ * pixel font (one pixel per pad row) -- underglow and function buttons
+ * both stay off, keeping the whole thing purely a pad-grid text
+ * effect. Each glyph is a small array of column bytes (bit0 = row 1/top
+ * ... bit3 = row 4/bottom); the message is a sequence of glyphs with a
+ * blank spacing column automatically inserted after each one, and the
+ * whole thing scrolls by indexing into that sequence at a virtual
+ * column offset that advances with time and wraps around
+ * (marquee_total_width()), so the message repeats seamlessly. */
+
+static const uint8_t GLYPH_S[] = {11u, 9u, 13u};
+static const uint8_t GLYPH_E[] = {15u, 5u, 5u};
+static const uint8_t GLYPH_N[] = {15u, 6u, 15u};
+static const uint8_t GLYPH_T[] = {1u, 15u, 1u};
+static const uint8_t GLYPH_I[] = {15u};
+static const uint8_t GLYPH_A[] = {14u, 5u, 14u};
+static const uint8_t GLYPH_L[] = {15u, 8u, 8u};
+static const uint8_t GLYPH_DASH[] = {4u, 4u, 4u};
+static const uint8_t GLYPH_SPACE[] = {0u, 0u};
+
+typedef struct {
+    const uint8_t *cols;
+    uint8_t width;
+} tiles_glyph_t;
+
+static const tiles_glyph_t s_marquee_message[] = {
+    {GLYPH_S, 3u},     {GLYPH_E, 3u}, {GLYPH_N, 3u}, {GLYPH_T, 3u}, {GLYPH_I, 1u}, {GLYPH_A, 3u},
+    {GLYPH_SPACE, 2u}, {GLYPH_DASH, 3u}, {GLYPH_SPACE, 2u},
+    {GLYPH_T, 3u},     {GLYPH_I, 1u}, {GLYPH_L, 3u}, {GLYPH_E, 3u}, {GLYPH_S, 3u},
+    {GLYPH_SPACE, 2u}, {GLYPH_DASH, 3u}, {GLYPH_SPACE, 2u},
+};
+#define MARQUEE_NUM_GLYPHS ((uint8_t)(sizeof(s_marquee_message) / sizeof(s_marquee_message[0])))
+#define MARQUEE_GLYPH_GAP 1u
+#define MARQUEE_MS_PER_COLUMN 260u
+#define MARQUEE_LIT_LEVEL 0.9f
+
+static uint16_t marquee_total_width(void) {
+    static uint16_t s_total_width;
+    static bool s_computed;
+    if (!s_computed) {
+        uint16_t total = 0;
+        for (uint8_t i = 0; i < MARQUEE_NUM_GLYPHS; i++) {
+            total = (uint16_t)(total + s_marquee_message[i].width + MARQUEE_GLYPH_GAP);
+        }
+        s_total_width = total;
+        s_computed = true;
+    }
+    return s_total_width;
+}
+
+static uint8_t marquee_column_bits(uint16_t virtual_col) {
+    uint16_t remaining = virtual_col;
+    for (uint8_t i = 0; i < MARQUEE_NUM_GLYPHS; i++) {
+        uint16_t glyph_span = (uint16_t)(s_marquee_message[i].width + MARQUEE_GLYPH_GAP);
+        if (remaining < s_marquee_message[i].width) {
+            return s_marquee_message[i].cols[remaining];
+        }
+        if (remaining < glyph_span) {
+            return 0u; /* the trailing spacing column */
+        }
+        remaining = (uint16_t)(remaining - glyph_span);
+    }
+    return 0u;
+}
+
+static tiles_standby_color_t anim_marquee(uint8_t row, uint8_t col, uint32_t now_ms) {
+    if (row == 0u) {
+        return white(0.0f);
+    }
+
+    uint16_t total_width = marquee_total_width();
+    if (total_width == 0u) {
+        return white(0.0f);
+    }
+
+    uint32_t scroll_col = (now_ms / MARQUEE_MS_PER_COLUMN) % total_width;
+    uint16_t virtual_col = (uint16_t)((scroll_col + (col - TILES_GRID_MIN_COL)) % total_width);
+    uint8_t bits = marquee_column_bits(virtual_col);
+
+    uint8_t row_bit = (uint8_t)(1u << (row - 1u));
+    if ((bits & row_bit) != 0u) {
+        return white(MARQUEE_LIT_LEVEL);
+    }
+    return white(0.0f);
+}
+
+static tiles_standby_color_t marquee_underglow(uint8_t pixel_index, uint32_t now_ms) {
+    (void)pixel_index;
+    (void)now_ms;
+    return white(0.0f);
+}
+
 /* ---- Animation registry + shared render -------------------------------- */
 
 typedef tiles_standby_color_t (*field_fn_t)(uint8_t row, uint8_t col, uint32_t now_ms);
 typedef tiles_standby_color_t (*underglow_fn_t)(uint8_t pixel_index, uint32_t now_ms);
 
 static const field_fn_t s_animations[] = {
-    anim_wave, anim_glow, anim_shooting_stars, anim_snake, anim_rgb_showcase, anim_equalizer,
-    anim_underglow_circle,
+    anim_wave,           anim_glow,     anim_shooting_stars, anim_snake,
+    anim_rgb_showcase,   anim_equalizer, anim_underglow_circle,
+    anim_brick_breaker,  anim_marquee,
 };
 /* Parallel to s_animations[] -- NULL means underglow samples the same
  * field the pads use at its anchor points (animations 1-5, where
  * underglow mirroring the pad grid is exactly what's wanted). A
  * non-NULL entry means underglow needs genuinely different behavior
  * from whatever the pad field computes at that (row, col) -- the
- * equalizer's underglow is a constant green unrelated to any one
- * column's bar, and the circular-wave animation's whole point is
- * underglow-specific motion indexed by pixel, not by row/col at all. */
+ * equalizer's underglow is a constant accent unrelated to any one
+ * column's bar, the circular-wave animation's whole point is
+ * underglow-specific motion indexed by pixel, not by row/col at all,
+ * brick breaker's underglow is off except for the won/lost flash, and
+ * the marquee's underglow is simply always off. */
 static const underglow_fn_t s_animation_underglow_override[] = {
-    NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow,
+    NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow, bb_underglow, marquee_underglow,
 };
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
 

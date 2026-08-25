@@ -5,7 +5,8 @@ events, and turns high-level intent into driver commands. Depends on
 `drivers/` and `board/`; knows nothing about USB/MIDI transport.
 
 Built: Hall scan, touch, lighting, buttons, pedal, note mapping (with
-octave shift), the SW1/SW2 octave-shift button controller, touch+Hall
+octave shift), the SW1/SW2 octave-shift button controller, real
+player-controlled minigames (snake, brick breaker), touch+Hall
 expression fusion (velocity/aftertouch), power source state, standby
 idle animations (plus a power-saving state after 15 minutes), a
 power-on boot animation, and per-pad haptic feedback -- see Status
@@ -54,6 +55,19 @@ not its code.
   LED write is suspended; `tiles_buttons_set_standby_active(false)`
   (standby ending) skips re-asserting an overridden button's LED rather
   than clobbering it, and the override's own next scan repaints it.
+  Fixed a real bug found from octave_control.c's real-hardware
+  feedback: `set_button_led_level()`'s two exact endpoints (0.0/1.0,
+  going through `tiles_pca9685_set_channel_full()`) had the active-low
+  boolean backwards relative to `set_button_led()`'s own established
+  `!lit` convention two lines above it -- level 0.0 ("off") was actually
+  driving the pin low (lit), and level 1.0 ("solid") was actually
+  driving it high (dark). The intermediate PWM path was correct the
+  whole time (its own comment already worked through the inversion
+  carefully); only the two full-on/full-off special cases were wrong.
+  This is exactly why octave_control.c's buttons looked inverted
+  (lit by default, dark when they should show "solid") while standby's
+  own button dimming mostly didn't visibly show it -- standby's
+  luminance values are rarely exactly 0.0 or 1.0.
 - `touch.h`/`.c` — done: reads both MPR121 controllers, derives each
   pad's touched state from its board-map touch route, pushes that into
   `lighting.c`'s per-pad brightness (touched = full ceiling, untouched
@@ -116,6 +130,48 @@ not its code.
   **Not hardware-verified:** every pattern timing constant
   (`PULSE_PERIOD_MS`, the blink/hold durations) is a first guess, and
   this hasn't been seen on real hardware at all yet.
+- `game_mode.h`/`.c` — done for V1: real, player-controlled minigames --
+  a genuinely separate feature from `standby.c`'s autonomous snake/
+  brick-breaker animations (below), which stay exactly what they were
+  (ambient, self-playing, no player). Hold SW3 (triangle) + SW4
+  (diamond) + SW5 (square) + SW6 (circle) together for ~0.7s to toggle a
+  menu on/off -- SW1 ("-")/SW2 ("+") are deliberately excluded from that
+  combo since they're reserved as in-game controls, matching
+  `octave_control.h`'s own note above about "-"/"+" becoming
+  general-purpose modifiers eventually. The menu shows pad 1 (green) for
+  Snake and pad 2 (orange) for Brick Breaker; touch either to launch it.
+  Snake: SW1/SW2/SW3/SW4 = left/right/up/down (absolute direction, not
+  relative turning; reversing straight into the snake's own neck is
+  ignored, the standard rule), eats a pulsing food dot to grow, wraps
+  around the grid's edges (friendlier than instant wall-death on a board
+  this small) and dies only on self-collision. Brick Breaker: SW1/SW2
+  move the paddle -- otherwise identical physics to `standby.c`'s
+  autonomous version. Either game ending (self-collision, or brick
+  breaker won/lost) flashes underglow red/purple for ~2s, then returns
+  to the menu.
+  Claims the same standby-active rendering path `standby.c`'s own
+  animations and `boot_sequence.c` use -- correct and sufficient by
+  itself: `buttons.c`'s per-button override for SW1/SW2
+  (`octave_control.c`) already goes transparently inert under that same
+  flag (see `buttons.c`), so no changes were needed there for this
+  module to freely drive SW1/SW2's LEDs too. `main.c` skips calling
+  `tiles_standby_scan()` entirely while `tiles_game_mode_is_active()` is
+  true, so standby's own idle timer can't fire mid-game and fight this
+  module over the same rendering path -- both being triggered by real
+  button presses means standby's idle timer gets a fresh reset the
+  moment control hands back either way, so there's no "immediately idle
+  right after leaving a game" edge case from skipping its scan while
+  active.
+  Deliberately NOT sharing state/logic with `standby.c`'s autonomous
+  versions of the same two games, even though the physics/rules mostly
+  overlap -- an AI-driven idle loop and a player-driven game are
+  different concerns likely to evolve independently (control remapping,
+  more games, difficulty tuning), and forcing them through one shared
+  implementation now would couple things that don't need to be coupled.
+  **Not hardware-verified at all:** the entry-gesture hold duration,
+  every step-timing constant, the wrap-around-vs-wall-death choice for
+  snake, and the round-end flash timing are all first attempts, none
+  seen on real hardware yet.
 - `expression.h`/`.c` — done for V1: touch+Hall fusion. Touch remains
   the authoritative note on/off timing gate (more reliable to detect
   than inferring press/release from Hall depth alone); Hall supplies
@@ -228,7 +284,7 @@ not its code.
   explicit demo-mode default, expected to change once this isn't just a
   demo) with no touch/button/pedal activity, the pad grid + 6 function
   buttons + underglow stop reflecting real input and instead run one of
-  7 rotating ambient animations, switching to a random one every 2
+  9 rotating ambient animations, switching to a random one every 2
   minutes (also a starting guess, not tuned against how it actually
   feels to watch) -- excludes both the animation ending and the one
   before it, so a switch never immediately repeats itself and never
@@ -236,10 +292,12 @@ not its code.
   1. diagonal traveling wave
   2. a sharp, squared-contrast ring pulsing outward from center
   3. comet-tailed "shooting stars" with per-star randomized speed/tail/twinkle
-  4. a fixed-length "snake" ping-ponging back and forth along a serpentine path instead of teleport-resetting
+  4. an actual game of snake: a pulsing red food dot appears, the snake (green, brighter head) moves toward it a cell at a time and eats it (grows by one segment, a new dot appears) -- direction each step is greedy-toward-the-food with a randomized perturbation (`SNAKE_RANDOM_TURN_WEIGHT`) so the path varies run to run, and it resets to a short length at a randomized start position/direction whenever it grows past `SNAKE_MAX_LENGTH` or traps itself with nowhere to go, so it doesn't settle into one repeating pattern long-term either. Reworked from an earlier version that was just a fixed-length segment ping-ponging a deterministic path -- real feedback was that it didn't feel like an actual game.
   5. a blue/purple RGB showcase where underglow shows the same moving color as the pads -- the whole point being to show off both
   6. a graphic equalizer: each column is a fake, slow (layered-sine, never literally random) EQ/VU bar, bottom-up blue/blue/yellow/red, with a per-column red "peak-hold" marker that sticks at the highest segment reached and only falls slowly (`EQ_PEAK_DECAY_PER_MS`, ~6s full fall) independent of the bar's own motion -- classic hardware-equalizer behavior. Each column also has its own slow, independent "phrase" envelope (`eq_bar_envelope()`) biased toward quiet, so columns spend real stretches fully dark rather than always showing a segment or two -- reworked from real feedback that an earlier version was too fast and too continuously lit to read as stylized. Function buttons are fully off; underglow is a constant blue accent unrelated to any one column.
   7. a circular underglow wave: only underglow moves, a wave traveling around the 4 pixels in their actual physical circular order (`g_tiles_underglow_circular_position` in `board/board_layout.h` -- chain order 0,1,2,3 zigzags diagonally, the real ring order is 0,1,3,2), each pixel rising and dimming significantly as the wave passes through, going around and around; pads/buttons sit at a flat, minimal, non-animated brightness.
+  8. brick breaker: the function-button row is a wall of bricks, a 3-pad-wide cyan paddle (bottom pad row) tracks a warm-white/yellow ball with simple AI (moves at most one column per step toward the ball), the ball bounces around knocking orange bricks out until every brick is broken (won) or it gets past the paddle (lost) -- either way underglow flashes red and purple for a few seconds, then a fresh round starts. Ball checked before paddle in the render order so it draws on top during a bounce, when they briefly occupy the same cell.
+  9. a scrolling marquee: "SENTIA - TILES - " scrolls across the pad grid in a tiny 4-pixel-high pixel font (one pixel per pad row), built from a small per-glyph column-bitmap table (`s_marquee_message[]`) with automatic inter-glyph spacing and seamless wraparound (`marquee_total_width()`) rather than a fixed animation; underglow and function buttons both stay off, keeping it purely a pad-grid text effect.
 
   Touch/button/pedal activity exits standby immediately. A Hall-depth wake fallback exists in the code
   (`hall_depth_wake_triggered()`, checked only while already in standby,
@@ -328,8 +386,14 @@ not its code.
   seen lit. The animation frame rate (~25fps) and every animation's own
   timing constants (including the new power-saving pulse period and the
   15-minute timeout itself) are unmeasured against real I2C bus load /
-  how it actually looks. None of this has been flashed and watched on
-  real hardware yet.
+  how it actually looks. Animations 1-3, 5-7 and the power-saving state
+  have been seen on real hardware in some earlier form (several already
+  reworked from that feedback); animation 4's real-snake rework and
+  animations 8 (brick breaker) and 9 (marquee) have NOT been seen at
+  all yet -- their AI/pathing/step timing, the marquee's tiny pixel
+  font (hand-designed, not measured against how legible it actually is
+  at 4 pixels tall), and brick breaker's paddle-AI reaction speed are
+  all first attempts.
 - `boot_sequence.h`/`.c` — done for V1: a ~4-second, blocking power-on
   animation run once from `main.c`, before the main loop starts (nothing
   else needs to run concurrently -- USB stays alive via TinyUSB's own

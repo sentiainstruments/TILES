@@ -84,7 +84,23 @@ first on-hardware note-on test.
   octave shift down/up (one octave per press), the active direction's
   LED showing the shift's magnitude via a distinct pattern (solid /
   slow pulse / triple-blink-then-hold) -- claims both buttons
-  permanently via a new per-button LED override in `buttons.c`.
+  permanently via a new per-button LED override in `buttons.c`. First
+  real-hardware run of this surfaced a genuine bug, since fixed: two of
+  `set_button_led_level()`'s branches (the exact 0.0/1.0 endpoints) had
+  the active-low polarity backwards, so "off" was actually driving the
+  LED lit and "solid" was actually driving it dark -- see
+  `services/README.md`'s `buttons.h` entry.
+  `game_mode` done for V1: real, player-controlled snake and brick
+  breaker (distinct from `standby`'s autonomous versions of the same two
+  games below, which stay unchanged) -- hold SW3+SW4+SW5+SW6 to toggle a
+  menu, touch pad 1 or 2 to launch Snake or Brick Breaker. Snake:
+  SW1-SW4 = left/right/up/down, eats food to grow, wraps at the edges,
+  dies on self-collision. Brick Breaker: SW1/SW2 move the paddle. Either
+  game ending flashes underglow red/purple, then returns to the menu.
+  Shares standby's rendering-ownership mechanism; `main.c` skips
+  `tiles_standby_scan()` entirely while a game is active so the two
+  can't fight over the same pads/buttons/underglow. See
+  `services/README.md` for the full reasoning.
   `expression` done for V1: touch+Hall
   fusion deriving real velocity (from strike acceleration) and
   aftertouch (from press depth) -- see `services/README.md` for the
@@ -96,11 +112,13 @@ first on-hardware note-on test.
   and `haptics.c`'s voice ceiling, not yet hardware-tested against a
   real source-switch transition.
   `standby` done for a demo V1: after 1 minute idle, pads + buttons +
-  underglow run one of 7 rotating ambient animations (diagonal wave,
-  sharp center-out ring, complex shooting stars, ping-pong snake, a
-  blue/purple RGB showcase where underglow shows the same color as the
-  pads, a graphic equalizer with per-column peak-hold, and a circular
-  underglow-only wave), in randomized order (never repeating the current
+  underglow run one of 9 rotating ambient animations (diagonal wave,
+  sharp center-out ring, complex shooting stars, an actual game of snake
+  that eats food and grows, a blue/purple RGB showcase where underglow
+  shows the same color as the pads, a graphic equalizer with per-column
+  peak-hold, a circular underglow-only wave, brick breaker, and a
+  scrolling "SENTIA - TILES -" marquee in a tiny pixel font), in
+  randomized order (never repeating the current
   animation or the one before it), instead of reflecting touch state,
   until any touch/button/pedal activity exits it. After 15 minutes of
   total inactivity it drops further into power-saving: everything dark
@@ -195,10 +213,21 @@ flashable `.uf2`.
   guess pending that. The Hall baseline re-capture at the end is a real
   mechanism (reuses `hall.c`'s existing per-pad read path), but whether
   ~4 seconds is actually enough settling time to matter is unverified.
-- `services/octave_control.c` has not been hardware-tested at all --
-  every LED pattern timing constant (`PULSE_PERIOD_MS`, the blink/hold
-  durations) is a first guess, and whether the three patterns actually
-  read as visually distinct at a glance is unverified.
+- `services/octave_control.c`: real hardware testing already found and
+  fixed one genuine bug, not just an untuned constant --
+  `buttons.c`'s `set_button_led_level()` had its active-low endpoints
+  backwards (see `services/README.md`'s `buttons.h` entry). Every LED
+  pattern timing constant (`PULSE_PERIOD_MS`, the blink/hold durations)
+  is still a first guess, and whether the three patterns read as
+  visually distinct at a glance is unverified.
+- `services/game_mode.c` has not been hardware-tested at all -- the
+  entry-gesture hold duration, every step-timing constant for both
+  games, and the round-end flash timing are first attempts. Whether
+  snake's edge-wrap (chosen over instant wall-death as friendlier on
+  such a small board) actually feels right in practice, and whether
+  holding 4 buttons simultaneously is comfortable/reliable to do on the
+  real hardware at all, are both open questions this hasn't been able
+  to answer yet.
 - `services/haptics.c` has not been hardware-tested at all -- every
   duty/timing constant (kick duration, overdrive duration, gap duration,
   min kick duty, max sustain duty, stagger gap) is an unmeasured

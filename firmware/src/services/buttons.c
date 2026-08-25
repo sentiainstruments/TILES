@@ -88,11 +88,19 @@ static void set_button_led_level(uint8_t index, float level_0_to_1) {
     uint8_t channel = s_button_routes[index].pca9685_channel;
 
     if (level_0_to_1 <= 0.0f) {
-        tiles_pca9685_set_channel_full(pca, channel, false); /* dark */
+        /* Active-low, same convention as set_button_led() above: dark =
+         * pin high = full_on=true. This was backwards (full_on=false)
+         * until now -- a real bug, not just untuned: it meant
+         * octave_control.c's "off by default" state (level 0.0) was
+         * actually driving the pin low, i.e. LIT, and its "solid"
+         * magnitude-1 indicator (level 1.0, the branch below) was
+         * actually driving dark. Confirmed against set_button_led()'s
+         * own !lit convention two lines up. */
+        tiles_pca9685_set_channel_full(pca, channel, true); /* dark */
         return;
     }
     if (level_0_to_1 >= 1.0f) {
-        tiles_pca9685_set_channel_full(pca, channel, true); /* fully lit */
+        tiles_pca9685_set_channel_full(pca, channel, false); /* fully lit */
         return;
     }
 

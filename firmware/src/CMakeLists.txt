@@ -22,6 +22,7 @@ add_executable(sentia_tiles_firmware
     services/haptics.c
     services/boot_sequence.c
     services/octave_control.c
+    services/game_mode.c
     midi/usb_device.c
     midi/usb_descriptors.c
     midi/midi_out.c
