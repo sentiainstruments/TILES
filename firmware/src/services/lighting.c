@@ -9,12 +9,19 @@
 
 #define TILES_LIGHTING_IDLE_BASELINE_PERCENT 10u
 
-/* Underglow is deliberately much brighter than the pad idle baseline --
- * it's a fixed ambient halo, not a per-pad state indicator, so "way
- * brighter" doesn't compete with touch/press feedback the way raising
- * every pad's baseline would. Tuned against real hardware; adjust if it
- * still doesn't read as bright enough. */
-#define TILES_LIGHTING_UNDERGLOW_PERCENT 65u
+/* Underglow's own fixed brightness, out of 255 -- deliberately NOT
+ * scaled by ceiling_level()/the power state. It used to be a percentage
+ * of the active ceiling (65% of ceiling_level()), which meant it rode
+ * down with the USB-only ceiling (37%) to ~24% of full and read as
+ * "basically not glowing" on real hardware. Only 4 LEDs are on this
+ * chain vs 24 on the pad grid -- even at full raw brightness the
+ * current draw is a small fraction of the ~448mA full-grid estimate in
+ * docs/architecture/defaults-and-safeguards.md, so there's no power
+ * budget reason to hold it down the way the 24-pad grid needs to be.
+ * It's a fixed ambient halo, not a per-pad state indicator, so running
+ * it bright doesn't compete with touch/press feedback the way raising
+ * every pad's baseline would. */
+#define TILES_LIGHTING_UNDERGLOW_LEVEL 230u
 
 static tiles_sk6805_chain_t s_underglow_chain;
 static tiles_sk6805_chain_t s_pad_chain;
@@ -37,7 +44,7 @@ static uint8_t idle_baseline_level(void) {
 }
 
 static uint8_t underglow_level(void) {
-    return (uint8_t)(((uint32_t)ceiling_level() * TILES_LIGHTING_UNDERGLOW_PERCENT) / 100u);
+    return TILES_LIGHTING_UNDERGLOW_LEVEL;
 }
 
 static uint8_t pad_level_for_press(float press_0_to_1) {

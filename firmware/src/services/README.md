@@ -19,16 +19,18 @@ not its code.
 
 - `lighting.h`/`.c` — done for the V1 default behavior in
   `docs/architecture/defaults-and-safeguards.md` ("LED color and
-  brightness"): underglow solid white, brighter than pad idle baseline
-  (separately tunable, both confirmed working and legible on real
-  hardware), all 24 pads solid white at idle baseline by default,
-  brightening toward the ceiling when `touch.c` reports that pad
-  touched -- written immediately on a press-value change rather than
-  waiting for the round-robin, so touch reads as responsive rather than
-  laggy. Brightness ceiling now reads live from `power.h`'s
-  `tiles_power_get_state().led_brightness_ceiling_percent` (37% on
-  USB-only, 75% once external power is confirmed) instead of a
-  hardcoded constant.
+  brightness"): underglow solid white at its own fixed high brightness
+  (230/255, deliberately independent of the power ceiling below -- only
+  4 LEDs on that chain, negligible current impact even at full
+  brightness, and it was reading as "basically not glowing" when it
+  rode down with the USB-only ceiling), all 24 pads solid white at idle
+  baseline by default, brightening toward the ceiling when `touch.c`
+  reports that pad touched -- written immediately on a press-value
+  change rather than waiting for the round-robin, so touch reads as
+  responsive rather than laggy. Pad brightness ceiling reads live from
+  `power.h`'s `tiles_power_get_state().led_brightness_ceiling_percent`
+  (37% on USB-only, 75% once external power is confirmed) instead of a
+  hardcoded constant -- underglow does not use this ceiling at all.
   **Not done:** standby animations (needs its own design pass — see the
   defaults doc), Hall-driven (as opposed to touch-driven) brightness.
 - `buttons.h`/`.c` — done for V1: reads all 6 function buttons

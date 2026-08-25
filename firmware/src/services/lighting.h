@@ -1,20 +1,24 @@
 #pragma once
 
 /*
- * Pad LED + underglow control per
- * docs/architecture/defaults-and-safeguards.md "LED color and
- * brightness": both start solid white. Underglow is always on at the
- * idle baseline and never changes. Pad LEDs sit at idle baseline until
- * touch/Hall drivers exist to drive per-pad brightness -- this service
- * exposes that hook now (tiles_lighting_set_pad_press) so those
- * services can call it once they exist, without lighting.c changing.
+ * Pad LED + underglow control. Both start solid white. Pad LEDs sit at
+ * idle baseline until touch/Hall drivers exist to drive per-pad
+ * brightness -- this service exposes that hook now
+ * (tiles_lighting_set_pad_press) so those services can call it once
+ * they exist, without lighting.c changing.
  *
- * Brightness is clamped to services/power.h's live
+ * Pad brightness is clamped to services/power.h's live
  * led_brightness_ceiling_percent (35-40% on USB-only, 70-80% once
  * external power is confirmed present, per the truth table there) --
  * see lighting.c's ceiling_level(). A future profiles/ module can
  * still override this; don't bypass tiles_power_get_state() to raise
- * brightness some other way.
+ * pad brightness some other way.
+ *
+ * Underglow is always on at its own fixed, high brightness (see
+ * lighting.c's TILES_LIGHTING_UNDERGLOW_LEVEL) and deliberately does
+ * NOT scale with the power ceiling above -- only 4 LEDs are on that
+ * chain, so even at full brightness it's a negligible fraction of the
+ * board's current budget, unlike the 24-pad grid.
  */
 
 #include <stdbool.h>

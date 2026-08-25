@@ -88,8 +88,11 @@ channel, which matters for the power governor below.
 
 **Behavior (V1 default):**
 
-- Underglow: always on, solid white, fixed at the idle baseline level
-  (see below). Not reactive to anything — it's the ambient halo per the
+- Underglow: always on, solid white, at its own fixed high brightness
+  (230/255) that does **not** scale with the pad brightness ceiling
+  below — only 4 LEDs are on that chain, so even full brightness is a
+  negligible fraction of the board's current budget, unlike the 24-pad
+  grid. Not reactive to anything — it's the ambient halo per the
   product's visual language (a soft perimeter, not a focal point), so it
   doesn't compete for attention with pad state.
 - Pad LEDs: always on at a dim white **idle baseline** (~10% of the
