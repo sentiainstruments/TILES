@@ -9,11 +9,14 @@
  * pad->note layout with a scale-mode architecture ready for more
  * scales later -- see services/note_map.h), pedal (sustain CC64 on by
  * default, expression CC11 built but off by default -- see
- * services/pedal.h). Not yet built: MPE, haptics/motors, DIN, CV/gate,
- * the usb_vendor diagnostics interface, per-pad Hall calibration --
- * added module by module per the bring-up order in
- * docs/hardware/SENTIA_FIRMWARE_CODEX_START.md. Each phase must leave
- * this file building and the previous phase's safety guarantees intact.
+ * services/pedal.h), per-pad haptic feedback (velocity-mapped kick on
+ * strike, aftertouch-mapped sustain while held -- see
+ * services/haptics.h), standby idle animations (see services/standby.h).
+ * Not yet built: MPE, DIN, CV/gate, the usb_vendor diagnostics
+ * interface, per-pad Hall calibration -- added module by module per the
+ * bring-up order in docs/hardware/SENTIA_FIRMWARE_CODEX_START.md. Each
+ * phase must leave this file building and the previous phase's safety
+ * guarantees intact.
  */
 
 #include <stdio.h>
@@ -26,6 +29,7 @@
 #include "services/buttons.h"
 #include "services/expression.h"
 #include "services/hall.h"
+#include "services/haptics.h"
 #include "services/lighting.h"
 #include "services/pedal.h"
 #include "services/power.h"
@@ -106,8 +110,19 @@ int main(void) {
         printf("[hall] one or more pads failed sensor init -- see per-pad status\n");
     }
 
-    /* Touch + Hall fusion: strike velocity + aftertouch. See
-     * services/expression.h. */
+    /* Haptics: needs tiles_buttons_init() (above) already run, since it
+     * shares both PCA9685 chip instances with buttons rather than
+     * re-initializing them -- see services/haptics.h. Doesn't write any
+     * PCA9685 register itself (every channel is already "full off" from
+     * buttons' own init), so exact ordering relative to
+     * board_pca9685_enable_outputs() above doesn't matter electrically;
+     * placed here because services/expression.c is what actually drives
+     * it. */
+    tiles_haptics_init();
+
+    /* Touch + Hall fusion: strike velocity + aftertouch, and (via
+     * haptics above) a velocity-mapped kick + aftertouch-mapped sustain.
+     * See services/expression.h. */
     tiles_expression_init();
 
     /* Idle animations: needs lighting/buttons already initialized (its
@@ -134,6 +149,10 @@ int main(void) {
         /* Must run after both tiles_touch_scan() and tiles_hall_scan()
          * above so it sees this iteration's fresh data from both. */
         tiles_expression_scan();
+        /* Advances KICK -> GAP -> SUSTAIN timing for any pad
+         * expression_scan() just triggered/updated/stopped this
+         * iteration. */
+        tiles_haptics_scan();
 
         uint32_t now_ms = to_ms_since_boot(get_absolute_time());
         if (now_ms - last_scan_ms >= 2000) {

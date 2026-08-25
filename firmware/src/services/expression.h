@@ -15,14 +15,17 @@
  *   IDLE            -- touch rising edge --> AWAITING_STRIKE
  *   AWAITING_STRIKE  -- enough Hall samples + min window elapsed, or
  *                       max window elapsed --> commit: fire note-on
- *                       with velocity from peak acceleration observed
- *                       so far --> NOTE_ON
+ *                       (+ a haptic kick, same velocity value -- see
+ *                       services/haptics.h) with velocity from peak
+ *                       acceleration observed so far --> NOTE_ON
  *                    -- touch released before committing --> IDLE
  *                       (cancelled -- a light tap that never became a
  *                       real press never sends a note)
- *   NOTE_ON          -- touch falling edge --> note-off --> IDLE
+ *   NOTE_ON          -- touch falling edge --> note-off (+ haptic hard
+ *                       stop) --> IDLE
  *                    -- while held: poly aftertouch on a meaningful
- *                       depth change
+ *                       depth change (+ the same value drives haptic
+ *                       sustain intensity)
  *
  * V1 caveat, stated plainly in expression.c: the acceleration->velocity
  * scale and the depth->aftertouch range are placeholder estimates, not

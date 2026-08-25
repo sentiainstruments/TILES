@@ -6,6 +6,7 @@
 #include "touch.h"
 #include "note_map.h"
 #include "midi_out.h"
+#include "haptics.h"
 
 #include "pico/time.h"
 
@@ -162,7 +163,12 @@ void tiles_expression_scan(void) {
 
             if (ready || timed_out) {
                 s->active_note = tiles_note_map_get_note(pad);
-                tiles_midi_note_on(s->active_note, velocity_from_peak_accel(s->peak_accel));
+                uint8_t velocity = velocity_from_peak_accel(s->peak_accel);
+                tiles_midi_note_on(s->active_note, velocity);
+                /* Same velocity value driving both -- "mapped to the
+                 * velocity curve by default" means the kick and the MIDI
+                 * note agree exactly, not two independent estimates. */
+                tiles_haptics_trigger_kick(pad, velocity);
                 s->last_sent_aftertouch = 0xFFu;
                 s->state = PAD_STATE_NOTE_ON;
             }
@@ -172,6 +178,7 @@ void tiles_expression_scan(void) {
         /* PAD_STATE_NOTE_ON */
         if (!touched) {
             tiles_midi_note_off(s->active_note);
+            tiles_haptics_stop(pad);
             s->state = PAD_STATE_IDLE;
             continue;
         }
@@ -180,6 +187,7 @@ void tiles_expression_scan(void) {
         if (at != s->last_sent_aftertouch) {
             s->last_sent_aftertouch = at;
             tiles_midi_send_poly_aftertouch(s->active_note, at);
+            tiles_haptics_set_sustain_level(pad, at);
         }
     }
 }

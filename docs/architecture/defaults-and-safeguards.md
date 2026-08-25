@@ -170,5 +170,9 @@ show one pixel at a time).
 - X/Y tilt sensing and any pitch-bend/CC74 mapping from it.
 - Companion app and the USB vendor config protocol.
 - Per-pad LED animation themes beyond basic touch/note feedback.
-- Haptics beyond bounded diagnostic pulses (needs measured motor current
-  through the real flex first, per hardware docs).
+- Real per-motor current/duty measurement through the actual flex --
+  `firmware/src/services/haptics.c`'s kick/sustain duty curves ship as
+  unmeasured placeholder estimates (built ahead of this measurement, at
+  explicit user direction, not because the measurement stopped
+  mattering) pending it, same as this doc's LED brightness ceilings did
+  before hardware existed to check them against.

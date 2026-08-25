@@ -33,7 +33,11 @@ static bool s_debounced[NUM_BUTTONS];
 static uint32_t s_last_change_ms[NUM_BUTTONS];
 static bool s_standby_active;
 
-static tiles_pca9685_t *pca_for_addr(uint8_t addr) {
+/* Public (see buttons.h) so services/haptics.c can reach the same two
+ * already-woken, already-configured chip instances this file owns,
+ * without re-running tiles_pca9685_init() itself (which would force
+ * every channel -- including any live motor -- back to "full off"). */
+tiles_pca9685_t *tiles_buttons_pca9685_for_addr(uint8_t addr) {
     if (addr == TILES_I2C1_ADDR_HAPTIC_PCA9685_1) {
         return &s_pca1;
     }
@@ -44,7 +48,7 @@ static tiles_pca9685_t *pca_for_addr(uint8_t addr) {
 }
 
 static void set_button_led(uint8_t index, bool lit) {
-    tiles_pca9685_t *pca = pca_for_addr(s_button_routes[index].pca9685_addr);
+    tiles_pca9685_t *pca = tiles_buttons_pca9685_for_addr(s_button_routes[index].pca9685_addr);
     if (pca == NULL) {
         return;
     }
@@ -69,7 +73,7 @@ static void set_button_led(uint8_t index, bool lit) {
  * file and sidestepping the datasheet's documented ambiguity around
  * on_count==off_count without the full-on/full-off bit set. */
 static void set_button_led_level(uint8_t index, float level_0_to_1) {
-    tiles_pca9685_t *pca = pca_for_addr(s_button_routes[index].pca9685_addr);
+    tiles_pca9685_t *pca = tiles_buttons_pca9685_for_addr(s_button_routes[index].pca9685_addr);
     if (pca == NULL) {
         return;
     }

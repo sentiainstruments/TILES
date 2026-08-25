@@ -80,15 +80,21 @@ first on-hardware note-on test.
   `power` done for V1: derives USB-only/external-only/both/fault from
   GP22 + TinyUSB's mounted state (debounced), exposing both a live
   accessor and a change-callback so haptics/CV-gate can plug in once
-  they exist -- currently wired into `lighting.c`'s brightness ceiling,
-  not yet hardware-tested against a real source-switch transition.
+  they exist -- currently wired into `lighting.c`'s brightness ceiling
+  and `haptics.c`'s voice ceiling, not yet hardware-tested against a
+  real source-switch transition.
   `standby` done for a demo V1: after 1 minute idle, pads + buttons +
   underglow run one of 4 rotating ambient animations (wave, center-out
   glow, shooting stars, snake) instead of reflecting touch state, until
   any touch/button/pedal activity exits it -- see `services/README.md`
   for the button-column/underglow-anchor mapping assumptions this still
-  needs verified on real hardware. Everything else (haptics, per-pad
-  Hall calibration) not built.
+  needs verified on real hardware. `haptics` done for V1: a velocity-
+  mapped kick on strike, then aftertouch-mapped sustain while held, then
+  a hard cutoff on release -- see `services/README.md` for why real
+  active braking isn't physically possible on this board's motor drive
+  circuit (single low-side NMOS, no H-bridge) and what the closest
+  achievable substitute is. Everything else (per-pad Hall calibration,
+  DIN MIDI, CV/gate) not built.
 - `midi/` — composite USB CDC+MIDI device done (see `midi/README.md`);
   note on/off with real velocity, poly aftertouch, and CC (sustain/
   expression) all wired up, single MIDI channel. Not yet verified with
@@ -116,15 +122,30 @@ flashable `.uf2`.
   yet -- no test has actually unplugged USB, plugged in external 12V,
   or forced the FAULT combination to confirm the debounce and the
   resulting mode/ceiling actually behave as designed.
-- `services/standby.c` has not been flashed and watched on real hardware
-  yet. The button-column and underglow-anchor mappings it uses
-  (`button_for_col()`, `s_underglow_anchor[]`) are based on the user's
-  verbal description of the physical board rather than a hardware doc --
-  confirmed absent from `docs/hardware/` -- so the underglow LED1-4
-  chain order in particular is a guess that needs correcting against
-  what's actually seen lit if wrong. The 1-minute idle timeout and
-  2-minute animation-cycle period are explicit demo-mode defaults, not
-  final values.
+- `services/standby.c`: on real hardware, entering standby works and
+  buttons/pedal reliably wake it, but MPR121 touch alone does NOT
+  reliably wake it while the animation is running -- root cause
+  unconfirmed, most likely candidate is the pad-LED SK6805 chain's
+  continuous ~25fps rewrite interfering with capacitive sensing (see
+  `services/README.md`'s standby entry for the fuller history). A Hall-
+  depth wake fallback exists in the code but is currently disabled
+  (`TILES_STANDBY_HALL_WAKE_ENABLED 0`) because the magnets aren't in
+  their final position yet, making hall.c's baseline/depth meaningless
+  until the mid-plate assembly is done. The button-column and
+  underglow-anchor mappings it uses (`button_for_col()`,
+  `s_underglow_anchor[]`) are based on the user's verbal description of
+  the physical board rather than a hardware doc -- confirmed absent from
+  `docs/hardware/`. The 1-minute idle timeout and 2-minute
+  animation-cycle period are explicit demo-mode defaults, not final
+  values.
+- `services/haptics.c` has not been hardware-tested at all -- every
+  duty/timing constant (kick duration, gap duration, min kick duty, max
+  sustain duty) is an unmeasured placeholder, and the hardware handoff's
+  "stagger motor starts >= 15ms" guidance isn't implemented (only the
+  total concurrent-voice ceiling is enforced). True active braking isn't
+  physically possible on this board (single low-side NMOS per motor, no
+  H-bridge, no haptic driver IC) -- the GAP phase's hard cutoff is the
+  closest achievable substitute, not a compromise made for convenience.
 - `sk6805.pio`'s bit timing mirrors Raspberry Pi's reference `ws2812.pio`
   program; confirmed working on real SK6805 parts (all pads + underglow
   show correct white output on hardware), not independently verified on

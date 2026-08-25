@@ -7,17 +7,17 @@
  * is held. Debounced per the 10ms default in
  * docs/hardware/SENTIA_TILES_FIRMWARE_HANDOFF.md's scheduler defaults.
  *
- * Owns both physical PCA9685 chips. Haptics (24 motor channels, not
- * built yet) will need to talk to these same two chips -- when that's
- * built, it needs an accessor into these already-initialized instances
- * rather than re-running tiles_pca9685_init() (which would force every
- * channel back to "full off," glitching any active motor). Flagging
- * this ownership question here rather than building a shared-resource
- * abstraction now that nothing else needs yet.
+ * Owns both physical PCA9685 chips. services/haptics.c's 24 motor
+ * channels share these same two chips -- it reaches them via
+ * tiles_buttons_pca9685_for_addr() below rather than re-running
+ * tiles_pca9685_init() itself (which would force every channel back to
+ * "full off," glitching any active motor).
  */
 
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "pca9685.h"
 
 /* Wakes both PCA9685 chips (see drivers/pca9685.h -- forces every
  * channel to "full off," which lights these active-low-wired button
@@ -52,3 +52,11 @@ void tiles_buttons_set_standby_active(bool active);
  * path tiles_buttons_scan() normally uses. No-op unless standby is
  * active. */
 void tiles_buttons_set_standby_led(uint8_t button_id, float level_0_to_1);
+
+/* ---- Shared-resource accessor (services/haptics.c) ----------------------
+ *
+ * Returns the already-initialized tiles_pca9685_t for
+ * TILES_I2C1_ADDR_HAPTIC_PCA9685_1 or _2, or NULL for any other address.
+ * Callers must not call tiles_pca9685_init() on the result -- see the
+ * file header above. */
+tiles_pca9685_t *tiles_buttons_pca9685_for_addr(uint8_t addr);

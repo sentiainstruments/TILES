@@ -6,9 +6,9 @@ events, and turns high-level intent into driver commands. Depends on
 
 Built: Hall scan, touch, lighting, buttons, pedal, note mapping,
 touch+Hall expression fusion (velocity/aftertouch), power source state,
-and standby idle animations -- see Status below. Still planned: per-pad
-Hall calibration, X/Y tilt -> pitch/timbre, haptics (voice/duty
-allocation + current governor), storage glue.
+standby idle animations, and per-pad haptic feedback -- see Status
+below. Still planned: per-pad Hall calibration, X/Y tilt -> pitch/
+timbre, storage glue.
 
 This is also where the legacy prototype's *behaviors* (scale modes, voice
 stealing, standby animation, haptic confirm clicks — see
@@ -35,9 +35,11 @@ not its code.
   defaults doc), Hall-driven (as opposed to touch-driven) brightness.
 - `buttons.h`/`.c` — done for V1: reads all 6 function buttons
   (debounced, 10ms), lights each one's PCA9685-driven LED while (and
-  only while) it's held. Owns both physical PCA9685 chips; see the file
-  header for the ownership question this raises once haptics needs the
-  same two chips for the 24 motor channels.
+  only while) it's held. Owns both physical PCA9685 chips --
+  `tiles_buttons_pca9685_for_addr()` is the accessor `haptics.c` (below)
+  uses to reach the same two already-initialized instances rather than
+  re-running `tiles_pca9685_init()` itself, resolving the ownership
+  question this file used to flag as open.
 - `touch.h`/`.c` — done: reads both MPR121 controllers, derives each
   pad's touched state from its board-map touch route, pushes that into
   `lighting.c`'s per-pad brightness (touched = full ceiling, untouched
@@ -84,7 +86,34 @@ not its code.
   acceleration->velocity scale, the depth->aftertouch full-scale range,
   and the strike-detection window durations -- all flagged as
   placeholders in `expression.c`, none derived from a calibrated
-  mT/LSB relationship since that doesn't exist yet.
+  mT/LSB relationship since that doesn't exist yet. Also drives
+  `haptics.c` at the same three points it drives `midi_out.c` (note-on
+  -> kick, note-off -> stop, aftertouch change -> sustain level) with
+  the exact same velocity/aftertouch values, so haptic and MIDI output
+  never disagree.
+- `haptics.h`/`.c` — done for V1: per-pad feedback driven entirely by
+  `expression.c`'s calls (not touch/Hall directly). Envelope: KICK
+  (brief, velocity-mapped) -> GAP (hard zero) -> SUSTAIN
+  (aftertouch-mapped, live-updated while held) -> hard cutoff on
+  note-off. **Hardware constraint, not a software choice:** each motor
+  is a single low-side NMOS (AO3400A) to a fixed supply rail -- no
+  H-bridge, no dedicated haptic driver IC (confirmed against the board
+  map, see the file header) -- so real reverse-drive/active braking is
+  physically impossible here. The GAP phase (an instant, complete
+  cutoff rather than a soft ramp-down) is the closest achievable analog
+  to "braking," standard practice for ERM motors without brake
+  circuitry. Respects `power.h`'s `max_haptic_voices` ceiling -- a new
+  kick past the ceiling is silently dropped, never blocks the MIDI note.
+  Shares both PCA9685 chips with `buttons.c` via
+  `tiles_buttons_pca9685_for_addr()`.
+  **Not done:** the hardware handoff's documented "stagger motor starts
+  >= 15ms" guidance (inrush current across many simultaneous kicks) --
+  `max_haptic_voices` caps how many motors can be active at once but
+  nothing staggers simultaneous trigger timing yet. Every duty/timing
+  constant (`KICK_DURATION_MS`, `KICK_GAP_MS`, `MIN_KICK_DUTY`,
+  `MAX_SUSTAIN_DUTY`) is an unmeasured placeholder -- no per-motor
+  current/duty data exists yet (see the board map's
+  `measured_current_required` TODOs). Not yet hardware-tested at all.
 - `pedal.h`/`.c` — done: sustain (MIDI CC64) on by default, debounced
   with hysteresis, polarity defaults to the usual normally-open
   footswitch convention and is switchable at runtime
@@ -179,4 +208,5 @@ not its code.
   The animation frame rate (~25fps) and every animation's own timing
   constants are unmeasured against real I2C bus load / how it actually
   looks. None of this has been flashed and watched on real hardware yet.
-- Everything else (haptics, per-pad Hall calibration) is not built yet.
+- Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
+  built yet.
