@@ -6,6 +6,7 @@
 #include "hall.h"
 #include "lighting.h"
 #include "pedal.h"
+#include "pixel_font.h"
 #include "touch.h"
 
 #include "pico/time.h"
@@ -153,8 +154,10 @@ static tiles_standby_color_t anim_glow(uint8_t row, uint8_t col, uint32_t now_ms
 #define NUM_STARS 5u
 #define STAR_TAIL_ROWS_MIN 2.0f
 #define STAR_TAIL_ROWS_MAX 4.5f
-#define STAR_SPEED_ROWS_PER_MS_MIN (1.0f / 300.0f)
-#define STAR_SPEED_ROWS_PER_MS_MAX (1.0f / 140.0f)
+/* Roughly half the original speed (denominators doubled) -- real
+ * feedback that the fall read as too fast. */
+#define STAR_SPEED_ROWS_PER_MS_MIN (1.0f / 600.0f)
+#define STAR_SPEED_ROWS_PER_MS_MAX (1.0f / 280.0f)
 #define STAR_TWINKLE_PERIOD_MS 90.0f
 #define STAR_TWINKLE_DEPTH 0.25f
 #define STAR_DECAY_SHARPNESS 2.2f
@@ -884,41 +887,37 @@ static tiles_standby_color_t bb_underglow(uint8_t pixel_index, uint32_t now_ms) 
 }
 
 /* ---- Animation 9: scrolling marquee ---------------------------------------
- * "SENTIA - TILES - " scrolls across the pad grid in a tiny 4-pixel-high
- * pixel font (one pixel per pad row) -- underglow and function buttons
- * both stay off, keeping the whole thing purely a pad-grid text
- * effect. Each glyph is a small array of column bytes (bit0 = row 1/top
- * ... bit3 = row 4/bottom); the message is a sequence of glyphs with a
- * blank spacing column automatically inserted after each one, and the
- * whole thing scrolls by indexing into that sequence at a virtual
- * column offset that advances with time and wraps around
- * (marquee_total_width()), so the message repeats seamlessly. */
+ * "SENTIA - TILES - " scrolls across the pad grid using
+ * services/pixel_font.h's shared 4-row font -- underglow and function
+ * buttons both stay off, keeping the whole thing purely a pad-grid text
+ * effect. The message is a sequence of glyphs with a blank spacing
+ * column automatically inserted after each one, and the whole thing
+ * scrolls by indexing into that sequence at a virtual column offset
+ * that advances with time and wraps around (marquee_total_width()), so
+ * the message repeats seamlessly.
+ *
+ * Reworked from real feedback that the font itself needed fixing (the
+ * glyphs used to live here as a one-off, hand-guessed set -- moved into
+ * pixel_font.h/.c so this and services/octave_control.c's transpose key
+ * display share one already-checked font instead of each guessing its
+ * own) and that the scroll was too fast -- slowed accordingly
+ * (MARQUEE_MS_PER_COLUMN). */
 
-static const uint8_t GLYPH_S[] = {11u, 9u, 13u};
-static const uint8_t GLYPH_E[] = {15u, 5u, 5u};
-static const uint8_t GLYPH_N[] = {15u, 6u, 15u};
-static const uint8_t GLYPH_T[] = {1u, 15u, 1u};
-static const uint8_t GLYPH_I[] = {15u};
-static const uint8_t GLYPH_A[] = {14u, 5u, 14u};
-static const uint8_t GLYPH_L[] = {15u, 8u, 8u};
-static const uint8_t GLYPH_DASH[] = {4u, 4u, 4u};
-static const uint8_t GLYPH_SPACE[] = {0u, 0u};
-
-typedef struct {
-    const uint8_t *cols;
-    uint8_t width;
-} tiles_glyph_t;
-
-static const tiles_glyph_t s_marquee_message[] = {
-    {GLYPH_S, 3u},     {GLYPH_E, 3u}, {GLYPH_N, 3u}, {GLYPH_T, 3u}, {GLYPH_I, 1u}, {GLYPH_A, 3u},
-    {GLYPH_SPACE, 2u}, {GLYPH_DASH, 3u}, {GLYPH_SPACE, 2u},
-    {GLYPH_T, 3u},     {GLYPH_I, 1u}, {GLYPH_L, 3u}, {GLYPH_E, 3u}, {GLYPH_S, 3u},
-    {GLYPH_SPACE, 2u}, {GLYPH_DASH, 3u}, {GLYPH_SPACE, 2u},
-};
 #define MARQUEE_NUM_GLYPHS ((uint8_t)(sizeof(s_marquee_message) / sizeof(s_marquee_message[0])))
 #define MARQUEE_GLYPH_GAP 1u
-#define MARQUEE_MS_PER_COLUMN 260u
+#define MARQUEE_MS_PER_COLUMN 420u
 #define MARQUEE_LIT_LEVEL 0.9f
+
+/* Pointers, not struct copies -- TILES_GLYPH_* are extern objects
+ * defined in pixel_font.c, and an extern object's value (as opposed to
+ * its address) isn't a compile-time constant to this translation unit,
+ * so a static initializer can't copy the struct by value. */
+static const tiles_glyph_t *const s_marquee_message[] = {
+    &TILES_GLYPH_S,     &TILES_GLYPH_E, &TILES_GLYPH_N, &TILES_GLYPH_T, &TILES_GLYPH_I, &TILES_GLYPH_A,
+    &TILES_GLYPH_SPACE, &TILES_GLYPH_DASH, &TILES_GLYPH_SPACE,
+    &TILES_GLYPH_T,     &TILES_GLYPH_I, &TILES_GLYPH_L, &TILES_GLYPH_E, &TILES_GLYPH_S,
+    &TILES_GLYPH_SPACE, &TILES_GLYPH_DASH, &TILES_GLYPH_SPACE,
+};
 
 static uint16_t marquee_total_width(void) {
     static uint16_t s_total_width;
@@ -926,7 +925,7 @@ static uint16_t marquee_total_width(void) {
     if (!s_computed) {
         uint16_t total = 0;
         for (uint8_t i = 0; i < MARQUEE_NUM_GLYPHS; i++) {
-            total = (uint16_t)(total + s_marquee_message[i].width + MARQUEE_GLYPH_GAP);
+            total = (uint16_t)(total + s_marquee_message[i]->width + MARQUEE_GLYPH_GAP);
         }
         s_total_width = total;
         s_computed = true;
@@ -937,9 +936,9 @@ static uint16_t marquee_total_width(void) {
 static uint8_t marquee_column_bits(uint16_t virtual_col) {
     uint16_t remaining = virtual_col;
     for (uint8_t i = 0; i < MARQUEE_NUM_GLYPHS; i++) {
-        uint16_t glyph_span = (uint16_t)(s_marquee_message[i].width + MARQUEE_GLYPH_GAP);
-        if (remaining < s_marquee_message[i].width) {
-            return s_marquee_message[i].cols[remaining];
+        uint16_t glyph_span = (uint16_t)(s_marquee_message[i]->width + MARQUEE_GLYPH_GAP);
+        if (remaining < s_marquee_message[i]->width) {
+            return s_marquee_message[i]->cols[remaining];
         }
         if (remaining < glyph_span) {
             return 0u; /* the trailing spacing column */
@@ -976,6 +975,50 @@ static tiles_standby_color_t marquee_underglow(uint8_t pixel_index, uint32_t now
     return white(0.0f);
 }
 
+/* ---- Animation 10: bouncing glow -----------------------------------------
+ * A single soft white point bounces diagonally around the pad grid,
+ * reflecting off the edges like a screensaver ball -- deliberately the
+ * "simple but elegant" one: no particle array, no game state, just a
+ * closed-form position (a triangle wave per axis, which is a bounce-off-
+ * the-walls reflection with zero bookkeeping) and a soft Gaussian-ish
+ * falloff around it. Row and col bounce at different, non-integer-ratio
+ * periods so the path slowly traces out a Lissajous-like figure instead
+ * of repeating quickly. Function buttons stay off for a clean, minimal
+ * look; underglow mirrors the pad field (NULL override below) so the
+ * glow naturally spills into it when the point passes near an anchor,
+ * same as animations 1-4. */
+
+#define BOUNCE_ROW_PERIOD_MS 5200.0f /* one full row min->max->min traversal */
+#define BOUNCE_COL_PERIOD_MS 6700.0f /* deliberately not a small-integer ratio of the row period */
+#define BOUNCE_RADIUS_CELLS 1.5f
+#define BOUNCE_PEAK_LEVEL 0.9f
+
+/* Triangle wave 0->1->0 over one period, then scaled/offset into
+ * [min_val, max_val] -- a closed-form bounce-off-the-walls reflection,
+ * no velocity/state needed. */
+static float bounce_axis_position(uint32_t now_ms, float period_ms, float min_val, float max_val) {
+    float phase = fmodf((float)now_ms, period_ms) / period_ms;
+    float tri = 1.0f - fabsf(2.0f * phase - 1.0f);
+    return min_val + (max_val - min_val) * tri;
+}
+
+static tiles_standby_color_t anim_bounce(uint8_t row, uint8_t col, uint32_t now_ms) {
+    if (row == 0u) {
+        return white(0.0f);
+    }
+
+    float bounce_row = bounce_axis_position(now_ms, BOUNCE_ROW_PERIOD_MS, 1.0f, (float)TILES_GRID_MAX_ROW);
+    float bounce_col =
+        bounce_axis_position(now_ms, BOUNCE_COL_PERIOD_MS, (float)TILES_GRID_MIN_COL, (float)TILES_GRID_MAX_COL);
+
+    float dr = (float)row - bounce_row;
+    float dc = (float)col - bounce_col;
+    float dist = sqrtf(dr * dr + dc * dc);
+
+    float t = clamp01(1.0f - dist / BOUNCE_RADIUS_CELLS);
+    return white(BOUNCE_PEAK_LEVEL * t * t);
+}
+
 /* ---- Animation registry + shared render -------------------------------- */
 
 typedef tiles_standby_color_t (*field_fn_t)(uint8_t row, uint8_t col, uint32_t now_ms);
@@ -984,10 +1027,10 @@ typedef tiles_standby_color_t (*underglow_fn_t)(uint8_t pixel_index, uint32_t no
 static const field_fn_t s_animations[] = {
     anim_wave,           anim_glow,     anim_shooting_stars, anim_snake,
     anim_rgb_showcase,   anim_equalizer, anim_underglow_circle,
-    anim_brick_breaker,  anim_marquee,
+    anim_brick_breaker,  anim_marquee,  anim_bounce,
 };
 /* Parallel to s_animations[] -- NULL means underglow samples the same
- * field the pads use at its anchor points (animations 1-5, where
+ * field the pads use at its anchor points (animations 1-5 and 10, where
  * underglow mirroring the pad grid is exactly what's wanted). A
  * non-NULL entry means underglow needs genuinely different behavior
  * from whatever the pad field computes at that (row, col) -- the
@@ -997,7 +1040,7 @@ static const field_fn_t s_animations[] = {
  * brick breaker's underglow is off except for the won/lost flash, and
  * the marquee's underglow is simply always off. */
 static const underglow_fn_t s_animation_underglow_override[] = {
-    NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow, bb_underglow, marquee_underglow,
+    NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow, bb_underglow, marquee_underglow, NULL,
 };
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
 

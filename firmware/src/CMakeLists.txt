@@ -16,6 +16,7 @@ add_executable(sentia_tiles_firmware
     services/touch.c
     services/pedal.c
     services/note_map.c
+    services/pixel_font.c
     services/expression.c
     services/power.c
     services/standby.c

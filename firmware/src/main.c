@@ -188,11 +188,13 @@ int main(void) {
         tiles_game_mode_scan();
         /* Must run after the three scans above so this iteration's
          * activity check sees fresh state -- see services/standby.h.
-         * Skipped entirely while game mode owns the rendering path, so
-         * standby's own idle timer can't fire mid-game and fight
-         * game_mode.c over the same pads/buttons/underglow -- see
-         * services/game_mode.h's file header for the full reasoning. */
-        if (!tiles_game_mode_is_active()) {
+         * Skipped entirely while game mode or octave_control.c's
+         * transpose mode owns the rendering path, so standby's own idle
+         * timer can't fire mid-game/mid-transpose and fight either of
+         * them over the same pads/buttons/underglow -- see
+         * services/game_mode.h's and services/octave_control.h's file
+         * headers for the full reasoning. */
+        if (!tiles_game_mode_is_active() && !tiles_octave_control_is_transpose_active()) {
             tiles_standby_scan();
         }
         tiles_lighting_service();

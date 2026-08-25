@@ -114,6 +114,12 @@ not its code.
   24-pad chromatic span safely inside 0-127 with real margin either
   side -- it's a deliberate UX limit, not something the 0-127 note clamp
   ever actually has to catch.
+  Also owns the key-center transpose (`tiles_note_map_set_key_offset()`/
+  `_get_key_offset()`, 0-11 semitones, 0 = C, *wraps* rather than clamps
+  since it's a position on the 12-note wheel not a magnitude) applied on
+  top of octave shift, added for `octave_control.c`'s transpose mode
+  (below) -- same "one owner for note-mapping parameters" reasoning as
+  octave shift.
 - `octave_control.h`/`.c` — done for V1: the default function of SW1
   ("-") and SW2 ("+") is octave shift down/up, one octave per press
   (rising edge, not while held), driving `note_map.c`'s shift above.
@@ -150,6 +156,46 @@ not its code.
   `OCTAVE_PULSE_REST_LEVEL`) is a first guess -- this rework is reasoned
   through against the *previous* version's real feedback, not itself
   seen on real hardware yet.
+  **Transpose mode** is the first real instance of that "general-purpose
+  modifier" direction: holding SW1+SW2 together (a quick "click them
+  together," ~`TRANSPOSE_COMBO_HOLD_MS` 120ms, not a long hold) toggles
+  it. While active both LEDs pulse together (magnitude 1's continuous
+  pulse shape, same phase on both) instead of showing the octave
+  pattern, and "-"/"+" step `note_map.c`'s key-center offset (wraps
+  0-11/C-B) instead of the octave shift. The pad grid is claimed (same
+  standby-active rendering-ownership pattern `standby.c`'s own
+  animations and `game_mode.c` use) and shows the current key's
+  natural-note letter in caps, centered, via the shared font in
+  `pixel_font.h`/`.c` (below). A sharp key alternates the letter with a
+  plain amber "+"-shaped cross (a 2-column vertical bar crossed with a
+  1-row horizontal bar, both centered) as a second flash, since a 4-row
+  glyph has no room to draw "#" -- the letter always shows first for a
+  moment (re-anchored on mode entry and on every key change) so the
+  flash is never caught mid-cross. Underglow goes dark while this is
+  showing. `tiles_octave_control_is_transpose_active()` lets `main.c`
+  skip `standby.c`'s idle scan while this owns the pad grid, mirroring
+  the existing `game_mode.c` gate.
+  **Not hardware-verified:** the combo-hold threshold, both flash
+  durations, the cross's row/column placement, and the amber accent
+  color are all first-pass judgment calls, not measurements.
+- `pixel_font.h`/`.c` — done for V1: a shared tiny pixel font, 4 rows
+  tall (one pixel per pad row 1-4), used by both `standby.c`'s scrolling
+  marquee animation and `octave_control.c`'s transpose key-letter
+  display above -- pulled out of `standby.c` (where the glyphs used to
+  live as a one-off, hand-guessed set with at least one real mistake: E
+  and F were nearly indistinguishable, E was missing its bottom bar) so
+  both callers share one already-checked font instead of each guessing
+  its own. Format: one byte per glyph column, bit0 = row 1 (top) ...
+  bit3 = row 4 (bottom). Covers exactly the letters needed -- A-G (the
+  seven natural note names) plus I/L/N/S/T (for "SENTIA - TILES -"), a
+  dash, and a space -- not a full alphabet, since nothing else uses this
+  yet. `tiles_pixel_font_glyph_for_note_letter()` is the runtime lookup
+  `octave_control.c` needs for a variable key letter; `standby.c`'s
+  marquee references the glyphs directly since its message is fixed.
+  **Not hardware-verified:** every glyph is hand-designed specifically
+  for 4 rows (there's no established "4-row font" to have copied
+  instead) and hasn't been seen lit yet -- legibility at actual LED
+  brightness/diffusion is unconfirmed.
 - `game_mode.h`/`.c` — done for V1: real, player-controlled minigames --
   a genuinely separate feature from `standby.c`'s autonomous snake/
   brick-breaker animations (below), which stay exactly what they were
@@ -313,13 +359,14 @@ not its code.
   bounces straight back to the animation two ago either:
   1. diagonal traveling wave
   2. a sharp, squared-contrast ring pulsing outward from center
-  3. comet-tailed "shooting stars" with per-star randomized speed/tail/twinkle
+  3. comet-tailed "shooting stars" with per-star randomized speed/tail/twinkle -- fall speed roughly halved (`STAR_SPEED_ROWS_PER_MS_MIN`/`_MAX`) from real feedback that it read as too fast
   4. an actual game of snake: starts 2 segments long (real feedback: 3 felt cramped on a board this small), a pulsing red food dot appears, the snake (green, brighter head) moves toward it a cell at a time and eats it (grows by one segment, a new dot appears) -- direction each step is greedy-toward-the-food with a randomized perturbation (`SNAKE_RANDOM_TURN_WEIGHT`) so the path varies run to run, and it resets to a short length at a randomized start position/direction whenever it grows past `SNAKE_MAX_LENGTH` or traps itself with nowhere to go, so it doesn't settle into one repeating pattern long-term either. Reworked from an earlier version that was just a fixed-length segment ping-ponging a deterministic path -- real feedback was that it didn't feel like an actual game.
   5. a blue/purple RGB showcase where underglow shows the same moving color as the pads -- the whole point being to show off both
   6. a graphic equalizer: each column is a fake EQ/VU bar, bottom-up blue/blue/yellow/red, with a per-column red "peak-hold" marker that sticks at the highest segment reached and falls over about 2 beats (`EQ_PEAK_DECAY_PER_MS`) independent of the bar's own motion -- classic hardware-equalizer behavior. Reworked twice: an early pass was too fast/continuously lit, the fix for that (a long, low-biased "phrase" envelope forcing multi-second silences) overshot into "too slow" with "almost no peaks"; the current version instead drives every column with a percussive, tempo-locked hit envelope -- instant peak then decay, at a per-column whole-number subdivision of one shared 127bpm beat (`EQ_BEAT_MS`) so bass columns (`s_eq_col_hits_per_beat` = 1/beat) ring out slowly and treble columns (4/beat) snap back fast, all still locked to the same underlying pulse ("should feel like a song at 127bpm pumping"). A deterministic golden-angle-stepped "miss" occasionally drops a hit to 0 for some breathing room, without the old envelope's long silences killing density. Function buttons are fully off; underglow is a constant blue accent unrelated to any one column.
   7. a circular underglow wave: only underglow moves, a wave traveling around the 4 pixels in their actual physical circular order (`g_tiles_underglow_circular_position` in `board/board_layout.h` -- chain order 0,1,2,3 zigzags diagonally, the real ring order is 0,1,3,2), each pixel rising and dimming significantly as the wave passes through, going around and around; pads/buttons sit at a flat, minimal, non-animated brightness.
   8. brick breaker: the function-button row is a wall of bricks, a 3-pad-wide cyan paddle (bottom pad row) tracks a warm-white/yellow ball with simple AI (moves at most one column per step toward the ball), the ball bounces around knocking orange bricks out until every brick is broken (won) or it gets past the paddle (lost) -- either way underglow flashes red and purple for a few seconds, then a fresh round starts. Ball checked before paddle in the render order so it draws on top during a bounce, when they briefly occupy the same cell.
-  9. a scrolling marquee: "SENTIA - TILES - " scrolls across the pad grid in a tiny 4-pixel-high pixel font (one pixel per pad row), built from a small per-glyph column-bitmap table (`s_marquee_message[]`) with automatic inter-glyph spacing and seamless wraparound (`marquee_total_width()`) rather than a fixed animation; underglow and function buttons both stay off, keeping it purely a pad-grid text effect.
+  9. a scrolling marquee: "SENTIA - TILES - " scrolls across the pad grid using the shared font in `services/pixel_font.h`/`.c` (see its own entry above), with automatic inter-glyph spacing and seamless wraparound (`marquee_total_width()`) rather than a fixed animation; underglow and function buttons both stay off, keeping it purely a pad-grid text effect. Scroll speed slowed (`MARQUEE_MS_PER_COLUMN` 260ms -> 420ms per column) from real feedback, at the same time the font itself moved out to the shared module to fix a real mistake in the old one-off glyphs (E and F were nearly indistinguishable).
+  10. bouncing glow: the "simple but elegant" one -- a single soft white point bounces diagonally around the pad grid like a screensaver ball, purely a closed-form position (a triangle wave per axis -- a bounce-off-the-walls reflection with no velocity/state to track) with a soft falloff around it, no particle array or game state at all. Row and col bounce at different, non-integer-ratio periods (`BOUNCE_ROW_PERIOD_MS`/`BOUNCE_COL_PERIOD_MS`) so the path slowly traces a Lissajous-like figure instead of repeating quickly. Function buttons stay off; underglow mirrors the pad field like animations 1-4, so the glow naturally spills into it near an anchor.
 
   Touch/button/pedal activity exits standby immediately. A Hall-depth wake fallback exists in the code
   (`hall_depth_wake_triggered()`, checked only while already in standby,
@@ -410,12 +457,14 @@ not its code.
   15-minute timeout itself) are unmeasured against real I2C bus load /
   how it actually looks. Animations 1-3, 5-7 and the power-saving state
   have been seen on real hardware in some earlier form (several already
-  reworked from that feedback); animation 4's real-snake rework and
-  animations 8 (brick breaker) and 9 (marquee) have NOT been seen at
-  all yet -- their AI/pathing/step timing, the marquee's tiny pixel
-  font (hand-designed, not measured against how legible it actually is
-  at 4 pixels tall), and brick breaker's paddle-AI reaction speed are
-  all first attempts.
+  reworked from that feedback, including animation 3's fall-speed halving
+  above); animation 4's real-snake rework and animations 8 (brick
+  breaker), 9 (marquee, including its font move to `pixel_font.h`/`.c`),
+  and 10 (bouncing glow) have NOT been seen at all yet -- their
+  AI/pathing/step timing, the shared pixel font (hand-designed, not
+  measured against how legible it actually is at 4 pixels tall), brick
+  breaker's paddle-AI reaction speed, and bouncing glow's periods/radius
+  are all first attempts.
 - `boot_sequence.h`/`.c` — done for V1: a ~4-second, blocking power-on
   animation run once from `main.c`, before the main loop starts (nothing
   else needs to run concurrently -- USB stays alive via TinyUSB's own

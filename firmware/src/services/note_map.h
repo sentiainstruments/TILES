@@ -73,6 +73,18 @@ tiles_scale_mode_t tiles_note_map_get_scale(void);
 void tiles_note_map_set_octave_shift(int8_t octaves);
 int8_t tiles_note_map_get_octave_shift(void);
 
+/* Transpose ("key center") offset in semitones, 0-11: 0 = C (the
+ * default key the board boots into), 11 = B. Wraps rather than clamps
+ * (unlike octave shift above) since it's a position on the 12-note
+ * chromatic wheel, not a magnitude with a real edge -- stepping past B
+ * lands back on C and vice versa. Driven by services/octave_control.c's
+ * transpose mode (SW1+SW2 held together toggles it, then "-"/"+" step
+ * the key while it's active) but lives here for the same reason octave
+ * shift does: one owner for "how a pad's position becomes a MIDI
+ * note." */
+void tiles_note_map_set_key_offset(int8_t offset);
+int8_t tiles_note_map_get_key_offset(void);
+
 /* MIDI note number (0-127, clamped) for logical pad (1-24) under the
  * currently selected scale and octave shift. Returns 0 for an
  * out-of-range pad. */

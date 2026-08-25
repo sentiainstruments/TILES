@@ -6,6 +6,7 @@
 
 static tiles_scale_mode_t s_scale = TILES_SCALE_CHROMATIC;
 static int8_t s_octave_shift = 0;
+static int8_t s_key_offset = 0;
 
 void tiles_note_map_set_scale(tiles_scale_mode_t scale) {
     s_scale = scale;
@@ -27,6 +28,18 @@ void tiles_note_map_set_octave_shift(int8_t octaves) {
 
 int8_t tiles_note_map_get_octave_shift(void) {
     return s_octave_shift;
+}
+
+void tiles_note_map_set_key_offset(int8_t offset) {
+    int wrapped = (int)offset % 12;
+    if (wrapped < 0) {
+        wrapped += 12;
+    }
+    s_key_offset = (int8_t)wrapped;
+}
+
+int8_t tiles_note_map_get_key_offset(void) {
+    return s_key_offset;
 }
 
 uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
@@ -51,7 +64,7 @@ uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
             break;
     }
 
-    int note = (int)TILES_NOTE_MAP_BASE_NOTE + interval + (int)s_octave_shift * 12;
+    int note = (int)TILES_NOTE_MAP_BASE_NOTE + interval + (int)s_octave_shift * 12 + (int)s_key_offset;
     if (note < 0) {
         note = 0;
     }

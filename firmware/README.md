@@ -79,17 +79,25 @@ first on-hardware note-on test.
   (pad 19 = lowest note, bottom-to-top/left-to-right), scale-mode
   architecture in place with only chromatic implemented, verified by
   `firmware/test/test_note_map.c`. Also owns an octave shift
-  (+/-3 octaves) applied on top of the scale-derived note.
+  (+/-3 octaves) and a key-center transpose offset (0-11 semitones,
+  wraps) applied on top of the scale-derived note.
   `octave_control` done for V1: SW1 ("-")/SW2 ("+")'s default function is
   octave shift down/up (one octave per press), the active direction's
-  LED showing the shift's magnitude via a distinct pattern (solid /
-  slow pulse / triple-blink-then-hold) -- claims both buttons
-  permanently via a new per-button LED override in `buttons.c`. First
-  real-hardware run of this surfaced a genuine bug, since fixed: two of
-  `set_button_led_level()`'s branches (the exact 0.0/1.0 endpoints) had
-  the active-low polarity backwards, so "off" was actually driving the
-  LED lit and "solid" was actually driving it dark -- see
-  `services/README.md`'s `buttons.h` entry.
+  LED showing the shift's magnitude via a distinct pattern -- all three
+  magnitudes now built from one shared raised-cosine pulse shape after
+  real feedback that they didn't pulse evenly with each other, see
+  `services/README.md`'s entry for the full rework history -- claims
+  both buttons permanently via a per-button LED override in
+  `buttons.c`. First real-hardware run of this surfaced a genuine bug,
+  since fixed: two of `set_button_led_level()`'s branches (the exact
+  0.0/1.0 endpoints) had the active-low polarity backwards, so "off" was
+  actually driving the LED lit and "solid" was actually driving it dark
+  -- see `services/README.md`'s `buttons.h` entry.
+  Also owns transpose mode: holding SW1+SW2 together toggles a mode
+  where "-"/"+" step the key center instead of the octave, both LEDs
+  pulse together, and the pad grid shows the current key's letter (via
+  the new shared `pixel_font.h`/`.c`), flashing a cross for sharp keys
+  since a 4-row glyph can't draw "#". Not yet hardware-tested.
   `game_mode` done for V1: real, player-controlled snake and brick
   breaker (distinct from `standby`'s autonomous versions of the same two
   games below, which stay unchanged) -- hold SW3+SW4+SW5+SW6 to toggle a
@@ -195,20 +203,24 @@ flashable `.uf2`.
   doc -- confirmed absent from `docs/hardware/`. The 1-minute idle
   timeout, 2-minute animation-cycle period, and 15-minute power-saving
   timeout are explicit demo-mode defaults, not final values. Animations
-  1-5 and the button-brightness/standby-baseline-floor fixes are based on
-  user feedback from watching an earlier version on real hardware, but
-  the two newest animations (6, the graphic equalizer; 7, the circular
-  underglow wave) and the power-saving state have NOT been seen on real
-  hardware at all yet -- every one of their constants
-  (`EQ_PEAK_DECAY_PER_MS`, `CIRCLE_PERIOD_MS`,
-  `POWER_SAVING_PULSE_PERIOD_MS`, etc.) is a first guess.
-  `BUTTON_STANDBY_BRIGHTNESS_SCALE` (0.35) is likewise still an
+  1-3, 5-7 and the power-saving state are based on user feedback from
+  watching an earlier version on real hardware (animation 3's fall speed
+  most recently halved after still reading as too fast); animation 4's
+  real-snake rework and animations 8 (brick breaker), 9 (marquee,
+  including its font's move to the new shared `services/pixel_font.h`/
+  `.c`), and 10 (bouncing glow, a new "simple but elegant" white
+  animation) have NOT been seen on real hardware at all yet -- every one
+  of their constants (`EQ_PEAK_DECAY_PER_MS`, `CIRCLE_PERIOD_MS`,
+  `POWER_SAVING_PULSE_PERIOD_MS`, `BOUNCE_ROW_PERIOD_MS`, etc.) is a
+  first guess. `BUTTON_STANDBY_BRIGHTNESS_SCALE` (0.35) is likewise still an
   unmeasured guess at how much dimmer buttons need to be, not a measured
   match to pad brightness.
 - `services/boot_sequence.c`: seen on real hardware twice now, reworked
-  both times (direction/pacing, then buttons dropped entirely after
-  residual glow was still visible with only the magenta phase
-  excluded) -- this latest version hasn't itself been flashed and
+  three times total -- direction/pacing, then buttons dropped entirely
+  after residual glow was still visible with only the magenta phase
+  excluded, then buttons brought back into the rain/fade phases (only
+  still excluded from the magenta pulse) after that turned out to be an
+  overcorrection. This latest version hasn't itself been flashed and
   watched yet, so every duration/edge-width constant is again a first
   guess pending that. The Hall baseline re-capture at the end is a real
   mechanism (reuses `hall.c`'s existing per-pad read path), but whether
@@ -216,10 +228,14 @@ flashable `.uf2`.
 - `services/octave_control.c`: real hardware testing already found and
   fixed one genuine bug, not just an untuned constant --
   `buttons.c`'s `set_button_led_level()` had its active-low endpoints
-  backwards (see `services/README.md`'s `buttons.h` entry). Every LED
-  pattern timing constant (`PULSE_PERIOD_MS`, the blink/hold durations)
-  is still a first guess, and whether the three patterns read as
-  visually distinct at a glance is unverified.
+  backwards (see `services/README.md`'s `buttons.h` entry). The pulse
+  pattern has since been reworked three times from real feedback (see
+  `services/README.md`'s entry for the full history) and every timing
+  constant is still a first guess. Transpose mode (SW1+SW2 held together,
+  key-center display via the new `services/pixel_font.h`/`.c`) is brand
+  new and has not been hardware-tested at all -- the combo-hold
+  threshold, flash timings, and font legibility at actual LED
+  brightness are all unverified.
 - `services/game_mode.c` has not been hardware-tested at all -- the
   entry-gesture hold duration, every step-timing constant for both
   games, and the round-end flash timing are first attempts. Whether

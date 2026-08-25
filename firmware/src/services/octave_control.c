@@ -1,7 +1,10 @@
 #include "octave_control.h"
 
+#include "board_layout.h"
 #include "buttons.h"
+#include "lighting.h"
 #include "note_map.h"
+#include "pixel_font.h"
 
 #include "pico/time.h"
 
@@ -78,34 +81,189 @@ static float level_for_magnitude(uint8_t magnitude, uint32_t now_ms) {
     }
 }
 
+/* Both held together for this long counts as "click them together" --
+ * short enough to still feel instantaneous, long enough to reliably
+ * distinguish a deliberate combo from two independent presses that
+ * happen to briefly overlap. Unmeasured -- a starting guess. */
+#define TRANSPOSE_COMBO_HOLD_MS 120u
+
+/* Natural-note letter + whether that semitone is the sharp of it, one
+ * entry per tiles_note_map_get_key_offset() value 0-11 (0 = C). */
+typedef struct {
+    char letter;
+    bool sharp;
+} tiles_key_info_t;
+
+static const tiles_key_info_t s_key_table[12] = {
+    {'C', false}, {'C', true}, {'D', false}, {'D', true}, {'E', false}, {'F', false},
+    {'F', true},  {'G', false}, {'G', true},  {'A', false}, {'A', true}, {'B', false},
+};
+
+/* Sharp-key flash: show the letter first, then alternate with the
+ * cross. Both re-anchored to now_ms whenever transpose mode is entered
+ * or the key changes, so a fresh letter is never caught mid-cross.
+ * Unmeasured -- a starting guess at pacing. */
+#define TRANSPOSE_FLASH_LETTER_MS 900u
+#define TRANSPOSE_FLASH_CROSS_MS 500u
+#define TRANSPOSE_LETTER_LEVEL 0.9f
+/* Warm amber rather than reusing white for the cross -- a deliberate,
+ * if unrequested, color distinction so the sharp flash reads
+ * unambiguously as a different signal from the letter itself rather
+ * than as a glitch. */
+#define TRANSPOSE_CROSS_R 1.0f
+#define TRANSPOSE_CROSS_G 0.55f
+#define TRANSPOSE_CROSS_B 0.0f
+/* The cross: a 2-column-wide vertical bar (the two middle columns of
+ * 1-6) crossed with a 1-row-thick horizontal bar (picked at row 2 of
+ * 1-4 -- there's no exact center row on an even count, this is a first
+ * judgment call, not a measurement). */
+#define TRANSPOSE_CROSS_ROW 2u
+#define TRANSPOSE_CROSS_COL_A 3u
+#define TRANSPOSE_CROSS_COL_B 4u
+
 static bool s_prev_minus_pressed;
 static bool s_prev_plus_pressed;
+
+static bool s_combo_was_held;
+static bool s_combo_fired;
+static uint32_t s_combo_hold_start_ms;
+
+static bool s_transpose_mode;
+static uint32_t s_transpose_flash_anchor_ms;
 
 void tiles_octave_control_init(void) {
     s_prev_minus_pressed = false;
     s_prev_plus_pressed = false;
+    s_combo_was_held = false;
+    s_combo_fired = false;
+    s_transpose_mode = false;
     tiles_buttons_set_override_active(BUTTON_ID_MINUS, true);
     tiles_buttons_set_override_active(BUTTON_ID_PLUS, true);
+}
+
+bool tiles_octave_control_is_transpose_active(void) {
+    return s_transpose_mode;
+}
+
+static void transpose_toggle(uint32_t now_ms) {
+    s_transpose_mode = !s_transpose_mode;
+    s_transpose_flash_anchor_ms = now_ms;
+    /* Claims/releases the pad grid exactly like standby.c's own
+     * animations and game_mode.c do -- see buttons/lighting's standby-
+     * active doc comments for why this also immediately repaints
+     * correctly on release. */
+    tiles_lighting_set_standby_active(s_transpose_mode);
+}
+
+/* Centers a 4-row/N-col glyph in the 6-column grid and lights it via
+ * the standby pad-RGB path; row 0 (buttons) is untouched here since
+ * SW1/SW2's LEDs are driven separately below and the other 4 buttons
+ * aren't part of this display. */
+static void render_transpose_letter(const tiles_glyph_t *glyph) {
+    uint8_t grid_width = (uint8_t)(TILES_GRID_MAX_COL - TILES_GRID_MIN_COL + 1u);
+    uint8_t col_start = (uint8_t)(TILES_GRID_MIN_COL + (grid_width - glyph->width) / 2u);
+
+    for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
+        uint8_t row_bit = (uint8_t)(1u << (row - 1u));
+        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+            bool lit = false;
+            if (col >= col_start && col < (uint8_t)(col_start + glyph->width)) {
+                lit = (glyph->cols[col - col_start] & row_bit) != 0u;
+            }
+            float level = lit ? TRANSPOSE_LETTER_LEVEL : 0.0f;
+            tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), level, level, level);
+        }
+    }
+}
+
+static void render_transpose_cross(void) {
+    for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
+        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+            bool lit = (row == TRANSPOSE_CROSS_ROW) || (col == TRANSPOSE_CROSS_COL_A) || (col == TRANSPOSE_CROSS_COL_B);
+            if (lit) {
+                tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), TRANSPOSE_CROSS_R,
+                                                    TRANSPOSE_CROSS_G, TRANSPOSE_CROSS_B);
+            } else {
+                tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), 0.0f, 0.0f, 0.0f);
+            }
+        }
+    }
+}
+
+static void render_transpose_frame(uint32_t now_ms) {
+    const tiles_key_info_t *key = &s_key_table[tiles_note_map_get_key_offset()];
+
+    bool show_cross = false;
+    if (key->sharp) {
+        uint32_t cycle_ms = TRANSPOSE_FLASH_LETTER_MS + TRANSPOSE_FLASH_CROSS_MS;
+        uint32_t phase = (now_ms - s_transpose_flash_anchor_ms) % cycle_ms;
+        show_cross = phase >= TRANSPOSE_FLASH_LETTER_MS;
+    }
+
+    if (show_cross) {
+        render_transpose_cross();
+    } else {
+        const tiles_glyph_t *glyph = tiles_pixel_font_glyph_for_note_letter(key->letter);
+        render_transpose_letter(glyph);
+    }
+
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+    }
 }
 
 void tiles_octave_control_scan(void) {
     bool minus_pressed = tiles_button_is_pressed(BUTTON_ID_MINUS);
     bool plus_pressed = tiles_button_is_pressed(BUTTON_ID_PLUS);
+    bool both_held = minus_pressed && plus_pressed;
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
-    /* Rising edge only -- one shift per physical press, not continuous
-     * while held. */
-    if (minus_pressed && !s_prev_minus_pressed) {
-        tiles_note_map_set_octave_shift((int8_t)(tiles_note_map_get_octave_shift() - 1));
+    if (both_held && !s_combo_was_held) {
+        s_combo_hold_start_ms = now_ms;
+        s_combo_fired = false;
     }
-    if (plus_pressed && !s_prev_plus_pressed) {
-        tiles_note_map_set_octave_shift((int8_t)(tiles_note_map_get_octave_shift() + 1));
+    if (both_held && !s_combo_fired && (now_ms - s_combo_hold_start_ms) >= TRANSPOSE_COMBO_HOLD_MS) {
+        s_combo_fired = true;
+        transpose_toggle(now_ms);
+    }
+    s_combo_was_held = both_held;
+
+    /* Individual rising-edge actions are suppressed for as long as both
+     * buttons are held together, so the two presses that make up a
+     * combo never also fire a plain octave/key step alongside the mode
+     * toggle. */
+    if (!both_held) {
+        if (minus_pressed && !s_prev_minus_pressed) {
+            if (s_transpose_mode) {
+                tiles_note_map_set_key_offset((int8_t)(tiles_note_map_get_key_offset() - 1));
+                s_transpose_flash_anchor_ms = now_ms;
+            } else {
+                tiles_note_map_set_octave_shift((int8_t)(tiles_note_map_get_octave_shift() - 1));
+            }
+        }
+        if (plus_pressed && !s_prev_plus_pressed) {
+            if (s_transpose_mode) {
+                tiles_note_map_set_key_offset((int8_t)(tiles_note_map_get_key_offset() + 1));
+                s_transpose_flash_anchor_ms = now_ms;
+            } else {
+                tiles_note_map_set_octave_shift((int8_t)(tiles_note_map_get_octave_shift() + 1));
+            }
+        }
     }
     s_prev_minus_pressed = minus_pressed;
     s_prev_plus_pressed = plus_pressed;
 
-    int8_t shift = tiles_note_map_get_octave_shift();
-    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    if (s_transpose_mode) {
+        /* Both LEDs pulse together -- same phase, since both come from
+         * the same now_ms with no per-button offset. */
+        float pulse = magnitude1_level(now_ms);
+        tiles_buttons_set_override_led(BUTTON_ID_MINUS, pulse);
+        tiles_buttons_set_override_led(BUTTON_ID_PLUS, pulse);
+        render_transpose_frame(now_ms);
+        return;
+    }
 
+    int8_t shift = tiles_note_map_get_octave_shift();
     float minus_level = 0.0f;
     float plus_level = 0.0f;
     if (shift != 0) {

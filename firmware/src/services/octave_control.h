@@ -22,21 +22,53 @@
  *                appended before the rest -- three pulses, dim rest,
  *                repeat
  *
+ * ---- Transpose mode ------------------------------------------------------
+ * Holding SW1+SW2 together (a quick "click them together," not a long
+ * hold like services/game_mode.h's 4-button combo) toggles transpose
+ * mode -- the first concrete use of "-"/"+" as general-purpose
+ * modifiers, per the product direction noted below. While active:
+ *   - Both LEDs pulse together (magnitude 1's continuous pulse shape,
+ *     same phase on both) instead of showing the octave pattern.
+ *   - "-"/"+" step the key center (services/note_map.c's
+ *     tiles_note_map_set_key_offset(), wraps 0-11/C-B) instead of the
+ *     octave shift.
+ *   - The pad grid (claimed via tiles_lighting_set_standby_active(),
+ *     same rendering-ownership pattern services/standby.c and
+ *     services/game_mode.h use) shows the current key's natural-note
+ *     letter in caps, centered, via services/pixel_font.h. For a sharp
+ *     key, the letter alternates with a plain "+"-shaped cross (a
+ *     2-column-wide vertical bar and a 1-row-thick horizontal bar,
+ *     centered) as a second flash, since there's no room to draw "#"
+ *     into a 4-row glyph -- the letter always shows first for a moment
+ *     after entering the mode or changing key, so the flash never
+ *     starts mid-cross. Underglow goes dark while this is showing.
+ * Holding SW1+SW2 together again exits back to normal octave-shift
+ * behavior. tiles_octave_control_is_transpose_active() lets main.c skip
+ * services/standby.h's idle scan while this owns the pad grid, the same
+ * way it already does for services/game_mode.h.
+ *
  * Claims SW1/SW2 permanently via services/buttons.h's per-button
  * override mechanism (tiles_buttons_set_override_active()) -- their
  * LEDs stop following "lit while held" and are driven by the pattern
  * above instead; the other 4 buttons are untouched by this module.
  *
- * "-"/"+" are meant to become general-purpose modifier buttons later
- * (held as a modifier for other menus/combos, per the product's own
- * direction) -- this module only implements their V1 default function,
- * octave shift; it isn't a generic modifier framework and shouldn't be
- * stretched into one until something else actually needs it.
+ * "-"/"+" are meant to become general-purpose modifier buttons for
+ * other menus/combos down the line, per the product's own direction --
+ * transpose mode above is the first real instance of that; octave shift
+ * is still the V1 default function otherwise.
  */
+
+#include <stdbool.h>
 
 void tiles_octave_control_init(void);
 
-/* Detects SW1/SW2 press edges and drives their LED pattern. Call every
- * main-loop iteration, after tiles_buttons_scan() so this iteration's
- * debounced press state is fresh. */
+/* Detects SW1/SW2 press edges and the transpose-mode combo, drives
+ * their LED pattern, and renders the transpose key display when active.
+ * Call every main-loop iteration, after tiles_buttons_scan() so this
+ * iteration's debounced press state is fresh. */
 void tiles_octave_control_scan(void);
+
+/* True while transpose mode owns the pad grid -- see the file header.
+ * Checked by main.c to skip services/standby.h's idle scan while this
+ * is active, the same way it already does for services/game_mode.h. */
+bool tiles_octave_control_is_transpose_active(void);
