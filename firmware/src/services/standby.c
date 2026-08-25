@@ -41,7 +41,16 @@
  * expression.c). PLACEHOLDER, unmeasured: expression.c's own
  * DEPTH_TO_AFTERTOUCH_FULL_SCALE (2000, also unmeasured) is "full
  * press" depth; this is a coarse fraction of that meant to catch even a
- * light press, not tuned against real noise floor. */
+ * light press, not tuned against real noise floor.
+ *
+ * IMPORTANT: only ever check this while ALREADY in standby (see
+ * hall_depth_wake_triggered() below) -- the first version of this fix
+ * folded it into the same "is anything active" check used to decide
+ * whether to enter standby at all, which broke standby entirely
+ * (real symptom: it never triggered). hall.c's depth has no baseline
+ * drift compensation yet, so treating it as part of the idle condition
+ * meant any pad's ambient noise/drift could permanently look "active"
+ * and the idle timer would never elapse. */
 #define TILES_STANDBY_HALL_WAKE_DEPTH 150u
 
 #define TILES_STANDBY_PI 3.14159265358979323846f
@@ -260,13 +269,13 @@ static uint32_t s_last_frame_ms;
 static uint32_t s_animation_switch_ms;
 static uint8_t s_animation_index;
 
-static bool any_input_active(void) {
+/* Touch/button/pedal only -- deliberately NOT Hall (see
+ * hall_depth_wake_triggered() below for why Hall is kept separate).
+ * Used both to decide whether to enter standby and, once in it, as one
+ * of the two ways to wake back up. */
+static bool real_input_active(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         if (tiles_touch_is_touched(pad)) {
-            return true;
-        }
-        /* See TILES_STANDBY_HALL_WAKE_DEPTH above. */
-        if (tiles_hall_get_depth(pad) >= TILES_STANDBY_HALL_WAKE_DEPTH) {
             return true;
         }
     }
@@ -276,6 +285,29 @@ static bool any_input_active(void) {
         }
     }
     return tiles_pedal_is_sustained();
+}
+
+/* See TILES_STANDBY_HALL_WAKE_DEPTH above for why this exists. Checked
+ * ONLY while already in standby (tiles_standby_scan() below), never as
+ * part of deciding whether to ENTER standby or as the idle-timer reset
+ * condition -- hall.c's depth is a raw, uncalibrated reading against a
+ * baseline captured once at boot with no drift compensation yet (see
+ * hall.h), so ambient noise or thermal drift alone can plausibly sit
+ * above this threshold for some pad at any given moment. Folding that
+ * into the same check used to decide "is anything active" broke
+ * standby entirely the first time it was tried (real symptom: standby
+ * never triggered at all) -- some pad's drifted/noisy reading looked
+ * "always active" and the idle timer never got a chance to elapse.
+ * Restricting it to wake-only means a false positive here just costs an
+ * unnecessary early exit from standby, not a permanently broken idle
+ * timer. */
+static bool hall_depth_wake_triggered(void) {
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        if (tiles_hall_get_depth(pad) >= TILES_STANDBY_HALL_WAKE_DEPTH) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void enter_standby(uint32_t now_ms) {
@@ -307,7 +339,7 @@ void tiles_standby_init(void) {
 void tiles_standby_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
-    if (any_input_active()) {
+    if (real_input_active()) {
         s_last_activity_ms = now_ms;
         if (s_state == TILES_STANDBY_STATE_STANDBY) {
             exit_standby();
@@ -319,6 +351,16 @@ void tiles_standby_scan(void) {
         if (now_ms - s_last_activity_ms >= TILES_STANDBY_IDLE_TIMEOUT_MS) {
             enter_standby(now_ms);
         }
+        return;
+    }
+
+    /* STATE_STANDBY: real_input_active() above was false, so the only
+     * remaining wake path is Hall depth -- see
+     * hall_depth_wake_triggered()'s comment for why it's checked only
+     * here, not folded into real_input_active(). */
+    if (hall_depth_wake_triggered()) {
+        s_last_activity_ms = now_ms;
+        exit_standby();
         return;
     }
 

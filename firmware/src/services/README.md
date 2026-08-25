@@ -128,23 +128,29 @@ not its code.
   table and confirmed to build/pass host tests.
 - `standby.h`/`.c` — done for a demo V1: after 60s (1 minute -- an
   explicit demo-mode default, expected to change once this isn't just a
-  demo) with no touch/Hall/button/pedal activity, the pad grid + 6
-  function buttons + underglow stop reflecting real input and instead
-  run one of 4 rotating ambient animations (traveling wave, radial glow
-  pulsing outward from center, falling comet-tailed "shooting stars",
-  and a fixed-length "snake" crawling a serpentine path), switching to
-  the next one every 2 minutes (also a starting guess, not tuned against
-  how it actually feels to watch). Any touch/Hall/button/pedal activity
-  exits standby immediately -- Hall depth
-  (`TILES_STANDBY_HALL_WAKE_DEPTH`) was added alongside touch after real
-  hardware showed MPR121 touch alone not reliably waking standby while
-  the pad animation is running (buttons/pedal woke it fine); root cause
-  isn't confirmed (most likely candidate: the pad-LED SK6805 chain being
-  continuously rewritten at ~25fps while idle, vs. only writing
-  reactively on a touch change during normal play), but Hall's magnetic
-  sensing isn't subject to whatever that is, giving a robust second path
-  regardless of why -- matches this codebase's existing "touch alone is
-  foolable, fuse with Hall" stance (see `hall.h`/`expression.c`).
+  demo) with no touch/button/pedal activity, the pad grid + 6 function
+  buttons + underglow stop reflecting real input and instead run one of
+  4 rotating ambient animations (traveling wave, radial glow pulsing
+  outward from center, falling comet-tailed "shooting stars", and a
+  fixed-length "snake" crawling a serpentine path), switching to the
+  next one every 2 minutes (also a starting guess, not tuned against how
+  it actually feels to watch). Touch/button/pedal activity exits standby
+  immediately; while already in standby, Hall depth
+  (`TILES_STANDBY_HALL_WAKE_DEPTH`) is checked too, as a second wake
+  path, after real hardware showed MPR121 touch alone not reliably
+  waking standby while the pad animation is running (buttons/pedal woke
+  it fine); root cause isn't confirmed (most likely candidate: the
+  pad-LED SK6805 chain being continuously rewritten at ~25fps while
+  idle, vs. only writing reactively on a touch change during normal
+  play), but Hall's magnetic sensing isn't subject to whatever that is,
+  giving a robust second path regardless of why -- matches this
+  codebase's existing "touch alone is foolable, fuse with Hall" stance
+  (see `hall.h`/`expression.c`). Hall is deliberately checked only while
+  already in standby, never as part of deciding whether to *enter* it or
+  as the idle-timer reset condition -- an early version folded it into
+  that same check and broke standby entirely (it never triggered),
+  because hall.c's depth has no drift compensation yet and some pad's
+  ambient noise/drift alone was enough to look permanently "active".
   Deliberately a lighting-only concept: touch/Hall/
   expression/MIDI keep running completely unaware standby exists, so
   playing still works exactly as normal even while idle animations are
