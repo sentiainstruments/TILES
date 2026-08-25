@@ -30,9 +30,9 @@
  * but it's a legitimate, standard technique for the attack. */
 #define KICK_OVERDRIVE_MS 6u
 
-/* The hard-zero "brake" gap between KICK and SUSTAIN -- see haptics.h's
- * file header for why this, not a soft ramp, is the achievable analog
- * to braking on this hardware. */
+/* The hard-zero "brake" gap after KICK -- see haptics.h's file header
+ * for why this, not a soft ramp, is the achievable analog to braking on
+ * this hardware. */
 #define KICK_GAP_MS 8u
 
 /* Even the weakest strike should give a felt kick, not nothing. */
@@ -42,8 +42,24 @@
 /* Capped below the kick's peak, and below 1.0, because sustain can be
  * held continuously for seconds (a long-held chord) where a brief
  * kick's inrush/thermal risk doesn't apply the same way -- unmeasured,
- * a conservative starting guess pending real current data. */
+ * a conservative starting guess pending real current data. Only matters
+ * while TILES_HAPTICS_SUSTAIN_ENABLED is 1 (see below). */
 #define MAX_SUSTAIN_DUTY 0.6f
+
+/* Continuous, aftertouch-mapped sustain after the kick -- DISABLED for
+ * now. On real hardware this felt like continuous buzzing the whole
+ * time a pad was held, not the single, brief click the user actually
+ * wants; the SUSTAIN phase's code stays in place (real, desired
+ * behavior once it's tunable) rather than being deleted. A very
+ * plausible contributor: the magnets aren't in their final position yet
+ * (see standby.c's TILES_STANDBY_HALL_WAKE_ENABLED for the same root
+ * issue elsewhere), so the aftertouch value driving sustain_duty is
+ * currently against meaningless Hall data -- worth re-enabling once
+ * that's calibrated (see diagnostics/calibration.h) and re-evaluating
+ * from there, rather than assuming this alone was the whole problem.
+ * With this at 0, every pad's envelope is just KICK -> GAP -> silence
+ * (IDLE) -- a single click, nothing continuous. */
+#define TILES_HAPTICS_SUSTAIN_ENABLED 0
 
 /* Minimum spacing enforced between actual kick starts (not trigger
  * calls), per the hardware handoff's "stagger motor starts >= 15ms"
@@ -266,11 +282,19 @@ void tiles_haptics_scan(void) {
                 }
             }
         } else if (s->phase == HAPTIC_PHASE_GAP && (now_ms - s->phase_start_ms) >= KICK_GAP_MS) {
+#if TILES_HAPTICS_SUSTAIN_ENABLED
             s->phase = HAPTIC_PHASE_SUSTAIN;
             const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
             if (cfg != NULL) {
                 set_motor_level(cfg, sustain_duty_from_aftertouch(s->sustain_target_0_127));
             }
+#else
+            /* Single click only -- see TILES_HAPTICS_SUSTAIN_ENABLED
+             * above. Motor is already at 0 from the KICK->GAP
+             * transition, so no further write is needed; just free this
+             * pad's voice slot. */
+            s->phase = HAPTIC_PHASE_IDLE;
+#endif
         }
     }
 }

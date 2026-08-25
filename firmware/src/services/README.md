@@ -99,10 +99,20 @@ not its code.
   (opens with a brief overdrive spike at max duty regardless of
   velocity, to overcome the motor's static friction/inertia fast, then
   settles to the velocity-mapped duty for the rest of the window) ->
-  GAP (hard zero) -> SUSTAIN (aftertouch-mapped, live-updated while
-  held) -> hard cutoff on note-off. A kick may sit briefly in an
-  internal PENDING state first if another kick started too recently --
-  see `KICK_STAGGER_MIN_GAP_MS` below.
+  GAP (hard zero) -> silence. A kick may sit briefly in an internal
+  PENDING state first if another kick started too recently -- see
+  `KICK_STAGGER_MIN_GAP_MS` below.
+  The continuous, aftertouch-mapped SUSTAIN phase (the motor ramping
+  with press depth while held) is built but currently **disabled**
+  (`TILES_HAPTICS_SUSTAIN_ENABLED 0`): on real hardware it read as
+  continuous buzzing rather than the single, clean click the user
+  actually wants, and the magnets aren't in their final position yet
+  (same root issue as `standby.c`'s disabled Hall wake path -- see that
+  entry above), so the aftertouch value it would ramp against is
+  currently against meaningless Hall data. Every pad's envelope is
+  currently just KICK -> GAP -> silence; re-enable SUSTAIN and
+  re-evaluate once Hall is calibrated, rather than assuming uncalibrated
+  data was the whole story.
   **Hardware constraint, not a software choice:** each motor is a
   single low-side NMOS (AO3400A) to a fixed supply rail -- no H-bridge,
   no dedicated haptic driver IC (confirmed against the board map, see
@@ -183,10 +193,12 @@ not its code.
   "shooting stars" with per-star randomized speed/tail/twinkle; a
   fixed-length "snake" ping-ponging back and forth along a serpentine
   path instead of teleport-resetting; and a blue/purple RGB showcase
-  animation with underglow held off so the pad grid's actual color
-  capability is the whole focus), switching to a random (never
-  immediately repeated) one every 2 minutes (also a starting guess, not
-  tuned against how it actually feels to watch). Touch/button/pedal
+  animation where underglow shows the same moving color as the pads --
+  the whole point being to show off both), switching to a random one
+  every 2 minutes (also a starting guess, not tuned against how it
+  actually feels to watch) -- excludes both the animation ending and the
+  one before it, so a switch never immediately repeats itself and never
+  bounces straight back to the animation two ago either. Touch/button/pedal
   activity exits standby
   immediately. A Hall-depth wake fallback exists in the code
   (`hall_depth_wake_triggered()`, checked only while already in standby,
@@ -241,7 +253,11 @@ not its code.
   top row -- `render_frame()` now collapses each cell's color to a
   single brightness for the (monochrome) button row and scales it down
   by `BUTTON_STANDBY_BRIGHTNESS_SCALE` (0.35, unmeasured) before writing
-  it.
+  it. The RGB showcase animation additionally holds its button row to a
+  fixed, low, non-pulsing glow rather than tracking the wave (buttons
+  can't show the actual color, so following the wave's brightness swings
+  would just look like an unrelated flicker; a quiet constant glow reads
+  as "present but not the point" instead).
   **Not done / not hardware-verified:** the button-column and
   underglow-anchor mappings (`button_for_col()`, `s_underglow_anchor[]`
   in `standby.c`) are based on the user's verbal description of the

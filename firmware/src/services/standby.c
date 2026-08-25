@@ -282,15 +282,19 @@ static tiles_standby_color_t anim_snake(uint8_t row, uint8_t col, uint32_t now_m
 }
 
 /* ---- Animation 5: blue/purple RGB showcase ------------------------------
- * Shows off the pad grid's actual RGB capability (every other animation
- * is deliberately white) -- a diagonal value wave, same shape as
- * anim_wave, but hue cycles within the blue-to-violet range instead of
- * brightness alone staying white. Underglow is held fully off for this
- * one (see s_animation_underglow_off below) so it doesn't compete with
- * the pad color, and the function-button row is likewise held dark --
- * button LEDs are plain monochrome PWM, not addressable RGB, so there's
- * no way for them to participate in a color showcase; lighting them
- * white here would just look like an unrelated glitch. */
+ * Shows off both the underglow AND the pad grid's actual RGB capability
+ * (every other animation is deliberately white) -- a diagonal value
+ * wave, same shape as anim_wave, but hue cycles within the blue-to-
+ * violet range instead of brightness alone staying white. Underglow
+ * samples this same field at its usual anchor points (see
+ * s_animation_underglow_off below, false for this animation), so it
+ * shows the same moving color as the pads instead of sitting the
+ * animation out. The function-button row is held to a low, constant,
+ * non-animated dim glow rather than fully off or full brightness --
+ * button LEDs are plain monochrome PWM, not addressable RGB, so they
+ * can't show the color itself, but going fully dark read as an
+ * unrelated glitch; a low, deliberately non-pulsing glow reads as
+ * "quietly present" without competing with the pad color. */
 
 #define RGB_WAVE_LENGTH_DIAG 3.0f
 #define RGB_WAVE_PERIOD_MS 3500.0f
@@ -298,6 +302,14 @@ static tiles_standby_color_t anim_snake(uint8_t row, uint8_t col, uint32_t now_m
 #define RGB_HUE_CYCLE_MS 6000.0f
 #define RGB_HUE_MIN_DEG 220.0f /* blue */
 #define RGB_HUE_MAX_DEG 285.0f /* violet/purple */
+
+/* Raw luminance returned for the button row -- render_frame() further
+ * multiplies every animation's button row by BUTTON_STANDBY_BRIGHTNESS_SCALE
+ * (0.35), so the actual final brightness is roughly this times that,
+ * not this value directly. Picked to land low/subtle after that scale;
+ * unmeasured, adjust directly if it still reads as too bright or too
+ * dark once seen lit. */
+#define RGB_SHOWCASE_BUTTON_ROW_LEVEL 0.35f
 
 /* Standard HSV->RGB, s always 1.0 here (fully saturated blue/purple hues). */
 static tiles_standby_color_t hsv_to_rgb(float h_deg, float v) {
@@ -339,8 +351,7 @@ static tiles_standby_color_t hsv_to_rgb(float h_deg, float v) {
 
 static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_t now_ms) {
     if (row == 0u) {
-        tiles_standby_color_t off = {0.0f, 0.0f, 0.0f};
-        return off;
+        return white(RGB_SHOWCASE_BUTTON_ROW_LEVEL);
     }
 
     float diag = (float)row + (float)col;
@@ -362,12 +373,6 @@ typedef tiles_standby_color_t (*field_fn_t)(uint8_t row, uint8_t col, uint32_t n
 static const field_fn_t s_animations[] = {
     anim_wave, anim_glow, anim_shooting_stars, anim_snake, anim_rgb_showcase,
 };
-/* Parallel to s_animations[] -- true for the one animation (5, the RGB
- * showcase) that wants underglow held fully off rather than sampling
- * the same per-cell field the pad grid uses at its anchor points. */
-static const bool s_animation_underglow_off[] = {
-    false, false, false, false, true,
-};
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
 
 /* Function-button LEDs read noticeably brighter than pad LEDs at the
@@ -381,7 +386,6 @@ static const bool s_animation_underglow_off[] = {
 
 static void render_frame(uint8_t animation_index, uint32_t now_ms) {
     field_fn_t field = s_animations[animation_index];
-    bool underglow_off = s_animation_underglow_off[animation_index];
 
     for (uint8_t col = GRID_MIN_COL; col <= GRID_MAX_COL; col++) {
         tiles_standby_color_t c = field(0u, col, now_ms);
@@ -404,12 +408,8 @@ static void render_frame(uint8_t animation_index, uint32_t now_ms) {
         }
     }
     for (uint8_t i = 0; i < 4u; i++) {
-        if (underglow_off) {
-            tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
-        } else {
-            tiles_standby_color_t c = field(s_underglow_anchor[i].row, s_underglow_anchor[i].col, now_ms);
-            tiles_lighting_set_standby_underglow_rgb(i, c.r, c.g, c.b);
-        }
+        tiles_standby_color_t c = field(s_underglow_anchor[i].row, s_underglow_anchor[i].col, now_ms);
+        tiles_lighting_set_standby_underglow_rgb(i, c.r, c.g, c.b);
     }
 }
 
@@ -425,6 +425,7 @@ static uint32_t s_last_activity_ms;
 static uint32_t s_last_frame_ms;
 static uint32_t s_animation_switch_ms;
 static uint8_t s_animation_index;
+static uint8_t s_prev_animation_index; /* the one that played immediately before s_animation_index */
 
 /* Touch/button/pedal only -- deliberately NOT Hall (see
  * hall_depth_wake_triggered() below for why Hall is kept separate).
@@ -469,23 +470,34 @@ static bool hall_depth_wake_triggered(void) {
     return false;
 }
 
-/* Picks a random animation index, excluding `exclude` (pass a value
- * >= NUM_ANIMATIONS, e.g. 0xFFu, to allow any index -- used for the
- * very first pick where there's nothing to avoid repeating). */
-static uint8_t pick_random_animation(uint8_t exclude) {
-    if (NUM_ANIMATIONS <= 1u) {
+/* Picks a random animation index, excluding both `exclude_a` and
+ * `exclude_b` (pass a value >= NUM_ANIMATIONS, e.g. 0xFFu, for either to
+ * not exclude anything there -- used for the very first pick, which has
+ * no real history to avoid repeating). Excluding both the animation
+ * about to end AND the one before it means a switch never immediately
+ * repeats the current animation, and never bounces straight back to
+ * the one two animations ago either (e.g. A, B, A back-to-back) -- with
+ * NUM_ANIMATIONS==5 this still leaves 3 valid choices, so the loop
+ * always terminates. */
+static uint8_t pick_random_animation(uint8_t exclude_a, uint8_t exclude_b) {
+    if (NUM_ANIMATIONS <= 2u) {
         return 0u;
     }
     uint8_t next;
     do {
         next = (uint8_t)(rand() % NUM_ANIMATIONS);
-    } while (next == exclude);
+    } while (next == exclude_a || next == exclude_b);
     return next;
 }
 
 static void enter_standby(uint32_t now_ms) {
     s_state = TILES_STANDBY_STATE_STANDBY;
-    s_animation_index = pick_random_animation(0xFFu);
+    /* Excludes whatever was showing (and the one before that) when
+     * standby last ended, so re-entering standby shortly after leaving
+     * it doesn't immediately repeat the same animation either. */
+    uint8_t next = pick_random_animation(s_animation_index, s_prev_animation_index);
+    s_prev_animation_index = s_animation_index;
+    s_animation_index = next;
     s_animation_switch_ms = now_ms;
     s_last_frame_ms = 0u; /* forces an immediate first frame below */
     tiles_lighting_set_standby_active(true);
@@ -504,7 +516,13 @@ void tiles_standby_init(void) {
     s_last_activity_ms = now_ms;
     s_last_frame_ms = 0u;
     s_animation_switch_ms = now_ms;
-    s_animation_index = 0u;
+    /* Both out of range -- nothing to avoid repeating yet, so the very
+     * first standby entry's pick is fully unconstrained. Never used as a
+     * real array index: enter_standby() always overwrites
+     * s_animation_index with a valid pick before STANDBY rendering ever
+     * runs. */
+    s_animation_index = 0xFFu;
+    s_prev_animation_index = 0xFFu;
     s_stars_inited = false;
     srand(now_ms);
 }
@@ -538,9 +556,13 @@ void tiles_standby_scan(void) {
     }
 
     if (now_ms - s_animation_switch_ms >= TILES_STANDBY_ANIMATION_CYCLE_MS) {
-        /* Random, not sequential -- excludes the current index so it
-         * never immediately repeats itself. */
-        s_animation_index = pick_random_animation(s_animation_index);
+        /* Random, not sequential -- excludes both the current animation
+         * and the one before it, so a switch never immediately repeats
+         * itself and never bounces straight back to the animation two
+         * ago either. */
+        uint8_t next = pick_random_animation(s_animation_index, s_prev_animation_index);
+        s_prev_animation_index = s_animation_index;
+        s_animation_index = next;
         s_animation_switch_ms = now_ms;
     }
 

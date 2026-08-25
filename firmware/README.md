@@ -91,16 +91,20 @@ first on-hardware note-on test.
   `standby` done for a demo V1: after 1 minute idle, pads + buttons +
   underglow run one of 5 rotating ambient animations (diagonal wave,
   sharp center-out ring, complex shooting stars, ping-pong snake, and a
-  blue/purple RGB showcase with underglow off), in randomized
-  never-repeating order, instead of reflecting touch state, until any
+  blue/purple RGB showcase where underglow shows the same color as the
+  pads), in randomized order (never repeating the current animation or
+  the one before it), instead of reflecting touch state, until any
   touch/button/pedal activity exits it -- see `services/README.md` for
   the button-column/underglow-anchor mapping assumptions this still
   needs verified on real hardware, and for a real bug this rework fixed
   (standby pads were routing through the touch-driven idle-baseline
   floor, so they never actually reached true black). `haptics` done for
   V1: an overdrive
-  spike then velocity-mapped kick on strike, then aftertouch-mapped
-  sustain while held, then a hard cutoff on release -- staggers actual
+  spike then velocity-mapped kick on strike, then a hard cutoff -- a
+  single click. Continuous aftertouch-mapped sustain while held is
+  built but disabled (felt like continuous buzzing on real hardware,
+  and the magnets aren't calibrated yet -- see `services/README.md`).
+  Staggers actual
   motor starts >= 15ms apart (no added latency for normal single-note
   play) and enforces `power.c`'s voice ceiling -- see
   `services/README.md` for why real active braking isn't physically

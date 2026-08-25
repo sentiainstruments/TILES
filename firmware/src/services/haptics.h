@@ -2,9 +2,16 @@
 
 /*
  * Per-pad haptic feedback: a strike gives a brief, strong "kick" pulse
- * mapped to velocity; while held, the motor's intensity continuously
- * tracks aftertouch (press depth), ramping up and down with pressure.
+ * mapped to velocity, then goes silent. Continuous aftertouch-mapped
+ * sustain while held is built but currently DISABLED
+ * (TILES_HAPTICS_SUSTAIN_ENABLED 0 in haptics.c) -- on real hardware it
+ * felt like continuous buzzing rather than the single, clean click the
+ * user wants, and the magnets aren't in their final position yet (see
+ * standby.c's own TILES_STANDBY_HALL_WAKE_ENABLED for the same class of
+ * issue), so the aftertouch value it would ramp against is currently
+ * meaningless. Re-enable and re-evaluate once Hall is calibrated.
  *
+
  * HARDWARE CONSTRAINT, read before changing pulse shapes: each motor is
  * switched by a single low-side NMOS (AO3400A) to a fixed supply rail --
  * see docs/hardware/SENTIA_TILES_FIRMWARE_HANDOFF.md's "Haptics"
@@ -33,9 +40,11 @@
  *
  *   KICK (tiles_haptics_trigger_kick, overdrive spike -> velocity-mapped)
  *     -> GAP (hard zero -- the "brake" moment)
- *       -> SUSTAIN (aftertouch-mapped, live-updated via
- *          tiles_haptics_set_sustain_level while held)
- *         -> hard cutoff to 0 on tiles_haptics_stop (note-off)
+ *       -> currently: IDLE (silence -- a single click, see
+ *          TILES_HAPTICS_SUSTAIN_ENABLED above)
+ *       -> when sustain is re-enabled: SUSTAIN (aftertouch-mapped,
+ *          live-updated via tiles_haptics_set_sustain_level while held)
+ *          -> hard cutoff to 0 on tiles_haptics_stop (note-off)
  *
  * A kick may first sit briefly in an internal PENDING state (see
  * haptics.c) if another kick started too recently -- see
