@@ -20,7 +20,8 @@
  * mode off again from any state (menu or mid-game).
  *
  * Once on: the menu shows pad 1 (green) for Snake, pad 2 (orange) for
- * Brick Breaker, and pad 3 (cyan) for Tetris -- touch any to launch it.
+ * Brick Breaker, pad 3 (cyan) for Tetris, and pad 4 (blue) for Pong --
+ * touch any to launch it.
  *   Snake controls: SW1 left, SW2 right, SW3 up, SW4 down (absolute
  *   direction, not relative turning; reversing straight into the
  *   snake's own neck is ignored, the standard snake-game rule). Eats a
@@ -35,11 +36,24 @@
  *   rotates it (a simplified 2-orientation rotation per piece, not full
  *   4-state SRS -- the board is only 4 rows tall so the extra states
  *   would rarely matter), SW4 hard-drops it. Standard tetromino set and
- *   colors, line clears shift everything above down; topping out (a
- *   freshly spawned piece has nowhere to go) ends the round.
- * Every game's end (snake self-collision, brick breaker won/lost,
- * Tetris topping out) flashes underglow red/purple for a couple of
- * seconds, then returns to the menu.
+ *   colors, line clears shift everything above down (and flash
+ *   underglow white -- see below); topping out (a freshly spawned piece
+ *   has nowhere to go) ends the round.
+ *   Pong controls, two players on one board: column 1 is the left
+ *   paddle (SW1 up, SW2 down), column 6 is the right paddle (SW5 up,
+ *   SW6 down -- the mirror-image pair to SW1/SW2; unverified against
+ *   what the user actually meant by "circle and the other button next
+ *   to it"). Both paddles 2 pads tall, white; the ball is a blue dot.
+ *   Pong deliberately does NOT use the round-end flow below -- a rally
+ *   on a board this small can end in seconds, so returning to the menu
+ *   on every missed point would be disruptive. A miss instead flashes
+ *   underglow white briefly and re-serves immediately, staying in play
+ *   until the player deliberately exits via the entry/exit combo above.
+ * Every other game's end (snake self-collision, brick breaker
+ * won/lost) flashes underglow red/purple for a couple of seconds, then
+ * returns to the menu; Tetris topping out flashes plain red instead
+ * (real feedback: "when game is lost it should flash red," distinct
+ * from its own white line-clear flash above).
  *
  * Claims the same standby-active rendering path standby.c's own
  * animations and boot_sequence.c use

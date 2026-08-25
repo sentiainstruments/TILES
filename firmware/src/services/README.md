@@ -214,8 +214,8 @@ not its code.
   combo since they're reserved as in-game controls, matching
   `octave_control.h`'s own note above about "-"/"+" becoming
   general-purpose modifiers eventually. The menu shows pad 1 (green) for
-  Snake, pad 2 (orange) for Brick Breaker, and pad 3 (cyan) for Tetris;
-  touch any to launch it.
+  Snake, pad 2 (orange) for Brick Breaker, pad 3 (cyan) for Tetris, and
+  pad 4 (blue) for Pong; touch any to launch it.
   Snake: starts 2 segments long (real feedback: 3 felt cramped on a
   board this small), SW1/SW2/SW3/SW4 = left/right/up/down (absolute
   direction, not relative turning; reversing straight into the snake's
@@ -230,11 +230,32 @@ not its code.
   `gt_` section's own comment for why), SW4 hard-drops it, gravity also
   steps it down automatically (`GT_STEP_MS`). Standard tetromino
   shapes/colors; `gt_clear_lines()` shifts everything above a full row
-  down (handles multiple simultaneous clears in one bottom-up sweep);
-  topping out (a freshly spawned piece already collides) ends the round.
-  Every game ending (snake self-collision, brick breaker won/lost,
-  Tetris topping out) flashes underglow red/purple for ~2s, then returns
-  to the menu.
+  down (handles multiple simultaneous clears in one bottom-up sweep) and
+  returns how many rows cleared, so `gt_lock()` can trigger a brief,
+  fast-toggling white underglow strobe (`GT_LINE_CLEAR_FLASH_MS`/
+  `_TOGGLE_MS`) only when something actually cleared -- real feedback:
+  "the underglow must flash white dramatically when a line is cleared."
+  Topping out (a freshly spawned piece already collides) ends the round
+  with a plain red blink instead of the usual red/purple (real feedback:
+  "when game is lost it should flash red") -- `gm_start_round_end()`
+  grew a `red_only` parameter for this, since Tetris is the only game
+  needing a different round-end color than snake/brick breaker.
+  Pong: two players, one board -- column 1 is the left paddle (SW1 up,
+  SW2 down), column 6 is the right paddle (SW5 up, SW6 down -- the
+  mirror pair to SW1/SW2; **unverified** whether "square" is actually
+  the button the user meant by "the other one next to circle"). Both
+  paddles 2 pads tall and white; the ball is a single blue dot, checked
+  before either paddle in the render order so it draws on top during a
+  bounce (same precedent as brick breaker's ball). Deliberately does
+  NOT go through the shared round-end flow below -- a rally on a board
+  this small can end in a couple of seconds, so bouncing back to the
+  menu on every missed point would be far more disruptive than useful.
+  A miss instead flashes underglow white briefly (`gp_point_scored()`)
+  and re-serves immediately, staying in `GM_STATE_PLAYING_PONG` the
+  whole time; the only way out is the standard 4-button hold every game
+  shares.
+  Every other game's end (snake self-collision, brick breaker won/lost)
+  flashes underglow red/purple for ~2s, then returns to the menu.
   Claims the same standby-active rendering path `standby.c`'s own
   animations and `boot_sequence.c` use -- correct and sufficient for LED
   *writes*: `buttons.c`'s per-button override for SW1/SW2
@@ -263,8 +284,10 @@ not its code.
   implementation now would couple things that don't need to be coupled.
   **Not hardware-verified at all:** the entry-gesture hold duration,
   every step-timing constant, the wrap-around-vs-wall-death choice for
-  snake, Tetris's simplified 2-state rotation, and the round-end flash
-  timing are all first attempts, none seen on real hardware yet.
+  snake, Tetris's simplified 2-state rotation, Pong's SW5/SW6 mapping
+  (the "square"-vs-whatever-the-user-meant guess above), and the
+  round-end/line-clear/point flash timings are all first attempts, none
+  seen on real hardware yet.
 - `expression.h`/`.c` — done for V1: touch+Hall fusion. Touch remains
   the authoritative note on/off timing gate (more reliable to detect
   than inferring press/release from Hall depth alone); Hall supplies
@@ -392,7 +415,8 @@ not its code.
   8. brick breaker: the function-button row is a wall of bricks, a 3-pad-wide cyan paddle (bottom pad row) tracks a warm-white/yellow ball with simple AI (moves at most one column per step toward the ball), the ball bounces around knocking orange bricks out until every brick is broken (won) or it gets past the paddle (lost) -- either way underglow flashes red and purple for a few seconds, then a fresh round starts. Ball checked before paddle in the render order so it draws on top during a bounce, when they briefly occupy the same cell.
   9. a scrolling marquee: "SENTIA - TILES - " scrolls across the pad grid using the shared font in `services/pixel_font.h`/`.c` (see its own entry above), with automatic inter-glyph spacing and seamless wraparound (`marquee_total_width()`) rather than a fixed animation; underglow and function buttons both stay off, keeping it purely a pad-grid text effect. Scroll speed slowed (`MARQUEE_MS_PER_COLUMN` 260ms -> 420ms per column) from real feedback, at the same time the font itself moved out to the shared module to fix a real mistake in the old one-off glyphs (E and F were nearly indistinguishable).
   10. bouncing glow: the "simple but elegant" one -- a single soft white point bounces diagonally around the pad grid like a screensaver ball, purely a closed-form position (a triangle wave per axis -- a bounce-off-the-walls reflection with no velocity/state to track) with a soft falloff around it, no particle array or game state at all. Row and col bounce at different, non-integer-ratio periods (`BOUNCE_ROW_PERIOD_MS`/`BOUNCE_COL_PERIOD_MS`) so the path slowly traces a Lissajous-like figure instead of repeating quickly. Function buttons stay off; underglow mirrors the pad field like animations 1-4, so the glow naturally spills into it near an anchor.
-  11. Tetris: the AI-played autonomous counterpart to `game_mode.h`'s real Tetris (below) -- same standard tetromino set/colors, deliberately separate state and code from the interactive version, matching this file's existing snake/brick-breaker precedent. A lightweight greedy AI (`tetris_ai_place()`) picks each piece's rotation and column at spawn by simulating every fitting placement and keeping whichever lands the piece's topmost cell deepest (a cheap "keep the stack low" proxy, no real hole-counting), then the piece visibly falls one row at a time toward that spot. Topping out flashes underglow red/purple like brick breaker, then the well clears and a new game starts. Function buttons stay off.
+  11. Tetris: the AI-played autonomous counterpart to `game_mode.h`'s real Tetris (below) -- same standard tetromino set/colors, deliberately separate state and code from the interactive version, matching this file's existing snake/brick-breaker precedent. A lightweight greedy AI (`tetris_ai_place()`) picks each piece's rotation and column at spawn by simulating every fitting placement and keeping whichever lands the piece's topmost cell deepest (a cheap "keep the stack low" proxy, no real hole-counting), then the piece visibly falls one row at a time toward that spot. A line clear triggers a brief, fast-toggling dramatic white underglow strobe (`TETRIS_LINE_CLEAR_FLASH_MS`/`_TOGGLE_MS`); topping out instead blinks plain red (not the red/purple alternation brick breaker's flash uses), then the well clears and a new game starts. Function buttons stay off.
+  12. Pong: the AI-vs-AI autonomous counterpart to `game_mode.h`'s real, two-player Pong (below) -- same court/paddle/ball layout and colors, deliberately separate state and code. Both paddles use the same "move at most one row per step toward the ball" simple AI animation 8's paddle already established, so rallies essentially never end on their own; on the rare miss, a brief white underglow flash plays and the ball re-serves immediately -- the same "stay in this animation and continue" behavior the interactive version uses instead of a win/lose round-end. Function buttons stay off.
 
   Touch/button/pedal activity exits standby immediately. A Hall-depth wake fallback exists in the code
   (`hall_depth_wake_triggered()`, checked only while already in standby,
@@ -486,10 +510,11 @@ not its code.
   reworked from that feedback, including animation 3's fall-speed halving
   above); animation 4's real-snake rework and animations 8 (brick
   breaker), 9 (marquee, including its font move to `pixel_font.h`/`.c`),
-  10 (bouncing glow), and 11 (Tetris) have NOT been seen at all yet --
-  their AI/pathing/step timing, the shared pixel font (hand-designed, not
+  10 (bouncing glow), 11 (Tetris, including its line-clear/loss flash
+  colors), and 12 (Pong) have NOT been seen at all yet -- their
+  AI/pathing/step timing, the shared pixel font (hand-designed, not
   measured against how legible it actually is at 4 pixels tall), brick
-  breaker's and Tetris's paddle/placement-AI reaction, and bouncing
+  breaker's/Tetris's/Pong's paddle-or-placement AI reaction, and bouncing
   glow's periods/radius are all first attempts.
 - `boot_sequence.h`/`.c` — done for V1: a ~4-second, blocking power-on
   animation run once from `main.c`, before the main loop starts (nothing

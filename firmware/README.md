@@ -99,15 +99,22 @@ first on-hardware note-on test.
   the new shared `pixel_font.h`/`.c`), flashing a cross for sharp keys
   since a 4-row glyph can't draw "#". Not yet hardware-tested.
   `game_mode` done for V1: real, player-controlled snake, brick breaker,
-  and Tetris (distinct from `standby`'s autonomous versions of the same
-  three games below, which stay unchanged) -- hold SW3+SW4+SW5+SW6 to
-  toggle a menu, touch pad 1/2/3 to launch Snake/Brick Breaker/Tetris.
+  Tetris, and Pong (distinct from `standby`'s autonomous versions of the
+  same four games below, which stay unchanged) -- hold SW3+SW4+SW5+SW6
+  to toggle a menu, touch pad 1/2/3/4 to launch Snake/Brick
+  Breaker/Tetris/Pong.
   Snake: SW1-SW4 = left/right/up/down, eats food to grow, wraps at the
   edges, dies on self-collision. Brick Breaker: SW1/SW2 move the paddle.
   Tetris: SW1/SW2 move the piece, SW3 rotates (2 states per piece, no
-  wall kicks), SW4 hard-drops. Every game ending flashes underglow
-  red/purple, then returns to the menu.
-  Since Tetris/brick breaker reuse SW1/SW2, `octave_control.c` now
+  wall kicks), SW4 hard-drops; a line clear flashes underglow white
+  dramatically, topping out flashes it plain red (both real feedback).
+  Pong: two players on one board, column 1/6 paddles (SW1/SW2 up/down
+  left, SW5/SW6 up/down right -- unverified guess at which button the
+  user meant by "circle and the other one"), blue ball; a miss flashes
+  white and re-serves immediately rather than ending the round.
+  Every other game's ending flashes underglow red/purple, then returns
+  to the menu.
+  Since Tetris/brick breaker/Pong reuse SW1/SW2, `octave_control.c` now
   checks `tiles_game_mode_is_active()` and skips its own action logic
   entirely while a game owns the buttons -- without this, every in-game
   left/right press would have also silently stepped the octave or
@@ -216,9 +223,10 @@ flashable `.uf2`.
   most recently halved after still reading as too fast); animation 4's
   real-snake rework and animations 8 (brick breaker), 9 (marquee,
   including its font's move to the new shared `services/pixel_font.h`/
-  `.c`), 10 (bouncing glow, a "simple but elegant" white animation), and
-  11 (Tetris, AI-placed via a greedy landing-depth heuristic) have NOT
-  been seen on real hardware at all yet -- every one of their constants
+  `.c`), 10 (bouncing glow, a "simple but elegant" white animation),
+  11 (Tetris, AI-placed via a greedy landing-depth heuristic), and 12
+  (Pong, AI-vs-AI) have NOT been seen on real hardware at all yet --
+  every one of their constants
   (`EQ_PEAK_DECAY_PER_MS`, `CIRCLE_PERIOD_MS`,
   `POWER_SAVING_PULSE_PERIOD_MS`, `BOUNCE_ROW_PERIOD_MS`,
   `TETRIS_STEP_MS`, etc.) is a first guess. `BUTTON_STANDBY_BRIGHTNESS_SCALE`
@@ -249,14 +257,20 @@ flashable `.uf2`.
   while a game owns them -- see `services/game_mode.c`'s entry below for
   the bug this fixes; the gate itself hasn't been hardware-tested.
 - `services/game_mode.c` has not been hardware-tested at all -- the
-  entry-gesture hold duration, every step-timing constant for all three
+  entry-gesture hold duration, every step-timing constant for all four
   games, and the round-end flash timing are first attempts. Whether
   snake's edge-wrap (chosen over instant wall-death as friendlier on
   such a small board) actually feels right in practice, and whether
   holding 4 buttons simultaneously is comfortable/reliable to do on the
   real hardware at all, are both open questions this hasn't been able
   to answer yet. Tetris is brand new: its simplified 2-state rotation
-  (no wall kicks), SW1-4 control mapping, and colors are all unverified.
+  (no wall kicks), SW1-4 control mapping, colors, and its white
+  line-clear / red topping-out flashes are all unverified. Pong is also
+  brand new and carries the most speculative control mapping of any
+  game here -- SW5/SW6 for the right paddle is a guess at what the user
+  meant by "circle and the other button next to it"; if wrong, it's a
+  one-line fix in `gp_handle_input()`/`gm_handle_menu_selection()`'s
+  pad-4 wiring, not a structural change.
   Building Tetris also surfaced a real, previously-unnoticed bug
   predating it -- `octave_control.c`'s SW1/SW2 handling ran
   unconditionally regardless of game mode, so every in-game left/right

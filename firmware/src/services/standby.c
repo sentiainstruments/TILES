@@ -1047,6 +1047,10 @@ static tiles_standby_color_t anim_bounce(uint8_t row, uint8_t col, uint32_t now_
 #define TETRIS_LOCKED_LEVEL 0.8f
 #define TETRIS_FLASH_DURATION_MS 2200u
 #define TETRIS_FLASH_TOGGLE_MS 260u
+/* Dramatic white underglow strobe on a line clear -- fast toggle, short
+ * total duration, so it reads as a flash rather than a glow. */
+#define TETRIS_LINE_CLEAR_FLASH_MS 450u
+#define TETRIS_LINE_CLEAR_TOGGLE_MS 90u
 #define TETRIS_NUM_PIECE_TYPES 7u
 
 typedef struct {
@@ -1088,6 +1092,7 @@ static int8_t s_tetris_target_row; /* the AI's chosen landing row for the curren
 static tetris_phase_t s_tetris_phase;
 static uint32_t s_tetris_last_step_ms;
 static uint32_t s_tetris_round_end_ms;
+static uint32_t s_tetris_line_clear_flash_ms;
 static bool s_tetris_inited;
 
 static const tetris_offset_t *tetris_offsets(uint8_t piece_type, uint8_t rotation) {
@@ -1173,8 +1178,11 @@ static void tetris_spawn(void) {
 
 /* Same bottom-up, recheck-same-row-after-a-shift sweep as
  * game_mode.c's gt_clear_lines() -- correctly collapses multiple
- * simultaneous line clears in one pass. */
-static void tetris_clear_lines(void) {
+ * simultaneous line clears in one pass. Returns how many rows were
+ * cleared, so tetris_lock() below can trigger the line-clear flash only
+ * when something actually cleared. */
+static uint8_t tetris_clear_lines(void) {
+    uint8_t cleared = 0u;
     int8_t row = (int8_t)(TETRIS_ROWS - 1u);
     while (row >= 0) {
         bool full = true;
@@ -1188,6 +1196,7 @@ static void tetris_clear_lines(void) {
             row--;
             continue;
         }
+        cleared++;
         for (int8_t r = row; r > 0; r--) {
             for (uint8_t c = 0; c < TETRIS_COLS; c++) {
                 s_tetris_board[r][c] = s_tetris_board[r - 1][c];
@@ -1197,6 +1206,7 @@ static void tetris_clear_lines(void) {
             s_tetris_board[0][c] = 0u;
         }
     }
+    return cleared;
 }
 
 static void tetris_new_round(uint32_t now_ms) {
@@ -1208,6 +1218,10 @@ static void tetris_new_round(uint32_t now_ms) {
     s_tetris_phase = TETRIS_PHASE_PLAYING;
     tetris_spawn();
     s_tetris_last_step_ms = now_ms;
+    /* "Already long past" rather than 0 -- 0 could still read as
+     * "within the flash window" if this round starts within
+     * TETRIS_LINE_CLEAR_FLASH_MS of boot. */
+    s_tetris_line_clear_flash_ms = now_ms - TETRIS_LINE_CLEAR_FLASH_MS - 1u;
 }
 
 static void tetris_lock(uint32_t now_ms) {
@@ -1217,7 +1231,9 @@ static void tetris_lock(uint32_t now_ms) {
         int8_t c = (int8_t)(s_tetris_origin_col + offsets[i].dc);
         s_tetris_board[r - (int8_t)TETRIS_MIN_ROW][c - (int8_t)TETRIS_MIN_COL] = (uint8_t)(s_tetris_piece_type + 1u);
     }
-    tetris_clear_lines();
+    if (tetris_clear_lines() > 0u) {
+        s_tetris_line_clear_flash_ms = now_ms;
+    }
     tetris_spawn();
     if (!tetris_fits(s_tetris_piece_type, s_tetris_rotation, s_tetris_origin_row, s_tetris_origin_col)) {
         /* Nowhere for the next piece to go -- topped out. */
@@ -1282,18 +1298,177 @@ static tiles_standby_color_t anim_tetris(uint8_t row, uint8_t col, uint32_t now_
     return white(0.0f);
 }
 
+/* Topping out (game lost) blinks plain red -- real feedback: "when game
+ * is lost it should flash red," not the red/purple alternation
+ * brick breaker's win/lose flash uses. A line clear (still playing) is
+ * a separate, much shorter dramatic white strobe instead. */
 static tiles_standby_color_t tetris_underglow(uint8_t pixel_index, uint32_t now_ms) {
     (void)pixel_index;
-    if (s_tetris_phase != TETRIS_PHASE_ROUND_END) {
+    if (s_tetris_phase == TETRIS_PHASE_ROUND_END) {
+        uint32_t toggle = (now_ms - s_tetris_round_end_ms) / TETRIS_FLASH_TOGGLE_MS;
+        if ((toggle % 2u) == 0u) {
+            tiles_standby_color_t red = {1.0f, 0.0f, 0.0f};
+            return red;
+        }
         return white(0.0f);
     }
-    uint32_t toggle = (now_ms - s_tetris_round_end_ms) / TETRIS_FLASH_TOGGLE_MS;
-    if ((toggle % 2u) == 0u) {
-        tiles_standby_color_t red = {1.0f, 0.0f, 0.0f};
-        return red;
+    if (now_ms - s_tetris_line_clear_flash_ms < TETRIS_LINE_CLEAR_FLASH_MS) {
+        uint32_t toggle = (now_ms - s_tetris_line_clear_flash_ms) / TETRIS_LINE_CLEAR_TOGGLE_MS;
+        if ((toggle % 2u) == 0u) {
+            return white(1.0f);
+        }
     }
-    tiles_standby_color_t purple = {0.6f, 0.0f, 1.0f};
-    return purple;
+    return white(0.0f);
+}
+
+/* ---- Animation 12: Pong ----------------------------------------------------
+ * The AI-vs-AI autonomous counterpart to game_mode.c's real, two-player
+ * Pong -- same court/paddle/ball layout and colors, deliberately
+ * separate state and code (same precedent as every other animation/
+ * game pair here). Both paddles use the same simple "move at most one
+ * row per step toward the ball" heuristic brick breaker's paddle AI
+ * already established, so rallies essentially never end on their own; a
+ * miss (on the rare occasion the ball reverses faster than a paddle can
+ * react) triggers a brief white underglow flash and an immediate
+ * re-serve, the same "stay in this animation, just flash and continue"
+ * behavior the interactive version uses instead of a win/lose
+ * round-end. Function buttons stay off. */
+
+#define PONG_MIN_ROW 1u /* row 0 is buttons, not part of the court */
+#define PONG_MAX_ROW TILES_GRID_MAX_ROW
+#define PONG_PADDLE_COL_LEFT TILES_GRID_MIN_COL
+#define PONG_PADDLE_COL_RIGHT TILES_GRID_MAX_COL
+#define PONG_PADDLE_TOP_MIN PONG_MIN_ROW /* paddle spans [top, top+1] */
+#define PONG_PADDLE_TOP_MAX (TILES_GRID_MAX_ROW - 1u)
+#define PONG_STEP_MS 220u /* faster than the interactive version -- nothing here waits on a player */
+#define PONG_POINT_FLASH_MS 500u
+#define PONG_POINT_FLASH_TOGGLE_MS 110u
+#define PONG_PADDLE_LEVEL 1.0f
+#define PONG_BALL_LEVEL 1.0f
+
+static int8_t s_pong_left_paddle_top;
+static int8_t s_pong_right_paddle_top;
+static int8_t s_pong_ball_row;
+static int8_t s_pong_ball_col;
+static int8_t s_pong_ball_drow;
+static int8_t s_pong_ball_dcol;
+static uint32_t s_pong_last_step_ms;
+static uint32_t s_pong_point_flash_ms;
+static bool s_pong_inited;
+
+static void pong_serve(uint32_t now_ms) {
+    s_pong_ball_row = (int8_t)(PONG_MIN_ROW + (rand() % (PONG_MAX_ROW - PONG_MIN_ROW + 1u)));
+    s_pong_ball_col = ((rand() % 2) == 0) ? 3 : 4; /* the two middle columns of 1-6 */
+    s_pong_ball_drow = ((rand() % 2) == 0) ? -1 : 1;
+    s_pong_ball_dcol = ((rand() % 2) == 0) ? -1 : 1;
+    s_pong_last_step_ms = now_ms;
+}
+
+static void pong_new_round(uint32_t now_ms) {
+    s_pong_left_paddle_top = 2;
+    s_pong_right_paddle_top = 2;
+    pong_serve(now_ms);
+    /* "Already long past" rather than 0 -- same reasoning as Tetris's
+     * line-clear flash above. */
+    s_pong_point_flash_ms = now_ms - PONG_POINT_FLASH_MS - 1u;
+}
+
+/* Moves *paddle_top by at most one row toward covering the ball's
+ * current row -- the same "at most one column/row per step" simple AI
+ * anim_brick_breaker's paddle already uses. */
+static void pong_ai_track(int8_t *paddle_top) {
+    if (s_pong_ball_row < *paddle_top) {
+        (*paddle_top)--;
+    } else if (s_pong_ball_row > (int8_t)(*paddle_top + 1)) {
+        (*paddle_top)++;
+    }
+    if (*paddle_top < (int8_t)PONG_PADDLE_TOP_MIN) {
+        *paddle_top = (int8_t)PONG_PADDLE_TOP_MIN;
+    }
+    if (*paddle_top > (int8_t)PONG_PADDLE_TOP_MAX) {
+        *paddle_top = (int8_t)PONG_PADDLE_TOP_MAX;
+    }
+}
+
+static void pong_step(uint32_t now_ms) {
+    int8_t new_row = (int8_t)(s_pong_ball_row + s_pong_ball_drow);
+    if (new_row < (int8_t)PONG_MIN_ROW || new_row > (int8_t)PONG_MAX_ROW) {
+        s_pong_ball_drow = (int8_t)(-s_pong_ball_drow);
+        new_row = (int8_t)(s_pong_ball_row + s_pong_ball_drow);
+    }
+
+    int8_t new_col = (int8_t)(s_pong_ball_col + s_pong_ball_dcol);
+    if (new_col < (int8_t)PONG_PADDLE_COL_LEFT) {
+        if (new_row >= s_pong_left_paddle_top && new_row <= (int8_t)(s_pong_left_paddle_top + 1)) {
+            s_pong_ball_dcol = 1;
+            new_col = (int8_t)PONG_PADDLE_COL_LEFT;
+        } else {
+            s_pong_point_flash_ms = now_ms;
+            pong_serve(now_ms);
+            return;
+        }
+    } else if (new_col > (int8_t)PONG_PADDLE_COL_RIGHT) {
+        if (new_row >= s_pong_right_paddle_top && new_row <= (int8_t)(s_pong_right_paddle_top + 1)) {
+            s_pong_ball_dcol = -1;
+            new_col = (int8_t)PONG_PADDLE_COL_RIGHT;
+        } else {
+            s_pong_point_flash_ms = now_ms;
+            pong_serve(now_ms);
+            return;
+        }
+    }
+
+    s_pong_ball_row = new_row;
+    s_pong_ball_col = new_col;
+
+    pong_ai_track(&s_pong_left_paddle_top);
+    pong_ai_track(&s_pong_right_paddle_top);
+}
+
+static void pong_update(uint32_t now_ms) {
+    if (!s_pong_inited) {
+        pong_new_round(now_ms);
+        s_pong_inited = true;
+        return;
+    }
+    if (now_ms - s_pong_last_step_ms < PONG_STEP_MS) {
+        return;
+    }
+    s_pong_last_step_ms = now_ms;
+    pong_step(now_ms);
+}
+
+static tiles_standby_color_t anim_pong(uint8_t row, uint8_t col, uint32_t now_ms) {
+    pong_update(now_ms);
+
+    if (row == 0u) {
+        return white(0.0f);
+    }
+
+    if ((int8_t)row == s_pong_ball_row && (int8_t)col == s_pong_ball_col) {
+        /* Checked before either paddle so it draws on top during a
+         * bounce -- same precedent as brick breaker's ball. */
+        tiles_standby_color_t ball = {0.0f, 0.0f, PONG_BALL_LEVEL};
+        return ball;
+    }
+    if (col == PONG_PADDLE_COL_LEFT && (int8_t)row >= s_pong_left_paddle_top &&
+        (int8_t)row <= (int8_t)(s_pong_left_paddle_top + 1)) {
+        return white(PONG_PADDLE_LEVEL);
+    }
+    if (col == PONG_PADDLE_COL_RIGHT && (int8_t)row >= s_pong_right_paddle_top &&
+        (int8_t)row <= (int8_t)(s_pong_right_paddle_top + 1)) {
+        return white(PONG_PADDLE_LEVEL);
+    }
+    return white(0.0f);
+}
+
+static tiles_standby_color_t pong_underglow(uint8_t pixel_index, uint32_t now_ms) {
+    (void)pixel_index;
+    if (now_ms - s_pong_point_flash_ms >= PONG_POINT_FLASH_MS) {
+        return white(0.0f);
+    }
+    bool on = (((now_ms - s_pong_point_flash_ms) / PONG_POINT_FLASH_TOGGLE_MS) % 2u) == 0u;
+    return white(on ? 1.0f : 0.0f);
 }
 
 /* ---- Animation registry + shared render -------------------------------- */
@@ -1304,7 +1479,7 @@ typedef tiles_standby_color_t (*underglow_fn_t)(uint8_t pixel_index, uint32_t no
 static const field_fn_t s_animations[] = {
     anim_wave,           anim_glow,     anim_shooting_stars, anim_snake,
     anim_rgb_showcase,   anim_equalizer, anim_underglow_circle,
-    anim_brick_breaker,  anim_marquee,  anim_bounce, anim_tetris,
+    anim_brick_breaker,  anim_marquee,  anim_bounce, anim_tetris, anim_pong,
 };
 /* Parallel to s_animations[] -- NULL means underglow samples the same
  * field the pads use at its anchor points (animations 1-5 and 10, where
@@ -1318,7 +1493,7 @@ static const field_fn_t s_animations[] = {
  * the marquee's underglow is simply always off. */
 static const underglow_fn_t s_animation_underglow_override[] = {
     NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow, bb_underglow, marquee_underglow, NULL,
-    tetris_underglow,
+    tetris_underglow, pong_underglow,
 };
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
 

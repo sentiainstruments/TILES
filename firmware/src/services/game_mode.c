@@ -24,12 +24,14 @@ typedef enum {
     GM_STATE_PLAYING_SNAKE,
     GM_STATE_PLAYING_BRICK,
     GM_STATE_PLAYING_TETRIS,
+    GM_STATE_PLAYING_PONG,
     GM_STATE_ROUND_END,
 } gm_state_t;
 
 static gm_state_t s_gm_state;
 static uint32_t s_gm_last_frame_ms;
 static uint32_t s_gm_round_end_ms;
+static bool s_gm_round_end_red_only;
 
 static bool s_gm_combo_was_held;
 static bool s_gm_combo_fired;
@@ -38,6 +40,7 @@ static uint32_t s_gm_hold_start_ms;
 static bool s_gm_prev_pad1_touched;
 static bool s_gm_prev_pad2_touched;
 static bool s_gm_prev_pad3_touched;
+static bool s_gm_prev_pad4_touched;
 
 /* ---- Interactive snake ---------------------------------------------------
  * Player-controlled version of standby.c's autonomous snake -- separate
@@ -110,9 +113,13 @@ static void gs_start(uint32_t now_ms) {
     s_gs_prev_down = false;
 }
 
-static void gm_start_round_end(uint32_t now_ms) {
+/* red_only: Tetris topping out flashes plain red (real feedback: "when
+ * game is lost it should flash red"), while snake/brick breaker keep
+ * the original red/purple alternation -- see render_round_end() below. */
+static void gm_start_round_end(uint32_t now_ms, bool red_only) {
     s_gm_state = GM_STATE_ROUND_END;
     s_gm_round_end_ms = now_ms;
+    s_gm_round_end_red_only = red_only;
 }
 
 static void gs_try_set_direction(int8_t dr, int8_t dc) {
@@ -176,7 +183,7 @@ static void gs_step(uint32_t now_ms) {
     }
 
     if (gs_cell_in_body(nr, nc)) {
-        gm_start_round_end(now_ms);
+        gm_start_round_end(now_ms, false);
         return;
     }
 
@@ -184,7 +191,7 @@ static void gs_step(uint32_t now_ms) {
     uint8_t new_length = ate ? (uint8_t)(s_gs_length + 1u) : s_gs_length;
     if (new_length > GS_MAX_LENGTH) {
         /* Board effectively full -- treat it as a win, same flash. */
-        gm_start_round_end(now_ms);
+        gm_start_round_end(now_ms, false);
         return;
     }
 
@@ -322,7 +329,7 @@ static void gb_step(uint32_t now_ms) {
             }
         }
         if (all_dead) {
-            gm_start_round_end(now_ms);
+            gm_start_round_end(now_ms, false);
         }
     } else if (new_row > (int8_t)GB_PADDLE_ROW) {
         int8_t paddle_min = (int8_t)(s_gb_paddle_center - 1);
@@ -331,7 +338,7 @@ static void gb_step(uint32_t now_ms) {
             s_gb_ball_drow = -1;
             new_row = (int8_t)GB_PADDLE_ROW;
         } else {
-            gm_start_round_end(now_ms);
+            gm_start_round_end(now_ms, false);
         }
     }
 
@@ -417,6 +424,10 @@ static void render_brick(uint32_t now_ms) {
 #define GT_STEP_MS 550u
 #define GT_SPAWN_COL 3 /* leaves room either side for every piece's max width (4) */
 #define GT_NUM_PIECE_TYPES 7u
+/* Dramatic white underglow strobe on a line clear -- fast toggle, short
+ * total duration, so it reads as a flash rather than a glow. */
+#define GT_LINE_CLEAR_FLASH_MS 450u
+#define GT_LINE_CLEAR_TOGGLE_MS 90u
 
 typedef struct {
     int8_t dr;
@@ -449,6 +460,7 @@ static uint8_t s_gt_rotation;
 static int8_t s_gt_origin_row;
 static int8_t s_gt_origin_col;
 static uint32_t s_gt_last_step_ms;
+static uint32_t s_gt_line_clear_flash_ms;
 static bool s_gt_prev_left;
 static bool s_gt_prev_right;
 static bool s_gt_prev_rotate;
@@ -487,8 +499,11 @@ static void gt_spawn(void) {
  * above it down by one and the top row clears; the same row index is
  * rechecked (not advanced) afterward since it now holds whatever
  * shifted into it -- this is what makes multiple simultaneous clears
- * collapse correctly in one pass. */
-static void gt_clear_lines(void) {
+ * collapse correctly in one pass. Returns how many rows were cleared,
+ * so gt_lock() below can trigger the line-clear flash only when
+ * something actually cleared. */
+static uint8_t gt_clear_lines(void) {
+    uint8_t cleared = 0u;
     int8_t row = (int8_t)(GT_ROWS - 1u);
     while (row >= 0) {
         bool full = true;
@@ -502,6 +517,7 @@ static void gt_clear_lines(void) {
             row--;
             continue;
         }
+        cleared++;
         for (int8_t r = row; r > 0; r--) {
             for (uint8_t c = 0; c < GT_COLS; c++) {
                 s_gt_board[r][c] = s_gt_board[r - 1][c];
@@ -511,6 +527,7 @@ static void gt_clear_lines(void) {
             s_gt_board[0][c] = 0u;
         }
     }
+    return cleared;
 }
 
 static void gt_lock(uint32_t now_ms) {
@@ -520,11 +537,17 @@ static void gt_lock(uint32_t now_ms) {
         int8_t c = (int8_t)(s_gt_origin_col + offsets[i].dc);
         s_gt_board[r - (int8_t)GT_MIN_ROW][c - (int8_t)GT_MIN_COL] = (uint8_t)(s_gt_piece_type + 1u);
     }
-    gt_clear_lines();
+    if (gt_clear_lines() > 0u) {
+        /* Dramatic white underglow strobe -- see render_tetris()'s
+         * underglow loop below. */
+        s_gt_line_clear_flash_ms = now_ms;
+    }
     gt_spawn();
     if (!gt_fits(s_gt_piece_type, s_gt_rotation, s_gt_origin_row, s_gt_origin_col)) {
-        /* Nowhere for the next piece to go -- topped out. */
-        gm_start_round_end(now_ms);
+        /* Nowhere for the next piece to go -- topped out. Plain red,
+         * not the red/purple every other game's round-end uses -- real
+         * feedback: "when game is lost it should flash red." */
+        gm_start_round_end(now_ms, true);
     }
 }
 
@@ -536,6 +559,10 @@ static void gt_start(uint32_t now_ms) {
     }
     gt_spawn();
     s_gt_last_step_ms = now_ms;
+    /* Set to "already long past" rather than 0 -- 0 could still read as
+     * "within the flash window" if this round starts within
+     * GT_LINE_CLEAR_FLASH_MS of boot. */
+    s_gt_line_clear_flash_ms = now_ms - GT_LINE_CLEAR_FLASH_MS - 1u;
     s_gt_prev_left = false;
     s_gt_prev_right = false;
     s_gt_prev_rotate = false;
@@ -592,7 +619,6 @@ static void gt_update(uint32_t now_ms) {
 #define GT_LOCKED_LEVEL 0.8f
 
 static void render_tetris(uint32_t now_ms) {
-    (void)now_ms;
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
     }
@@ -626,8 +652,190 @@ static void render_tetris(uint32_t now_ms) {
                                             active->b);
     }
 
+    bool flashing = (now_ms - s_gt_line_clear_flash_ms) < GT_LINE_CLEAR_FLASH_MS;
+    bool flash_on = flashing && (((now_ms - s_gt_line_clear_flash_ms) / GT_LINE_CLEAR_TOGGLE_MS) % 2u) == 0u;
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
-        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+        if (flash_on) {
+            tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 1.0f, 1.0f);
+        } else {
+            tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+        }
+    }
+}
+
+/* ---- Interactive Pong -------------------------------------------------------
+ * Two-player, same board: column 1 is the left paddle, column 6 is the
+ * right paddle, both 2 pads tall (white); the ball is a single blue
+ * dot bouncing between them. Left paddle: SW1 ("-") up, SW2 ("+") down.
+ * Right paddle: SW5 (square) up, SW6 (circle) down -- SW5/SW6 chosen as
+ * the mirror-image pair to SW1/SW2 (leftmost two vs. rightmost two of
+ * the six buttons); flag this to the user if "square" wasn't the button
+ * they meant by "the other one next to circle."
+ *
+ * Deliberately does NOT go through the shared win/lose round-end
+ * machinery every other game here uses -- a rally on a board this small
+ * can end in a couple of seconds, and bouncing back out to the menu
+ * after every single missed point would be far more disruptive than
+ * useful. Instead a miss triggers a short local white underglow flash
+ * (gp_point_scored()) and the ball re-serves immediately, staying in
+ * GM_STATE_PLAYING_PONG the whole time; the only way out is the
+ * standard SW3+SW4+SW5+SW6 hold every game shares (unambiguous since it
+ * needs SW3/SW4 too, neither of which Pong uses). */
+
+#define GP_MIN_ROW 1u /* row 0 is buttons, not part of the court */
+#define GP_MAX_ROW TILES_GRID_MAX_ROW
+#define GP_PADDLE_COL_LEFT TILES_GRID_MIN_COL
+#define GP_PADDLE_COL_RIGHT TILES_GRID_MAX_COL
+#define GP_PADDLE_TOP_MIN GP_MIN_ROW           /* paddle spans [top, top+1] */
+#define GP_PADDLE_TOP_MAX (TILES_GRID_MAX_ROW - 1u)
+#define GP_STEP_MS 260u
+#define GP_POINT_FLASH_MS 500u
+#define GP_POINT_FLASH_TOGGLE_MS 110u
+#define GP_PADDLE_LEVEL 1.0f
+#define GP_BALL_LEVEL 1.0f
+
+static int8_t s_gp_left_paddle_top;  /* GP_PADDLE_TOP_MIN..GP_PADDLE_TOP_MAX */
+static int8_t s_gp_right_paddle_top;
+static int8_t s_gp_ball_row;
+static int8_t s_gp_ball_col;
+static int8_t s_gp_ball_drow;
+static int8_t s_gp_ball_dcol;
+static uint32_t s_gp_last_step_ms;
+static uint32_t s_gp_point_flash_ms;
+static bool s_gp_prev_left_up;
+static bool s_gp_prev_left_down;
+static bool s_gp_prev_right_up;
+static bool s_gp_prev_right_down;
+
+static void gp_serve(uint32_t now_ms) {
+    s_gp_ball_row = (int8_t)(GP_MIN_ROW + (rand() % (GP_MAX_ROW - GP_MIN_ROW + 1u)));
+    s_gp_ball_col = ((rand() % 2) == 0) ? 3 : 4; /* the two middle columns of 1-6 */
+    s_gp_ball_drow = ((rand() % 2) == 0) ? -1 : 1;
+    s_gp_ball_dcol = ((rand() % 2) == 0) ? -1 : 1;
+    s_gp_last_step_ms = now_ms;
+}
+
+static void gp_start(uint32_t now_ms) {
+    s_gp_left_paddle_top = 2;
+    s_gp_right_paddle_top = 2;
+    gp_serve(now_ms);
+    /* "Already long past" rather than 0 -- see the same pattern/reasoning
+     * on Tetris's line-clear flash above. */
+    s_gp_point_flash_ms = now_ms - GP_POINT_FLASH_MS - 1u;
+    s_gp_prev_left_up = false;
+    s_gp_prev_left_down = false;
+    s_gp_prev_right_up = false;
+    s_gp_prev_right_down = false;
+}
+
+static void gp_handle_input(void) {
+    bool left_up = tiles_button_is_pressed(1u);    /* SW1 "-" */
+    bool left_down = tiles_button_is_pressed(2u);  /* SW2 "+" */
+    bool right_up = tiles_button_is_pressed(5u);   /* SW5 square */
+    bool right_down = tiles_button_is_pressed(6u); /* SW6 circle */
+
+    if (left_up && !s_gp_prev_left_up && s_gp_left_paddle_top > (int8_t)GP_PADDLE_TOP_MIN) {
+        s_gp_left_paddle_top--;
+    }
+    if (left_down && !s_gp_prev_left_down && s_gp_left_paddle_top < (int8_t)GP_PADDLE_TOP_MAX) {
+        s_gp_left_paddle_top++;
+    }
+    if (right_up && !s_gp_prev_right_up && s_gp_right_paddle_top > (int8_t)GP_PADDLE_TOP_MIN) {
+        s_gp_right_paddle_top--;
+    }
+    if (right_down && !s_gp_prev_right_down && s_gp_right_paddle_top < (int8_t)GP_PADDLE_TOP_MAX) {
+        s_gp_right_paddle_top++;
+    }
+
+    s_gp_prev_left_up = left_up;
+    s_gp_prev_left_down = left_down;
+    s_gp_prev_right_up = right_up;
+    s_gp_prev_right_down = right_down;
+}
+
+static void gp_point_scored(uint32_t now_ms) {
+    s_gp_point_flash_ms = now_ms;
+    gp_serve(now_ms);
+}
+
+static void gp_step(uint32_t now_ms) {
+    int8_t new_row = (int8_t)(s_gp_ball_row + s_gp_ball_drow);
+    if (new_row < (int8_t)GP_MIN_ROW || new_row > (int8_t)GP_MAX_ROW) {
+        s_gp_ball_drow = (int8_t)(-s_gp_ball_drow);
+        new_row = (int8_t)(s_gp_ball_row + s_gp_ball_drow);
+    }
+
+    int8_t new_col = (int8_t)(s_gp_ball_col + s_gp_ball_dcol);
+    if (new_col < (int8_t)GP_PADDLE_COL_LEFT) {
+        if (new_row >= s_gp_left_paddle_top && new_row <= (int8_t)(s_gp_left_paddle_top + 1)) {
+            s_gp_ball_dcol = 1;
+            new_col = (int8_t)GP_PADDLE_COL_LEFT;
+        } else {
+            gp_point_scored(now_ms);
+            return;
+        }
+    } else if (new_col > (int8_t)GP_PADDLE_COL_RIGHT) {
+        if (new_row >= s_gp_right_paddle_top && new_row <= (int8_t)(s_gp_right_paddle_top + 1)) {
+            s_gp_ball_dcol = -1;
+            new_col = (int8_t)GP_PADDLE_COL_RIGHT;
+        } else {
+            gp_point_scored(now_ms);
+            return;
+        }
+    }
+
+    s_gp_ball_row = new_row;
+    s_gp_ball_col = new_col;
+}
+
+static void gp_update(uint32_t now_ms) {
+    if (now_ms - s_gp_last_step_ms < GP_STEP_MS) {
+        return;
+    }
+    s_gp_last_step_ms = now_ms;
+    gp_step(now_ms);
+}
+
+static void render_pong(uint32_t now_ms) {
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+    }
+
+    for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
+        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+            uint8_t pad = board_pad_for_row_col(row, col);
+            float r = 0.0f;
+            float g = 0.0f;
+            float b = 0.0f;
+
+            if ((int8_t)row == s_gp_ball_row && (int8_t)col == s_gp_ball_col) {
+                /* Checked before either paddle so it draws on top during
+                 * a bounce, when they briefly occupy the same cell --
+                 * same precedent as brick breaker's ball. */
+                b = GP_BALL_LEVEL;
+            } else if (col == GP_PADDLE_COL_LEFT && (int8_t)row >= s_gp_left_paddle_top &&
+                       (int8_t)row <= (int8_t)(s_gp_left_paddle_top + 1)) {
+                r = GP_PADDLE_LEVEL;
+                g = GP_PADDLE_LEVEL;
+                b = GP_PADDLE_LEVEL;
+            } else if (col == GP_PADDLE_COL_RIGHT && (int8_t)row >= s_gp_right_paddle_top &&
+                       (int8_t)row <= (int8_t)(s_gp_right_paddle_top + 1)) {
+                r = GP_PADDLE_LEVEL;
+                g = GP_PADDLE_LEVEL;
+                b = GP_PADDLE_LEVEL;
+            }
+            tiles_lighting_set_standby_pad_rgb(pad, r, g, b);
+        }
+    }
+
+    bool flashing = (now_ms - s_gp_point_flash_ms) < GP_POINT_FLASH_MS;
+    bool flash_on = flashing && (((now_ms - s_gp_point_flash_ms) / GP_POINT_FLASH_TOGGLE_MS) % 2u) == 0u;
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        if (flash_on) {
+            tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 1.0f, 1.0f);
+        } else {
+            tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+        }
     }
 }
 
@@ -647,6 +855,8 @@ static void render_menu(uint32_t now_ms) {
                 tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 0.4f, 0.0f); /* brick breaker = orange */
             } else if (row == 1u && col == 3u) {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 1.0f, 1.0f); /* tetris = cyan */
+            } else if (row == 1u && col == 4u) {
+                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 1.0f); /* pong = blue, matches its ball */
             } else {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
             }
@@ -659,9 +869,17 @@ static void render_menu(uint32_t now_ms) {
 
 static void render_round_end(uint32_t now_ms) {
     uint32_t toggle = (now_ms - s_gm_round_end_ms) / GM_ROUND_END_TOGGLE_MS;
-    bool red_phase = (toggle % 2u) == 0u;
+    bool on_phase = (toggle % 2u) == 0u;
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
-        if (red_phase) {
+        if (s_gm_round_end_red_only) {
+            /* Tetris: plain red blink, not an alternation -- see
+             * gt_lock()'s comment. */
+            if (on_phase) {
+                tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 0.0f, 0.0f);
+            } else {
+                tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+            }
+        } else if (on_phase) {
             tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 0.0f, 0.0f);
         } else {
             tiles_lighting_set_standby_underglow_rgb(i, 0.6f, 0.0f, 1.0f);
@@ -677,6 +895,7 @@ static void gm_enter_menu(void) {
     s_gm_prev_pad1_touched = false;
     s_gm_prev_pad2_touched = false;
     s_gm_prev_pad3_touched = false;
+    s_gm_prev_pad4_touched = false;
     s_gm_last_frame_ms = 0u;
 }
 
@@ -695,10 +914,16 @@ static void gm_start_tetris(uint32_t now_ms) {
     gt_start(now_ms);
 }
 
+static void gm_start_pong(uint32_t now_ms) {
+    s_gm_state = GM_STATE_PLAYING_PONG;
+    gp_start(now_ms);
+}
+
 static void gm_handle_menu_selection(void) {
     bool pad1 = tiles_touch_is_touched(1u);
     bool pad2 = tiles_touch_is_touched(2u);
     bool pad3 = tiles_touch_is_touched(3u);
+    bool pad4 = tiles_touch_is_touched(4u);
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
     if (pad1 && !s_gm_prev_pad1_touched) {
@@ -707,10 +932,13 @@ static void gm_handle_menu_selection(void) {
         gm_start_brick(now_ms);
     } else if (pad3 && !s_gm_prev_pad3_touched) {
         gm_start_tetris(now_ms);
+    } else if (pad4 && !s_gm_prev_pad4_touched) {
+        gm_start_pong(now_ms);
     }
     s_gm_prev_pad1_touched = pad1;
     s_gm_prev_pad2_touched = pad2;
     s_gm_prev_pad3_touched = pad3;
+    s_gm_prev_pad4_touched = pad4;
 }
 
 static bool gm_combo_held(void) {
@@ -752,6 +980,7 @@ void tiles_game_mode_init(void) {
     s_gm_prev_pad1_touched = false;
     s_gm_prev_pad2_touched = false;
     s_gm_prev_pad3_touched = false;
+    s_gm_prev_pad4_touched = false;
 }
 
 void tiles_game_mode_scan(void) {
@@ -774,6 +1003,9 @@ void tiles_game_mode_scan(void) {
     } else if (s_gm_state == GM_STATE_PLAYING_TETRIS) {
         gt_handle_input(now_ms);
         gt_update(now_ms);
+    } else if (s_gm_state == GM_STATE_PLAYING_PONG) {
+        gp_handle_input();
+        gp_update(now_ms);
     } else if (s_gm_state == GM_STATE_ROUND_END) {
         if (now_ms - s_gm_round_end_ms >= GM_ROUND_END_FLASH_MS) {
             gm_enter_menu();
@@ -789,6 +1021,8 @@ void tiles_game_mode_scan(void) {
             render_brick(now_ms);
         } else if (s_gm_state == GM_STATE_PLAYING_TETRIS) {
             render_tetris(now_ms);
+        } else if (s_gm_state == GM_STATE_PLAYING_PONG) {
+            render_pong(now_ms);
         } else if (s_gm_state == GM_STATE_ROUND_END) {
             render_round_end(now_ms);
         }
