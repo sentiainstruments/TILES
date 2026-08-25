@@ -20,8 +20,13 @@
  * same shape so the three animations read as one coherent family (just
  * "how many pulses, then how long a rest") instead of three unrelated
  * effects -- direct fix for real feedback that magnitude 2 and 3 didn't
- * pulse evenly with each other. */
-#define OCTAVE_PULSE_UNIT_MS 450.0f
+ * pulse evenly with each other. Both periods below were slowed from an
+ * initial pass that read as "too fast" across the board on real
+ * hardware -- magnitude 1 especially, since it never rests between
+ * pulses and so needs to be noticeably slower on its own to still read
+ * as a calm single breath rather than a continuous flutter. */
+#define OCTAVE_PULSE1_PERIOD_MS 1400.0f
+#define OCTAVE_PULSE_UNIT_MS 650.0f
 #define OCTAVE_PULSE_REST_MS 650u
 #define OCTAVE_PULSE_REST_LEVEL 0.15f
 #define OCTAVE_PULSE_PEAK_LEVEL 1.0f
@@ -31,21 +36,25 @@ static float pulse_unit_level(float phase01) {
     return OCTAVE_PULSE_REST_LEVEL + (OCTAVE_PULSE_PEAK_LEVEL - OCTAVE_PULSE_REST_LEVEL) * raw;
 }
 
-/* Magnitude 1: the same unit pulse repeating back to back forever --
+/* Magnitude 1: the same pulse shape repeating back to back forever --
  * "pulses even," no burst/rest structure at all, just a steady regular
- * breathing. Replaces the earlier flat-solid magnitude-1 look per real
- * feedback that one click should read as pulsing too, not just lit. */
+ * breathing -- but at its own, slower period (OCTAVE_PULSE1_PERIOD_MS)
+ * rather than the burst unit magnitude 2/3 use, since a pulse that never
+ * pauses reads as much faster than the same period would in a burst.
+ * Replaces the earlier flat-solid magnitude-1 look per real feedback
+ * that one click should read as pulsing too, not just lit. */
 static float magnitude1_level(uint32_t now_ms) {
-    float phase = fmodf((float)now_ms / OCTAVE_PULSE_UNIT_MS, 1.0f);
+    float phase = fmodf((float)now_ms / OCTAVE_PULSE1_PERIOD_MS, 1.0f);
     return pulse_unit_level(phase);
 }
 
-/* Magnitude 2 and 3: `magnitude` unit pulses back to back, then a dim
- * (not fully dark) rest, then the whole burst repeats. Magnitude 3 is
- * literally magnitude 2's shape plus one more pulse appended before the
- * same rest -- not a separately-tuned animation -- per real feedback
- * that the two should be "the same, just with an additional pulse
- * followed by a rest in dim." Unmeasured -- a starting guess at pacing. */
+/* Magnitude 2 and 3: `magnitude` unit pulses (OCTAVE_PULSE_UNIT_MS each)
+ * back to back, then a dim (not fully dark) rest, then the whole burst
+ * repeats. Magnitude 3 is literally magnitude 2's shape plus one more
+ * pulse appended before the same rest -- not a separately-tuned
+ * animation -- per real feedback that the two should be "the same, just
+ * with an additional pulse followed by a rest in dim." Unmeasured --
+ * a starting guess at pacing. */
 static float magnitude_burst_level(uint8_t magnitude, uint32_t now_ms) {
     uint32_t burst_ms = (uint32_t)((float)magnitude * OCTAVE_PULSE_UNIT_MS);
     uint32_t cycle_ms = burst_ms + OCTAVE_PULSE_REST_MS;

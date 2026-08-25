@@ -128,7 +128,7 @@ not its code.
   repeat; magnitude 3 is exactly magnitude 2's shape with one more pulse
   appended before the same rest. The inactive direction (and both, at
   shift 0) stay dark.
-  Reworked twice from real hardware feedback: first pass slowed
+  Reworked three times from real hardware feedback: first pass slowed
   magnitude 2's period and replaced magnitude 3's original hard on/off
   blink-then-solid-hold with smooth pulses, but left the three
   magnitudes as separately-shaped animations that "didn't pulse evenly
@@ -136,16 +136,20 @@ not its code.
   `pulse_unit_level()` building block above so magnitude 2 and 3 are
   literally the same burst shape (just one more repeat before the rest)
   and magnitude 1 uses that same shape continuously instead of being
-  flat solid.
+  flat solid; third pass slowed both periods again after that rebuild
+  still read as too fast overall (magnitude 1 especially -- a pulse with
+  no rest between repeats reads as noticeably faster than the same
+  period would in a burst, so it now runs on its own longer
+  `OCTAVE_PULSE1_PERIOD_MS` rather than sharing the burst unit's period).
   Meant to become a general-purpose modifier eventually (held for other
   menus/combos, per the product's own direction) -- this module only
   implements the V1 default function, not a generic modifier framework;
   that's real future work, not built speculatively now.
   **Not hardware-verified:** every pattern timing constant
-  (`OCTAVE_PULSE_UNIT_MS`/`OCTAVE_PULSE_REST_MS`/`OCTAVE_PULSE_REST_LEVEL`)
-  is a first guess -- this rework is reasoned through against the
-  *previous* version's real feedback, not itself seen on real hardware
-  yet.
+  (`OCTAVE_PULSE1_PERIOD_MS`/`OCTAVE_PULSE_UNIT_MS`/`OCTAVE_PULSE_REST_MS`/
+  `OCTAVE_PULSE_REST_LEVEL`) is a first guess -- this rework is reasoned
+  through against the *previous* version's real feedback, not itself
+  seen on real hardware yet.
 - `game_mode.h`/`.c` — done for V1: real, player-controlled minigames --
   a genuinely separate feature from `standby.c`'s autonomous snake/
   brick-breaker animations (below), which stay exactly what they were
