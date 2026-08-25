@@ -14,7 +14,8 @@
  * services/haptics.h), standby idle animations plus a deeper
  * power-saving state after 15 minutes of total inactivity (see
  * services/standby.h), a power-on animation that doubles as a Hall
- * baseline re-capture window (see services/boot_sequence.h), and a
+ * baseline re-capture window (see services/boot_sequence.h), SW1/SW2's
+ * default octave-shift function (see services/octave_control.h), and a
  * serial-driven Hall calibration capture tool (rest/full-press/
  * max-press snapshots -- see diagnostics/calibration.h). Not yet built:
  * MPE, DIN, CV/gate, the usb_vendor diagnostics interface, a real
@@ -39,6 +40,7 @@
 #include "services/hall.h"
 #include "services/haptics.h"
 #include "services/lighting.h"
+#include "services/octave_control.h"
 #include "services/pedal.h"
 #include "services/power.h"
 #include "services/standby.h"
@@ -99,6 +101,12 @@ int main(void) {
      * button LEDs dark) before the physical outputs go live. */
     board_pca9685_enable_outputs();
 
+    /* SW1 ("-")/SW2 ("+")'s default function: octave shift, applied via
+     * services/note_map.c. Claims both buttons' LEDs via buttons.h's
+     * per-button override -- needs tiles_buttons_init() (above) already
+     * run. See services/octave_control.h. */
+    tiles_octave_control_init();
+
     /* Phase 3/5 bring-up: capacitive touch. */
     if (!tiles_touch_init()) {
         printf("[touch] one or both MPR121 controllers failed init\n");
@@ -118,10 +126,10 @@ int main(void) {
         printf("[hall] one or more pads failed sensor init -- see per-pad status\n");
     }
 
-    /* Power-on animation (~2s, blocking) -- also re-captures the Hall
-     * rest baseline right as it ends, now that a couple of settled
-     * seconds have passed since tiles_hall_init()'s very-first-instant
-     * capture above. See services/boot_sequence.h. */
+    /* Power-on animation (~4s, blocking) -- also re-captures the Hall
+     * rest baseline right as it ends, now that a few settled seconds
+     * have passed since tiles_hall_init()'s very-first-instant capture
+     * above. See services/boot_sequence.h. */
     if (!tiles_boot_sequence_run()) {
         printf("[boot_sequence] post-animation Hall baseline re-capture failed for at least one pad\n");
     }
@@ -159,6 +167,10 @@ int main(void) {
          * current by the time anything else runs. */
         tiles_power_scan();
         tiles_buttons_scan();
+        /* Must run after tiles_buttons_scan() so this iteration's
+         * debounced SW1/SW2 state is fresh. See
+         * services/octave_control.h. */
+        tiles_octave_control_scan();
         tiles_touch_scan();
         tiles_pedal_scan();
         /* Must run after the three scans above so this iteration's

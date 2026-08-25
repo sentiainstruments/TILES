@@ -5,6 +5,7 @@
 #include "pad_config.h"
 
 static tiles_scale_mode_t s_scale = TILES_SCALE_CHROMATIC;
+static int8_t s_octave_shift = 0;
 
 void tiles_note_map_set_scale(tiles_scale_mode_t scale) {
     s_scale = scale;
@@ -12,6 +13,20 @@ void tiles_note_map_set_scale(tiles_scale_mode_t scale) {
 
 tiles_scale_mode_t tiles_note_map_get_scale(void) {
     return s_scale;
+}
+
+void tiles_note_map_set_octave_shift(int8_t octaves) {
+    if (octaves > (int8_t)TILES_NOTE_MAP_MAX_OCTAVE_SHIFT) {
+        octaves = (int8_t)TILES_NOTE_MAP_MAX_OCTAVE_SHIFT;
+    }
+    if (octaves < -(int8_t)TILES_NOTE_MAP_MAX_OCTAVE_SHIFT) {
+        octaves = -(int8_t)TILES_NOTE_MAP_MAX_OCTAVE_SHIFT;
+    }
+    s_octave_shift = octaves;
+}
+
+int8_t tiles_note_map_get_octave_shift(void) {
+    return s_octave_shift;
 }
 
 uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
@@ -36,7 +51,7 @@ uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
             break;
     }
 
-    int note = (int)TILES_NOTE_MAP_BASE_NOTE + interval;
+    int note = (int)TILES_NOTE_MAP_BASE_NOTE + interval + (int)s_octave_shift * 12;
     if (note < 0) {
         note = 0;
     }

@@ -1,19 +1,27 @@
 #pragma once
 
 /*
- * Power-on animation, run once at boot: a white "rain" floods down from
- * the function buttons through the pad grid (underglow stays off), then
- * fades to complete dark, then a single, slow, smoothstep-eased "Sentia
- * Instruments Magenta" (#FF00FF) pulse across pads + underglow (NOT
- * buttons -- see run_phase3_magenta_pulse() in boot_sequence.c)
- * finishes it -- then normal operation begins.
+ * Power-on animation, run once at boot: a white "rain" floods down
+ * through the pad grid, conceptually originating just above pad row 1
+ * (where the function buttons sit) and flowing down to row 4
+ * (underglow stays off), then fades to complete dark, then a single,
+ * slow, smoothstep-eased "Sentia Instruments Magenta" (#FF00FF) pulse
+ * across pads + underglow finishes it -- then normal operation begins.
+ * Function buttons are held dark for the ENTIRE sequence (zeroed once
+ * up front, never written again) -- an earlier version lit them as part
+ * of the rain (they're logically the flood's source) and again during
+ * the magenta pulse, both of which read as wrong once seen on real
+ * hardware: they can't show magenta at all (plain monochrome PWM, not
+ * addressable RGB), and even the white rain glow on them didn't read as
+ * intended. The rain's downward direction (from real feedback -- an
+ * earlier version rose from the bottom-center outward instead) still
+ * conceptually starts at the buttons' position, it just doesn't light
+ * them.
  *
- * Direction and pacing are both the result of real feedback on an
- * earlier version: it originally rose from the bottom-center outward
- * (reversed -- flows down from the buttons now, "like rain/flooding")
- * and used linear, fairly quick, narrow-edged transitions that read as
- * "jumpy" (now smoothstep-eased throughout, wider soft edges, longer
- * durations).
+ * Pacing is also the result of real feedback: the earlier version used
+ * linear, fairly quick, narrow-edged transitions that read as "jumpy" --
+ * now smoothstep-eased throughout, with wider soft edges and longer
+ * durations.
  *
  * Also uses the ~4 seconds this takes productively: hall.c's rest
  * baseline is captured once at tiles_hall_init(), right at the very

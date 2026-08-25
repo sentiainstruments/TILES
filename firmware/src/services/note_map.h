@@ -55,6 +55,25 @@ typedef enum {
 void tiles_note_map_set_scale(tiles_scale_mode_t scale);
 tiles_scale_mode_t tiles_note_map_get_scale(void);
 
+/* Octave shift applied on top of the scale-derived note, in whole
+ * octaves (each unit = +/-12 semitones). Driven by services/octave_control.c
+ * (SW1 "-"/SW2 "+", the default function of those two buttons) but
+ * lives here, not there, since it's a note-mapping parameter exactly
+ * like the scale above -- one owner for "how a pad's position becomes a
+ * MIDI note."
+ *
+ * Clamped to +/-TILES_NOTE_MAP_MAX_OCTAVE_SHIFT: chosen to match the
+ * highest octave_control.c LED pattern (3) and because it keeps the
+ * full 24-pad chromatic span (BASE_NOTE..BASE_NOTE+23) safely inside
+ * 0-127 at the extremes (12..107) with real margin either side, so the
+ * limit is never actually reached by the 0-127 clamp in
+ * tiles_note_map_get_note() below -- it's a deliberate UX bound, not a
+ * MIDI-range safety clamp. */
+#define TILES_NOTE_MAP_MAX_OCTAVE_SHIFT 3
+void tiles_note_map_set_octave_shift(int8_t octaves);
+int8_t tiles_note_map_get_octave_shift(void);
+
 /* MIDI note number (0-127, clamped) for logical pad (1-24) under the
- * currently selected scale. Returns 0 for an out-of-range pad. */
+ * currently selected scale and octave shift. Returns 0 for an
+ * out-of-range pad. */
 uint8_t tiles_note_map_get_note(uint8_t logical_pad);

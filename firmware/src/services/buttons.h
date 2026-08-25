@@ -53,6 +53,31 @@ void tiles_buttons_set_standby_active(bool active);
  * active. */
 void tiles_buttons_set_standby_led(uint8_t button_id, float level_0_to_1);
 
+/* ---- Per-button LED override (e.g. services/octave_control.c) ----------
+ *
+ * For a button whose default "LED follows press" behavior has been
+ * replaced by some other persistent function (e.g. the octave-shift
+ * indicator on SW1/SW2) -- distinct from the standby hooks above, which
+ * apply to all 6 buttons at once only while idle; this applies to one
+ * button at a time, at any time, including during normal operation.
+ *
+ * true: tiles_buttons_scan()'s normal "LED follows press" behavior stops
+ * touching this button's LED (press/release tracking and
+ * tiles_button_is_pressed() keep working normally), leaving it free for
+ * tiles_buttons_set_override_led() below. false: immediately re-asserts
+ * the LED from its current debounced state, same reasoning as
+ * tiles_buttons_set_standby_active()'s false case. */
+void tiles_buttons_set_override_active(uint8_t button_id, bool active);
+
+/* Sets one overridden button's LED to a smooth 0.0-1.0 brightness.
+ * No-op unless that button's override is active. Also a transparent
+ * no-op while standby is active -- standby's own animation already
+ * writes every button each frame, so a controller can call this every
+ * scan unconditionally without needing to know standby exists (same
+ * pattern touch.c relies on for tiles_lighting_set_pad_press()); the
+ * override's own next scan after standby ends repaints it correctly. */
+void tiles_buttons_set_override_led(uint8_t button_id, float level_0_to_1);
+
 /* ---- Shared-resource accessor (services/haptics.c) ----------------------
  *
  * Returns the already-initialized tiles_pca9685_t for

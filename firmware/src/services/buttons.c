@@ -32,6 +32,7 @@ static bool s_raw_pressed[NUM_BUTTONS];
 static bool s_debounced[NUM_BUTTONS];
 static uint32_t s_last_change_ms[NUM_BUTTONS];
 static bool s_standby_active;
+static bool s_override_active[NUM_BUTTONS];
 
 /* Public (see buttons.h) so services/haptics.c can reach the same two
  * already-woken, already-configured chip instances this file owns,
@@ -107,6 +108,12 @@ static void set_button_led_level(uint8_t index, float level_0_to_1) {
 
 static void refresh_all_button_leds(void) {
     for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
+        if (s_override_active[i]) {
+            /* Owned by an override controller (e.g. octave_control.c),
+             * not the default press-follow behavior -- leave it alone;
+             * that controller's own next scan repaints it correctly. */
+            continue;
+        }
         set_button_led(i, s_debounced[i]);
     }
 }
@@ -123,6 +130,7 @@ bool tiles_buttons_init(void) {
         s_raw_pressed[i] = false;
         s_debounced[i] = false;
         s_last_change_ms[i] = 0;
+        s_override_active[i] = false;
     }
     s_standby_active = false;
 
@@ -142,9 +150,14 @@ void tiles_buttons_scan(void) {
             s_debounced[i] = raw_pressed;
             /* Debounce/press tracking above always runs -- standby.c
              * needs a live tiles_button_is_pressed() to detect a wake
-             * press even while its own animation owns the LEDs. Only
-             * the LED write itself is suppressed. */
-            if (!s_standby_active) {
+             * press even while its own animation owns the LEDs, and a
+             * button with an active override (see
+             * tiles_buttons_set_override_active()) still needs its press
+             * state tracked even though this default "LED follows
+             * press" behavior is suspended for it. Only the LED write
+             * itself is suppressed, by either standby or a per-button
+             * override. */
+            if (!s_standby_active && !s_override_active[i]) {
                 set_button_led(i, s_debounced[i]);
             }
         }
@@ -167,6 +180,38 @@ void tiles_buttons_set_standby_active(bool active) {
 
 void tiles_buttons_set_standby_led(uint8_t button_id, float level_0_to_1) {
     if (!s_standby_active || button_id < 1u || button_id > NUM_BUTTONS) {
+        return;
+    }
+    set_button_led_level((uint8_t)(button_id - 1u), level_0_to_1);
+}
+
+void tiles_buttons_set_override_active(uint8_t button_id, bool active) {
+    if (button_id < 1u || button_id > NUM_BUTTONS) {
+        return;
+    }
+    uint8_t index = (uint8_t)(button_id - 1u);
+    s_override_active[index] = active;
+    if (!active) {
+        /* Restore default "LED follows press" immediately -- tiles_buttons_scan()
+         * only writes an LED on a press/release edge, so simply clearing
+         * the flag wouldn't by itself repaint whatever the override left
+         * the LED showing. */
+        set_button_led(index, s_debounced[index]);
+    }
+}
+
+void tiles_buttons_set_override_led(uint8_t button_id, float level_0_to_1) {
+    if (button_id < 1u || button_id > NUM_BUTTONS || !s_override_active[button_id - 1u]) {
+        return;
+    }
+    /* Transparent no-op during standby -- standby.c's own animation
+     * already writes every button (including this one) every frame via
+     * tiles_buttons_set_standby_led(), so a controller like
+     * octave_control.c can keep calling this unconditionally every scan
+     * without needing to know standby exists, exactly like touch.c does
+     * for tiles_lighting_set_pad_press(). The override resumes on its
+     * own next scan once standby ends. */
+    if (s_standby_active) {
         return;
     }
     set_button_led_level((uint8_t)(button_id - 1u), level_0_to_1);

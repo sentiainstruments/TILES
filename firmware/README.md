@@ -78,7 +78,14 @@ first on-hardware note-on test.
   MIDI note layout confirmed against real hardware's stated pattern
   (pad 19 = lowest note, bottom-to-top/left-to-right), scale-mode
   architecture in place with only chromatic implemented, verified by
-  `firmware/test/test_note_map.c`. `expression` done for V1: touch+Hall
+  `firmware/test/test_note_map.c`. Also owns an octave shift
+  (+/-3 octaves) applied on top of the scale-derived note.
+  `octave_control` done for V1: SW1 ("-")/SW2 ("+")'s default function is
+  octave shift down/up (one octave per press), the active direction's
+  LED showing the shift's magnitude via a distinct pattern (solid /
+  slow pulse / triple-blink-then-hold) -- claims both buttons
+  permanently via a new per-button LED override in `buttons.c`.
+  `expression` done for V1: touch+Hall
   fusion deriving real velocity (from strike acceleration) and
   aftertouch (from press depth) -- see `services/README.md` for the
   state machine and the explicitly-unmeasured scaling constants.
@@ -103,13 +110,16 @@ first on-hardware note-on test.
   (standby pads were routing through the touch-driven idle-baseline
   floor, so they never actually reached true black).
   `boot_sequence` done for V1: a ~4-second power-on animation (white
-  "rain" flooding down from the function buttons, fade to black, a slow
-  smoothstep-eased magenta pulse across pads + underglow only -- not
-  buttons, which can't show color) that also re-captures Hall's rest
-  baseline once the animation's given the sensors a few settled seconds,
-  instead of only ever trusting the very-first-instant-of-boot capture.
-  Already reworked once from real feedback (direction reversed, "jumpy"
-  linear transitions replaced with eased ones).
+  "rain" flooding down through the pad grid, fade to black, a slow
+  smoothstep-eased magenta pulse across pads + underglow) that also
+  re-captures Hall's rest baseline once the animation's given the
+  sensors a few settled seconds, instead of only ever trusting the
+  very-first-instant-of-boot capture. Function buttons are held dark for
+  the entire sequence -- they can't show color at all, and even a plain
+  white glow on them read as wrong. Reworked twice from real feedback
+  (direction reversed and "jumpy" linear transitions replaced with eased
+  ones; then buttons dropped from the sequence entirely after residual
+  glow was still visible with only the magenta phase excluded).
   `haptics` done for
   V1: an overdrive
   spike then velocity-mapped kick on strike, then a hard cutoff -- a
@@ -177,15 +187,18 @@ flashable `.uf2`.
   `BUTTON_STANDBY_BRIGHTNESS_SCALE` (0.35) is likewise still an
   unmeasured guess at how much dimmer buttons need to be, not a measured
   match to pad brightness.
-- `services/boot_sequence.c`: the *first* version was seen on real
-  hardware and read as "jumpy" with the wrong flow direction -- reworked
-  (rain now flows down from the buttons, smoothstep easing throughout,
-  buttons dropped from the magenta pulse), but this reworked version
-  hasn't itself been flashed and watched yet, so every duration/edge-
-  width constant is again a first guess pending that. The Hall baseline
-  re-capture at the end is a real mechanism (reuses `hall.c`'s existing
-  per-pad read path), but whether ~4 seconds is actually enough settling
-  time to matter is unverified.
+- `services/boot_sequence.c`: seen on real hardware twice now, reworked
+  both times (direction/pacing, then buttons dropped entirely after
+  residual glow was still visible with only the magenta phase
+  excluded) -- this latest version hasn't itself been flashed and
+  watched yet, so every duration/edge-width constant is again a first
+  guess pending that. The Hall baseline re-capture at the end is a real
+  mechanism (reuses `hall.c`'s existing per-pad read path), but whether
+  ~4 seconds is actually enough settling time to matter is unverified.
+- `services/octave_control.c` has not been hardware-tested at all --
+  every LED pattern timing constant (`PULSE_PERIOD_MS`, the blink/hold
+  durations) is a first guess, and whether the three patterns actually
+  read as visually distinct at a glance is unverified.
 - `services/haptics.c` has not been hardware-tested at all -- every
   duty/timing constant (kick duration, overdrive duration, gap duration,
   min kick duty, max sustain duty, stagger gap) is an unmeasured

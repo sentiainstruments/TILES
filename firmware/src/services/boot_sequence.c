@@ -112,11 +112,15 @@ static float pulse_envelope(uint32_t elapsed_ms) {
 
 typedef float (*white_level_fn_t)(uint8_t row, uint8_t col, uint32_t elapsed_ms);
 
+/* Function buttons are deliberately never written here -- see the file
+ * header. Real hardware showed both an unwanted flash of full button
+ * brightness early in the rain (buttons being the flood's source
+ * naturally reached full brightness quickly under the old code) and
+ * some residual button glow during the magenta pulse; rather than
+ * fine-tune around that, buttons are held dark (zeroed once in
+ * tiles_boot_sequence_run() before any phase starts) for the whole
+ * sequence and simply never touched again. */
 static void write_frame_white(white_level_fn_t level_fn, uint32_t elapsed_ms) {
-    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        float v = level_fn(0u, col, elapsed_ms);
-        tiles_buttons_set_standby_led(board_button_for_col(col), v);
-    }
     for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             float v = level_fn(row, col, elapsed_ms);
@@ -206,6 +210,13 @@ static void run_phase3_magenta_pulse(void) {
 bool tiles_boot_sequence_run(void) {
     tiles_lighting_set_standby_active(true);
     tiles_buttons_set_standby_active(true);
+
+    /* Function buttons stay dark for the entire sequence -- see
+     * write_frame_white()'s comment. Zeroed once here defensively;
+     * nothing else in this file writes to a button LED after this. */
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+    }
 
     run_phase1_rain();
     run_phase2_fade();

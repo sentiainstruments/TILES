@@ -4,10 +4,11 @@ The behavioral layer: turns raw driver data into musical/expressive
 events, and turns high-level intent into driver commands. Depends on
 `drivers/` and `board/`; knows nothing about USB/MIDI transport.
 
-Built: Hall scan, touch, lighting, buttons, pedal, note mapping,
-touch+Hall expression fusion (velocity/aftertouch), power source state,
-standby idle animations (plus a power-saving state after 15 minutes),
-a power-on boot animation, and per-pad haptic feedback -- see Status
+Built: Hall scan, touch, lighting, buttons, pedal, note mapping (with
+octave shift), the SW1/SW2 octave-shift button controller, touch+Hall
+expression fusion (velocity/aftertouch), power source state, standby
+idle animations (plus a power-saving state after 15 minutes), a
+power-on boot animation, and per-pad haptic feedback -- see Status
 below. Still planned: per-pad Hall calibration, X/Y tilt -> pitch/
 timbre, storage glue.
 
@@ -36,11 +37,23 @@ not its code.
   defaults doc), Hall-driven (as opposed to touch-driven) brightness.
 - `buttons.h`/`.c` — done for V1: reads all 6 function buttons
   (debounced, 10ms), lights each one's PCA9685-driven LED while (and
-  only while) it's held. Owns both physical PCA9685 chips --
+  only while) it's held -- the default for any button without a
+  persistent function assigned. Owns both physical PCA9685 chips --
   `tiles_buttons_pca9685_for_addr()` is the accessor `haptics.c` (below)
   uses to reach the same two already-initialized instances rather than
   re-running `tiles_pca9685_init()` itself, resolving the ownership
   question this file used to flag as open.
+  Also exposes a per-button LED override
+  (`tiles_buttons_set_override_active()`/`_set_override_led()`), for a
+  button whose default "LED follows press" has been replaced by some
+  other persistent function -- `octave_control.c` (below) is the first
+  user, for SW1/SW2. Distinct from the standby hooks (which apply to all
+  6 buttons at once, only while idle): this is per-button, at any time.
+  A button under an active override still gets its press/release
+  tracked normally (`tiles_button_is_pressed()` keeps working), only the
+  LED write is suspended; `tiles_buttons_set_standby_active(false)`
+  (standby ending) skips re-asserting an overridden button's LED rather
+  than clobbering it, and the override's own next scan repaints it.
 - `touch.h`/`.c` — done: reads both MPR121 controllers, derives each
   pad's touched state from its board-map touch route, pushes that into
   `lighting.c`'s per-pad brightness (touched = full ceiling, untouched
@@ -77,6 +90,32 @@ not its code.
   `pad_config.c` or this layout logic. Verified by
   `firmware/test/test_note_map.c` against the exact examples given when
   the layout was specified.
+  Also owns the octave shift (`tiles_note_map_set_octave_shift()`/
+  `_get_octave_shift()`, +/-`TILES_NOTE_MAP_MAX_OCTAVE_SHIFT` (3), applied
+  as +/-12 semitones on top of the scale-derived note) -- lives here
+  rather than in `octave_control.c` (below) since it's a note-mapping
+  parameter exactly like the scale, one owner for "how a pad's position
+  becomes a MIDI note." The +/-3 bound was picked to match
+  `octave_control.c`'s highest LED pattern and because it keeps the full
+  24-pad chromatic span safely inside 0-127 with real margin either
+  side -- it's a deliberate UX limit, not something the 0-127 note clamp
+  ever actually has to catch.
+- `octave_control.h`/`.c` — done for V1: the default function of SW1
+  ("-") and SW2 ("+") is octave shift down/up, one octave per press
+  (rising edge, not while held), driving `note_map.c`'s shift above.
+  Claims both buttons permanently via `buttons.c`'s new per-button
+  override -- their LEDs stop following "lit while held" and instead
+  show the active direction's shift magnitude via a distinct pattern:
+  magnitude 1 solid, magnitude 2 a slow breathing pulse, magnitude 3
+  three quick blinks then a solid hold then repeat; the inactive
+  direction (and both, at shift 0) stay dark.
+  Meant to become a general-purpose modifier eventually (held for other
+  menus/combos, per the product's own direction) -- this module only
+  implements the V1 default function, not a generic modifier framework;
+  that's real future work, not built speculatively now.
+  **Not hardware-verified:** every pattern timing constant
+  (`PULSE_PERIOD_MS`, the blink/hold durations) is a first guess, and
+  this hasn't been seen on real hardware at all yet.
 - `expression.h`/`.c` — done for V1: touch+Hall fusion. Touch remains
   the authoritative note on/off timing gate (more reliable to detect
   than inferring press/release from Hall depth alone); Hall supplies
@@ -294,19 +333,25 @@ not its code.
 - `boot_sequence.h`/`.c` — done for V1: a ~4-second, blocking power-on
   animation run once from `main.c`, before the main loop starts (nothing
   else needs to run concurrently -- USB stays alive via TinyUSB's own
-  background IRQ task regardless). A white "rain" floods down from the
-  function buttons (the source) through pad rows 1-4 (underglow off
-  throughout), fades to complete dark, then a single, slow,
+  background IRQ task regardless). A white "rain" floods down through
+  pad rows 1-4, conceptually originating at the button row (underglow
+  off throughout), fades to complete dark, then a single, slow,
   smoothstep-eased "Sentia Instruments Magenta" (#FF00FF) pulse across
-  pads + underglow (deliberately NOT buttons -- they're plain monochrome
-  PWM, not addressable RGB, so pulsing their brightness in sync read as
-  visually wrong once seen lit) finishes it.
-  Reworked once already from real feedback on the first version: it
-  originally rose from the bottom-center outward (reversed to flow down
-  from the buttons instead, "like rain/flooding") and used linear,
-  fairly fast, narrow-edged transitions that read as "jumpy" -- every
-  phase is now smoothstep-eased with wider soft edges and longer
-  durations instead.
+  pads + underglow finishes it. Function buttons are held dark for the
+  *entire* sequence (zeroed once up front, never written again) --
+  they're plain monochrome PWM, not addressable RGB, so they can't
+  participate in the magenta pulse at all, and an earlier version's
+  white glow on them (as the rain's literal source) read as wrong too
+  once seen on real hardware.
+  Reworked twice already from real feedback:
+  1. Direction and pacing -- it originally rose from the bottom-center
+     outward (reversed to flow down instead, "like rain/flooding") and
+     used linear, fairly fast, narrow-edged transitions that read as
+     "jumpy" (now smoothstep-eased throughout, wider soft edges, longer
+     durations).
+  2. Buttons -- originally lit as part of the rain and (attempted, but
+     apparently not fully) excluded from the magenta pulse; now held
+     dark for the whole sequence with no exceptions.
   Reuses the exact same standby-active rendering path `standby.c`'s
   animations use (`tiles_lighting_set_standby_active()`, the RGB
   pad/underglow/button setters) rather than a second mechanism, and
