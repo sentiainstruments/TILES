@@ -1,12 +1,15 @@
 #pragma once
 
 /*
- * Standby (idle) animations: after 1 minute with no touch/button/pedal
- * activity, the pad grid + function buttons + underglow stop reflecting
- * real input and instead run one of a rotating set of ambient
- * animations, cycling to the next one every couple of minutes. Any
- * activity exits standby immediately and hands rendering back to
- * touch.c/buttons.c's normal behavior.
+ * Standby (idle) animations: after 1 minute with no touch/Hall/button/
+ * pedal activity, the pad grid + function buttons + underglow stop
+ * reflecting real input and instead run one of a rotating set of
+ * ambient animations, cycling to the next one every couple of minutes.
+ * Any activity exits standby immediately and hands rendering back to
+ * touch.c/buttons.c's normal behavior. Hall depth is included alongside
+ * touch specifically because real hardware showed MPR121 touch alone
+ * not reliably waking standby while the pad animation is running --
+ * see TILES_STANDBY_HALL_WAKE_DEPTH in standby.c.
  *
  * Deliberately a lighting-only concept: touch/Hall/expression/MIDI keep
  * running completely unaware standby exists (see standby.c's header for

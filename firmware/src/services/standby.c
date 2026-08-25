@@ -2,6 +2,7 @@
 
 #include "board_pins.h"
 #include "buttons.h"
+#include "hall.h"
 #include "lighting.h"
 #include "pedal.h"
 #include "touch.h"
@@ -24,6 +25,24 @@
  * buttons + 4 underglow pixels every frame turns out to compete with
  * anything else on the bus, raise this first. */
 #define TILES_STANDBY_FRAME_INTERVAL_MS 40u
+
+/* Hall-depth wake fallback: on real hardware, touching a pad during the
+ * standby animation was observed to NOT reliably wake it, even though
+ * MPR121 touch wakes it fine outside of standby and buttons/pedal wake
+ * it fine during standby too -- pointing at the animation itself (most
+ * likely the pad-LED SK6805 chain, continuously rewritten at ~25fps
+ * while idle, vs. only writing reactively on a touch change during
+ * normal play) interfering specifically with capacitive touch sensing.
+ * Root cause isn't confirmed -- Hall (magnetic, not capacitive) isn't
+ * subject to whatever that is, so it's used here as an independent
+ * second path to detect a real press regardless of why touch alone
+ * isn't enough. Matches this codebase's existing stance that touch
+ * alone is foolable and Hall should be fused with it (see hall.h /
+ * expression.c). PLACEHOLDER, unmeasured: expression.c's own
+ * DEPTH_TO_AFTERTOUCH_FULL_SCALE (2000, also unmeasured) is "full
+ * press" depth; this is a coarse fraction of that meant to catch even a
+ * light press, not tuned against real noise floor. */
+#define TILES_STANDBY_HALL_WAKE_DEPTH 150u
 
 #define TILES_STANDBY_PI 3.14159265358979323846f
 
@@ -241,13 +260,13 @@ static uint32_t s_last_frame_ms;
 static uint32_t s_animation_switch_ms;
 static uint8_t s_animation_index;
 
-/* Only touch/button/pedal, matching this codebase's established "touch
- * is the authoritative intention signal" stance (see expression.h) --
- * Hall depth alone (e.g. a hover that never registers as touched) is
- * deliberately not treated as activity here, same reasoning. */
 static bool any_input_active(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         if (tiles_touch_is_touched(pad)) {
+            return true;
+        }
+        /* See TILES_STANDBY_HALL_WAKE_DEPTH above. */
+        if (tiles_hall_get_depth(pad) >= TILES_STANDBY_HALL_WAKE_DEPTH) {
             return true;
         }
     }
