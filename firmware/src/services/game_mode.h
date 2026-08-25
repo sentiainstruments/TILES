@@ -19,8 +19,8 @@
  * reserved as in-game controls (see below). The same hold toggles game
  * mode off again from any state (menu or mid-game).
  *
- * Once on: the menu shows pad 1 (green) for Snake and pad 2 (orange)
- * for Brick Breaker -- touch either to launch it.
+ * Once on: the menu shows pad 1 (green) for Snake, pad 2 (orange) for
+ * Brick Breaker, and pad 3 (cyan) for Tetris -- touch any to launch it.
  *   Snake controls: SW1 left, SW2 right, SW3 up, SW4 down (absolute
  *   direction, not relative turning; reversing straight into the
  *   snake's own neck is ignored, the standard snake-game rule). Eats a
@@ -31,25 +31,41 @@
  *   right. Otherwise the same physics as standby.c's autonomous
  *   version, just with the paddle player-controlled instead of AI-
  *   tracked.
- * Either game's end (snake self-collision, brick breaker won/lost)
- * flashes underglow red/purple for a couple of seconds, then returns to
- * the menu.
+ *   Tetris controls: SW1/SW2 move the falling piece left/right, SW3
+ *   rotates it (a simplified 2-orientation rotation per piece, not full
+ *   4-state SRS -- the board is only 4 rows tall so the extra states
+ *   would rarely matter), SW4 hard-drops it. Standard tetromino set and
+ *   colors, line clears shift everything above down; topping out (a
+ *   freshly spawned piece has nowhere to go) ends the round.
+ * Every game's end (snake self-collision, brick breaker won/lost,
+ * Tetris topping out) flashes underglow red/purple for a couple of
+ * seconds, then returns to the menu.
  *
  * Claims the same standby-active rendering path standby.c's own
  * animations and boot_sequence.c use
  * (tiles_lighting_set_standby_active(), tiles_buttons_set_standby_active(),
- * the RGB pad/underglow/button setters) -- correct and sufficient by
- * itself: buttons.c's per-button override for SW1/SW2 (octave_control.c)
- * already goes transparently inert under that same standby-active flag
- * (see buttons.c), so no changes were needed there for game mode to
- * freely drive SW1/SW2's LEDs too. main.c must skip calling
- * tiles_standby_scan() while tiles_game_mode_is_active() is true --
- * otherwise standby's own idle timer could fire mid-game and standby.c
- * would fight this module over the same rendering path. Both being
- * triggered by real button presses (the entry gesture, and exiting)
- * means standby's idle timer gets a fresh reset at the moment control
- * hands back, so there's no awkward "immediately idle right after
- * leaving a game" edge case from skipping its scan while active.
+ * the RGB pad/underglow/button setters) -- correct and sufficient for
+ * *LED writes*: buttons.c's per-button override for SW1/SW2
+ * (octave_control.c) already goes transparently inert under that same
+ * standby-active flag (see buttons.c), so no changes were needed there
+ * for game mode to freely drive SW1/SW2's LEDs too.
+ * That inertness only covers LED *writes*, though -- octave_control.c's
+ * button *reads* (SW1/SW2 rising edges -> octave/key-offset steps) run
+ * unconditionally every scan regardless of standby-active, so without an
+ * explicit check there, every left/right press in Snake/Brick
+ * Breaker/Tetris would *also* silently step the octave or transpose key
+ * underneath the game. octave_control.c now checks
+ * tiles_game_mode_is_active() itself and skips all of its own action
+ * logic (while keeping its press-edge tracking current) whenever a game
+ * owns the buttons -- see its file header.
+ * main.c must skip calling tiles_standby_scan() while
+ * tiles_game_mode_is_active() is true -- otherwise standby's own idle
+ * timer could fire mid-game and standby.c would fight this module over
+ * the same rendering path. Both being triggered by real button presses
+ * (the entry gesture, and exiting) means standby's idle timer gets a
+ * fresh reset at the moment control hands back, so there's no awkward
+ * "immediately idle right after leaving a game" edge case from skipping
+ * its scan while active.
  */
 
 #include <stdbool.h>

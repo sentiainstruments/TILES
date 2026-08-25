@@ -23,6 +23,7 @@ typedef enum {
     GM_STATE_MENU,
     GM_STATE_PLAYING_SNAKE,
     GM_STATE_PLAYING_BRICK,
+    GM_STATE_PLAYING_TETRIS,
     GM_STATE_ROUND_END,
 } gm_state_t;
 
@@ -36,6 +37,7 @@ static uint32_t s_gm_hold_start_ms;
 
 static bool s_gm_prev_pad1_touched;
 static bool s_gm_prev_pad2_touched;
+static bool s_gm_prev_pad3_touched;
 
 /* ---- Interactive snake ---------------------------------------------------
  * Player-controlled version of standby.c's autonomous snake -- separate
@@ -391,6 +393,244 @@ static void render_brick(uint32_t now_ms) {
     }
 }
 
+/* ---- Interactive Tetris ----------------------------------------------------
+ * Standard tetromino set falling into a 4-row x 6-col well (the pad
+ * grid; function buttons stay off, same as the other two games).
+ * Simplified from full Tetris to fit both the tiny board and this
+ * board's control set: only 2 rotation states per piece (not full
+ * 4-state SRS -- with only 4 rows of height the extra states would
+ * rarely change anything) and no wall kicks (a rotation that doesn't
+ * fit in place is just rejected). SW1/SW2 move left/right, SW3 rotates,
+ * SW4 hard-drops. Gravity also steps the piece down automatically every
+ * GT_STEP_MS. Landing locks the piece into the well; full rows shift
+ * everything above them down (gt_clear_lines() below, handles multiple
+ * simultaneous clears). Topping out -- a freshly spawned piece has
+ * nowhere to fit -- ends the round via the same gm_start_round_end()
+ * flash every other game uses. */
+
+#define GT_MIN_ROW 1u /* row 0 is buttons, not part of the well */
+#define GT_MAX_ROW TILES_GRID_MAX_ROW
+#define GT_MIN_COL TILES_GRID_MIN_COL
+#define GT_MAX_COL TILES_GRID_MAX_COL
+#define GT_ROWS 4u
+#define GT_COLS 6u
+#define GT_STEP_MS 550u
+#define GT_SPAWN_COL 3 /* leaves room either side for every piece's max width (4) */
+#define GT_NUM_PIECE_TYPES 7u
+
+typedef struct {
+    int8_t dr;
+    int8_t dc;
+} gt_offset_t;
+
+/* Two rotation states per piece, 4 cells each -- see the file comment
+ * above for why only 2, not the usual 4. */
+typedef struct {
+    gt_offset_t state0[4];
+    gt_offset_t state1[4];
+    float r, g, b;
+} gt_piece_def_t;
+
+/* Classic Tetris piece colors, in classic piece order (I,O,T,S,Z,J,L). */
+static const gt_piece_def_t GT_PIECES[GT_NUM_PIECE_TYPES] = {
+    {{{0, 0}, {0, 1}, {0, 2}, {0, 3}}, {{0, 0}, {1, 0}, {2, 0}, {3, 0}}, 0.0f, 1.0f, 1.0f},   /* I: cyan */
+    {{{0, 0}, {0, 1}, {1, 0}, {1, 1}}, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, 1.0f, 1.0f, 0.0f},   /* O: yellow */
+    {{{0, 0}, {0, 1}, {0, 2}, {1, 1}}, {{0, 0}, {1, 0}, {2, 0}, {1, 1}}, 0.6f, 0.0f, 1.0f},   /* T: purple */
+    {{{0, 1}, {0, 2}, {1, 0}, {1, 1}}, {{0, 0}, {1, 0}, {1, 1}, {2, 1}}, 0.0f, 1.0f, 0.0f},   /* S: green */
+    {{{0, 0}, {0, 1}, {1, 1}, {1, 2}}, {{0, 1}, {1, 0}, {1, 1}, {2, 0}}, 1.0f, 0.0f, 0.0f},   /* Z: red */
+    {{{0, 0}, {1, 0}, {1, 1}, {1, 2}}, {{0, 0}, {0, 1}, {1, 0}, {2, 0}}, 0.0f, 0.0f, 1.0f},   /* J: blue */
+    {{{0, 2}, {1, 0}, {1, 1}, {1, 2}}, {{0, 0}, {1, 0}, {2, 0}, {2, 1}}, 1.0f, 0.5f, 0.0f},   /* L: orange */
+};
+
+/* 0 = empty, else (piece type index + 1) -- indexed [row - GT_MIN_ROW][col - GT_MIN_COL]. */
+static uint8_t s_gt_board[GT_ROWS][GT_COLS];
+static uint8_t s_gt_piece_type;
+static uint8_t s_gt_rotation;
+static int8_t s_gt_origin_row;
+static int8_t s_gt_origin_col;
+static uint32_t s_gt_last_step_ms;
+static bool s_gt_prev_left;
+static bool s_gt_prev_right;
+static bool s_gt_prev_rotate;
+static bool s_gt_prev_drop;
+
+static const gt_offset_t *gt_offsets(uint8_t piece_type, uint8_t rotation) {
+    return (rotation == 0u) ? GT_PIECES[piece_type].state0 : GT_PIECES[piece_type].state1;
+}
+
+static bool gt_fits(uint8_t piece_type, uint8_t rotation, int8_t origin_row, int8_t origin_col) {
+    const gt_offset_t *offsets = gt_offsets(piece_type, rotation);
+    for (uint8_t i = 0; i < 4u; i++) {
+        int8_t r = (int8_t)(origin_row + offsets[i].dr);
+        int8_t c = (int8_t)(origin_col + offsets[i].dc);
+        if (r < (int8_t)GT_MIN_ROW || r > (int8_t)GT_MAX_ROW) {
+            return false;
+        }
+        if (c < (int8_t)GT_MIN_COL || c > (int8_t)GT_MAX_COL) {
+            return false;
+        }
+        if (s_gt_board[r - (int8_t)GT_MIN_ROW][c - (int8_t)GT_MIN_COL] != 0u) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void gt_spawn(void) {
+    s_gt_piece_type = (uint8_t)(rand() % GT_NUM_PIECE_TYPES);
+    s_gt_rotation = 0u;
+    s_gt_origin_row = (int8_t)GT_MIN_ROW;
+    s_gt_origin_col = (int8_t)GT_SPAWN_COL;
+}
+
+/* Standard line-clear sweep: bottom-up, a full row shifts everything
+ * above it down by one and the top row clears; the same row index is
+ * rechecked (not advanced) afterward since it now holds whatever
+ * shifted into it -- this is what makes multiple simultaneous clears
+ * collapse correctly in one pass. */
+static void gt_clear_lines(void) {
+    int8_t row = (int8_t)(GT_ROWS - 1u);
+    while (row >= 0) {
+        bool full = true;
+        for (uint8_t c = 0; c < GT_COLS; c++) {
+            if (s_gt_board[row][c] == 0u) {
+                full = false;
+                break;
+            }
+        }
+        if (!full) {
+            row--;
+            continue;
+        }
+        for (int8_t r = row; r > 0; r--) {
+            for (uint8_t c = 0; c < GT_COLS; c++) {
+                s_gt_board[r][c] = s_gt_board[r - 1][c];
+            }
+        }
+        for (uint8_t c = 0; c < GT_COLS; c++) {
+            s_gt_board[0][c] = 0u;
+        }
+    }
+}
+
+static void gt_lock(uint32_t now_ms) {
+    const gt_offset_t *offsets = gt_offsets(s_gt_piece_type, s_gt_rotation);
+    for (uint8_t i = 0; i < 4u; i++) {
+        int8_t r = (int8_t)(s_gt_origin_row + offsets[i].dr);
+        int8_t c = (int8_t)(s_gt_origin_col + offsets[i].dc);
+        s_gt_board[r - (int8_t)GT_MIN_ROW][c - (int8_t)GT_MIN_COL] = (uint8_t)(s_gt_piece_type + 1u);
+    }
+    gt_clear_lines();
+    gt_spawn();
+    if (!gt_fits(s_gt_piece_type, s_gt_rotation, s_gt_origin_row, s_gt_origin_col)) {
+        /* Nowhere for the next piece to go -- topped out. */
+        gm_start_round_end(now_ms);
+    }
+}
+
+static void gt_start(uint32_t now_ms) {
+    for (uint8_t r = 0; r < GT_ROWS; r++) {
+        for (uint8_t c = 0; c < GT_COLS; c++) {
+            s_gt_board[r][c] = 0u;
+        }
+    }
+    gt_spawn();
+    s_gt_last_step_ms = now_ms;
+    s_gt_prev_left = false;
+    s_gt_prev_right = false;
+    s_gt_prev_rotate = false;
+    s_gt_prev_drop = false;
+}
+
+static void gt_handle_input(uint32_t now_ms) {
+    bool left = tiles_button_is_pressed(1u);   /* SW1 "-" */
+    bool right = tiles_button_is_pressed(2u);  /* SW2 "+" */
+    bool rotate = tiles_button_is_pressed(3u); /* SW3 triangle */
+    bool drop = tiles_button_is_pressed(4u);   /* SW4 diamond */
+
+    if (left && !s_gt_prev_left) {
+        if (gt_fits(s_gt_piece_type, s_gt_rotation, s_gt_origin_row, (int8_t)(s_gt_origin_col - 1))) {
+            s_gt_origin_col--;
+        }
+    }
+    if (right && !s_gt_prev_right) {
+        if (gt_fits(s_gt_piece_type, s_gt_rotation, s_gt_origin_row, (int8_t)(s_gt_origin_col + 1))) {
+            s_gt_origin_col++;
+        }
+    }
+    if (rotate && !s_gt_prev_rotate) {
+        uint8_t next_rotation = (uint8_t)(1u - s_gt_rotation);
+        if (gt_fits(s_gt_piece_type, next_rotation, s_gt_origin_row, s_gt_origin_col)) {
+            s_gt_rotation = next_rotation;
+        }
+    }
+    if (drop && !s_gt_prev_drop) {
+        while (gt_fits(s_gt_piece_type, s_gt_rotation, (int8_t)(s_gt_origin_row + 1), s_gt_origin_col)) {
+            s_gt_origin_row++;
+        }
+        gt_lock(now_ms);
+    }
+
+    s_gt_prev_left = left;
+    s_gt_prev_right = right;
+    s_gt_prev_rotate = rotate;
+    s_gt_prev_drop = drop;
+}
+
+static void gt_update(uint32_t now_ms) {
+    if (now_ms - s_gt_last_step_ms < GT_STEP_MS) {
+        return;
+    }
+    s_gt_last_step_ms = now_ms;
+    if (gt_fits(s_gt_piece_type, s_gt_rotation, (int8_t)(s_gt_origin_row + 1), s_gt_origin_col)) {
+        s_gt_origin_row++;
+    } else {
+        gt_lock(now_ms);
+    }
+}
+
+#define GT_LOCKED_LEVEL 0.8f
+
+static void render_tetris(uint32_t now_ms) {
+    (void)now_ms;
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+    }
+
+    for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
+        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+            uint8_t pad = board_pad_for_row_col(row, col);
+            uint8_t v = s_gt_board[row - GT_MIN_ROW][col - GT_MIN_COL];
+            if (v != 0u) {
+                const gt_piece_def_t *def = &GT_PIECES[v - 1u];
+                tiles_lighting_set_standby_pad_rgb(pad, def->r * GT_LOCKED_LEVEL, def->g * GT_LOCKED_LEVEL,
+                                                    def->b * GT_LOCKED_LEVEL);
+            } else {
+                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
+            }
+        }
+    }
+
+    /* The falling piece draws on top, at full brightness -- a visible
+     * cue distinguishing it from the already-locked stack. */
+    const gt_piece_def_t *active = &GT_PIECES[s_gt_piece_type];
+    const gt_offset_t *offsets = gt_offsets(s_gt_piece_type, s_gt_rotation);
+    for (uint8_t i = 0; i < 4u; i++) {
+        int8_t r = (int8_t)(s_gt_origin_row + offsets[i].dr);
+        int8_t c = (int8_t)(s_gt_origin_col + offsets[i].dc);
+        if (r < 1 || r > (int8_t)TILES_GRID_MAX_ROW || c < (int8_t)TILES_GRID_MIN_COL ||
+            c > (int8_t)TILES_GRID_MAX_COL) {
+            continue;
+        }
+        tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col((uint8_t)r, (uint8_t)c), active->r, active->g,
+                                            active->b);
+    }
+
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+    }
+}
+
 /* ---- Menu + round-end + top-level state machine --------------------------- */
 
 static void render_menu(uint32_t now_ms) {
@@ -405,6 +645,8 @@ static void render_menu(uint32_t now_ms) {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, GS_HEAD_LEVEL, 0.0f); /* snake = green */
             } else if (row == 1u && col == 2u) {
                 tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 0.4f, 0.0f); /* brick breaker = orange */
+            } else if (row == 1u && col == 3u) {
+                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 1.0f, 1.0f); /* tetris = cyan */
             } else {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
             }
@@ -434,6 +676,7 @@ static void gm_enter_menu(void) {
     s_gm_state = GM_STATE_MENU;
     s_gm_prev_pad1_touched = false;
     s_gm_prev_pad2_touched = false;
+    s_gm_prev_pad3_touched = false;
     s_gm_last_frame_ms = 0u;
 }
 
@@ -447,18 +690,27 @@ static void gm_start_brick(uint32_t now_ms) {
     gb_start(now_ms);
 }
 
+static void gm_start_tetris(uint32_t now_ms) {
+    s_gm_state = GM_STATE_PLAYING_TETRIS;
+    gt_start(now_ms);
+}
+
 static void gm_handle_menu_selection(void) {
     bool pad1 = tiles_touch_is_touched(1u);
     bool pad2 = tiles_touch_is_touched(2u);
+    bool pad3 = tiles_touch_is_touched(3u);
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
     if (pad1 && !s_gm_prev_pad1_touched) {
         gm_start_snake(now_ms);
     } else if (pad2 && !s_gm_prev_pad2_touched) {
         gm_start_brick(now_ms);
+    } else if (pad3 && !s_gm_prev_pad3_touched) {
+        gm_start_tetris(now_ms);
     }
     s_gm_prev_pad1_touched = pad1;
     s_gm_prev_pad2_touched = pad2;
+    s_gm_prev_pad3_touched = pad3;
 }
 
 static bool gm_combo_held(void) {
@@ -499,6 +751,7 @@ void tiles_game_mode_init(void) {
     s_gm_combo_fired = false;
     s_gm_prev_pad1_touched = false;
     s_gm_prev_pad2_touched = false;
+    s_gm_prev_pad3_touched = false;
 }
 
 void tiles_game_mode_scan(void) {
@@ -518,6 +771,9 @@ void tiles_game_mode_scan(void) {
     } else if (s_gm_state == GM_STATE_PLAYING_BRICK) {
         gb_handle_input();
         gb_update(now_ms);
+    } else if (s_gm_state == GM_STATE_PLAYING_TETRIS) {
+        gt_handle_input(now_ms);
+        gt_update(now_ms);
     } else if (s_gm_state == GM_STATE_ROUND_END) {
         if (now_ms - s_gm_round_end_ms >= GM_ROUND_END_FLASH_MS) {
             gm_enter_menu();
@@ -531,6 +787,8 @@ void tiles_game_mode_scan(void) {
             render_snake(now_ms);
         } else if (s_gm_state == GM_STATE_PLAYING_BRICK) {
             render_brick(now_ms);
+        } else if (s_gm_state == GM_STATE_PLAYING_TETRIS) {
+            render_tetris(now_ms);
         } else if (s_gm_state == GM_STATE_ROUND_END) {
             render_round_end(now_ms);
         }

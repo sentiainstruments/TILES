@@ -2,6 +2,7 @@
 
 #include "board_layout.h"
 #include "buttons.h"
+#include "game_mode.h"
 #include "lighting.h"
 #include "note_map.h"
 #include "pixel_font.h"
@@ -215,6 +216,17 @@ static void render_transpose_frame(uint32_t now_ms) {
 void tiles_octave_control_scan(void) {
     bool minus_pressed = tiles_button_is_pressed(BUTTON_ID_MINUS);
     bool plus_pressed = tiles_button_is_pressed(BUTTON_ID_PLUS);
+
+    if (tiles_game_mode_is_active()) {
+        /* A game has claimed SW1/SW2 as its own controls -- see the
+         * "Deferring to game mode" section of the file header. Keep
+         * edge-tracking state current and do nothing else. */
+        s_prev_minus_pressed = minus_pressed;
+        s_prev_plus_pressed = plus_pressed;
+        s_combo_was_held = minus_pressed && plus_pressed;
+        return;
+    }
+
     bool both_held = minus_pressed && plus_pressed;
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 

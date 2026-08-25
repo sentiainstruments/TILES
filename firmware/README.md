@@ -98,13 +98,21 @@ first on-hardware note-on test.
   pulse together, and the pad grid shows the current key's letter (via
   the new shared `pixel_font.h`/`.c`), flashing a cross for sharp keys
   since a 4-row glyph can't draw "#". Not yet hardware-tested.
-  `game_mode` done for V1: real, player-controlled snake and brick
-  breaker (distinct from `standby`'s autonomous versions of the same two
-  games below, which stay unchanged) -- hold SW3+SW4+SW5+SW6 to toggle a
-  menu, touch pad 1 or 2 to launch Snake or Brick Breaker. Snake:
-  SW1-SW4 = left/right/up/down, eats food to grow, wraps at the edges,
-  dies on self-collision. Brick Breaker: SW1/SW2 move the paddle. Either
-  game ending flashes underglow red/purple, then returns to the menu.
+  `game_mode` done for V1: real, player-controlled snake, brick breaker,
+  and Tetris (distinct from `standby`'s autonomous versions of the same
+  three games below, which stay unchanged) -- hold SW3+SW4+SW5+SW6 to
+  toggle a menu, touch pad 1/2/3 to launch Snake/Brick Breaker/Tetris.
+  Snake: SW1-SW4 = left/right/up/down, eats food to grow, wraps at the
+  edges, dies on self-collision. Brick Breaker: SW1/SW2 move the paddle.
+  Tetris: SW1/SW2 move the piece, SW3 rotates (2 states per piece, no
+  wall kicks), SW4 hard-drops. Every game ending flashes underglow
+  red/purple, then returns to the menu.
+  Since Tetris/brick breaker reuse SW1/SW2, `octave_control.c` now
+  checks `tiles_game_mode_is_active()` and skips its own action logic
+  entirely while a game owns the buttons -- without this, every in-game
+  left/right press would have also silently stepped the octave or
+  transpose key underneath the game (a real gap the previous transpose-
+  mode work exposed, not just an untuned constant).
   Shares standby's rendering-ownership mechanism; `main.c` skips
   `tiles_standby_scan()` entirely while a game is active so the two
   can't fight over the same pads/buttons/underglow. See
@@ -208,12 +216,13 @@ flashable `.uf2`.
   most recently halved after still reading as too fast); animation 4's
   real-snake rework and animations 8 (brick breaker), 9 (marquee,
   including its font's move to the new shared `services/pixel_font.h`/
-  `.c`), and 10 (bouncing glow, a new "simple but elegant" white
-  animation) have NOT been seen on real hardware at all yet -- every one
-  of their constants (`EQ_PEAK_DECAY_PER_MS`, `CIRCLE_PERIOD_MS`,
-  `POWER_SAVING_PULSE_PERIOD_MS`, `BOUNCE_ROW_PERIOD_MS`, etc.) is a
-  first guess. `BUTTON_STANDBY_BRIGHTNESS_SCALE` (0.35) is likewise still an
-  unmeasured guess at how much dimmer buttons need to be, not a measured
+  `.c`), 10 (bouncing glow, a "simple but elegant" white animation), and
+  11 (Tetris, AI-placed via a greedy landing-depth heuristic) have NOT
+  been seen on real hardware at all yet -- every one of their constants
+  (`EQ_PEAK_DECAY_PER_MS`, `CIRCLE_PERIOD_MS`,
+  `POWER_SAVING_PULSE_PERIOD_MS`, `BOUNCE_ROW_PERIOD_MS`,
+  `TETRIS_STEP_MS`, etc.) is a first guess. `BUTTON_STANDBY_BRIGHTNESS_SCALE`
+  (0.35) is likewise still an unmeasured guess at how much dimmer buttons need to be, not a measured
   match to pad brightness.
 - `services/boot_sequence.c`: seen on real hardware twice now, reworked
   three times total -- direction/pacing, then buttons dropped entirely
@@ -235,15 +244,27 @@ flashable `.uf2`.
   key-center display via the new `services/pixel_font.h`/`.c`) is brand
   new and has not been hardware-tested at all -- the combo-hold
   threshold, flash timings, and font legibility at actual LED
-  brightness are all unverified.
+  brightness are all unverified. Also newly gates on
+  `tiles_game_mode_is_active()` so it stops consuming SW1/SW2 presses
+  while a game owns them -- see `services/game_mode.c`'s entry below for
+  the bug this fixes; the gate itself hasn't been hardware-tested.
 - `services/game_mode.c` has not been hardware-tested at all -- the
-  entry-gesture hold duration, every step-timing constant for both
+  entry-gesture hold duration, every step-timing constant for all three
   games, and the round-end flash timing are first attempts. Whether
   snake's edge-wrap (chosen over instant wall-death as friendlier on
   such a small board) actually feels right in practice, and whether
   holding 4 buttons simultaneously is comfortable/reliable to do on the
   real hardware at all, are both open questions this hasn't been able
-  to answer yet.
+  to answer yet. Tetris is brand new: its simplified 2-state rotation
+  (no wall kicks), SW1-4 control mapping, and colors are all unverified.
+  Building Tetris also surfaced a real, previously-unnoticed bug
+  predating it -- `octave_control.c`'s SW1/SW2 handling ran
+  unconditionally regardless of game mode, so every in-game left/right
+  press (already true for Snake and Brick Breaker, just far more
+  noticeable once Tetris made SW1/SW2 the primary controls) was also
+  silently stepping the octave/transpose key underneath the game. Now
+  fixed (see `services/octave_control.c`'s entry above), but the fix
+  itself hasn't been seen on real hardware.
 - `services/haptics.c` has not been hardware-tested at all -- every
   duty/timing constant (kick duration, overdrive duration, gap duration,
   min kick duty, max sustain duty, stagger gap) is an unmeasured

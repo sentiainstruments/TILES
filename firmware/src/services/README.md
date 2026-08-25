@@ -175,6 +175,15 @@ not its code.
   showing. `tiles_octave_control_is_transpose_active()` lets `main.c`
   skip `standby.c`'s idle scan while this owns the pad grid, mirroring
   the existing `game_mode.c` gate.
+  **Defers to game mode:** this module's scan runs unconditionally every
+  tick with no gate of its own, and `game_mode.h`'s minigames (below)
+  reuse SW1/SW2 as their own left/right controls -- without a check
+  here, every in-game press would *also* silently fire an octave or
+  transpose step underneath the game. `tiles_game_mode_is_active()` is
+  checked at the top of the scan: while a game owns the buttons, this
+  module only keeps its press-edge tracking current and does nothing
+  else (button-LED writes were already a no-op in that state, see
+  `game_mode.h`'s entry below for why).
   **Not hardware-verified:** the combo-hold threshold, both flash
   durations, the cross's row/column placement, and the amber accent
   color are all first-pass judgment calls, not measurements.
@@ -205,7 +214,8 @@ not its code.
   combo since they're reserved as in-game controls, matching
   `octave_control.h`'s own note above about "-"/"+" becoming
   general-purpose modifiers eventually. The menu shows pad 1 (green) for
-  Snake and pad 2 (orange) for Brick Breaker; touch either to launch it.
+  Snake, pad 2 (orange) for Brick Breaker, and pad 3 (cyan) for Tetris;
+  touch any to launch it.
   Snake: starts 2 segments long (real feedback: 3 felt cramped on a
   board this small), SW1/SW2/SW3/SW4 = left/right/up/down (absolute
   direction, not relative turning; reversing straight into the snake's
@@ -214,32 +224,47 @@ not its code.
   wall-death on a board this small) and dies only on self-collision.
   Brick Breaker: SW1/SW2
   move the paddle -- otherwise identical physics to `standby.c`'s
-  autonomous version. Either game ending (self-collision, or brick
-  breaker won/lost) flashes underglow red/purple for ~2s, then returns
+  autonomous version.
+  Tetris: SW1/SW2 move the falling piece left/right, SW3 rotates it (2
+  states per piece, not full 4-state SRS, and no wall kicks -- see the
+  `gt_` section's own comment for why), SW4 hard-drops it, gravity also
+  steps it down automatically (`GT_STEP_MS`). Standard tetromino
+  shapes/colors; `gt_clear_lines()` shifts everything above a full row
+  down (handles multiple simultaneous clears in one bottom-up sweep);
+  topping out (a freshly spawned piece already collides) ends the round.
+  Every game ending (snake self-collision, brick breaker won/lost,
+  Tetris topping out) flashes underglow red/purple for ~2s, then returns
   to the menu.
   Claims the same standby-active rendering path `standby.c`'s own
-  animations and `boot_sequence.c` use -- correct and sufficient by
-  itself: `buttons.c`'s per-button override for SW1/SW2
+  animations and `boot_sequence.c` use -- correct and sufficient for LED
+  *writes*: `buttons.c`'s per-button override for SW1/SW2
   (`octave_control.c`) already goes transparently inert under that same
   flag (see `buttons.c`), so no changes were needed there for this
-  module to freely drive SW1/SW2's LEDs too. `main.c` skips calling
-  `tiles_standby_scan()` entirely while `tiles_game_mode_is_active()` is
-  true, so standby's own idle timer can't fire mid-game and fight this
-  module over the same rendering path -- both being triggered by real
-  button presses means standby's idle timer gets a fresh reset the
-  moment control hands back either way, so there's no "immediately idle
-  right after leaving a game" edge case from skipping its scan while
-  active.
+  module to freely drive SW1/SW2's LEDs too. That inertness only covers
+  writes, though -- `octave_control.c`'s button *reads* run
+  unconditionally every scan with no gate of their own, so without a
+  fix every in-game left/right press would *also* silently step the
+  octave or transpose key underneath the game. Fixed by having
+  `octave_control.c` check `tiles_game_mode_is_active()` itself and skip
+  all of its own action logic (while keeping its press-edge tracking
+  current) whenever a game owns the buttons -- see its own entry above
+  and file header. `main.c` skips calling `tiles_standby_scan()` entirely
+  while `tiles_game_mode_is_active()` is true, so standby's own idle
+  timer can't fire mid-game and fight this module over the same
+  rendering path -- both being triggered by real button presses means
+  standby's idle timer gets a fresh reset the moment control hands back
+  either way, so there's no "immediately idle right after leaving a
+  game" edge case from skipping its scan while active.
   Deliberately NOT sharing state/logic with `standby.c`'s autonomous
-  versions of the same two games, even though the physics/rules mostly
+  versions of the same games, even though the physics/rules mostly
   overlap -- an AI-driven idle loop and a player-driven game are
   different concerns likely to evolve independently (control remapping,
   more games, difficulty tuning), and forcing them through one shared
   implementation now would couple things that don't need to be coupled.
   **Not hardware-verified at all:** the entry-gesture hold duration,
   every step-timing constant, the wrap-around-vs-wall-death choice for
-  snake, and the round-end flash timing are all first attempts, none
-  seen on real hardware yet.
+  snake, Tetris's simplified 2-state rotation, and the round-end flash
+  timing are all first attempts, none seen on real hardware yet.
 - `expression.h`/`.c` — done for V1: touch+Hall fusion. Touch remains
   the authoritative note on/off timing gate (more reliable to detect
   than inferring press/release from Hall depth alone); Hall supplies
@@ -367,6 +392,7 @@ not its code.
   8. brick breaker: the function-button row is a wall of bricks, a 3-pad-wide cyan paddle (bottom pad row) tracks a warm-white/yellow ball with simple AI (moves at most one column per step toward the ball), the ball bounces around knocking orange bricks out until every brick is broken (won) or it gets past the paddle (lost) -- either way underglow flashes red and purple for a few seconds, then a fresh round starts. Ball checked before paddle in the render order so it draws on top during a bounce, when they briefly occupy the same cell.
   9. a scrolling marquee: "SENTIA - TILES - " scrolls across the pad grid using the shared font in `services/pixel_font.h`/`.c` (see its own entry above), with automatic inter-glyph spacing and seamless wraparound (`marquee_total_width()`) rather than a fixed animation; underglow and function buttons both stay off, keeping it purely a pad-grid text effect. Scroll speed slowed (`MARQUEE_MS_PER_COLUMN` 260ms -> 420ms per column) from real feedback, at the same time the font itself moved out to the shared module to fix a real mistake in the old one-off glyphs (E and F were nearly indistinguishable).
   10. bouncing glow: the "simple but elegant" one -- a single soft white point bounces diagonally around the pad grid like a screensaver ball, purely a closed-form position (a triangle wave per axis -- a bounce-off-the-walls reflection with no velocity/state to track) with a soft falloff around it, no particle array or game state at all. Row and col bounce at different, non-integer-ratio periods (`BOUNCE_ROW_PERIOD_MS`/`BOUNCE_COL_PERIOD_MS`) so the path slowly traces a Lissajous-like figure instead of repeating quickly. Function buttons stay off; underglow mirrors the pad field like animations 1-4, so the glow naturally spills into it near an anchor.
+  11. Tetris: the AI-played autonomous counterpart to `game_mode.h`'s real Tetris (below) -- same standard tetromino set/colors, deliberately separate state and code from the interactive version, matching this file's existing snake/brick-breaker precedent. A lightweight greedy AI (`tetris_ai_place()`) picks each piece's rotation and column at spawn by simulating every fitting placement and keeping whichever lands the piece's topmost cell deepest (a cheap "keep the stack low" proxy, no real hole-counting), then the piece visibly falls one row at a time toward that spot. Topping out flashes underglow red/purple like brick breaker, then the well clears and a new game starts. Function buttons stay off.
 
   Touch/button/pedal activity exits standby immediately. A Hall-depth wake fallback exists in the code
   (`hall_depth_wake_triggered()`, checked only while already in standby,
@@ -460,11 +486,11 @@ not its code.
   reworked from that feedback, including animation 3's fall-speed halving
   above); animation 4's real-snake rework and animations 8 (brick
   breaker), 9 (marquee, including its font move to `pixel_font.h`/`.c`),
-  and 10 (bouncing glow) have NOT been seen at all yet -- their
-  AI/pathing/step timing, the shared pixel font (hand-designed, not
+  10 (bouncing glow), and 11 (Tetris) have NOT been seen at all yet --
+  their AI/pathing/step timing, the shared pixel font (hand-designed, not
   measured against how legible it actually is at 4 pixels tall), brick
-  breaker's paddle-AI reaction speed, and bouncing glow's periods/radius
-  are all first attempts.
+  breaker's and Tetris's paddle/placement-AI reaction, and bouncing
+  glow's periods/radius are all first attempts.
 - `boot_sequence.h`/`.c` — done for V1: a ~4-second, blocking power-on
   animation run once from `main.c`, before the main loop starts (nothing
   else needs to run concurrently -- USB stays alive via TinyUSB's own

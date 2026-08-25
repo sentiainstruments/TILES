@@ -1019,6 +1019,283 @@ static tiles_standby_color_t anim_bounce(uint8_t row, uint8_t col, uint32_t now_
     return white(BOUNCE_PEAK_LEVEL * t * t);
 }
 
+/* ---- Animation 11: Tetris --------------------------------------------------
+ * Standard tetromino set, AI-placed and AI-played -- the autonomous
+ * counterpart to game_mode.c's real, player-controlled Tetris (same
+ * piece shapes/colors, deliberately separate state and code, per this
+ * file's established precedent of not sharing anything between the
+ * idle-loop and player-driven versions of the same game -- see
+ * animations 4 and 8 above). A lightweight greedy AI picks each new
+ * piece's rotation and column immediately at spawn: of every
+ * (rotation, column) combination that fits, it simulates the drop and
+ * keeps whichever lands the piece's topmost cell deepest (a cheap proxy
+ * for "keeps the resulting stack lowest," without real hole-counting).
+ * The piece then visibly falls one row at a time toward that chosen
+ * landing spot, the same step-throttle pattern as every other stateful
+ * animation here. Topping out (nowhere for a freshly spawned piece to
+ * fit) triggers the same red/purple round-end flash brick breaker uses,
+ * then the well clears and a fresh game starts. Function buttons stay
+ * off. */
+
+#define TETRIS_MIN_ROW 1u /* row 0 is buttons, not part of the well */
+#define TETRIS_MAX_ROW TILES_GRID_MAX_ROW
+#define TETRIS_MIN_COL TILES_GRID_MIN_COL
+#define TETRIS_MAX_COL TILES_GRID_MAX_COL
+#define TETRIS_ROWS 4u
+#define TETRIS_COLS 6u
+#define TETRIS_STEP_MS 260u /* faster than the interactive version -- nothing here waits on a player */
+#define TETRIS_LOCKED_LEVEL 0.8f
+#define TETRIS_FLASH_DURATION_MS 2200u
+#define TETRIS_FLASH_TOGGLE_MS 260u
+#define TETRIS_NUM_PIECE_TYPES 7u
+
+typedef struct {
+    int8_t dr;
+    int8_t dc;
+} tetris_offset_t;
+
+/* Two rotation states per piece (not full 4-state SRS) -- with only 4
+ * rows of height the extra states would rarely matter. Classic piece
+ * colors, classic piece order (I,O,T,S,Z,J,L). */
+typedef struct {
+    tetris_offset_t state0[4];
+    tetris_offset_t state1[4];
+    float r, g, b;
+} tetris_piece_def_t;
+
+static const tetris_piece_def_t TETRIS_PIECES[TETRIS_NUM_PIECE_TYPES] = {
+    {{{0, 0}, {0, 1}, {0, 2}, {0, 3}}, {{0, 0}, {1, 0}, {2, 0}, {3, 0}}, 0.0f, 1.0f, 1.0f}, /* I: cyan */
+    {{{0, 0}, {0, 1}, {1, 0}, {1, 1}}, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, 1.0f, 1.0f, 0.0f}, /* O: yellow */
+    {{{0, 0}, {0, 1}, {0, 2}, {1, 1}}, {{0, 0}, {1, 0}, {2, 0}, {1, 1}}, 0.6f, 0.0f, 1.0f}, /* T: purple */
+    {{{0, 1}, {0, 2}, {1, 0}, {1, 1}}, {{0, 0}, {1, 0}, {1, 1}, {2, 1}}, 0.0f, 1.0f, 0.0f}, /* S: green */
+    {{{0, 0}, {0, 1}, {1, 1}, {1, 2}}, {{0, 1}, {1, 0}, {1, 1}, {2, 0}}, 1.0f, 0.0f, 0.0f}, /* Z: red */
+    {{{0, 0}, {1, 0}, {1, 1}, {1, 2}}, {{0, 0}, {0, 1}, {1, 0}, {2, 0}}, 0.0f, 0.0f, 1.0f}, /* J: blue */
+    {{{0, 2}, {1, 0}, {1, 1}, {1, 2}}, {{0, 0}, {1, 0}, {2, 0}, {2, 1}}, 1.0f, 0.5f, 0.0f}, /* L: orange */
+};
+
+typedef enum {
+    TETRIS_PHASE_PLAYING = 0,
+    TETRIS_PHASE_ROUND_END,
+} tetris_phase_t;
+
+/* 0 = empty, else (piece type index + 1) -- indexed [row - TETRIS_MIN_ROW][col - TETRIS_MIN_COL]. */
+static uint8_t s_tetris_board[TETRIS_ROWS][TETRIS_COLS];
+static uint8_t s_tetris_piece_type;
+static uint8_t s_tetris_rotation;
+static int8_t s_tetris_origin_row;
+static int8_t s_tetris_origin_col;
+static int8_t s_tetris_target_row; /* the AI's chosen landing row for the current piece */
+static tetris_phase_t s_tetris_phase;
+static uint32_t s_tetris_last_step_ms;
+static uint32_t s_tetris_round_end_ms;
+static bool s_tetris_inited;
+
+static const tetris_offset_t *tetris_offsets(uint8_t piece_type, uint8_t rotation) {
+    return (rotation == 0u) ? TETRIS_PIECES[piece_type].state0 : TETRIS_PIECES[piece_type].state1;
+}
+
+static bool tetris_fits(uint8_t piece_type, uint8_t rotation, int8_t origin_row, int8_t origin_col) {
+    const tetris_offset_t *offsets = tetris_offsets(piece_type, rotation);
+    for (uint8_t i = 0; i < 4u; i++) {
+        int8_t r = (int8_t)(origin_row + offsets[i].dr);
+        int8_t c = (int8_t)(origin_col + offsets[i].dc);
+        if (r < (int8_t)TETRIS_MIN_ROW || r > (int8_t)TETRIS_MAX_ROW) {
+            return false;
+        }
+        if (c < (int8_t)TETRIS_MIN_COL || c > (int8_t)TETRIS_MAX_COL) {
+            return false;
+        }
+        if (s_tetris_board[r - (int8_t)TETRIS_MIN_ROW][c - (int8_t)TETRIS_MIN_COL] != 0u) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Simulates dropping (piece_type, rotation, origin_col) from the top of
+ * the well and returns the row it would land at (the deepest row it
+ * still fits), or false if it doesn't even fit at spawn height for that
+ * column. */
+static bool tetris_simulate_drop(uint8_t piece_type, uint8_t rotation, int8_t origin_col, int8_t *out_row) {
+    if (!tetris_fits(piece_type, rotation, (int8_t)TETRIS_MIN_ROW, origin_col)) {
+        return false;
+    }
+    int8_t row = (int8_t)TETRIS_MIN_ROW;
+    while (tetris_fits(piece_type, rotation, (int8_t)(row + 1), origin_col)) {
+        row++;
+    }
+    *out_row = row;
+    return true;
+}
+
+/* Greedy placement AI -- see the animation's file comment above. */
+static void tetris_ai_place(uint8_t piece_type, uint8_t *out_rotation, int8_t *out_col, int8_t *out_row) {
+    bool found = false;
+    int8_t best_score = -1;
+    uint8_t best_rotation = 0u;
+    int8_t best_col = (int8_t)TETRIS_MIN_COL;
+    int8_t best_row = (int8_t)TETRIS_MIN_ROW;
+
+    for (uint8_t rotation = 0u; rotation < 2u; rotation++) {
+        for (int8_t col = (int8_t)TETRIS_MIN_COL; col <= (int8_t)TETRIS_MAX_COL; col++) {
+            int8_t landing_row;
+            if (!tetris_simulate_drop(piece_type, rotation, col, &landing_row)) {
+                continue;
+            }
+            const tetris_offset_t *offsets = tetris_offsets(piece_type, rotation);
+            int8_t min_row = (int8_t)(landing_row + offsets[0].dr);
+            for (uint8_t i = 1; i < 4u; i++) {
+                int8_t r = (int8_t)(landing_row + offsets[i].dr);
+                if (r < min_row) {
+                    min_row = r;
+                }
+            }
+            if (!found || min_row > best_score) {
+                found = true;
+                best_score = min_row;
+                best_rotation = rotation;
+                best_col = col;
+                best_row = landing_row;
+            }
+        }
+    }
+
+    *out_rotation = best_rotation;
+    *out_col = best_col;
+    *out_row = found ? best_row : (int8_t)TETRIS_MIN_ROW;
+}
+
+static void tetris_spawn(void) {
+    s_tetris_piece_type = (uint8_t)(rand() % TETRIS_NUM_PIECE_TYPES);
+    s_tetris_origin_row = (int8_t)TETRIS_MIN_ROW;
+    tetris_ai_place(s_tetris_piece_type, &s_tetris_rotation, &s_tetris_origin_col, &s_tetris_target_row);
+}
+
+/* Same bottom-up, recheck-same-row-after-a-shift sweep as
+ * game_mode.c's gt_clear_lines() -- correctly collapses multiple
+ * simultaneous line clears in one pass. */
+static void tetris_clear_lines(void) {
+    int8_t row = (int8_t)(TETRIS_ROWS - 1u);
+    while (row >= 0) {
+        bool full = true;
+        for (uint8_t c = 0; c < TETRIS_COLS; c++) {
+            if (s_tetris_board[row][c] == 0u) {
+                full = false;
+                break;
+            }
+        }
+        if (!full) {
+            row--;
+            continue;
+        }
+        for (int8_t r = row; r > 0; r--) {
+            for (uint8_t c = 0; c < TETRIS_COLS; c++) {
+                s_tetris_board[r][c] = s_tetris_board[r - 1][c];
+            }
+        }
+        for (uint8_t c = 0; c < TETRIS_COLS; c++) {
+            s_tetris_board[0][c] = 0u;
+        }
+    }
+}
+
+static void tetris_new_round(uint32_t now_ms) {
+    for (uint8_t r = 0; r < TETRIS_ROWS; r++) {
+        for (uint8_t c = 0; c < TETRIS_COLS; c++) {
+            s_tetris_board[r][c] = 0u;
+        }
+    }
+    s_tetris_phase = TETRIS_PHASE_PLAYING;
+    tetris_spawn();
+    s_tetris_last_step_ms = now_ms;
+}
+
+static void tetris_lock(uint32_t now_ms) {
+    const tetris_offset_t *offsets = tetris_offsets(s_tetris_piece_type, s_tetris_rotation);
+    for (uint8_t i = 0; i < 4u; i++) {
+        int8_t r = (int8_t)(s_tetris_origin_row + offsets[i].dr);
+        int8_t c = (int8_t)(s_tetris_origin_col + offsets[i].dc);
+        s_tetris_board[r - (int8_t)TETRIS_MIN_ROW][c - (int8_t)TETRIS_MIN_COL] = (uint8_t)(s_tetris_piece_type + 1u);
+    }
+    tetris_clear_lines();
+    tetris_spawn();
+    if (!tetris_fits(s_tetris_piece_type, s_tetris_rotation, s_tetris_origin_row, s_tetris_origin_col)) {
+        /* Nowhere for the next piece to go -- topped out. */
+        s_tetris_phase = TETRIS_PHASE_ROUND_END;
+        s_tetris_round_end_ms = now_ms;
+    }
+}
+
+static void tetris_update(uint32_t now_ms) {
+    if (!s_tetris_inited) {
+        tetris_new_round(now_ms);
+        s_tetris_inited = true;
+        return;
+    }
+    if (s_tetris_phase == TETRIS_PHASE_ROUND_END) {
+        if (now_ms - s_tetris_round_end_ms >= TETRIS_FLASH_DURATION_MS) {
+            tetris_new_round(now_ms);
+        }
+        return;
+    }
+    if (now_ms - s_tetris_last_step_ms < TETRIS_STEP_MS) {
+        return;
+    }
+    s_tetris_last_step_ms = now_ms;
+    if (s_tetris_origin_row < s_tetris_target_row) {
+        s_tetris_origin_row++;
+    } else {
+        tetris_lock(now_ms);
+    }
+}
+
+static tiles_standby_color_t anim_tetris(uint8_t row, uint8_t col, uint32_t now_ms) {
+    tetris_update(now_ms);
+
+    if (row == 0u) {
+        return white(0.0f);
+    }
+
+    if (s_tetris_phase == TETRIS_PHASE_PLAYING) {
+        const tetris_offset_t *offsets = tetris_offsets(s_tetris_piece_type, s_tetris_rotation);
+        for (uint8_t i = 0; i < 4u; i++) {
+            int8_t r = (int8_t)(s_tetris_origin_row + offsets[i].dr);
+            int8_t c = (int8_t)(s_tetris_origin_col + offsets[i].dc);
+            if (r == (int8_t)row && c == (int8_t)col) {
+                /* The falling piece draws at full brightness, checked
+                 * before the locked board below so it's never masked by
+                 * whatever is already in that cell. */
+                const tetris_piece_def_t *active = &TETRIS_PIECES[s_tetris_piece_type];
+                tiles_standby_color_t c_active = {active->r, active->g, active->b};
+                return c_active;
+            }
+        }
+    }
+
+    uint8_t v = s_tetris_board[row - (uint8_t)TETRIS_MIN_ROW][col - (uint8_t)TETRIS_MIN_COL];
+    if (v != 0u) {
+        const tetris_piece_def_t *def = &TETRIS_PIECES[v - 1u];
+        tiles_standby_color_t c_locked = {def->r * TETRIS_LOCKED_LEVEL, def->g * TETRIS_LOCKED_LEVEL,
+                                           def->b * TETRIS_LOCKED_LEVEL};
+        return c_locked;
+    }
+    return white(0.0f);
+}
+
+static tiles_standby_color_t tetris_underglow(uint8_t pixel_index, uint32_t now_ms) {
+    (void)pixel_index;
+    if (s_tetris_phase != TETRIS_PHASE_ROUND_END) {
+        return white(0.0f);
+    }
+    uint32_t toggle = (now_ms - s_tetris_round_end_ms) / TETRIS_FLASH_TOGGLE_MS;
+    if ((toggle % 2u) == 0u) {
+        tiles_standby_color_t red = {1.0f, 0.0f, 0.0f};
+        return red;
+    }
+    tiles_standby_color_t purple = {0.6f, 0.0f, 1.0f};
+    return purple;
+}
+
 /* ---- Animation registry + shared render -------------------------------- */
 
 typedef tiles_standby_color_t (*field_fn_t)(uint8_t row, uint8_t col, uint32_t now_ms);
@@ -1027,7 +1304,7 @@ typedef tiles_standby_color_t (*underglow_fn_t)(uint8_t pixel_index, uint32_t no
 static const field_fn_t s_animations[] = {
     anim_wave,           anim_glow,     anim_shooting_stars, anim_snake,
     anim_rgb_showcase,   anim_equalizer, anim_underglow_circle,
-    anim_brick_breaker,  anim_marquee,  anim_bounce,
+    anim_brick_breaker,  anim_marquee,  anim_bounce, anim_tetris,
 };
 /* Parallel to s_animations[] -- NULL means underglow samples the same
  * field the pads use at its anchor points (animations 1-5 and 10, where
@@ -1041,6 +1318,7 @@ static const field_fn_t s_animations[] = {
  * the marquee's underglow is simply always off. */
 static const underglow_fn_t s_animation_underglow_override[] = {
     NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow, bb_underglow, marquee_underglow, NULL,
+    tetris_underglow,
 };
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
 
