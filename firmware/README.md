@@ -102,11 +102,14 @@ first on-hardware note-on test.
   needs verified on real hardware, and for a real bug this rework fixed
   (standby pads were routing through the touch-driven idle-baseline
   floor, so they never actually reached true black).
-  `boot_sequence` done for V1: a ~2-second power-on animation (white
-  ripple rising from bottom-center, fade to black, single magenta pulse)
-  that also re-captures Hall's rest baseline once the animation's given
-  the sensors a couple of settled seconds, instead of only ever trusting
-  the very-first-instant-of-boot capture.
+  `boot_sequence` done for V1: a ~4-second power-on animation (white
+  "rain" flooding down from the function buttons, fade to black, a slow
+  smoothstep-eased magenta pulse across pads + underglow only -- not
+  buttons, which can't show color) that also re-captures Hall's rest
+  baseline once the animation's given the sensors a few settled seconds,
+  instead of only ever trusting the very-first-instant-of-boot capture.
+  Already reworked once from real feedback (direction reversed, "jumpy"
+  linear transitions replaced with eased ones).
   `haptics` done for
   V1: an overdrive
   spike then velocity-mapped kick on strike, then a hard cutoff -- a
@@ -174,12 +177,15 @@ flashable `.uf2`.
   `BUTTON_STANDBY_BRIGHTNESS_SCALE` (0.35) is likewise still an
   unmeasured guess at how much dimmer buttons need to be, not a measured
   match to pad brightness.
-- `services/boot_sequence.c` has not been flashed and watched on real
-  hardware yet -- the ripple's rise/fade/pulse durations, the ripple's
-  origin/radius/edge-width, and the magenta pulse's envelope timing are
-  all first guesses. The Hall baseline re-capture at the end is a real
-  mechanism (reuses `hall.c`'s existing per-pad read path), but whether
-  ~2 seconds is actually enough settling time to matter is unverified.
+- `services/boot_sequence.c`: the *first* version was seen on real
+  hardware and read as "jumpy" with the wrong flow direction -- reworked
+  (rain now flows down from the buttons, smoothstep easing throughout,
+  buttons dropped from the magenta pulse), but this reworked version
+  hasn't itself been flashed and watched yet, so every duration/edge-
+  width constant is again a first guess pending that. The Hall baseline
+  re-capture at the end is a real mechanism (reuses `hall.c`'s existing
+  per-pad read path), but whether ~4 seconds is actually enough settling
+  time to matter is unverified.
 - `services/haptics.c` has not been hardware-tested at all -- every
   duty/timing constant (kick duration, overdrive duration, gap duration,
   min kick duty, max sustain duty, stagger gap) is an unmeasured

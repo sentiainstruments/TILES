@@ -291,25 +291,35 @@ not its code.
   15-minute timeout itself) are unmeasured against real I2C bus load /
   how it actually looks. None of this has been flashed and watched on
   real hardware yet.
-- `boot_sequence.h`/`.c` — done for V1: a ~2-second, blocking power-on
+- `boot_sequence.h`/`.c` — done for V1: a ~4-second, blocking power-on
   animation run once from `main.c`, before the main loop starts (nothing
   else needs to run concurrently -- USB stays alive via TinyUSB's own
-  background IRQ task regardless). A white ripple rises from the grid's
-  bottom-center (underglow off), fills the board (buttons, being
-  logically further from the origin than any pad, are naturally the last
-  thing it reaches -- no special-casing needed), fades to complete dark,
-  then a single "Sentia Instruments Magenta" (#FF00FF) pulse across pads
-  + underglow finishes it. Reuses the exact same standby-active rendering
-  path `standby.c`'s animations use (`tiles_lighting_set_standby_active()`,
-  the RGB pad/underglow/button setters) rather than a second mechanism,
-  and shares `board/board_layout.h`'s grid model with `standby.c`.
+  background IRQ task regardless). A white "rain" floods down from the
+  function buttons (the source) through pad rows 1-4 (underglow off
+  throughout), fades to complete dark, then a single, slow,
+  smoothstep-eased "Sentia Instruments Magenta" (#FF00FF) pulse across
+  pads + underglow (deliberately NOT buttons -- they're plain monochrome
+  PWM, not addressable RGB, so pulsing their brightness in sync read as
+  visually wrong once seen lit) finishes it.
+  Reworked once already from real feedback on the first version: it
+  originally rose from the bottom-center outward (reversed to flow down
+  from the buttons instead, "like rain/flooding") and used linear,
+  fairly fast, narrow-edged transitions that read as "jumpy" -- every
+  phase is now smoothstep-eased with wider soft edges and longer
+  durations instead.
+  Reuses the exact same standby-active rendering path `standby.c`'s
+  animations use (`tiles_lighting_set_standby_active()`, the RGB
+  pad/underglow/button setters) rather than a second mechanism, and
+  shares `board/board_layout.h`'s grid model with `standby.c`.
   Also uses the time productively: `hall.c`'s rest baseline is captured
   once at `tiles_hall_init()`, at the very first instant of boot before
   anything has settled -- this sequence re-captures it
   (`tiles_hall_recapture_baseline()`) right as the animation ends, a
-  couple of seconds later, at essentially no extra cost since the
-  animation was going to take that long anyway.
-  **Not hardware-verified:** none of the ripple/fade/pulse timing or
-  radius constants have been seen on real hardware yet.
+  few seconds later, at essentially no extra cost since the animation
+  was going to take that long anyway.
+  **Not hardware-verified:** none of the rain/fade/pulse timing or edge-
+  width constants have been seen on real hardware yet -- this rework is
+  itself unverified, only reasoned through against the *previous*
+  version's real feedback.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
