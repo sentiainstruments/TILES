@@ -38,10 +38,7 @@
  * second path to detect a real press regardless of why touch alone
  * isn't enough. Matches this codebase's existing stance that touch
  * alone is foolable and Hall should be fused with it (see hall.h /
- * expression.c). PLACEHOLDER, unmeasured: expression.c's own
- * DEPTH_TO_AFTERTOUCH_FULL_SCALE (2000, also unmeasured) is "full
- * press" depth; this is a coarse fraction of that meant to catch even a
- * light press, not tuned against real noise floor.
+ * expression.c).
  *
  * IMPORTANT: only ever check this while ALREADY in standby (see
  * hall_depth_wake_triggered() below) -- the first version of this fix
@@ -50,8 +47,24 @@
  * (real symptom: it never triggered). hall.c's depth has no baseline
  * drift compensation yet, so treating it as part of the idle condition
  * meant any pad's ambient noise/drift could permanently look "active"
- * and the idle timer would never elapse. */
-#define TILES_STANDBY_HALL_WAKE_DEPTH 150u
+ * and the idle timer would never elapse.
+ *
+ * Even with that fix, real hardware still never showed an animation:
+ * moving Hall to wake-ONLY isn't enough by itself if the threshold is
+ * low enough that some pad's drift/noise crosses it within a scan or
+ * two of entering standby -- that reads as an instant exit_standby(),
+ * which looks identical to "never enters" from the outside (no
+ * animation frame survives long enough to be seen). Raised from an
+ * initial 150 (7.5% of expression.c's DEPTH_TO_AFTERTOUCH_FULL_SCALE,
+ * itself an unmeasured "full press" guess) to 1000 (50% of that same
+ * reference) at the user's explicit direction -- they'd rather standby
+ * require an unambiguous, deliberate press to wake than risk it
+ * bouncing back out on drift again. Still an unmeasured placeholder,
+ * just a much more conservative one; lower it if this now misses real
+ * presses, or report the raw depth values seen at rest (main.c's
+ * periodic [hall] print) if it's still bouncing, so the next value is
+ * chosen from real data instead of another guess. */
+#define TILES_STANDBY_HALL_WAKE_DEPTH 1000u
 
 #define TILES_STANDBY_PI 3.14159265358979323846f
 

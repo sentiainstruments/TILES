@@ -151,6 +151,16 @@ not its code.
   that same check and broke standby entirely (it never triggered),
   because hall.c's depth has no drift compensation yet and some pad's
   ambient noise/drift alone was enough to look permanently "active".
+  Even wake-only wasn't enough at the original threshold (150, 7.5% of
+  expression.c's unmeasured "full press" reference) -- real hardware
+  still never showed an animation, because a low enough threshold lets
+  some pad's drift cross it within a scan or two of entering, which
+  reads as an instant exit right after entry (indistinguishable from
+  "never enters" -- no frame survives long enough to see). Raised to
+  1000 (50% of that reference) at the user's explicit direction: they'd
+  rather standby need an unambiguous press to wake than risk bouncing
+  on drift again. Still an unmeasured placeholder, just a much more
+  conservative one.
   Deliberately a lighting-only concept: touch/Hall/
   expression/MIDI keep running completely unaware standby exists, so
   playing still works exactly as normal even while idle animations are
