@@ -340,47 +340,72 @@ static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_
 }
 
 /* ---- Animation 6: graphic equalizer --------------------------------------
- * Each column is a fake VU/EQ bar: a lively, purely synthetic level
+ * Each column is a fake VU/EQ bar: a slow, purely synthetic level
  * (layered sines, different period per column so bars don't move in
  * lockstep) lights that column's bottom-up segments -- rows 3-4 (the
- * bottom two) green, row 2 yellow, row 1 (top) red, like a classic
+ * bottom two) blue, row 2 yellow, row 1 (top) red, like a classic
  * hardware graphic equalizer. A per-column "redline" peak marker sticks
  * at the highest segment reached and only falls slowly (EQ_PEAK_DECAY_PER_MS),
- * independent of the bar's own faster motion -- the peak-hold behavior
- * real EQ/VU hardware has. Function buttons stay minimal; underglow is a
- * simple constant green accent (see eq_underglow below) rather than
- * tracking the bars -- doesn't correspond to any one column, so there's
- * nothing meaningful for it to track. */
+ * independent of the bar's own motion -- the peak-hold behavior real
+ * EQ/VU hardware has.
+ *
+ * Reworked from real feedback: was too fast and too continuously lit,
+ * reading as busy/mechanical rather than stylized. Two changes fix
+ * that: every period is much longer now, and each column also has its
+ * own slow, independent "phrase" envelope (eq_bar_envelope() below)
+ * that most of the time sits low -- so columns spend real stretches
+ * fully dark (not just dim), sometimes several at once, rather than
+ * always showing at least a segment or two. Function buttons are fully
+ * off (were a faint minimal glow); underglow is a simple constant blue
+ * accent (see eq_underglow below) rather than tracking the bars --
+ * doesn't correspond to any one column, so there's nothing meaningful
+ * for it to track. */
 
 #define EQ_NUM_COLS 6u
-#define EQ_BUTTON_ROW_LEVEL 0.06f
 #define EQ_LIT_LEVEL 0.85f
 #define EQ_PEAK_LEVEL 1.0f
 #define EQ_UNDERGLOW_LEVEL 0.7f
-#define EQ_BAR_MIN_LEVEL 0.15f
-#define EQ_BAR_MAX_LEVEL 1.0f
-#define EQ_BAR_PERIOD1_BASE_MS 900.0f
-#define EQ_BAR_PERIOD2_BASE_MS 370.0f
-/* Full fall from a maxed-out peak to 0 takes about 5s -- "drops slowly". */
-#define EQ_PEAK_DECAY_PER_MS (1.0f / 5000.0f)
+/* Both roughly 3-4x the original periods -- the main fix for "too
+ * fast". */
+#define EQ_BAR_PERIOD1_BASE_MS 3200.0f
+#define EQ_BAR_PERIOD2_BASE_MS 1300.0f
+/* The per-column "phrase" envelope: how active vs. silent a column is
+ * right now, cycling slowly and independently per column. Biased toward
+ * low via EQ_ENVELOPE_SHAPE (>1 spends more time near 0 than near 1) --
+ * "more empty space, sometimes columns fully off" is exactly a low
+ * envelope value forcing the bar level to ~0 regardless of the
+ * (still-moving) raw motion underneath it. */
+#define EQ_ENVELOPE_PERIOD_MS_BASE 7000.0f
+#define EQ_ENVELOPE_SHAPE 2.2f
+/* Full fall from a maxed-out peak to 0 takes about 6s -- "drops slowly",
+ * nudged up slightly to match the generally slower, more stylized pace. */
+#define EQ_PEAK_DECAY_PER_MS (1.0f / 6000.0f)
 
 static float s_eq_peak[EQ_NUM_COLS];
 static uint32_t s_eq_peak_update_ms[EQ_NUM_COLS];
 static bool s_eq_inited;
 
+static float eq_bar_envelope(uint8_t col, uint32_t now_ms) {
+    float period = EQ_ENVELOPE_PERIOD_MS_BASE + (float)col * 900.0f;
+    float phase = (float)col * 0.9f;
+    float raw = 0.5f + 0.5f * sinf(2.0f * TILES_STANDBY_PI * (float)now_ms / period + phase);
+    return powf(clamp01(raw), EQ_ENVELOPE_SHAPE);
+}
+
 /* Deterministic function of (col, time) -- two sine waves at different,
- * per-column periods/phases blended together, purely to look like lively
- * fake audio motion. No randomness/state needed for the bar itself, only
- * for the peak below. */
+ * per-column periods/phases blended together for texture, then scaled
+ * by that column's own slow envelope above so the bar genuinely goes
+ * quiet (not just dim) during that envelope's low stretches. No
+ * randomness/state needed for the bar itself, only for the peak below. */
 static float eq_bar_level(uint8_t col, uint32_t now_ms) {
     float col_f = (float)col;
-    float period1 = EQ_BAR_PERIOD1_BASE_MS + col_f * 130.0f;
-    float period2 = EQ_BAR_PERIOD2_BASE_MS + col_f * 55.0f;
+    float period1 = EQ_BAR_PERIOD1_BASE_MS + col_f * 400.0f;
+    float period2 = EQ_BAR_PERIOD2_BASE_MS + col_f * 180.0f;
     float phase = col_f * 1.7f;
     float s1 = sinf(2.0f * TILES_STANDBY_PI * (float)now_ms / period1 + phase);
     float s2 = sinf(2.0f * TILES_STANDBY_PI * (float)now_ms / period2 + phase * 1.3f);
     float raw = clamp01(0.5f + 0.3f * s1 + 0.2f * s2);
-    return EQ_BAR_MIN_LEVEL + (EQ_BAR_MAX_LEVEL - EQ_BAR_MIN_LEVEL) * raw;
+    return raw * eq_bar_envelope(col, now_ms);
 }
 
 /* Advances every column's peak by however long it's been since that
@@ -425,15 +450,15 @@ static tiles_standby_color_t eq_row_color(uint8_t row) {
         tiles_standby_color_t yellow = {1.0f, 1.0f, 0.0f};
         return yellow;
     }
-    tiles_standby_color_t green = {0.0f, 1.0f, 0.0f}; /* rows 3, 4 */
-    return green;
+    tiles_standby_color_t blue = {0.0f, 0.0f, 1.0f}; /* rows 3, 4 */
+    return blue;
 }
 
 static tiles_standby_color_t anim_equalizer(uint8_t row, uint8_t col, uint32_t now_ms) {
     eq_update_peaks(now_ms);
 
     if (row == 0u) {
-        return white(EQ_BUTTON_ROW_LEVEL);
+        return white(0.0f); /* function buttons fully off for this animation */
     }
 
     uint8_t col0 = (uint8_t)(col - TILES_GRID_MIN_COL);
@@ -470,7 +495,7 @@ static tiles_standby_color_t anim_equalizer(uint8_t row, uint8_t col, uint32_t n
 static tiles_standby_color_t eq_underglow(uint8_t pixel_index, uint32_t now_ms) {
     (void)pixel_index;
     (void)now_ms;
-    tiles_standby_color_t c = {0.0f, EQ_UNDERGLOW_LEVEL, 0.0f};
+    tiles_standby_color_t c = {0.0f, 0.0f, EQ_UNDERGLOW_LEVEL};
     return c;
 }
 
