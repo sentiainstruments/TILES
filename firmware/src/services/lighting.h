@@ -68,12 +68,16 @@ void tiles_lighting_service(void);
  * iteration regardless of standby) does that naturally. */
 void tiles_lighting_set_standby_active(bool active);
 
-/* Same brightness curve as tiles_lighting_set_pad_press (0.0 = idle
- * baseline, 1.0 = ceiling), but always writes -- meant only for
- * standby.c's animation frames. */
-void tiles_lighting_set_standby_pad(uint8_t logical_pad, float level_0_to_1);
+/* Sets one pad's standby-animation color: each of r/g/b (0.0-1.0) is
+ * scaled independently by the pad ceiling -- unlike
+ * tiles_lighting_set_pad_press, there is NO idle-baseline floor here,
+ * so {0,0,0} is true black. Meant only for standby.c's animation
+ * frames; a no-op unless standby is active. White animations just pass
+ * r=g=b=brightness. */
+void tiles_lighting_set_standby_pad_rgb(uint8_t logical_pad, float r, float g, float b);
 
-/* Sets one underglow pixel (0-3, chain order) as a fraction of its
- * fixed default level (TILES_LIGHTING_UNDERGLOW_LEVEL in lighting.c) --
- * meant only for standby.c's animation frames. */
-void tiles_lighting_set_standby_underglow(uint8_t pixel_index, float level_0_to_1);
+/* Sets one underglow pixel's (0-3, chain order) standby-animation
+ * color: each of r/g/b (0.0-1.0) is scaled independently by
+ * TILES_LIGHTING_UNDERGLOW_LEVEL. Meant only for standby.c's animation
+ * frames; a no-op unless standby is active. */
+void tiles_lighting_set_standby_underglow_rgb(uint8_t pixel_index, float r, float g, float b);

@@ -3,9 +3,10 @@
 /*
  * Standby (idle) animations: after 1 minute with no touch/Hall/button/
  * pedal activity, the pad grid + function buttons + underglow stop
- * reflecting real input and instead run one of a rotating set of
- * ambient animations, cycling to the next one every couple of minutes.
- * Any activity exits standby immediately and hands rendering back to
+ * reflecting real input and instead run one of 5 rotating ambient
+ * animations, switching to a new (never immediately repeated) random one
+ * every couple of minutes -- see standby.c's s_animations[]. Any
+ * activity exits standby immediately and hands rendering back to
  * touch.c/buttons.c's normal behavior. Hall depth is included alongside
  * touch specifically because real hardware showed MPR121 touch alone
  * not reliably waking standby while the pad animation is running --
@@ -23,6 +24,12 @@
  * underglow anchor points, both currently based on the user's verbal
  * description of the physical layout rather than a hardware doc, so
  * flagged there as easy to correct once seen lit on the real board.
+ * Buttons are plain monochrome PCA9685 PWM, not addressable RGB like the
+ * pads/underglow -- every animation collapses color to a single
+ * brightness for the button row, additionally scaled down
+ * (BUTTON_STANDBY_BRIGHTNESS_SCALE in standby.c) since buttons read
+ * noticeably brighter than pads at the same commanded duty on real
+ * hardware.
  */
 
 #include <stdbool.h>

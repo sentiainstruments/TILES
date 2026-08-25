@@ -178,11 +178,16 @@ not its code.
   explicit demo-mode default, expected to change once this isn't just a
   demo) with no touch/button/pedal activity, the pad grid + 6 function
   buttons + underglow stop reflecting real input and instead run one of
-  4 rotating ambient animations (traveling wave, radial glow pulsing
-  outward from center, falling comet-tailed "shooting stars", and a
-  fixed-length "snake" crawling a serpentine path), switching to the
-  next one every 2 minutes (also a starting guess, not tuned against how
-  it actually feels to watch). Touch/button/pedal activity exits standby
+  5 rotating ambient animations (diagonal traveling wave; a sharp,
+  squared-contrast ring pulsing outward from center; comet-tailed
+  "shooting stars" with per-star randomized speed/tail/twinkle; a
+  fixed-length "snake" ping-ponging back and forth along a serpentine
+  path instead of teleport-resetting; and a blue/purple RGB showcase
+  animation with underglow held off so the pad grid's actual color
+  capability is the whole focus), switching to a random (never
+  immediately repeated) one every 2 minutes (also a starting guess, not
+  tuned against how it actually feels to watch). Touch/button/pedal
+  activity exits standby
   immediately. A Hall-depth wake fallback exists in the code
   (`hall_depth_wake_triggered()`, checked only while already in standby,
   never as part of deciding whether to *enter* it -- an early version
@@ -218,6 +223,25 @@ not its code.
   gained the same guard plus its first real use of
   `tiles_pca9685_set_pwm()` for smooth (not just on/off) button-LED
   brightness.
+  Every animation now returns full RGB, not a single brightness scalar
+  (`tiles_standby_color_t{r,g,b}` in `standby.c`) -- needed for the RGB
+  showcase animation, and `lighting.c` gained
+  `tiles_lighting_set_standby_pad_rgb()`/`_underglow_rgb()` to match
+  (replacing the old brightness-only `_pad()`/`_underglow()` setters).
+  This also fixed a real bug found from user feedback on real hardware:
+  the old standby pad setter routed through `pad_level_for_press()`,
+  which adds the idle-baseline floor meant for normal touch operation
+  (pads "never fully dark in V1") -- so a standby animation asking for
+  0.0 brightness still rendered at ~10% of ceiling, never true black.
+  The new RGB path scales each channel directly by the ceiling with no
+  floor, which is why the wave/ripple animations can now actually go
+  fully dark between peaks. Also fixed: function-button LEDs read
+  markedly brighter than pad LEDs at the same commanded duty on real
+  hardware (different LED/drive path), overpowering every animation's
+  top row -- `render_frame()` now collapses each cell's color to a
+  single brightness for the (monochrome) button row and scales it down
+  by `BUTTON_STANDBY_BRIGHTNESS_SCALE` (0.35, unmeasured) before writing
+  it.
   **Not done / not hardware-verified:** the button-column and
   underglow-anchor mappings (`button_for_col()`, `s_underglow_anchor[]`
   in `standby.c`) are based on the user's verbal description of the

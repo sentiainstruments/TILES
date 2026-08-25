@@ -25,11 +25,18 @@
 
 #define TILES_LIGHTING_NUM_UNDERGLOW_PIXELS 4u
 
+typedef struct {
+    float r;
+    float g;
+    float b;
+} tiles_rgb01_t;
+
 static tiles_sk6805_chain_t s_underglow_chain;
 static tiles_sk6805_chain_t s_pad_chain;
 static tiles_tca9554_t s_led_mux;
-static float s_pad_press[TILES_NUM_PADS];
-static float s_underglow_press[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
+static float s_pad_press[TILES_NUM_PADS]; /* touch-driven, white, baseline-floored -- normal operation only */
+static tiles_rgb01_t s_pad_standby_rgb[TILES_NUM_PADS]; /* standby animation color, no baseline floor */
+static tiles_rgb01_t s_underglow_rgb[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
 static uint8_t s_service_cursor;
 static bool s_initialized;
 static bool s_standby_active;
@@ -57,14 +64,29 @@ static float clamp01(float v) {
     return v;
 }
 
-/* level_0_to_1 is a fraction of TILES_LIGHTING_UNDERGLOW_LEVEL, not of
- * ceiling_level() -- see that constant's header comment for why
- * underglow doesn't share the pad grid's power-derived ceiling. Normal
- * (non-standby) operation holds every pixel at 1.0. */
-static uint8_t underglow_pixel_level(uint8_t index) {
-    return (uint8_t)((float)TILES_LIGHTING_UNDERGLOW_LEVEL * clamp01(s_underglow_press[index]));
+/* Fraction of TILES_LIGHTING_UNDERGLOW_LEVEL -- see that constant's
+ * header comment for why underglow doesn't share the pad grid's
+ * power-derived ceiling. No baseline floor: unlike pad press (below),
+ * underglow (and standby pad color, also below) are allowed to go to
+ * true 0 -- there's no "never fully dark" requirement for either of
+ * those, and standby animations specifically need real black for
+ * contrast. */
+static uint8_t underglow_channel_level(float channel_0_to_1) {
+    return (uint8_t)((float)TILES_LIGHTING_UNDERGLOW_LEVEL * clamp01(channel_0_to_1));
 }
 
+/* Ceiling-scaled, no baseline floor -- the standby-animation equivalent
+ * of pad_level_for_press() below, used per RGB channel instead of a
+ * single baseline-floored white level. */
+static uint8_t pad_channel_level(float channel_0_to_1) {
+    return (uint8_t)((float)ceiling_level() * clamp01(channel_0_to_1));
+}
+
+/* Baseline-floored: 0.0 maps to idle_baseline_level(), not true black --
+ * this is normal (non-standby) touch-driven operation's "pads never go
+ * fully dark in V1" requirement (see tiles_lighting_set_pad_press's
+ * header). Standby animations use pad_channel_level() above instead,
+ * deliberately without this floor. */
 static uint8_t pad_level_for_press(float press_0_to_1) {
     press_0_to_1 = clamp01(press_0_to_1);
     uint8_t baseline = idle_baseline_level();
@@ -78,8 +100,15 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
         return;
     }
 
-    uint8_t level = pad_level_for_press(s_pad_press[pad_index]);
-    uint32_t pixel = tiles_sk6805_pack_rgb(level, level, level);
+    uint32_t pixel;
+    if (s_standby_active) {
+        const tiles_rgb01_t *c = &s_pad_standby_rgb[pad_index];
+        pixel = tiles_sk6805_pack_rgb(pad_channel_level(c->r), pad_channel_level(c->g),
+                                       pad_channel_level(c->b));
+    } else {
+        uint8_t level = pad_level_for_press(s_pad_press[pad_index]);
+        pixel = tiles_sk6805_pack_rgb(level, level, level);
+    }
 
     tiles_tca9554_disable_all_muxes(&s_led_mux);
     tiles_tca9554_set_select(&s_led_mux, cfg->led.mux_channel);
@@ -91,8 +120,9 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
 static void write_underglow(void) {
     uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
-        uint8_t level = underglow_pixel_level(i);
-        pixels[i] = tiles_sk6805_pack_rgb(level, level, level);
+        const tiles_rgb01_t *c = &s_underglow_rgb[i];
+        pixels[i] = tiles_sk6805_pack_rgb(underglow_channel_level(c->r), underglow_channel_level(c->g),
+                                           underglow_channel_level(c->b));
     }
     tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
 }
@@ -123,9 +153,10 @@ static void set_pad_press_internal(uint8_t logical_pad, float press_0_to_1) {
 bool tiles_lighting_init(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_pad_press[i] = 0.0f;
+        s_pad_standby_rgb[i] = (tiles_rgb01_t){0.0f, 0.0f, 0.0f};
     }
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
-        s_underglow_press[i] = 1.0f;
+        s_underglow_rgb[i] = (tiles_rgb01_t){1.0f, 1.0f, 1.0f};
     }
     s_service_cursor = 0;
     s_initialized = false;
@@ -181,7 +212,7 @@ void tiles_lighting_set_standby_active(bool active) {
          * writes each pad's real state. Underglow has no other
          * continuous driver, so restore it here explicitly. */
         for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
-            s_underglow_press[i] = 1.0f;
+            s_underglow_rgb[i] = (tiles_rgb01_t){1.0f, 1.0f, 1.0f};
         }
         if (s_initialized) {
             write_underglow();
@@ -189,19 +220,36 @@ void tiles_lighting_set_standby_active(bool active) {
     }
 }
 
-void tiles_lighting_set_standby_pad(uint8_t logical_pad, float level_0_to_1) {
-    set_pad_press_internal(logical_pad, level_0_to_1);
+void tiles_lighting_set_standby_pad_rgb(uint8_t logical_pad, float r, float g, float b) {
+    if (!s_standby_active || logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
+        return;
+    }
+    uint8_t pad_index = (uint8_t)(logical_pad - 1u);
+    tiles_rgb01_t c = {clamp01(r), clamp01(g), clamp01(b)};
+    tiles_rgb01_t *stored = &s_pad_standby_rgb[pad_index];
+    if (stored->r == c.r && stored->g == c.g && stored->b == c.b) {
+        return;
+    }
+    *stored = c;
+
+    /* Same immediate-write reasoning as set_pad_press_internal() above --
+     * an animation frame should reach the LED right away, not wait for
+     * the round-robin. */
+    if (s_initialized) {
+        write_pad(pad_index);
+    }
 }
 
-void tiles_lighting_set_standby_underglow(uint8_t pixel_index, float level_0_to_1) {
+void tiles_lighting_set_standby_underglow_rgb(uint8_t pixel_index, float r, float g, float b) {
     if (!s_standby_active || pixel_index >= TILES_LIGHTING_NUM_UNDERGLOW_PIXELS) {
         return;
     }
-    float clamped = clamp01(level_0_to_1);
-    if (s_underglow_press[pixel_index] == clamped) {
+    tiles_rgb01_t c = {clamp01(r), clamp01(g), clamp01(b)};
+    tiles_rgb01_t *stored = &s_underglow_rgb[pixel_index];
+    if (stored->r == c.r && stored->g == c.g && stored->b == c.b) {
         return;
     }
-    s_underglow_press[pixel_index] = clamped;
+    *stored = c;
     if (s_initialized) {
         write_underglow();
     }

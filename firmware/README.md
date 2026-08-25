@@ -89,11 +89,16 @@ first on-hardware note-on test.
   and `haptics.c`'s voice ceiling, not yet hardware-tested against a
   real source-switch transition.
   `standby` done for a demo V1: after 1 minute idle, pads + buttons +
-  underglow run one of 4 rotating ambient animations (wave, center-out
-  glow, shooting stars, snake) instead of reflecting touch state, until
-  any touch/button/pedal activity exits it -- see `services/README.md`
-  for the button-column/underglow-anchor mapping assumptions this still
-  needs verified on real hardware. `haptics` done for V1: an overdrive
+  underglow run one of 5 rotating ambient animations (diagonal wave,
+  sharp center-out ring, complex shooting stars, ping-pong snake, and a
+  blue/purple RGB showcase with underglow off), in randomized
+  never-repeating order, instead of reflecting touch state, until any
+  touch/button/pedal activity exits it -- see `services/README.md` for
+  the button-column/underglow-anchor mapping assumptions this still
+  needs verified on real hardware, and for a real bug this rework fixed
+  (standby pads were routing through the touch-driven idle-baseline
+  floor, so they never actually reached true black). `haptics` done for
+  V1: an overdrive
   spike then velocity-mapped kick on strike, then aftertouch-mapped
   sustain while held, then a hard cutoff on release -- staggers actual
   motor starts >= 15ms apart (no added latency for normal single-note
@@ -146,7 +151,14 @@ flashable `.uf2`.
   the physical board rather than a hardware doc -- confirmed absent from
   `docs/hardware/`. The 1-minute idle timeout and 2-minute
   animation-cycle period are explicit demo-mode defaults, not final
-  values.
+  values. The reworked animations (diagonal wave, sharper ring, complex
+  stars, ping-pong snake, RGB showcase) and the button-brightness/
+  standby-baseline-floor fixes are all based on user feedback from
+  watching the previous version on real hardware, but the *new* version
+  hasn't itself been flashed and watched yet -- e.g.
+  `BUTTON_STANDBY_BRIGHTNESS_SCALE` (0.35) is an unmeasured guess at how
+  much dimmer buttons need to be, not a measured match to pad
+  brightness.
 - `services/haptics.c` has not been hardware-tested at all -- every
   duty/timing constant (kick duration, overdrive duration, gap duration,
   min kick duty, max sustain duty, stagger gap) is an unmeasured

@@ -108,52 +108,90 @@ static float clamp01(float v) {
     return v;
 }
 
+static float rand01(void) {
+    return (float)rand() / (float)RAND_MAX;
+}
+
+/* Every animation returns full RGB now (0.0-1.0 per channel), not a
+ * single brightness scalar -- needed for anim_rgb_showcase (animation
+ * 5) below. The white animations (1-4) just return r=g=b=v via white(). */
+typedef struct {
+    float r;
+    float g;
+    float b;
+} tiles_standby_color_t;
+
+static tiles_standby_color_t white(float v) {
+    v = clamp01(v);
+    tiles_standby_color_t c = {v, v, v};
+    return c;
+}
+
 /* ---- Animation 1: wave -------------------------------------------------
- * A traveling sine band, mostly top-to-bottom with a mild diagonal skew
- * (via the col term) so it doesn't read as perfectly flat horizontal
- * bars. */
+ * A traveling diagonal band: phase is a function of (row + col), so
+ * constant-phase lines run at 45 degrees across the grid, not
+ * horizontally or vertically. WAVE_CONTRAST_GAMMA (>1) biases the curve
+ * toward dark, so most of the cycle reads as genuinely off with a
+ * brighter band passing through, rather than a smooth 50/50 sine. */
 
-#define WAVE_LENGTH_ROWS 2.2f
+#define WAVE_LENGTH_DIAG 3.0f
 #define WAVE_PERIOD_MS 3000.0f
-#define WAVE_DIAGONAL_SKEW 0.12f
+#define WAVE_CONTRAST_GAMMA 2.2f
 
-static float anim_wave(uint8_t row, uint8_t col, uint32_t now_ms) {
-    float phase = (float)row / WAVE_LENGTH_ROWS + (float)col * WAVE_DIAGONAL_SKEW -
-                  (float)now_ms / WAVE_PERIOD_MS;
-    return clamp01(0.5f + 0.5f * sinf(2.0f * TILES_STANDBY_PI * phase));
+static tiles_standby_color_t anim_wave(uint8_t row, uint8_t col, uint32_t now_ms) {
+    float diag = (float)row + (float)col;
+    float phase = diag / WAVE_LENGTH_DIAG - (float)now_ms / WAVE_PERIOD_MS;
+    float raw = 0.5f + 0.5f * sinf(2.0f * TILES_STANDBY_PI * phase);
+    return white(powf(clamp01(raw), WAVE_CONTRAST_GAMMA));
 }
 
 /* ---- Animation 2: glow center-out --------------------------------------
- * A ring pulsing outward from the grid's visual center, repeating. */
+ * A ring pulsing outward from the grid's visual center, repeating.
+ * GLOW_RING_WIDTH narrowed and the result squared for a sharper, more
+ * dramatic ring against a fully dark background instead of a soft,
+ * diffuse glow. */
 
 #define GLOW_CENTER_ROW 2.0f
 #define GLOW_CENTER_COL 3.5f
 #define GLOW_MAX_RADIUS 4.2f
 #define GLOW_PULSE_PERIOD_MS 2500.0f
-#define GLOW_RING_WIDTH 1.1f
+#define GLOW_RING_WIDTH 0.5f
 
-static float anim_glow(uint8_t row, uint8_t col, uint32_t now_ms) {
+static tiles_standby_color_t anim_glow(uint8_t row, uint8_t col, uint32_t now_ms) {
     float dr = (float)row - GLOW_CENTER_ROW;
     float dc = (float)col - GLOW_CENTER_COL;
     float dist = sqrtf(dr * dr + dc * dc);
     float ring = fmodf((float)now_ms / GLOW_PULSE_PERIOD_MS * GLOW_MAX_RADIUS, GLOW_MAX_RADIUS);
     float delta = dist - ring;
-    return clamp01(expf(-(delta * delta) / (2.0f * GLOW_RING_WIDTH * GLOW_RING_WIDTH)));
+    float raw = expf(-(delta * delta) / (2.0f * GLOW_RING_WIDTH * GLOW_RING_WIDTH));
+    return white(clamp01(raw * raw));
 }
 
 /* ---- Animation 3: shooting stars ----------------------------------------
- * A handful of comet-tailed points falling top (above row 0) to bottom
- * (past row 4), each respawning at a random column once it exits. The
- * only stateful animation here -- the others are pure functions of
- * (row, col, time); this one owns a small fixed-size particle array. */
+ * Comet-tailed points falling top (above row 0) to bottom (past row 4),
+ * each respawning at a random column once it exits. More "complex" than
+ * the original version: more concurrent stars, per-star randomized
+ * speed and tail length (not identical falls), exponential (not linear)
+ * tail decay for a sharper head/softer trail, and a subtle twinkle
+ * (brightness jitter) per star. The only stateful animation here -- the
+ * others are pure functions of (row, col, time); this one owns a small
+ * fixed-size particle array. */
 
-#define NUM_STARS 3u
-#define STAR_TAIL_ROWS 3.0f
-#define STAR_SPEED_ROWS_PER_MS (1.0f / 220.0f) /* one row every 220ms */
+#define NUM_STARS 5u
+#define STAR_TAIL_ROWS_MIN 2.0f
+#define STAR_TAIL_ROWS_MAX 4.5f
+#define STAR_SPEED_ROWS_PER_MS_MIN (1.0f / 300.0f)
+#define STAR_SPEED_ROWS_PER_MS_MAX (1.0f / 140.0f)
+#define STAR_TWINKLE_PERIOD_MS 90.0f
+#define STAR_TWINKLE_DEPTH 0.25f
+#define STAR_DECAY_SHARPNESS 2.2f
 
 typedef struct {
     uint8_t col;
     uint32_t spawn_ms;
+    float tail_rows;
+    float speed_rows_per_ms;
+    float twinkle_phase;
 } star_t;
 
 static star_t s_stars[NUM_STARS];
@@ -162,14 +200,18 @@ static bool s_stars_inited;
 static void star_respawn(star_t *star, uint32_t spawn_ms) {
     star->col = (uint8_t)(GRID_MIN_COL + (uint8_t)(rand() % (GRID_MAX_COL - GRID_MIN_COL + 1u)));
     star->spawn_ms = spawn_ms;
+    star->tail_rows = STAR_TAIL_ROWS_MIN + rand01() * (STAR_TAIL_ROWS_MAX - STAR_TAIL_ROWS_MIN);
+    star->speed_rows_per_ms =
+        STAR_SPEED_ROWS_PER_MS_MIN + rand01() * (STAR_SPEED_ROWS_PER_MS_MAX - STAR_SPEED_ROWS_PER_MS_MIN);
+    star->twinkle_phase = rand01() * 6.2831853f;
 }
 
-static float anim_shooting_stars(uint8_t row, uint8_t col, uint32_t now_ms) {
+static tiles_standby_color_t anim_shooting_stars(uint8_t row, uint8_t col, uint32_t now_ms) {
     if (!s_stars_inited) {
         for (uint8_t i = 0; i < NUM_STARS; i++) {
-            /* Stagger initial spawn times so all three don't fall in
+            /* Stagger initial spawn times so they don't all fall in
              * lockstep the first time this animation is shown. */
-            star_respawn(&s_stars[i], now_ms - (uint32_t)i * 900u);
+            star_respawn(&s_stars[i], now_ms - (uint32_t)i * 700u);
         }
         s_stars_inited = true;
     }
@@ -177,9 +219,9 @@ static float anim_shooting_stars(uint8_t row, uint8_t col, uint32_t now_ms) {
     float brightness = 0.0f;
     for (uint8_t i = 0; i < NUM_STARS; i++) {
         star_t *star = &s_stars[i];
-        float head_row = (float)(now_ms - star->spawn_ms) * STAR_SPEED_ROWS_PER_MS - STAR_TAIL_ROWS;
+        float head_row = (float)(now_ms - star->spawn_ms) * star->speed_rows_per_ms - star->tail_rows;
 
-        if (head_row > (float)GRID_MAX_ROW + STAR_TAIL_ROWS) {
+        if (head_row > (float)GRID_MAX_ROW + star->tail_rows) {
             star_respawn(star, now_ms);
             continue;
         }
@@ -188,21 +230,25 @@ static float anim_shooting_stars(uint8_t row, uint8_t col, uint32_t now_ms) {
         }
 
         float behind = head_row - (float)row;
-        if (behind >= 0.0f && behind <= STAR_TAIL_ROWS) {
-            float b = 1.0f - behind / STAR_TAIL_ROWS;
+        if (behind >= 0.0f && behind <= star->tail_rows) {
+            float decay = expf(-STAR_DECAY_SHARPNESS * behind / star->tail_rows);
+            float twinkle = 1.0f - STAR_TWINKLE_DEPTH * (0.5f + 0.5f * sinf((float)now_ms / STAR_TWINKLE_PERIOD_MS +
+                                                                             star->twinkle_phase));
+            float b = decay * twinkle;
             if (b > brightness) {
                 brightness = b;
             }
         }
     }
-    return clamp01(brightness);
+    return white(clamp01(brightness));
 }
 
 /* ---- Animation 4: snake --------------------------------------------------
  * A fixed-length lit segment crawling along a deterministic boustrophedon
- * (serpentine) path that visits every button and pad cell once, then
- * wraps -- classic snake movement without needing actual game state
- * (growth, food, collisions aren't meaningful for a lighting pattern). */
+ * (serpentine) path that visits every button and pad cell, then reverses
+ * and crawls back -- a ping-pong bounce, so the snake's direction of
+ * travel alternates each full traversal instead of teleport-resetting
+ * back to the start. */
 
 #define SNAKE_STEP_MS 150u
 #define SNAKE_TAIL_LENGTH 6u
@@ -217,42 +263,153 @@ static uint8_t snake_path_index(uint8_t row, uint8_t col) {
     return (uint8_t)(row * 6u + (5u - col0));
 }
 
-static float anim_snake(uint8_t row, uint8_t col, uint32_t now_ms) {
-    uint32_t head = (now_ms / SNAKE_STEP_MS) % SNAKE_PATH_LENGTH;
+static tiles_standby_color_t anim_snake(uint8_t row, uint8_t col, uint32_t now_ms) {
+    uint32_t half = SNAKE_PATH_LENGTH - 1u;
+    uint32_t cycle_len = 2u * half;
+    uint32_t t_mod = (now_ms / SNAKE_STEP_MS) % cycle_len;
+    bool forward = (t_mod <= half);
+    uint32_t head = forward ? t_mod : (cycle_len - t_mod);
+
     uint8_t p = snake_path_index(row, col);
-    uint32_t behind = (head + SNAKE_PATH_LENGTH - p) % SNAKE_PATH_LENGTH;
-    if (behind >= SNAKE_TAIL_LENGTH) {
-        return 0.0f;
+    /* "diff" is how far this cell is behind the head in the CURRENT
+     * direction of travel -- sign flips with direction so the tail
+     * trails correctly on both the forward and backward pass. */
+    int32_t diff = forward ? ((int32_t)head - (int32_t)p) : ((int32_t)p - (int32_t)head);
+    if (diff < 0 || (uint32_t)diff >= SNAKE_TAIL_LENGTH) {
+        return white(0.0f);
     }
-    return clamp01(1.0f - (float)behind / (float)SNAKE_TAIL_LENGTH);
+    return white(1.0f - (float)diff / (float)SNAKE_TAIL_LENGTH);
+}
+
+/* ---- Animation 5: blue/purple RGB showcase ------------------------------
+ * Shows off the pad grid's actual RGB capability (every other animation
+ * is deliberately white) -- a diagonal value wave, same shape as
+ * anim_wave, but hue cycles within the blue-to-violet range instead of
+ * brightness alone staying white. Underglow is held fully off for this
+ * one (see s_animation_underglow_off below) so it doesn't compete with
+ * the pad color, and the function-button row is likewise held dark --
+ * button LEDs are plain monochrome PWM, not addressable RGB, so there's
+ * no way for them to participate in a color showcase; lighting them
+ * white here would just look like an unrelated glitch. */
+
+#define RGB_WAVE_LENGTH_DIAG 3.0f
+#define RGB_WAVE_PERIOD_MS 3500.0f
+#define RGB_CONTRAST_GAMMA 1.8f
+#define RGB_HUE_CYCLE_MS 6000.0f
+#define RGB_HUE_MIN_DEG 220.0f /* blue */
+#define RGB_HUE_MAX_DEG 285.0f /* violet/purple */
+
+/* Standard HSV->RGB, s always 1.0 here (fully saturated blue/purple hues). */
+static tiles_standby_color_t hsv_to_rgb(float h_deg, float v) {
+    float h = fmodf(h_deg, 360.0f);
+    if (h < 0.0f) {
+        h += 360.0f;
+    }
+    float c = v;
+    float x = c * (1.0f - fabsf(fmodf(h / 60.0f, 2.0f) - 1.0f));
+    float r1, g1, b1;
+    if (h < 60.0f) {
+        r1 = c;
+        g1 = x;
+        b1 = 0.0f;
+    } else if (h < 120.0f) {
+        r1 = x;
+        g1 = c;
+        b1 = 0.0f;
+    } else if (h < 180.0f) {
+        r1 = 0.0f;
+        g1 = c;
+        b1 = x;
+    } else if (h < 240.0f) {
+        r1 = 0.0f;
+        g1 = x;
+        b1 = c;
+    } else if (h < 300.0f) {
+        r1 = x;
+        g1 = 0.0f;
+        b1 = c;
+    } else {
+        r1 = c;
+        g1 = 0.0f;
+        b1 = x;
+    }
+    tiles_standby_color_t out = {r1, g1, b1};
+    return out;
+}
+
+static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_t now_ms) {
+    if (row == 0u) {
+        tiles_standby_color_t off = {0.0f, 0.0f, 0.0f};
+        return off;
+    }
+
+    float diag = (float)row + (float)col;
+    float phase = diag / RGB_WAVE_LENGTH_DIAG - (float)now_ms / RGB_WAVE_PERIOD_MS;
+    float raw = 0.5f + 0.5f * sinf(2.0f * TILES_STANDBY_PI * phase);
+    float value = powf(clamp01(raw), RGB_CONTRAST_GAMMA);
+
+    float hue_phase = 0.5f + 0.5f * sinf(2.0f * TILES_STANDBY_PI *
+                                          ((float)now_ms / RGB_HUE_CYCLE_MS + diag * 0.04f));
+    float hue = RGB_HUE_MIN_DEG + (RGB_HUE_MAX_DEG - RGB_HUE_MIN_DEG) * hue_phase;
+
+    return hsv_to_rgb(hue, value);
 }
 
 /* ---- Animation registry + shared render -------------------------------- */
 
-typedef float (*field_fn_t)(uint8_t row, uint8_t col, uint32_t now_ms);
+typedef tiles_standby_color_t (*field_fn_t)(uint8_t row, uint8_t col, uint32_t now_ms);
 
 static const field_fn_t s_animations[] = {
-    anim_wave,
-    anim_glow,
-    anim_shooting_stars,
-    anim_snake,
+    anim_wave, anim_glow, anim_shooting_stars, anim_snake, anim_rgb_showcase,
+};
+/* Parallel to s_animations[] -- true for the one animation (5, the RGB
+ * showcase) that wants underglow held fully off rather than sampling
+ * the same per-cell field the pad grid uses at its anchor points. */
+static const bool s_animation_underglow_off[] = {
+    false, false, false, false, true,
 };
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
 
-static void render_frame(field_fn_t field, uint32_t now_ms) {
+/* Function-button LEDs read noticeably brighter than pad LEDs at the
+ * same commanded duty (different LED/diffusion/drive path -- PCA9685
+ * PWM vs SK6805 addressable) -- observed on real hardware as the top
+ * row "overpowering" every animation. Scaled down uniformly here rather
+ * than per-animation since it's a hardware-brightness mismatch, not an
+ * animation design choice. Unmeasured -- a starting guess, adjust if
+ * still too bright/now too dim once seen lit. */
+#define BUTTON_STANDBY_BRIGHTNESS_SCALE 0.35f
+
+static void render_frame(uint8_t animation_index, uint32_t now_ms) {
+    field_fn_t field = s_animations[animation_index];
+    bool underglow_off = s_animation_underglow_off[animation_index];
+
     for (uint8_t col = GRID_MIN_COL; col <= GRID_MAX_COL; col++) {
-        float b = field(0u, col, now_ms);
-        tiles_buttons_set_standby_led(button_for_col(col), b);
+        tiles_standby_color_t c = field(0u, col, now_ms);
+        /* Buttons are monochrome -- collapse color to a single
+         * brightness via the brightest channel, then apply the
+         * button-specific dimming above. */
+        float luminance = c.r;
+        if (c.g > luminance) {
+            luminance = c.g;
+        }
+        if (c.b > luminance) {
+            luminance = c.b;
+        }
+        tiles_buttons_set_standby_led(button_for_col(col), luminance * BUTTON_STANDBY_BRIGHTNESS_SCALE);
     }
     for (uint8_t row = 1u; row <= GRID_MAX_ROW; row++) {
         for (uint8_t col = GRID_MIN_COL; col <= GRID_MAX_COL; col++) {
-            float b = field(row, col, now_ms);
-            tiles_lighting_set_standby_pad(pad_for_row_col(row, col), b);
+            tiles_standby_color_t c = field(row, col, now_ms);
+            tiles_lighting_set_standby_pad_rgb(pad_for_row_col(row, col), c.r, c.g, c.b);
         }
     }
     for (uint8_t i = 0; i < 4u; i++) {
-        float b = field(s_underglow_anchor[i].row, s_underglow_anchor[i].col, now_ms);
-        tiles_lighting_set_standby_underglow(i, b);
+        if (underglow_off) {
+            tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+        } else {
+            tiles_standby_color_t c = field(s_underglow_anchor[i].row, s_underglow_anchor[i].col, now_ms);
+            tiles_lighting_set_standby_underglow_rgb(i, c.r, c.g, c.b);
+        }
     }
 }
 
@@ -312,9 +469,23 @@ static bool hall_depth_wake_triggered(void) {
     return false;
 }
 
+/* Picks a random animation index, excluding `exclude` (pass a value
+ * >= NUM_ANIMATIONS, e.g. 0xFFu, to allow any index -- used for the
+ * very first pick where there's nothing to avoid repeating). */
+static uint8_t pick_random_animation(uint8_t exclude) {
+    if (NUM_ANIMATIONS <= 1u) {
+        return 0u;
+    }
+    uint8_t next;
+    do {
+        next = (uint8_t)(rand() % NUM_ANIMATIONS);
+    } while (next == exclude);
+    return next;
+}
+
 static void enter_standby(uint32_t now_ms) {
     s_state = TILES_STANDBY_STATE_STANDBY;
-    s_animation_index = 0u;
+    s_animation_index = pick_random_animation(0xFFu);
     s_animation_switch_ms = now_ms;
     s_last_frame_ms = 0u; /* forces an immediate first frame below */
     tiles_lighting_set_standby_active(true);
@@ -367,12 +538,14 @@ void tiles_standby_scan(void) {
     }
 
     if (now_ms - s_animation_switch_ms >= TILES_STANDBY_ANIMATION_CYCLE_MS) {
-        s_animation_index = (uint8_t)((s_animation_index + 1u) % NUM_ANIMATIONS);
+        /* Random, not sequential -- excludes the current index so it
+         * never immediately repeats itself. */
+        s_animation_index = pick_random_animation(s_animation_index);
         s_animation_switch_ms = now_ms;
     }
 
     if (now_ms - s_last_frame_ms >= TILES_STANDBY_FRAME_INTERVAL_MS) {
-        render_frame(s_animations[s_animation_index], now_ms);
+        render_frame(s_animation_index, now_ms);
         s_last_frame_ms = now_ms;
     }
 }
