@@ -501,22 +501,31 @@ static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_
 }
 
 /* ---- Animation 6: graphic equalizer --------------------------------------
- * Each column is a fake VU/EQ bar: a slow, purely synthetic level
- * (layered sines, different period per column so bars don't move in
- * lockstep) lights that column's bottom-up segments -- rows 3-4 (the
- * bottom two) blue, row 2 yellow, row 1 (top) red, like a classic
- * hardware graphic equalizer. A per-column "redline" peak marker sticks
- * at the highest segment reached and only falls slowly (EQ_PEAK_DECAY_PER_MS),
+ * Each column is a fake VU/EQ bar lit bottom-up -- rows 3-4 (the bottom
+ * two) blue, row 2 yellow, row 1 (top) red, like a classic hardware
+ * graphic equalizer. A per-column "redline" peak marker sticks at the
+ * highest segment reached and only falls slowly (EQ_PEAK_DECAY_PER_MS),
  * independent of the bar's own motion -- the peak-hold behavior real
  * EQ/VU hardware has.
  *
- * Reworked from real feedback: was too fast and too continuously lit,
- * reading as busy/mechanical rather than stylized. Two changes fix
- * that: every period is much longer now, and each column also has its
- * own slow, independent "phrase" envelope (eq_bar_envelope() below)
- * that most of the time sits low -- so columns spend real stretches
- * fully dark (not just dim), sometimes several at once, rather than
- * always showing at least a segment or two. Function buttons are fully
+ * Reworked twice from real feedback. First pass slowed everything down
+ * and added a long, low-biased "phrase" envelope so columns spent real
+ * stretches fully dark -- but that overshot: it read as too slow, and
+ * with bars rarely reaching full height there were "almost no peaks."
+ * Second pass replaced the free-running sine motion with a percussive,
+ * tempo-locked hit envelope: every column snaps to full height at its
+ * own hit (an instant/near-instant attack, like a kick meter) and decays
+ * afterward, so peaks happen reliably instead of by chance. Every
+ * column's hit rate is a whole-number subdivision of one shared 127bpm
+ * beat (EQ_BEAT_MS) -- bass-register columns hit once a beat and ring
+ * out slowly, treble-register columns subdivide down to 16th notes and
+ * snap back fast -- so the whole grid still reads as reacting to one
+ * underlying pulse ("should feel like a song at 127bpm pumping") while
+ * different bars move at different rates, the way a real spectrum
+ * analyzer's bands do. A deterministic per-hit "miss" (golden-angle
+ * stepping, not real randomness) occasionally drops a hit to 0 so there
+ * is still some empty space between hits, without the old envelope's
+ * multi-second silences that killed density. Function buttons are fully
  * off (were a faint minimal glow); underglow is a simple constant blue
  * accent (see eq_underglow below) rather than tracking the bars --
  * doesn't correspond to any one column, so there's nothing meaningful
@@ -526,47 +535,57 @@ static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_
 #define EQ_LIT_LEVEL 0.85f
 #define EQ_PEAK_LEVEL 1.0f
 #define EQ_UNDERGLOW_LEVEL 0.7f
-/* Both roughly 3-4x the original periods -- the main fix for "too
- * fast". */
-#define EQ_BAR_PERIOD1_BASE_MS 3200.0f
-#define EQ_BAR_PERIOD2_BASE_MS 1300.0f
-/* The per-column "phrase" envelope: how active vs. silent a column is
- * right now, cycling slowly and independently per column. Biased toward
- * low via EQ_ENVELOPE_SHAPE (>1 spends more time near 0 than near 1) --
- * "more empty space, sometimes columns fully off" is exactly a low
- * envelope value forcing the bar level to ~0 regardless of the
- * (still-moving) raw motion underneath it. */
-#define EQ_ENVELOPE_PERIOD_MS_BASE 7000.0f
-#define EQ_ENVELOPE_SHAPE 2.2f
-/* Full fall from a maxed-out peak to 0 takes about 6s -- "drops slowly",
- * nudged up slightly to match the generally slower, more stylized pace. */
-#define EQ_PEAK_DECAY_PER_MS (1.0f / 6000.0f)
+/* One quarter note at 127bpm -- the shared pulse every column's hit rate
+ * subdivides. */
+#define EQ_BEAT_MS 472.0f
+/* Fraction of hits that get deterministically dropped to 0 -- "some
+ * empty space" without a multi-second silent stretch. */
+#define EQ_MISS_FRACTION 0.12f
+/* Peaks now happen every beat/subdivision, so the hold needs to actually
+ * fall between hits to still read as movement rather than a
+ * permanently-lit top segment -- full fall takes a bit over 2 beats. */
+#define EQ_PEAK_DECAY_PER_MS (1.0f / 1200.0f)
+
+/* Per-column hit rate, in hits per beat -- pairs of columns share a rate
+ * (low/low/mid/mid/high/high) so the six bars still read left-to-right
+ * as low to high register, like a real EQ's frequency axis. */
+static const float s_eq_col_hits_per_beat[EQ_NUM_COLS] = {1.0f, 1.0f, 2.0f, 2.0f, 4.0f, 4.0f};
+/* Per-column decay shape for the percussive envelope -- lower (slower
+ * subdivisions / bass) rings out over more of its hit window; higher
+ * (faster subdivisions / treble) snaps back almost immediately. */
+static const float s_eq_col_decay_exp[EQ_NUM_COLS] = {1.5f, 1.5f, 1.0f, 1.0f, 0.6f, 0.6f};
 
 static float s_eq_peak[EQ_NUM_COLS];
 static uint32_t s_eq_peak_update_ms[EQ_NUM_COLS];
 static bool s_eq_inited;
 
-static float eq_bar_envelope(uint8_t col, uint32_t now_ms) {
-    float period = EQ_ENVELOPE_PERIOD_MS_BASE + (float)col * 900.0f;
-    float phase = (float)col * 0.9f;
-    float raw = 0.5f + 0.5f * sinf(2.0f * TILES_STANDBY_PI * (float)now_ms / period + phase);
-    return powf(clamp01(raw), EQ_ENVELOPE_SHAPE);
-}
-
-/* Deterministic function of (col, time) -- two sine waves at different,
- * per-column periods/phases blended together for texture, then scaled
- * by that column's own slow envelope above so the bar genuinely goes
- * quiet (not just dim) during that envelope's low stretches. No
- * randomness/state needed for the bar itself, only for the peak below. */
+/* Deterministic function of (col, time): a percussive envelope --
+ * instant peak at the start of each hit window, decaying across it --
+ * tempo-locked to that column's own subdivision of EQ_BEAT_MS, plus a
+ * deterministic occasional full-miss for some breathing room between
+ * hits. No randomness/state needed for the bar itself, only for the
+ * peak-hold below. */
 static float eq_bar_level(uint8_t col, uint32_t now_ms) {
-    float col_f = (float)col;
-    float period1 = EQ_BAR_PERIOD1_BASE_MS + col_f * 400.0f;
-    float period2 = EQ_BAR_PERIOD2_BASE_MS + col_f * 180.0f;
-    float phase = col_f * 1.7f;
-    float s1 = sinf(2.0f * TILES_STANDBY_PI * (float)now_ms / period1 + phase);
-    float s2 = sinf(2.0f * TILES_STANDBY_PI * (float)now_ms / period2 + phase * 1.3f);
-    float raw = clamp01(0.5f + 0.3f * s1 + 0.2f * s2);
-    return raw * eq_bar_envelope(col, now_ms);
+    uint8_t i = (uint8_t)(col - TILES_GRID_MIN_COL);
+    float hit_period = EQ_BEAT_MS / s_eq_col_hits_per_beat[i];
+    float hit_index = floorf((float)now_ms / hit_period);
+    float phase = ((float)now_ms - hit_index * hit_period) / hit_period; /* 0 at the hit, ->1 before the next */
+
+    /* Golden-angle stepping keyed on which hit this is -- a cheap,
+     * deterministic stand-in for randomness that still spreads misses
+     * evenly across hits instead of clustering them. */
+    float miss_key = fmodf(hit_index * 0.6180339887f + (float)i * 0.37f, 1.0f);
+    if (miss_key < EQ_MISS_FRACTION) {
+        return 0.0f;
+    }
+
+    float envelope = powf(1.0f - phase, s_eq_col_decay_exp[i]);
+    /* Per-hit velocity variance (same golden-angle trick, different
+     * offset) so hits that do land aren't all identically full-height --
+     * still real dynamic range without needing every hit to be a peak. */
+    float velocity_key = fmodf(hit_index * 0.6180339887f + (float)i * 0.37f + 0.5f, 1.0f);
+    float velocity = 0.55f + 0.45f * velocity_key;
+    return clamp01(envelope * velocity);
 }
 
 /* Advances every column's peak by however long it's been since that
