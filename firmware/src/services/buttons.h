@@ -34,3 +34,21 @@ void tiles_buttons_scan(void);
  * right capsule, triangle, diamond, square, circle). False if out of
  * range. */
 bool tiles_button_is_pressed(uint8_t button_id);
+
+/* ---- Standby animation hooks (services/standby.c) ----------------------
+ *
+ * true: tiles_buttons_scan()'s normal "LED follows press" behavior stops
+ * touching the LEDs (button reads/debounce/tiles_button_is_pressed()
+ * keep working normally -- standby still needs to detect a press to wake
+ * up), leaving them free for tiles_buttons_set_standby_led() below.
+ * false: immediately re-asserts every button's LED from its current
+ * debounced state -- needed because tiles_buttons_scan() only writes an
+ * LED on a press/release edge, so simply clearing the flag wouldn't by
+ * itself repaint an LED animation left mid-brightness. */
+void tiles_buttons_set_standby_active(bool active);
+
+/* Sets button id 1-6's LED to a smooth 0.0 (dark) - 1.0 (fully lit)
+ * brightness via the PCA9685's 12-bit PWM, instead of the on/off-only
+ * path tiles_buttons_scan() normally uses. No-op unless standby is
+ * active. */
+void tiles_buttons_set_standby_led(uint8_t button_id, float level_0_to_1);

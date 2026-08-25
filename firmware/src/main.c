@@ -29,6 +29,7 @@
 #include "services/lighting.h"
 #include "services/pedal.h"
 #include "services/power.h"
+#include "services/standby.h"
 #include "services/touch.h"
 
 int main(void) {
@@ -109,6 +110,11 @@ int main(void) {
      * services/expression.h. */
     tiles_expression_init();
 
+    /* Idle animations: needs lighting/buttons already initialized (its
+     * render path drives both) and touch/pedal already initialized (its
+     * activity check polls both). See services/standby.h. */
+    tiles_standby_init();
+
     uint32_t last_scan_ms = to_ms_since_boot(get_absolute_time());
 
     while (true) {
@@ -120,6 +126,9 @@ int main(void) {
         tiles_buttons_scan();
         tiles_touch_scan();
         tiles_pedal_scan();
+        /* Must run after the three scans above so this iteration's
+         * activity check sees fresh state -- see services/standby.h. */
+        tiles_standby_scan();
         tiles_lighting_service();
         tiles_hall_scan();
         /* Must run after both tiles_touch_scan() and tiles_hall_scan()
@@ -150,6 +159,8 @@ int main(void) {
              * inspect Hall data. */
             tiles_hall_sample_t s = tiles_hall_get_sample(1);
             printf("[hall] pad 1: x=%d y=%d z=%d valid=%d\n", s.x, s.y, s.z, s.valid);
+
+            printf("[standby] active=%d\n", tiles_standby_is_active());
 
             last_scan_ms = now_ms;
         }

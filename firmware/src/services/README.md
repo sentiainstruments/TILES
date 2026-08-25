@@ -5,10 +5,10 @@ events, and turns high-level intent into driver commands. Depends on
 `drivers/` and `board/`; knows nothing about USB/MIDI transport.
 
 Built: Hall scan, touch, lighting, buttons, pedal, note mapping,
-touch+Hall expression fusion (velocity/aftertouch), and power source
-state -- see Status below. Still planned: per-pad Hall calibration, X/Y
-tilt -> pitch/timbre, haptics (voice/duty allocation + current
-governor), storage glue.
+touch+Hall expression fusion (velocity/aftertouch), power source state,
+and standby idle animations -- see Status below. Still planned: per-pad
+Hall calibration, X/Y tilt -> pitch/timbre, haptics (voice/duty
+allocation + current governor), storage glue.
 
 This is also where the legacy prototype's *behaviors* (scale modes, voice
 stealing, standby animation, haptic confirm clicks — see
@@ -126,4 +126,38 @@ not its code.
   hardware-tested against an actual USB unplug/external-power-plug
   transition yet -- only reasoned through against the documented truth
   table and confirmed to build/pass host tests.
+- `standby.h`/`.c` — done for a demo V1: after 60s (1 minute -- an
+  explicit demo-mode default, expected to change once this isn't just a
+  demo) with no touch/button/pedal activity, the pad grid + 6 function
+  buttons + underglow stop reflecting real input and instead run one of
+  4 rotating ambient animations (traveling wave, radial glow pulsing
+  outward from center, falling comet-tailed "shooting stars", and a
+  fixed-length "snake" crawling a serpentine path), switching to the
+  next one every 2 minutes (also a starting guess, not tuned against how
+  it actually feels to watch). Any touch/button/pedal activity exits
+  standby immediately. Deliberately a lighting-only concept: touch/Hall/
+  expression/MIDI keep running completely unaware standby exists, so
+  playing still works exactly as normal even while idle animations are
+  showing -- only the idle *lighting* behavior changes. Buttons and pads
+  are treated as one 5-row x 6-col grid (row 0 = the 6 function buttons,
+  physically just above pad row 1); each animation is a single function
+  of (row, col, time) sampled across every cell plus the 4 underglow
+  anchor points, so a wave/ripple/etc. that reaches a given pad reaches
+  the underglow pixel anchored near it at the same time. Needed two new
+  hooks per side: `lighting.c` gained a standby-active guard (so
+  touch.c's own continuous writes go inert without touch.c needing to
+  know standby exists) plus per-underglow-pixel control (previously
+  underglow was a single fixed color written once at init); `buttons.c`
+  gained the same guard plus its first real use of
+  `tiles_pca9685_set_pwm()` for smooth (not just on/off) button-LED
+  brightness.
+  **Not done / not hardware-verified:** the button-column and
+  underglow-anchor mappings (`button_for_col()`, `s_underglow_anchor[]`
+  in `standby.c`) are based on the user's verbal description of the
+  physical board, not a hardware doc (checked: not documented in
+  `docs/hardware/`) -- easy to correct in those two spots if the real
+  LED1-4 order or button alignment turns out different once seen lit.
+  The animation frame rate (~25fps) and every animation's own timing
+  constants are unmeasured against real I2C bus load / how it actually
+  looks. None of this has been flashed and watched on real hardware yet.
 - Everything else (haptics, per-pad Hall calibration) is not built yet.

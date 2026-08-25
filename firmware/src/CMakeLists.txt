@@ -17,6 +17,7 @@ add_executable(sentia_tiles_firmware
     services/note_map.c
     services/expression.c
     services/power.c
+    services/standby.c
     midi/usb_device.c
     midi/usb_descriptors.c
     midi/midi_out.c
@@ -42,6 +43,7 @@ target_link_libraries(sentia_tiles_firmware
     hardware_adc
     tinyusb_device
     pico_unique_id
+    m
 )
 
 # USB diagnostics console (CDC) + MIDI, composite device. Linking

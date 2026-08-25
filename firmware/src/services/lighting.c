@@ -23,12 +23,16 @@
  * every pad's baseline would. */
 #define TILES_LIGHTING_UNDERGLOW_LEVEL 230u
 
+#define TILES_LIGHTING_NUM_UNDERGLOW_PIXELS 4u
+
 static tiles_sk6805_chain_t s_underglow_chain;
 static tiles_sk6805_chain_t s_pad_chain;
 static tiles_tca9554_t s_led_mux;
 static float s_pad_press[TILES_NUM_PADS];
+static float s_underglow_press[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
 static uint8_t s_service_cursor;
 static bool s_initialized;
+static bool s_standby_active;
 
 /* Live read (not cached) so a power-state change -- e.g. external 12V
  * gets plugged in mid-session -- is reflected the very next time any
@@ -43,17 +47,26 @@ static uint8_t idle_baseline_level(void) {
     return (uint8_t)(((uint32_t)ceiling_level() * TILES_LIGHTING_IDLE_BASELINE_PERCENT) / 100u);
 }
 
-static uint8_t underglow_level(void) {
-    return TILES_LIGHTING_UNDERGLOW_LEVEL;
+static float clamp01(float v) {
+    if (v < 0.0f) {
+        return 0.0f;
+    }
+    if (v > 1.0f) {
+        return 1.0f;
+    }
+    return v;
+}
+
+/* level_0_to_1 is a fraction of TILES_LIGHTING_UNDERGLOW_LEVEL, not of
+ * ceiling_level() -- see that constant's header comment for why
+ * underglow doesn't share the pad grid's power-derived ceiling. Normal
+ * (non-standby) operation holds every pixel at 1.0. */
+static uint8_t underglow_pixel_level(uint8_t index) {
+    return (uint8_t)((float)TILES_LIGHTING_UNDERGLOW_LEVEL * clamp01(s_underglow_press[index]));
 }
 
 static uint8_t pad_level_for_press(float press_0_to_1) {
-    if (press_0_to_1 < 0.0f) {
-        press_0_to_1 = 0.0f;
-    }
-    if (press_0_to_1 > 1.0f) {
-        press_0_to_1 = 1.0f;
-    }
+    press_0_to_1 = clamp01(press_0_to_1);
     uint8_t baseline = idle_baseline_level();
     uint8_t ceiling = ceiling_level();
     return (uint8_t)(baseline + (float)(ceiling - baseline) * press_0_to_1);
@@ -75,41 +88,16 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
     tiles_tca9554_disable_all_muxes(&s_led_mux);
 }
 
-bool tiles_lighting_init(void) {
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        s_pad_press[i] = 0.0f;
+static void write_underglow(void) {
+    uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
+    for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
+        uint8_t level = underglow_pixel_level(i);
+        pixels[i] = tiles_sk6805_pack_rgb(level, level, level);
     }
-    s_service_cursor = 0;
-    s_initialized = false;
-
-    if (!tiles_sk6805_init(&s_underglow_chain, pio0, TILES_GPIO_UNDERGLOW_DATA)) {
-        return false;
-    }
-    if (!tiles_sk6805_init(&s_pad_chain, pio0, TILES_GPIO_PAD_LED_DATA)) {
-        tiles_sk6805_deinit(&s_underglow_chain);
-        return false;
-    }
-    if (!tiles_tca9554_init(&s_led_mux, i2c1, TILES_I2C1_ADDR_LED_MUX_TCA9554)) {
-        tiles_sk6805_deinit(&s_underglow_chain);
-        tiles_sk6805_deinit(&s_pad_chain);
-        return false;
-    }
-
-    uint8_t lvl = underglow_level();
-    uint32_t underglow_pixel = tiles_sk6805_pack_rgb(lvl, lvl, lvl);
-    uint32_t underglow_pixels[4] = {underglow_pixel, underglow_pixel, underglow_pixel, underglow_pixel};
-    tiles_sk6805_write(&s_underglow_chain, underglow_pixels, 4);
-
-    s_initialized = true;
-
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        write_pad(i);
-    }
-
-    return true;
+    tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
 }
 
-void tiles_lighting_set_pad_press(uint8_t logical_pad, float press_0_to_1) {
+static void set_pad_press_internal(uint8_t logical_pad, float press_0_to_1) {
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
         return;
     }
@@ -132,6 +120,48 @@ void tiles_lighting_set_pad_press(uint8_t logical_pad, float press_0_to_1) {
     }
 }
 
+bool tiles_lighting_init(void) {
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_pad_press[i] = 0.0f;
+    }
+    for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
+        s_underglow_press[i] = 1.0f;
+    }
+    s_service_cursor = 0;
+    s_initialized = false;
+    s_standby_active = false;
+
+    if (!tiles_sk6805_init(&s_underglow_chain, pio0, TILES_GPIO_UNDERGLOW_DATA)) {
+        return false;
+    }
+    if (!tiles_sk6805_init(&s_pad_chain, pio0, TILES_GPIO_PAD_LED_DATA)) {
+        tiles_sk6805_deinit(&s_underglow_chain);
+        return false;
+    }
+    if (!tiles_tca9554_init(&s_led_mux, i2c1, TILES_I2C1_ADDR_LED_MUX_TCA9554)) {
+        tiles_sk6805_deinit(&s_underglow_chain);
+        tiles_sk6805_deinit(&s_pad_chain);
+        return false;
+    }
+
+    write_underglow();
+
+    s_initialized = true;
+
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        write_pad(i);
+    }
+
+    return true;
+}
+
+void tiles_lighting_set_pad_press(uint8_t logical_pad, float press_0_to_1) {
+    if (s_standby_active) {
+        return;
+    }
+    set_pad_press_internal(logical_pad, press_0_to_1);
+}
+
 void tiles_lighting_service(void) {
     if (!s_initialized) {
         return;
@@ -139,4 +169,40 @@ void tiles_lighting_service(void) {
 
     write_pad(s_service_cursor);
     s_service_cursor = (uint8_t)((s_service_cursor + 1u) % TILES_NUM_PADS);
+}
+
+void tiles_lighting_set_standby_active(bool active) {
+    s_standby_active = active;
+
+    if (!active) {
+        /* Pads: no explicit restore needed -- touch.c calls
+         * tiles_lighting_set_pad_press() every main-loop iteration
+         * regardless of standby, so the very next scan (now unguarded)
+         * writes each pad's real state. Underglow has no other
+         * continuous driver, so restore it here explicitly. */
+        for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
+            s_underglow_press[i] = 1.0f;
+        }
+        if (s_initialized) {
+            write_underglow();
+        }
+    }
+}
+
+void tiles_lighting_set_standby_pad(uint8_t logical_pad, float level_0_to_1) {
+    set_pad_press_internal(logical_pad, level_0_to_1);
+}
+
+void tiles_lighting_set_standby_underglow(uint8_t pixel_index, float level_0_to_1) {
+    if (!s_standby_active || pixel_index >= TILES_LIGHTING_NUM_UNDERGLOW_PIXELS) {
+        return;
+    }
+    float clamped = clamp01(level_0_to_1);
+    if (s_underglow_press[pixel_index] == clamped) {
+        return;
+    }
+    s_underglow_press[pixel_index] = clamped;
+    if (s_initialized) {
+        write_underglow();
+    }
 }

@@ -82,7 +82,13 @@ first on-hardware note-on test.
   accessor and a change-callback so haptics/CV-gate can plug in once
   they exist -- currently wired into `lighting.c`'s brightness ceiling,
   not yet hardware-tested against a real source-switch transition.
-  Everything else (haptics, per-pad Hall calibration) not built.
+  `standby` done for a demo V1: after 1 minute idle, pads + buttons +
+  underglow run one of 4 rotating ambient animations (wave, center-out
+  glow, shooting stars, snake) instead of reflecting touch state, until
+  any touch/button/pedal activity exits it -- see `services/README.md`
+  for the button-column/underglow-anchor mapping assumptions this still
+  needs verified on real hardware. Everything else (haptics, per-pad
+  Hall calibration) not built.
 - `midi/` — composite USB CDC+MIDI device done (see `midi/README.md`);
   note on/off with real velocity, poly aftertouch, and CC (sustain/
   expression) all wired up, single MIDI channel. Not yet verified with
@@ -110,6 +116,15 @@ flashable `.uf2`.
   yet -- no test has actually unplugged USB, plugged in external 12V,
   or forced the FAULT combination to confirm the debounce and the
   resulting mode/ceiling actually behave as designed.
+- `services/standby.c` has not been flashed and watched on real hardware
+  yet. The button-column and underglow-anchor mappings it uses
+  (`button_for_col()`, `s_underglow_anchor[]`) are based on the user's
+  verbal description of the physical board rather than a hardware doc --
+  confirmed absent from `docs/hardware/` -- so the underglow LED1-4
+  chain order in particular is a guess that needs correcting against
+  what's actually seen lit if wrong. The 1-minute idle timeout and
+  2-minute animation-cycle period are explicit demo-mode defaults, not
+  final values.
 - `sk6805.pio`'s bit timing mirrors Raspberry Pi's reference `ws2812.pio`
   program; confirmed working on real SK6805 parts (all pads + underglow
   show correct white output on hardware), not independently verified on

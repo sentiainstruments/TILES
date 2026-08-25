@@ -31,6 +31,7 @@ static tiles_pca9685_t s_pca2; /* TILES_I2C1_ADDR_HAPTIC_PCA9685_2 */
 static bool s_raw_pressed[NUM_BUTTONS];
 static bool s_debounced[NUM_BUTTONS];
 static uint32_t s_last_change_ms[NUM_BUTTONS];
+static bool s_standby_active;
 
 static tiles_pca9685_t *pca_for_addr(uint8_t addr) {
     if (addr == TILES_I2C1_ADDR_HAPTIC_PCA9685_1) {
@@ -52,6 +53,60 @@ static void set_button_led(uint8_t index, bool lit) {
     tiles_pca9685_set_channel_full(pca, s_button_routes[index].pca9685_channel, !lit);
 }
 
+/* Smooth brightness via the PCA9685's 12-bit PWM -- tiles_pca9685_set_pwm()'s
+ * first real use in this codebase (previously only full on/off was
+ * needed for buttons; haptics, its other intended caller, isn't built
+ * yet). Per that function's own header comment, with on_count=0 the pin
+ * goes high at the start of each cycle and off_count is how many of the
+ * 4096 ticks it STAYS high before going low -- i.e. off_count is the
+ * HIGH duration, not the lit duration. This board's button LEDs are
+ * active-low (see set_button_led above), so HIGH = dark: the fraction
+ * of the cycle spent lit (low) is (4096-off_count)/4096, which means
+ * off_count = (1 - level) * 4095, not level * 4095 -- inverted from
+ * what you'd guess without re-reading that comment carefully. The true
+ * 0.0/1.0 endpoints go through tiles_pca9685_set_channel_full() instead
+ * of off_count=0/4095, matching how it's already used elsewhere in this
+ * file and sidestepping the datasheet's documented ambiguity around
+ * on_count==off_count without the full-on/full-off bit set. */
+static void set_button_led_level(uint8_t index, float level_0_to_1) {
+    tiles_pca9685_t *pca = pca_for_addr(s_button_routes[index].pca9685_addr);
+    if (pca == NULL) {
+        return;
+    }
+    if (level_0_to_1 < 0.0f) {
+        level_0_to_1 = 0.0f;
+    }
+    if (level_0_to_1 > 1.0f) {
+        level_0_to_1 = 1.0f;
+    }
+
+    uint8_t channel = s_button_routes[index].pca9685_channel;
+
+    if (level_0_to_1 <= 0.0f) {
+        tiles_pca9685_set_channel_full(pca, channel, false); /* dark */
+        return;
+    }
+    if (level_0_to_1 >= 1.0f) {
+        tiles_pca9685_set_channel_full(pca, channel, true); /* fully lit */
+        return;
+    }
+
+    uint16_t off_count = (uint16_t)((1.0f - level_0_to_1) * 4095.0f);
+    if (off_count < 1u) {
+        off_count = 1u;
+    }
+    if (off_count > 4094u) {
+        off_count = 4094u;
+    }
+    tiles_pca9685_set_pwm(pca, channel, 0u, off_count);
+}
+
+static void refresh_all_button_leds(void) {
+    for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
+        set_button_led(i, s_debounced[i]);
+    }
+}
+
 bool tiles_buttons_init(void) {
     bool ok = tiles_pca9685_init(&s_pca1, i2c1, TILES_I2C1_ADDR_HAPTIC_PCA9685_1);
     ok = tiles_pca9685_init(&s_pca2, i2c1, TILES_I2C1_ADDR_HAPTIC_PCA9685_2) && ok;
@@ -65,6 +120,7 @@ bool tiles_buttons_init(void) {
         s_debounced[i] = false;
         s_last_change_ms[i] = 0;
     }
+    s_standby_active = false;
 
     return ok;
 }
@@ -80,7 +136,13 @@ void tiles_buttons_scan(void) {
             s_last_change_ms[i] = now_ms;
         } else if (raw_pressed != s_debounced[i] && (now_ms - s_last_change_ms[i]) >= DEBOUNCE_MS) {
             s_debounced[i] = raw_pressed;
-            set_button_led(i, s_debounced[i]);
+            /* Debounce/press tracking above always runs -- standby.c
+             * needs a live tiles_button_is_pressed() to detect a wake
+             * press even while its own animation owns the LEDs. Only
+             * the LED write itself is suppressed. */
+            if (!s_standby_active) {
+                set_button_led(i, s_debounced[i]);
+            }
         }
     }
 }
@@ -90,4 +152,18 @@ bool tiles_button_is_pressed(uint8_t button_id) {
         return false;
     }
     return s_debounced[button_id - 1u];
+}
+
+void tiles_buttons_set_standby_active(bool active) {
+    s_standby_active = active;
+    if (!active) {
+        refresh_all_button_leds();
+    }
+}
+
+void tiles_buttons_set_standby_led(uint8_t button_id, float level_0_to_1) {
+    if (!s_standby_active || button_id < 1u || button_id > NUM_BUTTONS) {
+        return;
+    }
+    set_button_led_level((uint8_t)(button_id - 1u), level_0_to_1);
 }
