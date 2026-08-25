@@ -77,8 +77,12 @@ first on-hardware note-on test.
   fusion deriving real velocity (from strike acceleration) and
   aftertouch (from press depth) -- see `services/README.md` for the
   state machine and the explicitly-unmeasured scaling constants.
-  Everything else (haptics, power governance, per-pad Hall calibration)
-  not built.
+  `power` done for V1: derives USB-only/external-only/both/fault from
+  GP22 + TinyUSB's mounted state (debounced), exposing both a live
+  accessor and a change-callback so haptics/CV-gate can plug in once
+  they exist -- currently wired into `lighting.c`'s brightness ceiling,
+  not yet hardware-tested against a real source-switch transition.
+  Everything else (haptics, per-pad Hall calibration) not built.
 - `midi/` — composite USB CDC+MIDI device done (see `midi/README.md`);
   note on/off with real velocity, poly aftertouch, and CC (sustain/
   expression) all wired up, single MIDI channel. Not yet verified with
@@ -95,10 +99,17 @@ flashable `.uf2`.
   MIDI monitor yet -- the composite descriptor builds and the device
   should enumerate, but "builds clean" and "a host actually receives
   the right notes" are different claims until checked.
-- The LED brightness ceiling and idle-baseline/underglow percentages in
-  `services/lighting.c` are engineering estimates (tuned once against
-  real hardware for "too dim" feedback, but not measured against an
-  actual current budget).
+- The LED brightness ceiling and idle-baseline/underglow percentages
+  (now sourced from `services/power.c`'s per-mode state rather than a
+  single hardcoded constant) are still engineering estimates -- tuned
+  once against real hardware for "too dim" feedback on USB power, but
+  neither the USB-only nor the external-power ceiling has been measured
+  against an actual current budget.
+- `services/power.c`'s GP22-derived mode has only been reasoned through
+  against the documented truth table, not exercised on real hardware
+  yet -- no test has actually unplugged USB, plugged in external 12V,
+  or forced the FAULT combination to confirm the debounce and the
+  resulting mode/ceiling actually behave as designed.
 - `sk6805.pio`'s bit timing mirrors Raspberry Pi's reference `ws2812.pio`
   program; confirmed working on real SK6805 parts (all pads + underglow
   show correct white output on hardware), not independently verified on

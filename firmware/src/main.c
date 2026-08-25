@@ -28,6 +28,7 @@
 #include "services/hall.h"
 #include "services/lighting.h"
 #include "services/pedal.h"
+#include "services/power.h"
 #include "services/touch.h"
 
 int main(void) {
@@ -51,6 +52,17 @@ int main(void) {
      * (board_init's own bus setup and the scan above) ran at the
      * conservative 100kHz detection speed. */
     board_i2c_set_run_speed();
+
+    /* Power source state: reads GP22 + TinyUSB's mounted flag and
+     * derives the actual mode (USB-only / external-only / both / fault)
+     * per the truth table in docs/hardware/SENTIA_TILES_FIRMWARE_HANDOFF.md.
+     * Must run before tiles_lighting_init() -- lighting's brightness
+     * ceiling reads this state on its very first pad sweep. GP22 is
+     * already configured as an input by board_gpio_init() above, and
+     * tud_mounted() is valid as soon as tusb_init() has run (it has, at
+     * the very top of main via tiles_usb_device_init()) even though USB
+     * likely hasn't enumerated yet at this point in boot. */
+    tiles_power_init();
 
     /* Lighting only needs the LED mux controller (TCA9554, on I2C1) --
      * bring it up regardless of Hall/touch controller presence, so a
@@ -100,6 +112,11 @@ int main(void) {
     uint32_t last_scan_ms = to_ms_since_boot(get_absolute_time());
 
     while (true) {
+        /* Runs first: lighting's ceiling_level() and any future
+         * haptics/CV consumer read tiles_power_get_state() during this
+         * same iteration, so the debounced state should already be
+         * current by the time anything else runs. */
+        tiles_power_scan();
         tiles_buttons_scan();
         tiles_touch_scan();
         tiles_pedal_scan();
@@ -112,6 +129,19 @@ int main(void) {
         uint32_t now_ms = to_ms_since_boot(get_absolute_time());
         if (now_ms - last_scan_ms >= 2000) {
             tiles_diag_i2c_scan_expected_devices();
+
+            /* Temporary bring-up visibility for the derived power
+             * state, same reasoning as the Hall print below -- replace
+             * with a real usb_vendor/ diagnostics stream once that
+             * exists. Names match tiles_power_mode_t's declaration
+             * order. */
+            static const char *const power_mode_names[] = {
+                "USB_ONLY", "EXTERNAL_ONLY", "USB_AND_EXTERNAL", "FAULT",
+            };
+            tiles_power_state_t pwr = tiles_power_get_state();
+            printf("[power] mode=%s led_ceiling=%u%% max_haptic_voices=%u cv_gate=%d\n",
+                   power_mode_names[pwr.mode], pwr.led_brightness_ceiling_percent,
+                   pwr.max_haptic_voices, pwr.cv_gate_permitted);
 
             /* Temporary bring-up visibility for pad 1's raw Hall sample,
              * over the same USB-CDC stdio as the I2C scan above. Replace

@@ -2,17 +2,11 @@
 
 #include "board_pins.h"
 #include "pad_config.h"
+#include "power.h"
 
 #include "sk6805.h"
 #include "tca9554.h"
 
-/* Conservative USB-only ceiling per docs/architecture/defaults-and-safeguards.md
- * "LED color and brightness" -- 35-40% documented range, using the
- * midpoint. Hardcoded because there is no power-profile/GP22 governor
- * yet; replace with a real lookup once profiles/ exists. Never raise
- * this without that governor in place -- see the power safeguards in
- * the same doc. */
-#define TILES_LIGHTING_CEILING_PERCENT_USB 37u
 #define TILES_LIGHTING_IDLE_BASELINE_PERCENT 10u
 
 /* Underglow is deliberately much brighter than the pad idle baseline --
@@ -29,8 +23,13 @@ static float s_pad_press[TILES_NUM_PADS];
 static uint8_t s_service_cursor;
 static bool s_initialized;
 
+/* Live read (not cached) so a power-state change -- e.g. external 12V
+ * gets plugged in mid-session -- is reflected the very next time any
+ * pad is written, with no extra wiring here. tiles_power_get_state()
+ * is a cheap struct copy, safe to call this often. */
 static uint8_t ceiling_level(void) {
-    return (uint8_t)((255u * TILES_LIGHTING_CEILING_PERCENT_USB) / 100u);
+    uint8_t ceiling_percent = tiles_power_get_state().led_brightness_ceiling_percent;
+    return (uint8_t)((255u * ceiling_percent) / 100u);
 }
 
 static uint8_t idle_baseline_level(void) {

@@ -16,6 +16,7 @@ add_executable(sentia_tiles_firmware
     services/pedal.c
     services/note_map.c
     services/expression.c
+    services/power.c
     midi/usb_device.c
     midi/usb_descriptors.c
     midi/midi_out.c

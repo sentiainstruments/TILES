@@ -9,10 +9,12 @@
  * exposes that hook now (tiles_lighting_set_pad_press) so those
  * services can call it once they exist, without lighting.c changing.
  *
- * Brightness is clamped to a hardcoded USB-only ceiling for now (see
- * lighting.c) -- this needs to become power-profile-aware once
- * profiles/ and GP22-based source detection exist. Don't raise it
- * without that governor in place.
+ * Brightness is clamped to services/power.h's live
+ * led_brightness_ceiling_percent (35-40% on USB-only, 70-80% once
+ * external power is confirmed present, per the truth table there) --
+ * see lighting.c's ceiling_level(). A future profiles/ module can
+ * still override this; don't bypass tiles_power_get_state() to raise
+ * brightness some other way.
  */
 
 #include <stdbool.h>

@@ -4,11 +4,11 @@ The behavioral layer: turns raw driver data into musical/expressive
 events, and turns high-level intent into driver commands. Depends on
 `drivers/` and `board/`; knows nothing about USB/MIDI transport.
 
-Built: Hall scan, touch, lighting, buttons, pedal, note mapping, and
-touch+Hall expression fusion (velocity/aftertouch) -- see Status below.
-Still planned: per-pad Hall calibration, X/Y tilt -> pitch/timbre,
-haptics (voice/duty allocation + current governor), power/current
-governance across profiles, storage glue.
+Built: Hall scan, touch, lighting, buttons, pedal, note mapping,
+touch+Hall expression fusion (velocity/aftertouch), and power source
+state -- see Status below. Still planned: per-pad Hall calibration, X/Y
+tilt -> pitch/timbre, haptics (voice/duty allocation + current
+governor), storage glue.
 
 This is also where the legacy prototype's *behaviors* (scale modes, voice
 stealing, standby animation, haptic confirm clicks — see
@@ -25,11 +25,12 @@ not its code.
   brightening toward the ceiling when `touch.c` reports that pad
   touched -- written immediately on a press-value change rather than
   waiting for the round-robin, so touch reads as responsive rather than
-  laggy. Brightness hard-clamped to a hardcoded USB-only ceiling (no
-  power-profile governor yet).
+  laggy. Brightness ceiling now reads live from `power.h`'s
+  `tiles_power_get_state().led_brightness_ceiling_percent` (37% on
+  USB-only, 75% once external power is confirmed) instead of a
+  hardcoded constant.
   **Not done:** standby animations (needs its own design pass — see the
-  defaults doc), any power-profile awareness beyond the hardcoded
-  ceiling, Hall-driven (as opposed to touch-driven) brightness.
+  defaults doc), Hall-driven (as opposed to touch-driven) brightness.
 - `buttons.h`/`.c` — done for V1: reads all 6 function buttons
   (debounced, 10ms), lights each one's PCA9685-driven LED while (and
   only while) it's held. Owns both physical PCA9685 chips; see the file
@@ -91,5 +92,36 @@ not its code.
   eventually control once `usb_vendor/` exists. Real auto-sensing of
   polarity/disconnected-pedal state is still a later layer, see
   `docs/architecture/defaults-and-safeguards.md` "Pedal polarity".
-- Everything else (haptics, power governance, per-pad Hall calibration)
-  is not built yet.
+- `power.h`/`.c` — done for V1: derives the actual power mode
+  (USB-only / external-only / both / fault) from GP22 (TPS2121 ST) +
+  TinyUSB's mounted state, exactly matching the truth table in
+  `docs/hardware/SENTIA_TILES_FIRMWARE_HANDOFF.md` "Power/connection
+  states". The mux switching itself is fully automatic in hardware --
+  this module only observes which state resulted. Debounces the
+  combined raw (GP22, mounted) reading (50ms) before committing to a
+  new mode, so a brief transient during an actual source switch doesn't
+  immediately flip every consumer's limits. Exposes both a live
+  accessor (`tiles_power_get_state()` -- a plain struct copy, safe to
+  call as often as needed) and an event-driven trigger
+  (`tiles_power_register_callback()`, fixed 4-slot table, fired
+  synchronously on a debounced mode change) so a future module can pick
+  whichever fits: `lighting.c` uses the live read for its brightness
+  ceiling (the only consumer so far, proving both the derivation and
+  the wiring actually work); haptics/CV-gate will likely want the
+  callback instead, to react the instant power changes rather than on
+  their next poll. FAULT mode (GP22 high while USB isn't mounted --
+  "invalid/transient" per the hardware doc) always reports the safest
+  limits (0 haptic voices, CV/gate not permitted, USB-only LED ceiling)
+  so a consumer that just respects `tiles_power_state_t`'s fields is
+  automatically safe during a fault with no fault-handling code of its
+  own. Budgets/ceilings per mode are transcribed from the hardware
+  handoff's named-profile table (USB_DEMO_SAFE / FULL_DEMO_EXTERNAL),
+  not invented here.
+  **Not done:** `USB_DEMO_VALIDATED_1P5A` (a manual-only override, never
+  auto-selected -- belongs to a future `profiles/` module, not this
+  one), any real current measurement (every budget here is a governance
+  ceiling, not a live current reading), and this hasn't been
+  hardware-tested against an actual USB unplug/external-power-plug
+  transition yet -- only reasoned through against the documented truth
+  table and confirmed to build/pass host tests.
+- Everything else (haptics, per-pad Hall calibration) is not built yet.
