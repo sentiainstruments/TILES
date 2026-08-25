@@ -506,68 +506,63 @@ static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_
 /* ---- Animation 6: graphic equalizer --------------------------------------
  * Each column is a fake VU/EQ bar lit bottom-up -- rows 3-4 (the bottom
  * two) blue, row 2 yellow, row 1 (top) red, like a classic hardware
- * graphic equalizer. A per-column "redline" peak marker sticks at the
- * highest segment reached and only falls slowly (EQ_PEAK_DECAY_PER_MS),
- * independent of the bar's own motion -- the peak-hold behavior real
- * EQ/VU hardware has.
+ * graphic equalizer. Red is now *only* ever the top row's own color,
+ * not a separate marker -- see the rework note below.
  *
- * Reworked twice from real feedback. First pass slowed everything down
- * and added a long, low-biased "phrase" envelope so columns spent real
- * stretches fully dark -- but that overshot: it read as too slow, and
- * with bars rarely reaching full height there were "almost no peaks."
- * Second pass replaced the free-running sine motion with a percussive,
- * tempo-locked hit envelope: every column snaps to full height at its
- * own hit (an instant/near-instant attack, like a kick meter) and decays
- * afterward, so peaks happen reliably instead of by chance. Every
- * column's hit rate is a whole-number subdivision of one shared 127bpm
- * beat (EQ_BEAT_MS) -- bass-register columns hit once a beat and ring
- * out slowly, treble-register columns subdivide down to 16th notes and
- * snap back fast -- so the whole grid still reads as reacting to one
- * underlying pulse ("should feel like a song at 127bpm pumping") while
- * different bars move at different rates, the way a real spectrum
- * analyzer's bands do. A deterministic per-hit "miss" (golden-angle
- * stepping, not real randomness) occasionally drops a hit to 0 so there
- * is still some empty space between hits, without the old envelope's
- * multi-second silences that killed density. Function buttons are fully
- * off (were a faint minimal glow); underglow is a simple constant blue
- * accent (see eq_underglow below) rather than tracking the bars --
- * doesn't correspond to any one column, so there's nothing meaningful
- * for it to track. */
+ * Reworked three times from real feedback. First pass slowed everything
+ * down and added a long, low-biased "phrase" envelope so columns spent
+ * real stretches fully dark -- overshot into "too slow" with "almost no
+ * peaks." Second pass replaced that with a percussive, tempo-locked hit
+ * envelope (127bpm, instant attack, per-column subdivisions) plus a
+ * separate red "peak-hold" marker that could land on any row and slowly
+ * fall back down -- but real feedback was that the whole thing was now
+ * "too flashy and fast," the falling peak marker read as "dropping red
+ * lights" rather than a hold indicator, and at only 4 rows of
+ * resolution the effect just looked broken, not like a VU meter. Third
+ * pass (current): the peak-hold marker is gone entirely -- red only
+ * ever appears on row 1 because that's that row's own bar color, never
+ * as a separate roaming marker. The instant-attack pop is replaced with
+ * a short attack ramp (EQ_ATTACK_FRACTION) so each hit swells up rather
+ * than flashing on -- closer to a real VU needle's fast-attack/slower-
+ * release ballistics. Tempo slowed slightly (127bpm -> ~107bpm,
+ * EQ_BEAT_MS) and the busiest columns' subdivision lowered (4/beat ->
+ * 3/beat) for less density. Function buttons are fully off; underglow
+ * is a simple constant blue accent (see eq_underglow below) rather than
+ * tracking the bars -- doesn't correspond to any one column, so there's
+ * nothing meaningful for it to track. */
 
 #define EQ_NUM_COLS 6u
 #define EQ_LIT_LEVEL 0.85f
-#define EQ_PEAK_LEVEL 1.0f
 #define EQ_UNDERGLOW_LEVEL 0.7f
-/* One quarter note at 127bpm -- the shared pulse every column's hit rate
- * subdivides. */
-#define EQ_BEAT_MS 472.0f
+/* One quarter note at ~107bpm (slowed slightly from an initial 127bpm
+ * per real feedback that it was "too flashy and fast") -- the shared
+ * pulse every column's hit rate subdivides. */
+#define EQ_BEAT_MS 560.0f
 /* Fraction of hits that get deterministically dropped to 0 -- "some
  * empty space" without a multi-second silent stretch. */
 #define EQ_MISS_FRACTION 0.12f
-/* Peaks now happen every beat/subdivision, so the hold needs to actually
- * fall between hits to still read as movement rather than a
- * permanently-lit top segment -- full fall takes a bit over 2 beats. */
-#define EQ_PEAK_DECAY_PER_MS (1.0f / 1200.0f)
+/* Fraction of a hit's window spent rising to full brightness before it
+ * starts decaying -- a real VU needle swings up fast, not instantly, so
+ * a short ramp (rather than the old instant-attack pop) reads as less
+ * of a flash and more like a meter reacting. */
+#define EQ_ATTACK_FRACTION 0.18f
 
 /* Per-column hit rate, in hits per beat -- pairs of columns share a rate
  * (low/low/mid/mid/high/high) so the six bars still read left-to-right
- * as low to high register, like a real EQ's frequency axis. */
-static const float s_eq_col_hits_per_beat[EQ_NUM_COLS] = {1.0f, 1.0f, 2.0f, 2.0f, 4.0f, 4.0f};
+ * as low to high register, like a real EQ's frequency axis. Busiest
+ * columns lowered from 4/beat to 3/beat (less density) per real
+ * feedback. */
+static const float s_eq_col_hits_per_beat[EQ_NUM_COLS] = {1.0f, 1.0f, 2.0f, 2.0f, 3.0f, 3.0f};
 /* Per-column decay shape for the percussive envelope -- lower (slower
  * subdivisions / bass) rings out over more of its hit window; higher
  * (faster subdivisions / treble) snaps back almost immediately. */
 static const float s_eq_col_decay_exp[EQ_NUM_COLS] = {1.5f, 1.5f, 1.0f, 1.0f, 0.6f, 0.6f};
 
-static float s_eq_peak[EQ_NUM_COLS];
-static uint32_t s_eq_peak_update_ms[EQ_NUM_COLS];
-static bool s_eq_inited;
-
-/* Deterministic function of (col, time): a percussive envelope --
- * instant peak at the start of each hit window, decaying across it --
- * tempo-locked to that column's own subdivision of EQ_BEAT_MS, plus a
- * deterministic occasional full-miss for some breathing room between
- * hits. No randomness/state needed for the bar itself, only for the
- * peak-hold below. */
+/* Deterministic function of (col, time): a short attack ramp into a
+ * decay, tempo-locked to that column's own subdivision of EQ_BEAT_MS,
+ * plus a deterministic occasional full-miss for some breathing room
+ * between hits. No randomness/state needed at all -- unlike the
+ * previous version there's no peak-hold to track either. */
 static float eq_bar_level(uint8_t col, uint32_t now_ms) {
     uint8_t i = (uint8_t)(col - TILES_GRID_MIN_COL);
     float hit_period = EQ_BEAT_MS / s_eq_col_hits_per_beat[i];
@@ -582,46 +577,20 @@ static float eq_bar_level(uint8_t col, uint32_t now_ms) {
         return 0.0f;
     }
 
-    float envelope = powf(1.0f - phase, s_eq_col_decay_exp[i]);
+    float envelope;
+    if (phase < EQ_ATTACK_FRACTION) {
+        envelope = phase / EQ_ATTACK_FRACTION; /* linear rise to the peak */
+    } else {
+        float decay_phase = (phase - EQ_ATTACK_FRACTION) / (1.0f - EQ_ATTACK_FRACTION);
+        envelope = powf(1.0f - decay_phase, s_eq_col_decay_exp[i]);
+    }
+
     /* Per-hit velocity variance (same golden-angle trick, different
      * offset) so hits that do land aren't all identically full-height --
      * still real dynamic range without needing every hit to be a peak. */
     float velocity_key = fmodf(hit_index * 0.6180339887f + (float)i * 0.37f + 0.5f, 1.0f);
     float velocity = 0.55f + 0.45f * velocity_key;
     return clamp01(envelope * velocity);
-}
-
-/* Advances every column's peak by however long it's been since that
- * column was last updated, then only if this frame's bar level is
- * higher. Guarded by s_eq_peak_update_ms[col] == now_ms so calling this
- * once per (row, col) cell within the same render_frame() -- up to 4
- * times per column, once per pad row -- only actually advances each
- * column's peak once per frame, not once per cell (now_ms is identical
- * across every cell queried within one frame, same self-limiting
- * pattern anim_shooting_stars' respawn already relies on). */
-static void eq_update_peaks(uint32_t now_ms) {
-    if (!s_eq_inited) {
-        for (uint8_t i = 0; i < EQ_NUM_COLS; i++) {
-            s_eq_peak[i] = 0.0f;
-            s_eq_peak_update_ms[i] = now_ms;
-        }
-        s_eq_inited = true;
-    }
-    for (uint8_t i = 0; i < EQ_NUM_COLS; i++) {
-        if (s_eq_peak_update_ms[i] == now_ms) {
-            continue;
-        }
-        uint32_t dt = now_ms - s_eq_peak_update_ms[i];
-        s_eq_peak_update_ms[i] = now_ms;
-
-        uint8_t col = (uint8_t)(TILES_GRID_MIN_COL + i);
-        float level = eq_bar_level(col, now_ms);
-        float decayed = s_eq_peak[i] - EQ_PEAK_DECAY_PER_MS * (float)dt;
-        if (decayed < 0.0f) {
-            decayed = 0.0f;
-        }
-        s_eq_peak[i] = (level > decayed) ? level : decayed;
-    }
 }
 
 static tiles_standby_color_t eq_row_color(uint8_t row) {
@@ -638,36 +607,13 @@ static tiles_standby_color_t eq_row_color(uint8_t row) {
 }
 
 static tiles_standby_color_t anim_equalizer(uint8_t row, uint8_t col, uint32_t now_ms) {
-    eq_update_peaks(now_ms);
-
     if (row == 0u) {
         return white(0.0f); /* function buttons fully off for this animation */
     }
 
-    uint8_t col0 = (uint8_t)(col - TILES_GRID_MIN_COL);
     float level = eq_bar_level(col, now_ms);
-    float peak = s_eq_peak[col0];
-
-    /* Same threshold quantization for both: row_threshold(row) is this
-     * row's height as a 0-1 fraction (row 4 = 0.25 ... row 1 = 1.0), and
-     * peak_segment is how many segments (1-4) the peak has reached,
-     * using the identical quantization so the two stay consistent. */
-    float row_threshold = (float)(5u - row) / 4.0f;
-    bool bar_lit = (level >= row_threshold);
-
-    uint8_t peak_segment = (uint8_t)(peak * 4.0f);
-    if (peak_segment > 4u) {
-        peak_segment = 4u;
-    }
-    uint8_t peak_row = (peak_segment >= 1u) ? (uint8_t)(5u - peak_segment) : 0u;
-
-    if (peak_row == row && !bar_lit) {
-        /* The "redline" -- always red regardless of this row's normal
-         * EQ color, matching the classic peak-hold LED. */
-        tiles_standby_color_t c = {EQ_PEAK_LEVEL, 0.0f, 0.0f};
-        return c;
-    }
-    if (bar_lit) {
+    float row_threshold = (float)(5u - row) / 4.0f; /* row 4 = 0.25 ... row 1 = 1.0 */
+    if (level >= row_threshold) {
         tiles_standby_color_t c = eq_row_color(row);
         tiles_standby_color_t scaled = {c.r * EQ_LIT_LEVEL, c.g * EQ_LIT_LEVEL, c.b * EQ_LIT_LEVEL};
         return scaled;
