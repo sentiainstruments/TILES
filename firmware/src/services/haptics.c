@@ -10,6 +10,7 @@
 #include "pico/time.h"
 
 #include <stdbool.h>
+#include <stdio.h>
 
 /* Brief and strong -- a jolt, not a buzz. Unmeasured: no per-motor
  * spin-up/current data exists yet (see the board map's
@@ -190,9 +191,21 @@ void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
     /* Ceiling only applies to a genuinely new voice -- re-triggering an
      * already-active pad (shouldn't happen given expression.c's own
      * state machine, but cheap to guard) never gets refused. A PENDING
-     * (staggered, not yet started) pad already counts as active here. */
+     * (staggered, not yet started) pad already counts as active here.
+     * Real feedback: "haptics worked at some point... but they don't
+     * activate always" -- the prime suspect is power.c's
+     * TILES_POWER_MODE_FAULT, whose max_haptic_voices is a hard 0 (see
+     * power.c's state_for_mode()), which silently drops *every* kick
+     * while active. That GP22-derived mode has never been exercised on
+     * real hardware (see power.c's own file header) and could plausibly
+     * be flickering into FAULT transiently. The printf below makes a
+     * drop visible in the serial log the next time this happens, so it
+     * can be correlated against the periodic "[power] mode=..." print
+     * in main.c instead of guessed at. */
     if (s_pads[idx].phase == HAPTIC_PHASE_IDLE &&
         active_voice_count() >= tiles_power_get_state().max_haptic_voices) {
+        printf("[haptics] dropped pad %u kick -- voice ceiling (mode=%d max_voices=%u active=%u)\n", logical_pad,
+               (int)tiles_power_get_state().mode, tiles_power_get_state().max_haptic_voices, active_voice_count());
         return;
     }
 

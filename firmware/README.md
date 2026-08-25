@@ -184,7 +184,13 @@ first on-hardware note-on test.
   `services/README.md` for why real active braking isn't physically
   possible on this board's motor drive circuit (single low-side NMOS,
   no H-bridge) and what the closest achievable substitutes are for both
-  attack and stop. Everything else (a real per-pad Hall calibration
+  attack and stop. Real feedback: haptics don't always activate on
+  touch -- prime suspect is `power.c`'s `TILES_POWER_MODE_FAULT` (a
+  hard 0-voice ceiling, silently drops every kick), an untested-on-
+  hardware GP22-derived mode that could be flickering transiently; a new
+  `printf` on every dropped kick (mode/ceiling/active-voice-count) is
+  meant to confirm this next session, see `services/README.md`.
+  Everything else (a real per-pad Hall calibration
   curve -- capture-only exists, see `diagnostics/`; DIN MIDI; CV/gate)
   not built.
 - `midi/` — composite USB CDC+MIDI device done (see `midi/README.md`);
@@ -290,16 +296,23 @@ flashable `.uf2`.
   silently stepping the octave/transpose key underneath the game. Now
   fixed (see `services/octave_control.c`'s entry above), but the fix
   itself hasn't been seen on real hardware.
-- `services/haptics.c` has not been hardware-tested at all -- every
-  duty/timing constant (kick duration, overdrive duration, gap duration,
-  min kick duty, max sustain duty, stagger gap) is an unmeasured
-  placeholder. True active braking isn't physically possible on this
-  board (single low-side NMOS per motor, no H-bridge, no haptic driver
-  IC) -- the GAP phase's hard cutoff is the closest achievable
-  substitute for stopping quickly, and the overdrive spike at the start
-  of every kick is the closest achievable substitute for starting
-  quickly; neither is a compromise made for convenience, both are the
-  real limits and real techniques of this specific drive circuit.
+- `services/haptics.c`: now tried on real hardware -- kicks fire and
+  feel like the intended single click -- but *not reliably*: real
+  feedback is they "don't activate always." Every duty/timing constant
+  (kick duration, overdrive duration, gap duration, min kick duty, max
+  sustain duty, stagger gap) is still an unmeasured placeholder, and the
+  intermittent-activation root cause is unconfirmed -- prime suspect is
+  `power.c`'s untested `TILES_POWER_MODE_FAULT` silently zeroing the
+  voice ceiling if it flickers in transiently; a new `printf` on every
+  dropped kick should confirm or rule this out next session (see
+  `services/README.md`'s `haptics.h` entry). True active braking isn't
+  physically possible on this board (single low-side NMOS per motor, no
+  H-bridge, no haptic driver IC) -- the GAP phase's hard cutoff is the
+  closest achievable substitute for stopping quickly, and the overdrive
+  spike at the start of every kick is the closest achievable substitute
+  for starting quickly; neither is a compromise made for convenience,
+  both are the real limits and real techniques of this specific drive
+  circuit.
 - `diagnostics/calibration.c`'s rest/full-press/max-press snapshots are
   useful for reading real numbers off the terminal, but nothing yet
   turns those numbers into an applied per-pad calibration curve --

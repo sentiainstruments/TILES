@@ -368,8 +368,19 @@ not its code.
   technique for a snappier *attack* instead, not a substitute for
   braking on the stop side.
   Respects `power.h`'s `max_haptic_voices` ceiling -- a new kick past
-  the ceiling is silently dropped, never blocks the MIDI note. Also
-  enforces the hardware handoff's "stagger motor starts >= 15ms"
+  the ceiling is dropped (now logged via a `printf`, see below), never
+  blocks the MIDI note. Real feedback: "haptics worked at some point...
+  but they don't activate always" -- the prime suspect for an
+  intermittent, silent dropout is `power.c`'s `TILES_POWER_MODE_FAULT`,
+  whose `max_haptic_voices` is a hard 0 (every kick dropped while
+  active); that GP22-derived mode has never been exercised on real
+  hardware (see `power.h`'s own entry below) and could plausibly be
+  flickering into FAULT transiently. `tiles_haptics_trigger_kick()` now
+  prints `[haptics] dropped pad N kick -- voice ceiling (mode=...
+  max_voices=... active=...)` on every drop, correlatable against
+  `main.c`'s existing periodic `[power] mode=...` print, so the next
+  real-hardware session can confirm or rule this out directly instead of
+  guessing. Also enforces the hardware handoff's "stagger motor starts >= 15ms"
   guidance (`KICK_STAGGER_MIN_GAP_MS`): actual kick starts are spaced
   at least that far apart even if several trigger calls arrive at once,
   chained via a single global "next available slot" time so a burst of
@@ -385,8 +396,10 @@ not its code.
   `KICK_OVERDRIVE_MS`, `KICK_GAP_MS`, `MIN_KICK_DUTY`,
   `MAX_SUSTAIN_DUTY`, `KICK_STAGGER_MIN_GAP_MS`) is an unmeasured
   placeholder -- no per-motor current/duty data exists yet (see the
-  board map's `measured_current_required` TODOs). Not yet
-  hardware-tested at all.
+  board map's `measured_current_required` TODOs). Has now been tried on
+  real hardware (kicks fire and feel like clicks, matching the
+  KICK->GAP->silence design), but not reliably -- see the intermittent
+  dropout note above, still open.
 - `pedal.h`/`.c` — done: sustain (MIDI CC64) on by default, debounced
   with hysteresis, polarity defaults to the usual normally-open
   footswitch convention and is switchable at runtime
@@ -448,7 +461,7 @@ not its code.
   9. a scrolling marquee: "SENTIA - TILES - " scrolls across the pad grid using the shared font in `services/pixel_font.h`/`.c` (see its own entry above), with automatic inter-glyph spacing and seamless wraparound (`marquee_total_width()`) rather than a fixed animation; underglow and function buttons both stay off, keeping it purely a pad-grid text effect. Scroll speed slowed (`MARQUEE_MS_PER_COLUMN` 260ms -> 420ms per column) from real feedback, at the same time the font itself moved out to the shared module to fix a real mistake in the old one-off glyphs (E and F were nearly indistinguishable).
   10. bouncing glow: the "simple but elegant" one -- a single soft white point bounces diagonally around the pad grid like a screensaver ball, purely a closed-form position (a triangle wave per axis -- a bounce-off-the-walls reflection with no velocity/state to track) with a soft falloff around it, no particle array or game state at all. Row and col bounce at different, non-integer-ratio periods (`BOUNCE_ROW_PERIOD_MS`/`BOUNCE_COL_PERIOD_MS`) so the path slowly traces a Lissajous-like figure instead of repeating quickly. Function buttons stay off; underglow mirrors the pad field like animations 1-4, so the glow naturally spills into it near an anchor.
   11. Tetris: the AI-played autonomous counterpart to `game_mode.h`'s real Tetris (below) -- same custom 5-piece small set/colors (dot, domino, 3-cell straight tromino, 3-cell corner tromino, 2x2 square -- NOT the standard 7 tetrominoes, which real feedback said were too big for this board), deliberately separate state and code from the interactive version, matching this file's existing snake/brick-breaker precedent. Pieces carry a variable `num_cells` (1-4) rather than always 4. A lightweight greedy AI (`tetris_ai_place()`) picks each piece's rotation and column at spawn by simulating every fitting placement and keeping whichever lands the piece's topmost cell deepest (a cheap "keep the stack low" proxy, no real hole-counting), then the piece visibly falls one row at a time toward that spot. A line clear triggers a brief, fast-toggling dramatic white underglow strobe (`TETRIS_LINE_CLEAR_FLASH_MS`/`_TOGGLE_MS`); topping out instead blinks plain red (not the red/purple alternation brick breaker's flash uses), then the well clears and a new game starts. Function buttons stay off.
-  12. Pong: the AI-vs-AI autonomous counterpart to `game_mode.h`'s real, two-player Pong (below) -- same court/paddle/ball layout and colors, deliberately separate state and code. Both paddles use the same "move at most one row per step toward the ball" simple AI animation 8's paddle already established, so rallies essentially never end on their own; on the rare miss, a brief white underglow flash plays and the ball re-serves immediately -- the same "stay in this animation and continue" behavior the interactive version uses instead of a win/lose round-end. Function buttons stay off.
+  12. Pong: the AI-vs-AI autonomous counterpart to `game_mode.h`'s real, two-player Pong (below) -- same court/paddle/ball layout and colors, deliberately separate state and code. Each paddle uses the "move at most one row per step toward the ball" simple AI animation 8's paddle already established (`pong_ai_track()`), but only for the side the ball is currently heading toward -- the other side drifts back to its rest position instead (`pong_ai_recenter()`). Reworked from an earlier version where both paddles tracked the ball every step regardless of direction, which made them move in lockstep/mirror each other constantly -- real feedback: "doing the same on both sides," didn't feel like a real game. Rallies still essentially never end on their own; on the rare miss, a brief white underglow flash plays and the ball re-serves immediately -- the same "stay in this animation and continue" behavior the interactive version uses instead of a win/lose round-end. Function buttons stay off.
 
   Touch/button/pedal activity exits standby immediately. A Hall-depth wake fallback exists in the code
   (`hall_depth_wake_triggered()`, checked only while already in standby,

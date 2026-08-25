@@ -1293,14 +1293,21 @@ static tiles_standby_color_t tetris_underglow(uint8_t pixel_index, uint32_t now_
  * The AI-vs-AI autonomous counterpart to game_mode.c's real, two-player
  * Pong -- same court/paddle/ball layout and colors, deliberately
  * separate state and code (same precedent as every other animation/
- * game pair here). Both paddles use the same simple "move at most one
+ * game pair here). Each paddle uses the same simple "move at most one
  * row per step toward the ball" heuristic brick breaker's paddle AI
- * already established, so rallies essentially never end on their own; a
- * miss (on the rare occasion the ball reverses faster than a paddle can
- * react) triggers a brief white underglow flash and an immediate
- * re-serve, the same "stay in this animation, just flash and continue"
- * behavior the interactive version uses instead of a win/lose
- * round-end. Function buttons stay off. */
+ * already established, but only the side the ball is currently heading
+ * toward actively tracks it (pong_ai_track()) -- the other side drifts
+ * back to its rest position instead (pong_ai_recenter()). Both paddles
+ * running the identical tracking rule every step, every step,
+ * regardless of ball direction, made them move in lockstep and mirror
+ * each other constantly (real feedback: "doing the same on both
+ * sides," didn't feel like a real game); only one paddle "defends" at
+ * a time now, the way a real opponent would. Rallies still essentially
+ * never end on their own; a miss (on the rare occasion the ball
+ * reverses faster than a paddle can react) triggers a brief white
+ * underglow flash and an immediate re-serve, the same "stay in this
+ * animation, just flash and continue" behavior the interactive version
+ * uses instead of a win/lose round-end. Function buttons stay off. */
 
 #define PONG_MIN_ROW 1u /* row 0 is buttons, not part of the court */
 #define PONG_MAX_ROW TILES_GRID_MAX_ROW
@@ -1358,6 +1365,19 @@ static void pong_ai_track(int8_t *paddle_top) {
     }
 }
 
+/* Drifts *paddle_top one row back toward the rest position (the same
+ * center it spawns at) -- used for whichever side the ball isn't
+ * currently heading toward, below. */
+#define PONG_REST_TOP 2
+
+static void pong_ai_recenter(int8_t *paddle_top) {
+    if (*paddle_top < (int8_t)PONG_REST_TOP) {
+        (*paddle_top)++;
+    } else if (*paddle_top > (int8_t)PONG_REST_TOP) {
+        (*paddle_top)--;
+    }
+}
+
 static void pong_step(uint32_t now_ms) {
     int8_t new_row = (int8_t)(s_pong_ball_row + s_pong_ball_drow);
     if (new_row < (int8_t)PONG_MIN_ROW || new_row > (int8_t)PONG_MAX_ROW) {
@@ -1389,8 +1409,19 @@ static void pong_step(uint32_t now_ms) {
     s_pong_ball_row = new_row;
     s_pong_ball_col = new_col;
 
-    pong_ai_track(&s_pong_left_paddle_top);
-    pong_ai_track(&s_pong_right_paddle_top);
+    /* Only the side the ball is heading toward actively tracks it; the
+     * other side drifts back to its rest position instead of tracking
+     * too -- both paddles running the identical tracking rule every
+     * step made them move in lockstep/mirror each other constantly
+     * (real feedback: "doing the same on both sides"). This way only
+     * one paddle "defends" at a time, the way a real opponent would. */
+    if (s_pong_ball_dcol < 0) {
+        pong_ai_track(&s_pong_left_paddle_top);
+        pong_ai_recenter(&s_pong_right_paddle_top);
+    } else {
+        pong_ai_track(&s_pong_right_paddle_top);
+        pong_ai_recenter(&s_pong_left_paddle_top);
+    }
 }
 
 static void pong_update(uint32_t now_ms) {
