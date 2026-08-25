@@ -61,7 +61,12 @@ first on-hardware note-on test.
   and a full 0x08-0x77 bus scan (`tiles_diag_i2c_full_scan()`, not
   currently called from `main.c` -- it did its job finding the real
   PCA9685 addresses and is kept around for the next time something
-  isn't where it's expected).
+  isn't where it's expected). `calibration` done for a capture-only V1:
+  single-character serial commands over the same stdio channel capture
+  and print rest-baseline/full-press/max-press Hall depth tables (+
+  averages) across all 24 pads, for hand-picking real constants from --
+  see `diagnostics/README.md`. Doesn't persist or derive/apply a
+  calibration curve itself.
 - `drivers/` — `sk6805`, `tca9554`, `tca9548a`, `tmag5273`, `pca9685`,
   `mpr121` all done and now verified against real silicon (register
   maps were datasheet-confirmed from the start; behavior confirmed
@@ -88,13 +93,17 @@ first on-hardware note-on test.
   glow, shooting stars, snake) instead of reflecting touch state, until
   any touch/button/pedal activity exits it -- see `services/README.md`
   for the button-column/underglow-anchor mapping assumptions this still
-  needs verified on real hardware. `haptics` done for V1: a velocity-
-  mapped kick on strike, then aftertouch-mapped sustain while held, then
-  a hard cutoff on release -- see `services/README.md` for why real
-  active braking isn't physically possible on this board's motor drive
-  circuit (single low-side NMOS, no H-bridge) and what the closest
-  achievable substitute is. Everything else (per-pad Hall calibration,
-  DIN MIDI, CV/gate) not built.
+  needs verified on real hardware. `haptics` done for V1: an overdrive
+  spike then velocity-mapped kick on strike, then aftertouch-mapped
+  sustain while held, then a hard cutoff on release -- staggers actual
+  motor starts >= 15ms apart (no added latency for normal single-note
+  play) and enforces `power.c`'s voice ceiling -- see
+  `services/README.md` for why real active braking isn't physically
+  possible on this board's motor drive circuit (single low-side NMOS,
+  no H-bridge) and what the closest achievable substitutes are for both
+  attack and stop. Everything else (a real per-pad Hall calibration
+  curve -- capture-only exists, see `diagnostics/`; DIN MIDI; CV/gate)
+  not built.
 - `midi/` — composite USB CDC+MIDI device done (see `midi/README.md`);
   note on/off with real velocity, poly aftertouch, and CC (sustain/
   expression) all wired up, single MIDI channel. Not yet verified with
@@ -139,13 +148,22 @@ flashable `.uf2`.
   animation-cycle period are explicit demo-mode defaults, not final
   values.
 - `services/haptics.c` has not been hardware-tested at all -- every
-  duty/timing constant (kick duration, gap duration, min kick duty, max
-  sustain duty) is an unmeasured placeholder, and the hardware handoff's
-  "stagger motor starts >= 15ms" guidance isn't implemented (only the
-  total concurrent-voice ceiling is enforced). True active braking isn't
-  physically possible on this board (single low-side NMOS per motor, no
-  H-bridge, no haptic driver IC) -- the GAP phase's hard cutoff is the
-  closest achievable substitute, not a compromise made for convenience.
+  duty/timing constant (kick duration, overdrive duration, gap duration,
+  min kick duty, max sustain duty, stagger gap) is an unmeasured
+  placeholder. True active braking isn't physically possible on this
+  board (single low-side NMOS per motor, no H-bridge, no haptic driver
+  IC) -- the GAP phase's hard cutoff is the closest achievable
+  substitute for stopping quickly, and the overdrive spike at the start
+  of every kick is the closest achievable substitute for starting
+  quickly; neither is a compromise made for convenience, both are the
+  real limits and real techniques of this specific drive circuit.
+- `diagnostics/calibration.c`'s rest/full-press/max-press snapshots are
+  useful for reading real numbers off the terminal, but nothing yet
+  turns those numbers into an applied per-pad calibration curve --
+  picking new constants (e.g. `expression.c`'s
+  `DEPTH_TO_AFTERTOUCH_FULL_SCALE`) from what it prints is still a
+  manual step, and there's no persistence (`storage/` doesn't exist) so
+  a capture doesn't survive a reboot.
 - `sk6805.pio`'s bit timing mirrors Raspberry Pi's reference `ws2812.pio`
   program; confirmed working on real SK6805 parts (all pads + underglow
   show correct white output on hardware), not independently verified on

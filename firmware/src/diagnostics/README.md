@@ -15,5 +15,16 @@ diagnostics down with it.
   phase. Currently printed over the temporary USB-CDC stdio enabled in
   `src/CMakeLists.txt`; rewire to `usb_vendor/` once that exists instead
   of adding a second output path.
-- Everything else in this list (per-pad commands, calibration
-  save/erase, manufacturing tests) is not built yet.
+- `calibration.h`/`.c` — a capture-only stand-in for the real
+  save/inspect/invalidate/erase calibration flow above, over the same
+  temporary stdio channel as `i2c_scan`: single-character serial
+  commands ('r' recapture rest baseline, 'f'/'m' snapshot regular-full-
+  press/max-press depth against that baseline) print per-pad tables +
+  averages for a human to read and hand-pick real constants from (e.g.
+  `services/expression.c`'s `DEPTH_TO_AFTERTOUCH_FULL_SCALE`,
+  `services/standby.c`'s `TILES_STANDBY_HALL_WAKE_DEPTH`). Doesn't
+  persist anything or derive/apply a calibration curve itself --
+  `storage/` and a real per-pad curve don't exist yet.
+- Everything else in this list (per-pad commands beyond calibration
+  capture, calibration save/erase, manufacturing tests) is not built
+  yet.

@@ -3,6 +3,7 @@ add_executable(sentia_tiles_firmware
     board/board_init.c
     board/pad_config.c
     diagnostics/i2c_scan.c
+    diagnostics/calibration.c
     drivers/sk6805.c
     drivers/tca9554.c
     drivers/tca9548a.c

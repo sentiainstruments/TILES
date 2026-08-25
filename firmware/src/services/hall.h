@@ -67,6 +67,18 @@ void tiles_hall_scan(void);
  * sample if the pad number is out of range. */
 tiles_hall_sample_t tiles_hall_get_sample(uint8_t logical_pad);
 
+/* Re-captures the rest-Z baseline for every successfully-initialized
+ * pad from a fresh read taken right now -- same "this pad is at rest
+ * right now" assumption tiles_hall_init() makes at boot, just
+ * re-triggerable on demand instead of only once at power-on. Meant for
+ * re-baselining after the boot-time capture is known stale (e.g. the
+ * magnets weren't in their final position yet at boot) -- see
+ * diagnostics/calibration.h for the serial-driven flow that calls this.
+ * A pad whose sensor never initialized is skipped, not retried. Returns
+ * false if any initialized pad's read failed (that pad's baseline is
+ * left unchanged, not zeroed). */
+bool tiles_hall_recapture_baseline(void);
+
 /* |current Z - rest-baseline Z| for one pad -- an uncalibrated
  * "how far from rest" magnitude, always >= 0 regardless of the sensor's
  * actual (currently unknown) polarity. 0 if the pad is out of range,

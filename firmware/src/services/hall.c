@@ -163,6 +163,22 @@ tiles_hall_sample_t tiles_hall_get_sample(uint8_t logical_pad) {
     return s_pad_sample[logical_pad - 1u];
 }
 
+bool tiles_hall_recapture_baseline(void) {
+    bool all_ok = true;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        if (!s_pad_init_ok[i]) {
+            continue;
+        }
+        read_pad(i);
+        if (s_pad_sample[i].valid) {
+            s_pad_baseline_z[i] = s_pad_sample[i].z;
+        } else {
+            all_ok = false;
+        }
+    }
+    return all_ok;
+}
+
 uint16_t tiles_hall_get_depth(uint8_t logical_pad) {
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
         return 0u;

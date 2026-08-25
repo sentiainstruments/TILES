@@ -17,16 +17,30 @@
  * hard, complete cutoff (not a soft ramp-down), which is standard
  * practice for ERM-style motors without dedicated brake circuitry.
  *
+ * Overdrive is the real, physically-achievable technique this hardware
+ * *does* support for a snappier attack, and is used here: every kick
+ * opens with a brief spike at full duty regardless of velocity (see
+ * KICK_OVERDRIVE_MS in haptics.c), overcoming the motor's static
+ * friction/inertia faster than the velocity-mapped duty alone would, and
+ * only then settles to that velocity-mapped level for the rest of the
+ * kick window. This is about starting fast, not stopping fast -- it
+ * doesn't substitute for braking (still impossible here).
+ *
  * Envelope per pad, driven entirely by services/expression.c calling
  * the three functions below at the same points it already drives
  * midi_out.c (not touch/Hall directly -- one state machine decides note
  * timing, not two):
  *
- *   KICK (tiles_haptics_trigger_kick, brief, velocity-mapped)
+ *   KICK (tiles_haptics_trigger_kick, overdrive spike -> velocity-mapped)
  *     -> GAP (hard zero -- the "brake" moment)
  *       -> SUSTAIN (aftertouch-mapped, live-updated via
  *          tiles_haptics_set_sustain_level while held)
  *         -> hard cutoff to 0 on tiles_haptics_stop (note-off)
+ *
+ * A kick may first sit briefly in an internal PENDING state (see
+ * haptics.c) if another kick started too recently -- see
+ * KICK_STAGGER_MIN_GAP_MS there for the "stagger motor starts" handling
+ * and why it doesn't add latency to normal single-note play.
  *
  * Respects services/power.h's max_haptic_voices ceiling: a new kick is
  * silently dropped if the ceiling is already reached, rather than
@@ -37,14 +51,10 @@
  * Shares both PCA9685 chip instances with services/buttons.c (that file
  * owns their init/wake sequence) via tiles_buttons_pca9685_for_addr().
  *
- * V1 caveats, same spirit as expression.c's: the kick/sustain duty
- * curves and timing constants in haptics.c are unmeasured starting
- * guesses (no per-motor current/duty data exists yet -- see the board
- * map's "measured_current_required" TODOs), and the hardware doc's
- * "stagger motor starts >= 15ms" guidance (inrush current across many
- * motors starting at once) is NOT implemented here -- max_haptic_voices
- * caps how many can be active at once, but nothing staggers simultaneous
- * kick triggers yet.
+ * V1 caveat, same spirit as expression.c's: the kick/sustain duty curves
+ * and every timing constant in haptics.c are unmeasured starting
+ * guesses -- no per-motor current/duty data exists yet (see the board
+ * map's "measured_current_required" TODOs).
  */
 
 #include <stdint.h>

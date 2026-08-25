@@ -11,12 +11,15 @@
  * default, expression CC11 built but off by default -- see
  * services/pedal.h), per-pad haptic feedback (velocity-mapped kick on
  * strike, aftertouch-mapped sustain while held -- see
- * services/haptics.h), standby idle animations (see services/standby.h).
- * Not yet built: MPE, DIN, CV/gate, the usb_vendor diagnostics
- * interface, per-pad Hall calibration -- added module by module per the
- * bring-up order in docs/hardware/SENTIA_FIRMWARE_CODEX_START.md. Each
- * phase must leave this file building and the previous phase's safety
- * guarantees intact.
+ * services/haptics.h), standby idle animations (see services/standby.h),
+ * and a serial-driven Hall calibration capture tool (rest/full-press/
+ * max-press snapshots -- see diagnostics/calibration.h). Not yet built:
+ * MPE, DIN, CV/gate, the usb_vendor diagnostics interface, a real
+ * per-pad Hall calibration curve (this is capture only, no curve is
+ * derived or applied yet) -- added module by module per the bring-up
+ * order in docs/hardware/SENTIA_FIRMWARE_CODEX_START.md. Each phase must
+ * leave this file building and the previous phase's safety guarantees
+ * intact.
  */
 
 #include <stdio.h>
@@ -24,6 +27,7 @@
 #include "pico/stdlib.h"
 
 #include "board/board_init.h"
+#include "diagnostics/calibration.h"
 #include "diagnostics/i2c_scan.h"
 #include "midi/usb_device.h"
 #include "services/buttons.h"
@@ -110,6 +114,10 @@ int main(void) {
         printf("[hall] one or more pads failed sensor init -- see per-pad status\n");
     }
 
+    /* Serial-driven Hall calibration capture -- needs tiles_hall_init()
+     * above already run. See diagnostics/calibration.h. */
+    tiles_calibration_init();
+
     /* Haptics: needs tiles_buttons_init() (above) already run, since it
      * shares both PCA9685 chip instances with buttons rather than
      * re-initializing them -- see services/haptics.h. Doesn't write any
@@ -146,6 +154,9 @@ int main(void) {
         tiles_standby_scan();
         tiles_lighting_service();
         tiles_hall_scan();
+        /* Non-blocking (zero-timeout stdio read) -- cheap even when
+         * nothing has been typed. See diagnostics/calibration.h. */
+        tiles_calibration_scan();
         /* Must run after both tiles_touch_scan() and tiles_hall_scan()
          * above so it sees this iteration's fresh data from both. */
         tiles_expression_scan();

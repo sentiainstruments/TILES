@@ -48,7 +48,10 @@ not its code.
   than touch.c reaching into MIDI.
 - `hall.h`/`.c` — done for V1: scans all 24 pads' TMAG5273 sensors
   through their Hall mux channels, storing raw XYZ plus a per-pad rest-Z
-  baseline (captured once at init) and a derived depth magnitude
+  baseline (captured once at init, re-capturable on demand via
+  `tiles_hall_recapture_baseline()` -- see `diagnostics/README.md`'s
+  `calibration.h`/`.c` for the serial-driven flow that calls it once the
+  boot-time capture is known stale) and a derived depth magnitude
   (`tiles_hall_get_depth()`, `|z - baseline|`, sign-agnostic since the
   actual sensor polarity per pad is still unknown). Scan priority: a
   touched pad is read every `tiles_hall_scan()` call; untouched pads
@@ -93,27 +96,43 @@ not its code.
   never disagree.
 - `haptics.h`/`.c` — done for V1: per-pad feedback driven entirely by
   `expression.c`'s calls (not touch/Hall directly). Envelope: KICK
-  (brief, velocity-mapped) -> GAP (hard zero) -> SUSTAIN
-  (aftertouch-mapped, live-updated while held) -> hard cutoff on
-  note-off. **Hardware constraint, not a software choice:** each motor
-  is a single low-side NMOS (AO3400A) to a fixed supply rail -- no
-  H-bridge, no dedicated haptic driver IC (confirmed against the board
-  map, see the file header) -- so real reverse-drive/active braking is
+  (opens with a brief overdrive spike at max duty regardless of
+  velocity, to overcome the motor's static friction/inertia fast, then
+  settles to the velocity-mapped duty for the rest of the window) ->
+  GAP (hard zero) -> SUSTAIN (aftertouch-mapped, live-updated while
+  held) -> hard cutoff on note-off. A kick may sit briefly in an
+  internal PENDING state first if another kick started too recently --
+  see `KICK_STAGGER_MIN_GAP_MS` below.
+  **Hardware constraint, not a software choice:** each motor is a
+  single low-side NMOS (AO3400A) to a fixed supply rail -- no H-bridge,
+  no dedicated haptic driver IC (confirmed against the board map, see
+  the file header) -- so real reverse-drive/active braking is
   physically impossible here. The GAP phase (an instant, complete
   cutoff rather than a soft ramp-down) is the closest achievable analog
   to "braking," standard practice for ERM motors without brake
-  circuitry. Respects `power.h`'s `max_haptic_voices` ceiling -- a new
-  kick past the ceiling is silently dropped, never blocks the MIDI note.
+  circuitry -- overdrive (above) is the real, physically-available
+  technique for a snappier *attack* instead, not a substitute for
+  braking on the stop side.
+  Respects `power.h`'s `max_haptic_voices` ceiling -- a new kick past
+  the ceiling is silently dropped, never blocks the MIDI note. Also
+  enforces the hardware handoff's "stagger motor starts >= 15ms"
+  guidance (`KICK_STAGGER_MIN_GAP_MS`): actual kick starts are spaced
+  at least that far apart even if several trigger calls arrive at once,
+  chained via a single global "next available slot" time so a burst of
+  simultaneous strikes queues cleanly rather than all inrushing
+  together. Only affects near-simultaneous multi-pad strikes -- a single
+  note's own kick always starts immediately, so normal play has zero
+  added latency; only a second (or third) pad struck within the same
+  ~15ms window has its *haptic* pulse (never its MIDI note-on) pushed
+  back slightly.
   Shares both PCA9685 chips with `buttons.c` via
   `tiles_buttons_pca9685_for_addr()`.
-  **Not done:** the hardware handoff's documented "stagger motor starts
-  >= 15ms" guidance (inrush current across many simultaneous kicks) --
-  `max_haptic_voices` caps how many motors can be active at once but
-  nothing staggers simultaneous trigger timing yet. Every duty/timing
-  constant (`KICK_DURATION_MS`, `KICK_GAP_MS`, `MIN_KICK_DUTY`,
-  `MAX_SUSTAIN_DUTY`) is an unmeasured placeholder -- no per-motor
-  current/duty data exists yet (see the board map's
-  `measured_current_required` TODOs). Not yet hardware-tested at all.
+  **Not done:** every duty/timing constant (`KICK_DURATION_MS`,
+  `KICK_OVERDRIVE_MS`, `KICK_GAP_MS`, `MIN_KICK_DUTY`,
+  `MAX_SUSTAIN_DUTY`, `KICK_STAGGER_MIN_GAP_MS`) is an unmeasured
+  placeholder -- no per-motor current/duty data exists yet (see the
+  board map's `measured_current_required` TODOs). Not yet
+  hardware-tested at all.
 - `pedal.h`/`.c` — done: sustain (MIDI CC64) on by default, debounced
   with hysteresis, polarity defaults to the usual normally-open
   footswitch convention and is switchable at runtime
