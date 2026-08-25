@@ -119,24 +119,33 @@ not its code.
   (rising edge, not while held), driving `note_map.c`'s shift above.
   Claims both buttons permanently via `buttons.c`'s new per-button
   override -- their LEDs stop following "lit while held" and instead
-  show the active direction's shift magnitude via a distinct pattern:
-  magnitude 1 solid, magnitude 2 a slow breathing pulse, magnitude 3
-  three smooth quick pulses then a brief dark rest then repeat; the
-  inactive direction (and both, at shift 0) stay dark. Reworked once
-  from real hardware feedback: magnitude 2's pulse read as too fast
-  (period roughly doubled), and magnitude 3's original hard on/off
-  blink-then-solid-hold read as "flashing too hard, not pulsing" --
-  every transition in magnitude 3 is now a smooth raised-cosine bump
-  (rises and falls continuously, no square-wave edge anywhere), not
-  just a timing tweak.
+  show the active direction's shift magnitude via a distinct pattern,
+  all three built from one shared "pulse" shape (a raised-cosine bump,
+  smooth rise and fall, no square-wave edge anywhere) so the family
+  reads as coherent rather than three unrelated effects: magnitude 1 is
+  that pulse repeating evenly forever with no rest; magnitude 2 is two
+  of that pulse back to back then a dim (not fully dark) rest, then
+  repeat; magnitude 3 is exactly magnitude 2's shape with one more pulse
+  appended before the same rest. The inactive direction (and both, at
+  shift 0) stay dark.
+  Reworked twice from real hardware feedback: first pass slowed
+  magnitude 2's period and replaced magnitude 3's original hard on/off
+  blink-then-solid-hold with smooth pulses, but left the three
+  magnitudes as separately-shaped animations that "didn't pulse evenly
+  with each other"; second pass rebuilt all three from the single shared
+  `pulse_unit_level()` building block above so magnitude 2 and 3 are
+  literally the same burst shape (just one more repeat before the rest)
+  and magnitude 1 uses that same shape continuously instead of being
+  flat solid.
   Meant to become a general-purpose modifier eventually (held for other
   menus/combos, per the product's own direction) -- this module only
   implements the V1 default function, not a generic modifier framework;
   that's real future work, not built speculatively now.
   **Not hardware-verified:** every pattern timing constant
-  (`PULSE_PERIOD_MS`, `PULSE3_ONE_MS`/`PULSE3_REST_MS`) is a first
-  guess -- this rework is reasoned through against the *previous*
-  version's real feedback, not itself seen on real hardware yet.
+  (`OCTAVE_PULSE_UNIT_MS`/`OCTAVE_PULSE_REST_MS`/`OCTAVE_PULSE_REST_LEVEL`)
+  is a first guess -- this rework is reasoned through against the
+  *previous* version's real feedback, not itself seen on real hardware
+  yet.
 - `game_mode.h`/`.c` — done for V1: real, player-controlled minigames --
   a genuinely separate feature from `standby.c`'s autonomous snake/
   brick-breaker animations (below), which stay exactly what they were
@@ -407,24 +416,30 @@ not its code.
   animation run once from `main.c`, before the main loop starts (nothing
   else needs to run concurrently -- USB stays alive via TinyUSB's own
   background IRQ task regardless). A white "rain" floods down through
-  pad rows 1-4, conceptually originating at the button row (underglow
-  off throughout), fades to complete dark, then a single, slow,
-  smoothstep-eased "Sentia Instruments Magenta" (#FF00FF) pulse across
-  pads + underglow finishes it. Function buttons are held dark for the
-  *entire* sequence (zeroed once up front, never written again) --
-  they're plain monochrome PWM, not addressable RGB, so they can't
-  participate in the magenta pulse at all, and an earlier version's
-  white glow on them (as the rain's literal source) read as wrong too
-  once seen on real hardware.
-  Reworked twice already from real feedback:
+  the whole grid -- function buttons (row 0, monochrome PWM) light first
+  as the flood's source, pad rows 1-4 follow (underglow off throughout)
+  -- then buttons and pads fade together to complete dark, then a
+  single, slow, smoothstep-eased "Sentia Instruments Magenta" (#FF00FF)
+  pulse across pads + underglow finishes it. Function buttons are
+  explicitly blacked out right before that last phase and never touched
+  again for the rest of the sequence -- they're plain monochrome PWM,
+  not addressable RGB, so they can't show magenta at all; the rain and
+  fade are the only phases they participate in.
+  Reworked three times already from real feedback:
   1. Direction and pacing -- it originally rose from the bottom-center
      outward (reversed to flow down instead, "like rain/flooding") and
      used linear, fairly fast, narrow-edged transitions that read as
      "jumpy" (now smoothstep-eased throughout, wider soft edges, longer
      durations).
-  2. Buttons -- originally lit as part of the rain and (attempted, but
-     apparently not fully) excluded from the magenta pulse; now held
-     dark for the whole sequence with no exceptions.
+  2. Buttons, first pass -- originally lit as part of the rain and
+     (attempted, but apparently not fully) excluded from the magenta
+     pulse; changed to held dark for the whole sequence with no
+     exceptions.
+  3. Buttons, second pass -- that turned out to be an overcorrection:
+     real feedback was that buttons should be part of the rain/fade (as
+     the flood's own source row), just not the final magenta glow, which
+     they can't show correctly anyway. Reworked back to lighting buttons
+     through phases 1-2 and excluding them only from phase 3.
   Reuses the exact same standby-active rendering path `standby.c`'s
   animations use (`tiles_lighting_set_standby_active()`, the RGB
   pad/underglow/button setters) rather than a second mechanism, and

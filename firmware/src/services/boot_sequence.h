@@ -2,21 +2,23 @@
 
 /*
  * Power-on animation, run once at boot: a white "rain" floods down
- * through the pad grid, conceptually originating just above pad row 1
- * (where the function buttons sit) and flowing down to row 4
- * (underglow stays off), then fades to complete dark, then a single,
- * slow, smoothstep-eased "Sentia Instruments Magenta" (#FF00FF) pulse
- * across pads + underglow finishes it -- then normal operation begins.
- * Function buttons are held dark for the ENTIRE sequence (zeroed once
- * up front, never written again) -- an earlier version lit them as part
- * of the rain (they're logically the flood's source) and again during
- * the magenta pulse, both of which read as wrong once seen on real
- * hardware: they can't show magenta at all (plain monochrome PWM, not
- * addressable RGB), and even the white rain glow on them didn't read as
- * intended. The rain's downward direction (from real feedback -- an
- * earlier version rose from the bottom-center outward instead) still
- * conceptually starts at the buttons' position, it just doesn't light
- * them.
+ * through the grid, starting at the function buttons (row 0 -- they light
+ * first, as the flood's source) and flowing down through the pads to row
+ * 4 (underglow stays off), then both buttons and pads fade together to
+ * complete dark, then a single, slow, smoothstep-eased "Sentia
+ * Instruments Magenta" (#FF00FF) pulse across pads + underglow finishes
+ * it -- then normal operation begins. Function buttons are explicitly
+ * blacked out right before phase 3 and never touched again for the rest
+ * of the sequence, since they're plain monochrome PWM, not addressable
+ * RGB, and can't show magenta at all. (An earlier version held them dark
+ * for the entire sequence including the rain/fade, which read as wrong
+ * once seen on real hardware -- they're logically the flood's source, so
+ * leaving them unlit through the rain looked incomplete. A version before
+ * that had them lit during the magenta phase too, which is the part
+ * that's still wrong and stays excluded.) The rain's downward direction
+ * (from real feedback -- an earlier version rose from the bottom-center
+ * outward instead) starts at the buttons' position and lights them along
+ * with everything else.
  *
  * Pacing is also the result of real feedback: the earlier version used
  * linear, fairly quick, narrow-edged transitions that read as "jumpy" --

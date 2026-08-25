@@ -14,57 +14,56 @@
 
 #define OCTAVE_CONTROL_PI 3.14159265358979323846f
 
-/* Magnitude 2: a smooth, slow breathing pulse -- distinct from
- * magnitude 1's flat solid and magnitude 3's faster triple-pulse below.
- * Never fully dark (min > 0) so it still reads clearly as "the active
- * direction," not as flickering off. Slowed from an initial 1600ms
- * period after real feedback that it read as too fast -- unmeasured,
- * still a starting guess at the new period. */
-#define PULSE_PERIOD_MS 3200.0f
-#define PULSE_MIN_LEVEL 0.15f
-#define PULSE_MAX_LEVEL 1.0f
+/* One shared building block, "a pulse": a raised-cosine bump rising
+ * smoothly from the dim rest level up to full and back down -- no hard
+ * edge anywhere. Every magnitude is built from repeats of this exact
+ * same shape so the three animations read as one coherent family (just
+ * "how many pulses, then how long a rest") instead of three unrelated
+ * effects -- direct fix for real feedback that magnitude 2 and 3 didn't
+ * pulse evenly with each other. */
+#define OCTAVE_PULSE_UNIT_MS 450.0f
+#define OCTAVE_PULSE_REST_MS 650u
+#define OCTAVE_PULSE_REST_LEVEL 0.15f
+#define OCTAVE_PULSE_PEAK_LEVEL 1.0f
 
-static float magnitude2_level(uint32_t now_ms) {
-    float phase = (float)now_ms / PULSE_PERIOD_MS;
-    float raw = 0.5f + 0.5f * sinf(2.0f * OCTAVE_CONTROL_PI * phase);
-    return PULSE_MIN_LEVEL + (PULSE_MAX_LEVEL - PULSE_MIN_LEVEL) * raw;
+static float pulse_unit_level(float phase01) {
+    float raw = 0.5f * (1.0f - cosf(2.0f * OCTAVE_CONTROL_PI * phase01));
+    return OCTAVE_PULSE_REST_LEVEL + (OCTAVE_PULSE_PEAK_LEVEL - OCTAVE_PULSE_REST_LEVEL) * raw;
 }
 
-/* Magnitude 3: three smooth pulses (a raised-cosine bump each -- rises
- * and falls smoothly, no instant on/off edge) in quick succession, then
- * a brief dark rest, then the whole burst repeats -- reworked from an
- * original hard on/off blink-then-solid-hold pattern after real
- * feedback that it read as "flashing too hard, not pulsing": the fix is
- * the shape of each transition (smooth raised-cosine instead of a
- * square wave), not just the timing. Still meant to read as busier/
- * faster than magnitude 2's single slow breath -- three quick pulses
- * per burst instead of one long one. Unmeasured -- a starting guess. */
-#define PULSE3_ONE_MS 260.0f
-#define PULSE3_COUNT 3u
-#define PULSE3_REST_MS 700u
-#define PULSE3_BURST_MS ((uint32_t)(PULSE3_COUNT * PULSE3_ONE_MS))
-#define PULSE3_CYCLE_MS (PULSE3_BURST_MS + PULSE3_REST_MS)
+/* Magnitude 1: the same unit pulse repeating back to back forever --
+ * "pulses even," no burst/rest structure at all, just a steady regular
+ * breathing. Replaces the earlier flat-solid magnitude-1 look per real
+ * feedback that one click should read as pulsing too, not just lit. */
+static float magnitude1_level(uint32_t now_ms) {
+    float phase = fmodf((float)now_ms / OCTAVE_PULSE_UNIT_MS, 1.0f);
+    return pulse_unit_level(phase);
+}
 
-static float magnitude3_level(uint32_t now_ms) {
-    uint32_t t = now_ms % PULSE3_CYCLE_MS;
-    if (t >= PULSE3_BURST_MS) {
-        return 0.0f; /* the rest between bursts */
+/* Magnitude 2 and 3: `magnitude` unit pulses back to back, then a dim
+ * (not fully dark) rest, then the whole burst repeats. Magnitude 3 is
+ * literally magnitude 2's shape plus one more pulse appended before the
+ * same rest -- not a separately-tuned animation -- per real feedback
+ * that the two should be "the same, just with an additional pulse
+ * followed by a rest in dim." Unmeasured -- a starting guess at pacing. */
+static float magnitude_burst_level(uint8_t magnitude, uint32_t now_ms) {
+    uint32_t burst_ms = (uint32_t)((float)magnitude * OCTAVE_PULSE_UNIT_MS);
+    uint32_t cycle_ms = burst_ms + OCTAVE_PULSE_REST_MS;
+    uint32_t t = now_ms % cycle_ms;
+    if (t >= burst_ms) {
+        return OCTAVE_PULSE_REST_LEVEL; /* dim rest between bursts */
     }
-    float within = (float)(t % (uint32_t)PULSE3_ONE_MS);
-    float phase = within / PULSE3_ONE_MS; /* 0..1 across one pulse */
-    /* Raised cosine: 0 at the edges, 1 at the pulse's midpoint, smooth
-     * the whole way -- no hard edge anywhere in the waveform. */
-    return 0.5f * (1.0f - cosf(2.0f * OCTAVE_CONTROL_PI * phase));
+    float within = fmodf((float)t, OCTAVE_PULSE_UNIT_MS);
+    return pulse_unit_level(within / OCTAVE_PULSE_UNIT_MS);
 }
 
 static float level_for_magnitude(uint8_t magnitude, uint32_t now_ms) {
     switch (magnitude) {
     case 1u:
-        return 1.0f; /* solid */
+        return magnitude1_level(now_ms);
     case 2u:
-        return magnitude2_level(now_ms);
     case 3u:
-        return magnitude3_level(now_ms);
+        return magnitude_burst_level(magnitude, now_ms);
     default:
         return 0.0f;
     }

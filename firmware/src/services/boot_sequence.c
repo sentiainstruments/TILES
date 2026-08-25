@@ -112,15 +112,16 @@ static float pulse_envelope(uint32_t elapsed_ms) {
 
 typedef float (*white_level_fn_t)(uint8_t row, uint8_t col, uint32_t elapsed_ms);
 
-/* Function buttons are deliberately never written here -- see the file
- * header. Real hardware showed both an unwanted flash of full button
- * brightness early in the rain (buttons being the flood's source
- * naturally reached full brightness quickly under the old code) and
- * some residual button glow during the magenta pulse; rather than
- * fine-tune around that, buttons are held dark (zeroed once in
- * tiles_boot_sequence_run() before any phase starts) for the whole
- * sequence and simply never touched again. */
+/* Function buttons (row 0, monochrome PWM) ARE part of the rain and fade
+ * -- they're the flood's source row, so they light first and fade last
+ * along with everything else. They're only excluded from phase 3's
+ * magenta pulse, which is RGB-only and gets its own explicit button
+ * black-out right before it runs (see run_phase3_magenta_pulse()). */
 static void write_frame_white(white_level_fn_t level_fn, uint32_t elapsed_ms) {
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        float button_v = level_fn(0u, col, elapsed_ms);
+        tiles_buttons_set_standby_led(board_button_for_col(col), button_v);
+    }
     for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             float v = level_fn(row, col, elapsed_ms);
@@ -178,6 +179,14 @@ static void run_phase2_fade(void) {
 }
 
 static void run_phase3_magenta_pulse(void) {
+    /* Buttons are plain monochrome PWM, not addressable RGB, so they
+     * can't show magenta -- explicitly black them out here (phase 2's
+     * fade should already have brought them to 0, this just guarantees
+     * it) and never touch them again for the rest of this phase. */
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+    }
+
     uint32_t start_ms = to_ms_since_boot(get_absolute_time());
     while (true) {
         uint32_t elapsed = to_ms_since_boot(get_absolute_time()) - start_ms;
@@ -210,13 +219,6 @@ static void run_phase3_magenta_pulse(void) {
 bool tiles_boot_sequence_run(void) {
     tiles_lighting_set_standby_active(true);
     tiles_buttons_set_standby_active(true);
-
-    /* Function buttons stay dark for the entire sequence -- see
-     * write_frame_white()'s comment. Zeroed once here defensively;
-     * nothing else in this file writes to a button LED after this. */
-    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
-    }
 
     run_phase1_rain();
     run_phase2_fade();

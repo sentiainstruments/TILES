@@ -11,11 +11,16 @@
  * +/-TILES_NOTE_MAP_MAX_OCTAVE_SHIFT (3).
  *
  * The active-direction button's LED shows the current shift's magnitude
- * via a distinct pattern per level (the other direction's LED, and both
- * at shift 0, stay dark):
- *   magnitude 1: solid on
- *   magnitude 2: slow breathing pulse
- *   magnitude 3: three quick blinks, then a solid hold, then repeat
+ * via a distinct pattern per level, all built from the same underlying
+ * "pulse" shape (a smooth raised-cosine bump) so the three read as one
+ * coherent family rather than unrelated effects (the other direction's
+ * LED, and both at shift 0, stay dark):
+ *   magnitude 1: that pulse repeating evenly forever, no rest
+ *   magnitude 2: two of that pulse back to back, then a dim (not fully
+ *                dark) rest, then repeat
+ *   magnitude 3: the same shape as magnitude 2 with one more pulse
+ *                appended before the rest -- three pulses, dim rest,
+ *                repeat
  *
  * Claims SW1/SW2 permanently via services/buttons.h's per-button
  * override mechanism (tiles_buttons_set_override_active()) -- their
