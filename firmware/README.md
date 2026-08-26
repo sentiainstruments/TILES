@@ -260,12 +260,13 @@ flashable `.uf2`.
   real-snake rework and animations 8 (brick breaker), 9 (marquee,
   including its font's move to the new shared `services/pixel_font.h`/
   `.c`), 10 (bouncing glow, a "simple but elegant" white animation),
-  11 (Tetris, AI-placed via a greedy landing-depth heuristic), and 12
-  (Pong, AI-vs-AI) have NOT been seen on real hardware at all yet --
+  11 (Tetris, AI-placed via a greedy landing-depth heuristic), 12
+  (Pong, AI-vs-AI), and 13 (falling dots, a slow "filling up"
+  screensaver) have NOT been seen on real hardware at all yet --
   every one of their constants
   (`EQ_PEAK_DECAY_PER_MS`, `CIRCLE_PERIOD_MS`,
   `POWER_SAVING_PULSE_PERIOD_MS`, `BOUNCE_ROW_PERIOD_MS`,
-  `TETRIS_STEP_MS`, etc.) is a first guess. `BUTTON_STANDBY_BRIGHTNESS_SCALE`
+  `TETRIS_STEP_MS`, `FALLINGDOTS_STEP_MS`, etc.) is a first guess. `BUTTON_STANDBY_BRIGHTNESS_SCALE`
   (0.35) is likewise still an unmeasured guess at how much dimmer buttons need to be, not a measured
   match to pad brightness.
 - `services/boot_sequence.c`: seen on real hardware twice now, reworked

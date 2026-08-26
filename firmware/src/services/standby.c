@@ -1471,6 +1471,178 @@ static tiles_standby_color_t pong_underglow(uint8_t pixel_index, uint32_t now_ms
     return white(on ? 1.0f : 0.0f);
 }
 
+/* ---- Animation 13: falling dots -------------------------------------------
+ * White dots fall one row at a time from the top, landing wherever they
+ * hit the bottom or an already-landed dot below them and staying there
+ * -- a slow, ambient "filling up" screensaver. Unlike every other
+ * animation here, this one has real state that accumulates over its
+ * whole run rather than looping continuously: new dots spawn
+ * periodically in columns that still have room, gradually filling the
+ * grid; once every column is completely full, it holds for a moment
+ * then clears and the fill starts over. Function buttons stay off;
+ * underglow mirrors the pad field like animations 1-5/10, so a dot
+ * landing near an anchor lights it up naturally. */
+
+#define FALLINGDOTS_MIN_ROW 1u
+#define FALLINGDOTS_MAX_ROW TILES_GRID_MAX_ROW
+#define FALLINGDOTS_MIN_COL TILES_GRID_MIN_COL
+#define FALLINGDOTS_MAX_COL TILES_GRID_MAX_COL
+#define FALLINGDOTS_ROWS 4u
+#define FALLINGDOTS_COLS 6u
+#define FALLINGDOTS_STEP_MS 180u           /* how fast a falling dot drops one row */
+#define FALLINGDOTS_SPAWN_INTERVAL_MS 500u /* how often a new dot spawns, while there's still room */
+#define FALLINGDOTS_MAX_CONCURRENT 4u
+#define FALLINGDOTS_FULL_PAUSE_MS 1800u /* how long the fully-filled grid holds before clearing */
+#define FALLINGDOTS_ACTIVE_LEVEL 1.0f
+#define FALLINGDOTS_LANDED_LEVEL 0.65f
+
+typedef struct {
+    bool active;
+    uint8_t col;
+    int8_t row;
+} fallingdots_dot_t;
+
+/* Indexed [row - FALLINGDOTS_MIN_ROW][col - FALLINGDOTS_MIN_COL]. */
+static bool s_fallingdots_filled[FALLINGDOTS_ROWS][FALLINGDOTS_COLS];
+static fallingdots_dot_t s_fallingdots_active[FALLINGDOTS_MAX_CONCURRENT];
+static uint32_t s_fallingdots_last_step_ms;
+static uint32_t s_fallingdots_last_spawn_ms;
+static uint32_t s_fallingdots_full_since_ms;
+static bool s_fallingdots_is_full;
+static bool s_fallingdots_inited;
+
+static void fallingdots_reset(void) {
+    for (uint8_t r = 0; r < FALLINGDOTS_ROWS; r++) {
+        for (uint8_t c = 0; c < FALLINGDOTS_COLS; c++) {
+            s_fallingdots_filled[r][c] = false;
+        }
+    }
+    for (uint8_t i = 0; i < FALLINGDOTS_MAX_CONCURRENT; i++) {
+        s_fallingdots_active[i].active = false;
+    }
+    s_fallingdots_is_full = false;
+}
+
+/* Dots always land on top of whatever's already stacked in their
+ * column (like Tetris pieces), filling bottom-up with no gaps -- so
+ * row 1 (index 0) being empty is a valid, cheap proxy for "this column
+ * still has room," and checking it across every column is equally
+ * valid for "is the whole grid full." */
+static bool fallingdots_col_has_room(uint8_t col0) {
+    return !s_fallingdots_filled[0][col0];
+}
+
+static bool fallingdots_all_full(void) {
+    for (uint8_t c = 0; c < FALLINGDOTS_COLS; c++) {
+        if (!s_fallingdots_filled[0][c]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool fallingdots_cell_filled(uint8_t row, uint8_t col) {
+    return s_fallingdots_filled[row - FALLINGDOTS_MIN_ROW][col - FALLINGDOTS_MIN_COL];
+}
+
+static void fallingdots_spawn(void) {
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < FALLINGDOTS_MAX_CONCURRENT; i++) {
+        if (!s_fallingdots_active[i].active) {
+            slot = (int8_t)i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        return; /* already at the concurrent cap */
+    }
+
+    /* A handful of random tries for a column with room -- small board,
+     * finds one almost immediately in practice, same reasoning
+     * snake_place_food() uses for its own bounded rejection sampling. */
+    for (uint8_t attempt = 0; attempt < 12u; attempt++) {
+        uint8_t col0 = (uint8_t)(rand() % FALLINGDOTS_COLS);
+        if (fallingdots_col_has_room(col0)) {
+            s_fallingdots_active[slot].active = true;
+            s_fallingdots_active[slot].col = (uint8_t)(FALLINGDOTS_MIN_COL + col0);
+            s_fallingdots_active[slot].row = (int8_t)FALLINGDOTS_MIN_ROW;
+            return;
+        }
+    }
+    /* No column with room found in a handful of tries -- either the
+     * grid is nearly full (fallingdots_all_full() catches that shortly)
+     * or just unlucky this call; skip spawning rather than searching
+     * exhaustively. */
+}
+
+static void fallingdots_step(uint32_t now_ms) {
+    for (uint8_t i = 0; i < FALLINGDOTS_MAX_CONCURRENT; i++) {
+        fallingdots_dot_t *dot = &s_fallingdots_active[i];
+        if (!dot->active) {
+            continue;
+        }
+        int8_t next_row = (int8_t)(dot->row + 1);
+        bool blocked =
+            (next_row > (int8_t)FALLINGDOTS_MAX_ROW) || fallingdots_cell_filled((uint8_t)next_row, dot->col);
+        if (blocked) {
+            s_fallingdots_filled[dot->row - (int8_t)FALLINGDOTS_MIN_ROW][dot->col - FALLINGDOTS_MIN_COL] = true;
+            dot->active = false;
+        } else {
+            dot->row = next_row;
+        }
+    }
+
+    if (fallingdots_all_full()) {
+        if (!s_fallingdots_is_full) {
+            s_fallingdots_is_full = true;
+            s_fallingdots_full_since_ms = now_ms;
+        } else if (now_ms - s_fallingdots_full_since_ms >= FALLINGDOTS_FULL_PAUSE_MS) {
+            fallingdots_reset();
+        }
+        return;
+    }
+
+    if (now_ms - s_fallingdots_last_spawn_ms >= FALLINGDOTS_SPAWN_INTERVAL_MS) {
+        s_fallingdots_last_spawn_ms = now_ms;
+        fallingdots_spawn();
+    }
+}
+
+static void fallingdots_update(uint32_t now_ms) {
+    if (!s_fallingdots_inited) {
+        fallingdots_reset();
+        s_fallingdots_last_step_ms = now_ms;
+        s_fallingdots_last_spawn_ms = now_ms;
+        s_fallingdots_inited = true;
+        return;
+    }
+    if (now_ms - s_fallingdots_last_step_ms < FALLINGDOTS_STEP_MS) {
+        return;
+    }
+    s_fallingdots_last_step_ms = now_ms;
+    fallingdots_step(now_ms);
+}
+
+static tiles_standby_color_t anim_fallingdots(uint8_t row, uint8_t col, uint32_t now_ms) {
+    fallingdots_update(now_ms);
+
+    if (row == 0u) {
+        return white(0.0f);
+    }
+
+    for (uint8_t i = 0; i < FALLINGDOTS_MAX_CONCURRENT; i++) {
+        const fallingdots_dot_t *dot = &s_fallingdots_active[i];
+        if (dot->active && dot->row == (int8_t)row && dot->col == col) {
+            return white(FALLINGDOTS_ACTIVE_LEVEL);
+        }
+    }
+
+    if (fallingdots_cell_filled(row, col)) {
+        return white(FALLINGDOTS_LANDED_LEVEL);
+    }
+    return white(0.0f);
+}
+
 /* ---- Animation registry + shared render -------------------------------- */
 
 typedef tiles_standby_color_t (*field_fn_t)(uint8_t row, uint8_t col, uint32_t now_ms);
@@ -1480,10 +1652,11 @@ static const field_fn_t s_animations[] = {
     anim_wave,           anim_glow,     anim_shooting_stars, anim_snake,
     anim_rgb_showcase,   anim_equalizer, anim_underglow_circle,
     anim_brick_breaker,  anim_marquee,  anim_bounce, anim_tetris, anim_pong,
+    anim_fallingdots,
 };
 /* Parallel to s_animations[] -- NULL means underglow samples the same
- * field the pads use at its anchor points (animations 1-5 and 10, where
- * underglow mirroring the pad grid is exactly what's wanted). A
+ * field the pads use at its anchor points (animations 1-5, 10, and 13,
+ * where underglow mirroring the pad grid is exactly what's wanted). A
  * non-NULL entry means underglow needs genuinely different behavior
  * from whatever the pad field computes at that (row, col) -- the
  * equalizer's underglow is a constant accent unrelated to any one
@@ -1493,7 +1666,7 @@ static const field_fn_t s_animations[] = {
  * the marquee's underglow is simply always off. */
 static const underglow_fn_t s_animation_underglow_override[] = {
     NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow, bb_underglow, marquee_underglow, NULL,
-    tetris_underglow, pong_underglow,
+    tetris_underglow, pong_underglow, NULL,
 };
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
 
@@ -1518,6 +1691,7 @@ static const uint8_t s_animation_weight[] = {
     ANIM_WEIGHT_REGULAR, /* bounce */
     ANIM_WEIGHT_GAME,    /* tetris */
     ANIM_WEIGHT_GAME,    /* pong */
+    ANIM_WEIGHT_REGULAR, /* falling dots */
 };
 
 /* Function-button LEDs read noticeably brighter than pad LEDs at the
