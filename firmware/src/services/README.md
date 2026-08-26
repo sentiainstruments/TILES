@@ -465,6 +465,52 @@ not its code.
      bounds -- unlike the depth-delta numbers above, they're first
      attempts at a feel, and this print exists specifically so the next
      real-hardware session can calibrate them from real numbers.
+  6. **"Full fast presses are not even registering... if I press really
+     fast and hard nothing happens"** -- round 5's `touch_start_depth`
+     fix had a real bug of its own: it captured the zero reference from
+     the *first fresh Hall sample after touch begins*, reasoning that
+     hall.c's background round-robin could leave a stale pre-touch
+     reading. But a genuinely fast, hard strike can already be well past
+     `MIN_STRIKE_DEPTH_DELTA` by the time that first post-touch sample
+     actually arrives -- using it as the zero reference made
+     `peak_depth_delta` start near 0 with most of the real travel
+     already behind it, unable to ever reach threshold again on the way
+     back down. The harder and faster the strike, the more likely its
+     very first sample was already deep -- so this bug hit hardest
+     exactly the strikes it should have served best. Fixed by capturing
+     `touch_start_depth` immediately in `begin_awaiting_strike()`, at the
+     exact scan tick touch is first detected, from whatever hall.c
+     already has cached -- not waiting for anything. hall.c's depth is
+     already baseline-relative (drift-compensated for untouched pads by
+     its own background tracker -- see `hall.c`'s entry), so a cached
+     pre-touch reading is a perfectly valid zero point; the "staleness"
+     concern that motivated the original design was solving a problem
+     that likely didn't really exist, at the cost of one that very much
+     did.
+     Separately, **"when I press faster but not deep the reading is
+     still strong"**: at `MIN_STRIKE_DEPTH_DELTA` = 150 (~17% of the
+     ~900-unit full-press range), a light flick needs very little real
+     force to cover that little distance quickly, so speed and force
+     weren't well correlated at that shallow a checkpoint. Raised to 300
+     (~33%) -- covering twice the distance in the same short time
+     requires genuinely more force, given the pad's spring/magnet return
+     works against the motion the whole way, so a confident, fast strike
+     is now needed to trigger the checkpoint quickly, not just a flick.
+     Still leaves ~67% of travel for aftertouch. Unmeasured against this
+     specific complaint (the original 150 was validated against
+     "touch vs. press," not "how much depth suppresses fast-but-light
+     strikes") -- revisit with a labeled capture if light-fast still
+     reads too hard, or deliberate soft presses stop registering.
+     Finally, **touch-only haptic feedback added**, raised three times
+     with increasingly specific wording before it was clear this meant a
+     genuinely new capability, not a report that the note-strike kick
+     was broken: "haptic pulse on touch without pressure is gone still
+     as well." `tiles_haptics_trigger_touch_pulse()` (see `haptics.h`'s
+     entry) now fires the instant capacitive touch is detected
+     (IDLE -> AWAITING_STRIKE), completely independent of whether that
+     touch ever clears `MIN_STRIKE_DEPTH_DELTA` -- a light "I felt you"
+     tick distinct from the note-strike kick, which still requires a
+     real press exactly as before.
   `DEPTH_TO_AFTERTOUCH_FULL_SCALE` is now real, not a placeholder: 900,
   derived from a serial-driven full-press capture session
   (`diagnostics/calibration.h`'s 'f' command) with all 24 magnets
@@ -595,6 +641,31 @@ not its code.
   at least reached -- whether the problem is downstream of that (wiring,
   the PCA9685 write itself, one specific pad) is still open, pending a
   session that watches for this print while testing.
+  **Touch-only haptic pulse added** -- real feedback, raised three
+  times with increasingly specific wording until it was clear this
+  meant a genuinely new capability, not another report of the missing
+  kick: "haptic pulse on touch without pressure is gone still as well."
+  A new `HAPTIC_PHASE_TOUCH_PULSE`, distinct from the KICK/GAP/SUSTAIN
+  envelope, fires via `tiles_haptics_trigger_touch_pulse()` the instant
+  `services/expression.c` detects capacitive touch (IDLE ->
+  AWAITING_STRIKE), independent of whether that touch ever becomes a
+  real press -- a brief (`TOUCH_PULSE_DURATION_MS`, 15ms), soft
+  (`TOUCH_PULSE_DUTY`, 0.35 vs. a kick's 0.65+) tick, not a strike
+  confirmation. Deliberately bypasses `max_haptic_voices` entirely
+  (`active_voice_count()`/`steal_oldest_voice()` both explicitly exclude
+  this phase) -- far shorter/lower-duty than a real kick, so the
+  current-budget concern the ceiling exists for doesn't meaningfully
+  apply, and every touch getting *some* acknowledgment matters more here
+  than voice accounting for a pulse this brief. If the touch goes on to
+  clear `expression.c`'s `MIN_STRIKE_DEPTH_DELTA` before the pulse
+  finishes, `tiles_haptics_trigger_kick()` takes the pad over exactly as
+  it already does for any active pad (its ceiling check only applies
+  when `phase == HAPTIC_PHASE_IDLE`) -- the pulse never blocks or delays
+  a real kick. Conversely, if the pad is already doing something else
+  (a held note's SUSTAIN, a pending KICK) when touch starts, the pulse
+  is skipped rather than interrupting real feedback for an
+  acknowledgment. Unmeasured -- a first attempt at "clearly felt but
+  clearly not a strike," not tuned against real hardware.
   **Not done:** every duty/timing constant (`KICK_DURATION_MS`,
   `KICK_OVERDRIVE_MS`, `KICK_GAP_MS`, `MIN_KICK_DUTY`,
   `MAX_SUSTAIN_DUTY`, `KICK_STAGGER_MIN_GAP_MS`, and the new

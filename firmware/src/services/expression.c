@@ -66,23 +66,34 @@
  * touch counts as an actual press worth firing a note for, rather than
  * a light touch/rest with no real key motion -- see this section's own
  * header comment above for the real captured data this is picked from.
- * 150 sits comfortably above the observed touch-only ceiling (~96, the
- * vast majority clustering at exactly 32) and comfortably below the
- * smallest clearly-deliberate press observed (192) -- real margin on
- * both sides of an actual measured gap, not a number picked from
- * nowhere. A touch that never crosses this just sits in
- * PAD_STATE_AWAITING_STRIKE until release cancels it with no note ever
- * sent, matching how a real key requires an actual press, not just
- * contact. Leaves most of the ~900-unit full-press range as aftertouch
- * travel after the note fires, same as a synth-action keybed's
- * actuation point sitting well before its mechanical bottom. Still not
- * hardware-verified with this exact value -- the capture that produced
- * the numbers above mixed light touches and real presses in one
- * session without labeling which was which as they happened; revisit
- * with a labeled capture (explicit "light touch" vs "press" trials) if
- * light touches still get through or deliberate soft presses stop
- * registering. */
-#define MIN_STRIKE_DEPTH_DELTA 150.0f
+ * A touch that never crosses this just sits in PAD_STATE_AWAITING_STRIKE
+ * until release cancels it with no note ever sent, matching how a real
+ * key requires an actual press, not just contact.
+ *
+ * Also doubles as the elapsed-time model's actuation checkpoint (see
+ * "Velocity: elapsed-time-to-actuation" below) -- how far a strike has
+ * to travel before its speed even gets measured. Raised 150 -> 300
+ * after real feedback that a fast-but-shallow flick still read as a
+ * hard strike: "when I press faster but not deep the reading is still
+ * strong." At 150 (comfortably above the ~96 touch-only ceiling but
+ * still only ~17% of the ~900-unit full-press range), a light flick
+ * needs very little real force to cover that little distance quickly,
+ * so "fast" and "hard" weren't well correlated at that depth. 300
+ * (~33% of full press) requires enough real travel that covering it
+ * quickly takes genuine committed force, not just a flick -- the same
+ * physical logic a spring/magnet mechanism already applies to any
+ * motion: covering more distance in the same short time needs more
+ * initial force, since the spring's return force works against it the
+ * whole way. Still leaves ~67% of travel for aftertouch after the note
+ * fires, same as a synth-action keybed's actuation point sitting well
+ * before its mechanical bottom. Unmeasured against this specific
+ * complaint -- the capture that validated the original 150 (see this
+ * section's header) only measured "touch vs. press," not "how much
+ * depth makes fast-but-light strikes rare"; revisit with a labeled
+ * capture (explicit "light touch," "fast shallow flick," "real press"
+ * trials) if light-fast still reads too hard or deliberate soft presses
+ * stop registering. */
+#define MIN_STRIKE_DEPTH_DELTA 300.0f
 
 /* Retrigger threshold for a held note -- real feedback: "contact with
  * pad has to be broken for retrigger, that's bad." Depth (relative to
@@ -222,25 +233,30 @@ typedef struct {
     uint32_t touch_start_ms;
 
     /* Reference depth MIN_STRIKE_DEPTH_DELTA below measures real travel
-     * against -- set from the FIRST fresh Hall sample gathered after
-     * touch begins (see the AWAITING_STRIKE branch below), not read
-     * immediately at touch-down. An untouched pad is only covered by
-     * hall.c's slow background round-robin, so whatever depth happens to
-     * be cached the instant touch starts can be stale by many scan
-     * cycles; touch immediately switches this pad to hall.c's
-     * every-call priority scan, so comparing a fresh in-window sample
-     * against that stale one could read as "movement" from nothing more
-     * than ordinary drift over the stale gap, not a real press. Using
-     * the first sample actually taken at the new fast rate as the
-     * reference means every comparison is apples-to-apples, both sides
-     * measured within the same strike-detection window. */
+     * against -- captured immediately in begin_awaiting_strike(), at the
+     * exact scan tick touch is first detected, using whatever depth
+     * hall.c already has cached for this pad. NOT "wait for the first
+     * fresh Hall sample after touch begins" (an earlier version of this
+     * field) -- that seemed safer against hall.c's background-round-
+     * robin staleness, but broke fast strikes outright: a hard, fast
+     * press can already be well past MIN_STRIKE_DEPTH_DELTA by the time
+     * the *first* Hall sample after touch begins actually arrives, so
+     * using that sample as the zero reference made peak_depth_delta
+     * start near 0 and unable to ever reach threshold again on the way
+     * back down -- "if I press really fast and hard nothing happens."
+     * hall.c's depth is already baseline-relative (drift-compensated for
+     * untouched pads via its own background tracker), so a cached
+     * pre-touch reading is a perfectly valid zero point -- the earlier
+     * "staleness" concern was solving a problem that didn't actually
+     * exist, at the cost of one that very much did. Always valid the
+     * instant AWAITING_STRIKE begins, hence no longer a bool-guarded
+     * "first sample" flag. */
     float touch_start_depth;
-    bool has_touch_start_depth;
 
-    /* Hall sample timestamp (same clock as touch_start_ms, but the
-     * sample's own time rather than the scan loop's) paired with
-     * touch_start_depth -- the reference strike_time_ms below measures
-     * elapsed time from. Set at the same moment as touch_start_depth. */
+    /* Paired with touch_start_depth -- the reference strike_time_ms
+     * below measures elapsed time from. Set at the same moment, from
+     * the scan tick's own clock (the same to_ms_since_boot() clock Hall
+     * sample timestamps use, so directly comparable to them later). */
     uint32_t touch_start_sample_ms;
 
     /* Highest depth_delta (relative to touch_start_depth) seen at any
@@ -309,10 +325,13 @@ void tiles_expression_init(void) {
     }
 }
 
-static void begin_awaiting_strike(pad_expr_t *s, uint32_t now_ms) {
+static void begin_awaiting_strike(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
     s->state = PAD_STATE_AWAITING_STRIKE;
     s->touch_start_ms = now_ms;
-    s->has_touch_start_depth = false;
+    /* Captured immediately, not on a later "first fresh sample" -- see
+     * touch_start_depth's own comment for why. */
+    s->touch_start_depth = (float)tiles_hall_get_depth(pad);
+    s->touch_start_sample_ms = now_ms;
     s->peak_depth_delta = 0.0f;
     s->threshold_crossed = false;
     s->strike_time_ms = 0;
@@ -370,7 +389,11 @@ void tiles_expression_scan(void) {
 
         if (s->state == PAD_STATE_IDLE) {
             if (touched) {
-                begin_awaiting_strike(s, now_ms);
+                begin_awaiting_strike(s, pad, now_ms);
+                /* Touch-only haptic acknowledgment, independent of
+                 * whether this ever becomes a real press -- see
+                 * tiles_haptics_trigger_touch_pulse()'s own comment. */
+                tiles_haptics_trigger_touch_pulse(pad);
             }
             continue;
         }
@@ -385,14 +408,6 @@ void tiles_expression_scan(void) {
                 if (hs.valid && hs.sample_time_ms != s->last_seen_sample_time_ms) {
                     s->last_seen_sample_time_ms = hs.sample_time_ms;
                     float depth = (float)tiles_hall_get_depth(pad);
-                    if (!s->has_touch_start_depth) {
-                        /* First fresh sample since touch began -- see this
-                         * field's comment for why this, not a read taken
-                         * immediately at touch-down, is the right reference. */
-                        s->touch_start_depth = depth;
-                        s->touch_start_sample_ms = hs.sample_time_ms;
-                        s->has_touch_start_depth = true;
-                    }
                     float delta = depth - s->touch_start_depth;
                     if (delta > s->peak_depth_delta) {
                         s->peak_depth_delta = delta;
@@ -483,11 +498,11 @@ void tiles_expression_scan(void) {
          * going false. A subsequent real press is then measured and
          * fires a brand-new note-on with its own freshly computed
          * velocity through the exact same path as any other strike. */
-        if (s->has_touch_start_depth && (now_ms - s->note_on_ms) >= RETRIGGER_GRACE_MS &&
+        if ((now_ms - s->note_on_ms) >= RETRIGGER_GRACE_MS &&
             (raw_depth - s->touch_start_depth) <= RETRIGGER_ARM_DEPTH_DELTA) {
             tiles_midi_note_off(s->active_note);
             tiles_haptics_stop(pad);
-            begin_awaiting_strike(s, now_ms);
+            begin_awaiting_strike(s, pad, now_ms);
             continue;
         }
 

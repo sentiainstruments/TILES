@@ -102,9 +102,19 @@
  * back slightly, never its MIDI note-on. */
 #define KICK_STAGGER_MIN_GAP_MS 15u
 
+/* TOUCH_PULSE: a brief, soft acknowledgment fired on capacitive touch
+ * alone -- see this file's header for why this exists as a distinct
+ * concept from KICK. Much shorter and softer than a kick (KICK_DURATION_MS
+ * 45ms at MIN_KICK_DUTY 0.65+) -- this is a light "tick," not a strike.
+ * Unmeasured -- a first attempt at "clearly felt but clearly not a
+ * strike," not tuned against real hardware. */
+#define TOUCH_PULSE_DURATION_MS 15u
+#define TOUCH_PULSE_DUTY 0.35f
+
 typedef enum {
     HAPTIC_PHASE_IDLE = 0,
     HAPTIC_PHASE_PENDING, /* queued, waiting for its staggered start time */
+    HAPTIC_PHASE_TOUCH_PULSE,
     HAPTIC_PHASE_KICK,
     HAPTIC_PHASE_GAP,
     HAPTIC_PHASE_SUSTAIN,
@@ -211,10 +221,12 @@ static float sustain_target_duty(const haptic_pad_state_t *s) {
     return mixed;
 }
 
+/* TOUCH_PULSE deliberately doesn't count -- see this file's header on
+ * why it bypasses the voice ceiling entirely. */
 static uint8_t active_voice_count(void) {
     uint8_t count = 0;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        if (s_pads[i].phase != HAPTIC_PHASE_IDLE) {
+        if (s_pads[i].phase != HAPTIC_PHASE_IDLE && s_pads[i].phase != HAPTIC_PHASE_TOUCH_PULSE) {
             count++;
         }
     }
@@ -237,7 +249,7 @@ static bool steal_oldest_voice(void) {
     int8_t oldest_idx = -1;
     uint32_t oldest_seq = 0;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        if (s_pads[i].phase == HAPTIC_PHASE_IDLE) {
+        if (s_pads[i].phase == HAPTIC_PHASE_IDLE || s_pads[i].phase == HAPTIC_PHASE_TOUCH_PULSE) {
             continue;
         }
         if (oldest_idx < 0 || s_pads[i].voice_seq < oldest_seq) {
@@ -358,6 +370,31 @@ void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
     }
 }
 
+/* A brief, soft acknowledgment on capacitive touch alone -- see this
+ * file's header for why this is a separate concept from KICK. No
+ * ceiling, no staggering, no voice_seq -- see active_voice_count()/
+ * steal_oldest_voice()'s TOUCH_PULSE exclusions. If this pad is already
+ * doing anything else (a held note's SUSTAIN, a pending/active KICK from
+ * an extremely fast retrigger), leave it alone rather than interrupting
+ * real feedback for a touch acknowledgment -- the pulse is a nicety, a
+ * real strike's own feedback always takes priority. */
+void tiles_haptics_trigger_touch_pulse(uint8_t logical_pad) {
+    if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
+        return;
+    }
+    uint8_t idx = (uint8_t)(logical_pad - 1u);
+    if (s_pads[idx].phase != HAPTIC_PHASE_IDLE) {
+        return;
+    }
+    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
+    if (cfg == NULL) {
+        return;
+    }
+    s_pads[idx].phase = HAPTIC_PHASE_TOUCH_PULSE;
+    s_pads[idx].phase_start_ms = to_ms_since_boot(get_absolute_time());
+    set_motor_level(cfg, TOUCH_PULSE_DUTY);
+}
+
 void tiles_haptics_set_sustain_level(uint8_t logical_pad, uint8_t aftertouch_0_127) {
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
         return;
@@ -399,6 +436,17 @@ void tiles_haptics_scan(void) {
                 start_kick_now(i, cfg, s->kick_velocity_0_127, now_ms);
             }
             continue; /* just started -- nothing further to do this pad this call */
+        }
+
+        if (s->phase == HAPTIC_PHASE_TOUCH_PULSE) {
+            if ((now_ms - s->phase_start_ms) >= TOUCH_PULSE_DURATION_MS) {
+                s->phase = HAPTIC_PHASE_IDLE;
+                const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
+                if (cfg != NULL) {
+                    set_motor_level(cfg, 0.0f);
+                }
+            }
+            continue;
         }
 
         if (s->phase == HAPTIC_PHASE_KICK) {

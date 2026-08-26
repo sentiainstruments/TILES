@@ -88,6 +88,25 @@
  * active pad somehow has no voice to steal (shouldn't happen given the
  * ceiling), the new kick is dropped rather than the check being skipped.
  *
+ * A separate, much lighter TOUCH_PULSE exists purely for capacitive
+ * contact, independent of the KICK/SUSTAIN envelope above -- real
+ * feedback, raised three times with increasingly specific wording until
+ * it was clear this meant a genuinely new capability, not a report that
+ * the existing kick was broken: "haptic pulse on touch without pressure
+ * is gone." Fired by expression.c's tiles_haptics_trigger_touch_pulse()
+ * the instant capacitive touch is first detected (IDLE -> AWAITING_
+ * STRIKE), regardless of whether that touch ever becomes a real press --
+ * a brief, soft "I felt you" tick, not a strike confirmation. If the
+ * touch does go on to clear expression.c's MIN_STRIKE_DEPTH_DELTA before
+ * TOUCH_PULSE finishes, tiles_haptics_trigger_kick() simply takes the
+ * pad over as it already does for any already-active pad (see the
+ * ceiling logic below); TOUCH_PULSE never blocks or delays a real KICK.
+ * Deliberately bypasses the max_haptic_voices ceiling entirely -- it's
+ * far shorter and lower-duty than a real kick, so the current-budget
+ * concern the ceiling exists for doesn't meaningfully apply, and every
+ * touch getting *some* acknowledgment matters more here than voice
+ * accounting for a pulse this brief.
+ *
  * Shares both PCA9685 chip instances with services/buttons.c (that file
  * owns their init/wake sequence) via tiles_buttons_pca9685_for_addr().
  *
@@ -116,6 +135,12 @@ void tiles_haptics_scan(void);
  * pad's haptic voice (see the file header) rather than dropping this
  * one; MIDI note-on for both pads is completely unaffected either way. */
 void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127);
+
+/* Called by expression.c the instant capacitive touch is first detected
+ * (IDLE -> AWAITING_STRIKE), independent of whether a real press ever
+ * follows -- see the file header's TOUCH_PULSE section. A brief, soft
+ * tick, distinct from and never blocking tiles_haptics_trigger_kick(). */
+void tiles_haptics_trigger_touch_pulse(uint8_t logical_pad);
 
 /* Called by expression.c whenever aftertouch changes while a note is
  * held, with the same value sent as MIDI poly aftertouch. Only updates

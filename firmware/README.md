@@ -353,13 +353,16 @@ flashable `.uf2`.
   untested; whether stealing a still-held note's haptic feedback mid-hold
   actually feels acceptable in practice, versus jarring, hasn't been
   observed yet. Real feedback since reported haptic feedback missing
-  entirely ("we lost the haptic preview") -- reviewed the voice-ceiling
-  path and the PCA9685 wiring shared with `buttons.c` against three
-  clean debug captures (no dropped/stolen-voice lines, power mode
-  healthy throughout), ruling out both prime suspects without finding a
-  replacement one; a confirmation print at the actual motor-drive call
-  is now in place to localize this on the next test session instead of
-  guessing further. True active braking isn't
+  entirely, raised three times with increasingly specific wording
+  ("haptic pulse on touch without pressure") until it became clear this
+  meant a distinct touch-only tick was wanted, separate from the
+  note-strike kick -- not a report that the existing kick mechanism was
+  broken (review of the voice-ceiling path and shared PCA9685 wiring
+  against three clean debug captures never found a code-level cause for
+  that). A new `HAPTIC_PHASE_TOUCH_PULSE`, fired the instant capacitive
+  touch is detected regardless of whether a real press follows, is now
+  in place (see `services/README.md`'s `haptics.h` entry) -- untested on
+  real hardware. True active braking isn't
   physically possible on this board (single low-side NMOS per motor, no
   H-bridge, no haptic driver IC) -- the GAP phase's hard cutoff is the
   closest achievable substitute for stopping quickly, and the overdrive
@@ -390,32 +393,37 @@ flashable `.uf2`.
   assumed to be the vertical-press axis for every pad (unverified per-
   pad), and `hall.c`'s depth is a raw, uncalibrated magnitude with no
   dead zone, offset correction, or saturation margin.
-- `services/expression.c`'s strike detection went through five rounds of
+- `services/expression.c`'s strike detection went through six rounds of
   real-hardware feedback, each catching a genuine bug or forcing a real
   architectural change rather than a constant tweak -- see
   `services/README.md`'s `expression.h`/`.c` entry for the full blow-by-
   blow (a stale-reference bug, a "check the peak not the instant" bug
   plus new retrigger-without-lifting, a capacitive touch-bounce fix, and
   a reported haptic-feedback loss that review couldn't trace to a code
-  cause). The last round replaced the velocity model entirely: "max
-  sudden push does not trigger notes properly, light presses trigger
-  randomly hard, the logic and measurement method is not working" was a
-  verdict on acceleration itself, not its constants -- a double-
-  difference over only 3 Hall samples is too sensitive to exact sample
-  timing and depth's own coarse quantization, and a genuinely fast
-  strike is precisely the case most likely to never gather a stable
-  3-sample estimate at all. Velocity is now elapsed TIME between two
-  fixed points of travel (`touch_start_sample_ms` to the moment
+  cause). Round 5 replaced the velocity model entirely: "max sudden push
+  does not trigger notes properly, light presses trigger randomly hard,
+  the logic and measurement method is not working" was a verdict on
+  acceleration itself, not its constants -- a double-difference over
+  only 3 Hall samples is too sensitive to exact sample timing and
+  depth's own coarse quantization, and a genuinely fast strike is
+  precisely the case most likely to never gather a stable 3-sample
+  estimate at all. Velocity is now elapsed TIME between two fixed points
+  of travel (`touch_start_sample_ms` to the moment
   `MIN_STRIKE_DEPTH_DELTA` is crossed), the same technique real
-  weighted-action keyboards and drum pads use -- immune to the noise
-  that broke the accel approach, and well-defined even from a single
-  sample. `MIN_STRIKE_SAMPLES`, the 3-sample accel history, and
-  `MAX_STRIKE_WINDOW_MS` are all gone: a real press now commits the
-  instant it's measured, no more waiting. `STRIKE_TIME_MAX_VELOCITY_MS`/
-  `_MIN_VELOCITY_MS`/`VELOCITY_CURVE_EXPONENT` are first attempts with no
-  equivalent captured timing data yet -- the `[expression]` print now
-  reports `strike_time_ms` directly so the next session can calibrate
-  them from real numbers.
+  weighted-action keyboards and drum pads use. Round 6 then caught a
+  real bug in *that* fix: the zero reference was captured from the first
+  fresh Hall sample after touch begins, but a genuinely fast, hard
+  strike can already be well past threshold by the time that sample
+  arrives -- "if I press really fast and hard nothing happens." Fixed by
+  capturing the reference immediately at touch-down instead, from
+  hall.c's already-baseline-relative cached depth (no waiting needed).
+  The same round also deepened `MIN_STRIKE_DEPTH_DELTA` (150 -> 300)
+  since a shallow checkpoint let a fast-but-light flick read as a hard
+  strike ("when I press faster but not deep the reading is still
+  strong"), and added a genuinely new capability -- a light touch-only
+  haptic pulse, independent of the note-strike kick, after "haptic pulse
+  on touch without pressure" was raised three times with increasingly
+  specific wording (see `services/README.md`'s `haptics.h` entry).
 - MPR121 touch thresholds started at Freescale's generic quickstart
   defaults (12/6), not tuned for this board's actual electrode/keycap/
   acrylic stack. The release side was since narrowed to 9 -- real
