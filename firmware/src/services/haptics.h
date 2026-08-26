@@ -157,20 +157,21 @@ void tiles_haptics_set_sustain_level(uint8_t logical_pad, uint8_t aftertouch_0_1
  * achievable here anyway) and frees this pad's voice slot. */
 void tiles_haptics_stop(uint8_t logical_pad);
 
-/* Called by services/expression_control.h while square ("sentia") is
- * held alone (not combined with circle) and SW1 ("-") / SW2 ("+") are
- * pressed -- direction < 0 steps the global intensity scalar down one
- * notch, > 0 up one -- see haptics.c's HAPTIC_INTENSITY_STEP/_MIN/_MAX
- * and s_haptic_intensity's own comment for the full reasoning (applies
- * uniformly to every haptic effect, resets to full on every boot). */
-void tiles_haptics_adjust_intensity(int8_t direction);
-
-/* Direct-set variant for services/expression_control.h's haptics slider
- * row (row 1 of the expression sub-menu, held via circle+square) --
- * sets the scalar straight to a computed value rather than stepping by
- * HAPTIC_INTENSITY_STEP, so a single pad tap jumps directly to that
- * column's level. Clamped to [HAPTIC_INTENSITY_MIN, HAPTIC_INTENSITY_MAX]
- * same as the step adjustment above. */
+/* Sets the global intensity scalar directly -- the only way it's ever
+ * changed. services/expression_control.h calls this both for its
+ * haptics slider row (a pad tap maps a column 1-6 to a value) and for
+ * square ("sentia")'s own held + SW1("-")/SW2("+") shift gesture (which
+ * now steps that SAME column and re-derives the value through the exact
+ * same mapping, rather than incrementing this scalar independently) --
+ * see expression_control.c's apply_row_haptics()/step_haptics_column().
+ * Routing both paths through one setter is deliberate: it's what
+ * guarantees the sub-menu's displayed column can never drift out of
+ * sync with what "-"/"+" last set (real feedback: "any changes that
+ * affect those 4 parameters should always be reflected on the menu").
+ * Clamped to [HAPTIC_INTENSITY_MIN, HAPTIC_INTENSITY_MAX] -- 0.0 is a
+ * real, legitimate "haptics off" position (column 1), not just a low
+ * value; see s_haptic_intensity's own comment in haptics.c for why 0
+ * here is different from tiles_haptics_set_muted() below. */
 void tiles_haptics_set_intensity(float level_0_to_1);
 
 /* Current global intensity scalar (HAPTIC_INTENSITY_MIN-_MAX). For

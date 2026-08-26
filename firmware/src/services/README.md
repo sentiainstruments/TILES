@@ -239,91 +239,114 @@ not its code.
   directly: "our shift and power button is circle. sentia is square
   button. sentia acts as a secondary shift for a single feature for now,
   everything else shift is power/sleep/round."
-  **Square alone:** a short click (press+release, never joined by
-  circle) toggles `services/expression.c`'s pitch bend on/off via
-  `tiles_expression_toggle_pitch_bend()` -- real feedback: "when you
-  press sentia button once it turns on and off the pitch bend." While
-  square is held alone, SW1/SW2 step `services/haptics.c`'s intensity
-  scalar instead of their normal octave-shift function
-  (`handle_square_shift_input()`, `tiles_haptics_adjust_intensity()`) --
-  real feedback: "holding just sentia acts like a function shift for
-  modifiers -/+ for haptics." Both can happen on the same physical hold
-  (adjust intensity, then release -- the release still toggles pitch
-  bend), the same shape the earlier circle version used. A new accessor,
-  `tiles_expression_control_shift_active()`, is checked by
-  `octave_control.c` (see its entry above) so an intensity press doesn't
-  *also* silently step the octave/transpose key.
-  **Circle+square combo: the expression sub-menu.** Real feedback,
-  after the button-identity correction: "it should be when you hold
-  shift and sentia the pads become sliders one for each of the four
-  rows. allowing levels of control of expressiveness. so row one is
-  haptics, row two is pitch bend, 3 is the remaining axis and 4 is
-  aftertouch." Holding SW6 (circle) and SW5 (square) together
-  immediately claims the pad grid (`tiles_lighting_set_standby_active()`,
-  the same rendering-ownership pattern `octave_control.c`'s transpose
-  mode and `standby.c`'s own animations use -- no minimum hold, unlike
-  transpose mode's `TRANSPOSE_COMBO_HOLD_MS`) and turns it into 4 rows of
-  6-pad sliders: row 1 (nearest the buttons) = haptics intensity, row 2 =
-  pitch bend sensitivity, row 3 = reserved for a future "remaining axis"
-  (Y) feature (the selected column is stored, `SUBMENU_ROW_Y_AXIS`, but
-  not yet consumed anywhere), row 4 (bottom) = aftertouch sensitivity.
-  Tapping any pad in a row (a capacitive touch rising edge, read directly
-  via `tiles_touch_is_touched()` rather than through
-  `services/expression.c`'s own state machine, which is suppressed for
-  new strikes the whole time this is open -- see that file's entry
-  above) selects that column (1-6, left to right) as the row's new
-  level, applied immediately through each parameter's own setter.
+  **Square alone:** a short click (press+release, before either
+  hold-gesture below fires) toggles `services/expression.c`'s pitch bend
+  on/off via `tiles_expression_toggle_pitch_bend()` -- real feedback:
+  "when you press sentia button once it turns on and off the pitch
+  bend." While square is held alone, SW1/SW2 step the expression
+  sub-menu's row-1 (haptics) COLUMN one at a time
+  (`handle_square_shift_input()`/`step_haptics_column()`), through the
+  exact same `apply_row()` path a sub-menu pad tap uses -- real feedback:
+  "holding just sentia acts like a function shift for modifiers -/+ for
+  haptics," followed, after a first real-hardware pass, by: "theres no
+  continuity between menu and arrow keys control for haptics... any
+  changes that affect those 4 parameters should always be reflected on
+  the menu." (An earlier version stepped `services/haptics.c`'s scalar
+  directly via a now-removed `tiles_haptics_adjust_intensity()`, which
+  could drift to a value matching no defined column -- see that file's
+  own entry above.) A new accessor, `tiles_expression_control_shift_
+  active()`, is checked by `octave_control.c` (see its entry above) so an
+  intensity press doesn't *also* silently step the octave/transpose key.
+  **Square alone, held 3 seconds: the expression sub-menu.** Real
+  feedback, after the button-identity correction: "it should be when you
+  hold shift and sentia the pads become sliders one for each of the four
+  rows... row one is haptics, row two is pitch bend, 3 is the remaining
+  axis and 4 is aftertouch," then, after a combo-based version (holding
+  circle+square together) was tried on real hardware: "lets change [that]
+  to hold square for 3 seconds alone to toggle that menu." Held ALONE
+  (circle NOT also held) for `EXPRESSION_SUBMENU_TOGGLE_HOLD_MS` (3000ms,
+  edge-latched via `s_submenu_toggle_fired` so one long hold can't
+  re-fire; the alone-streak restarts if circle ever joins mid-hold, same
+  reasoning `standby.h`'s own circle-hold `*_fired` pattern uses), square
+  **toggles** the sub-menu open/closed -- sticky, not shown-only-while-
+  held, so it stays open after square is released and closes only on the
+  next such 3-second hold (`toggle_submenu()`). Open, it claims the pad
+  grid (`tiles_lighting_set_standby_active()`, the same rendering-
+  ownership pattern `octave_control.c`'s transpose mode and `standby.c`'s
+  own animations use) and turns it into 4 rows of 6-pad sliders: row 1
+  (nearest the buttons) = haptics intensity, row 2 = pitch bend
+  sensitivity, row 3 = reserved for a future "remaining axis" (Y) feature
+  (the selected column is stored, `SUBMENU_ROW_Y_AXIS`, but not yet
+  consumed anywhere), row 4 (bottom) = aftertouch sensitivity. Tapping
+  any pad in a row (a capacitive touch rising edge, read directly via
+  `tiles_touch_is_touched()` rather than through `services/expression.c`'s
+  own state machine, which is suppressed for new strikes the whole time
+  this is open -- see that file's entry above) selects that column (1-6,
+  left to right) as the row's new level, applied immediately through
+  each parameter's own setter -- the exact same `apply_row()` the
+  square-alone "-"/"+" shift above uses for row 1, so the two controls
+  can never disagree about what's currently applied.
   Every row shares one mapping function, `piecewise_column_value()`: a
   3-anchor piecewise-linear curve (column 1, column 4, column 6), column
   4 landing on exactly each parameter's previous fixed default (so a
   fresh boot behaves identically to before this feature existed) --
   real feedback: "we want defaults to be the sweet spot on column 4, and
-  5 and 6 are extra strong or sensitive." Row 1 (haptics) ranges 0.3 (col
-  1) -> 0.72 (col 4) -> 1.0 (col 6) -- 0.72 deliberately below the
-  physical duty ceiling so columns 5-6 have real headroom to be "extra
-  strong" rather than column 4 already sitting at 1.0 with nowhere to
-  go. Row 2 (pitch bend, `tiles_expression_set_pitch_bend_sensitivity()`)
-  and row 4 (aftertouch, `tiles_expression_set_aftertouch_sensitivity()`)
-  both range the opposite direction -- smaller is *more* sensitive for
-  both underlying values -- 0.30/1300 (col 1, least sensitive) -> 0.15/900
-  (col 4, the original real-calibrated aftertouch default and pitch
-  bend's original starting guess, both preserved exactly) -> 0.075/600
-  (col 6, most sensitive). All of row 1/2/4's non-default anchors are
-  unmeasured first attempts, not felt or captured on real hardware yet.
+  5 and 6 are extra strong or sensitive." Row 1 (haptics) ranges 0.0 (col
+  1, a real OFF -- see `haptics.h`'s entry above) -> 0.72 (col 4) -> 1.0
+  (col 6) -- 0.72 deliberately below the physical duty ceiling so columns
+  5-6 have real headroom to be "extra strong" rather than column 4
+  already sitting at 1.0 with nowhere to go. Row 2 (pitch bend,
+  `tiles_expression_set_pitch_bend_sensitivity()`) and row 4 (aftertouch,
+  `tiles_expression_set_aftertouch_sensitivity()`) both range the
+  opposite direction -- smaller is *more* sensitive for both underlying
+  values -- 0.30/1300 (col 1, least sensitive) -> 0.15/900 (col 4, the
+  original real-calibrated aftertouch default and pitch bend's original
+  starting guess, both preserved exactly) -> 0.075/600 (col 6, most
+  sensitive). All of row 1/2/4's non-default anchors are unmeasured first
+  attempts, not felt or captured on real hardware yet.
   The selected pad in every row lights Sentia Instruments Magenta
   (#FF00FF, the same brand color `boot_sequence.h`'s final pulse phase
   uses) -- every other pad in the grid stays dark, underglow off -- real
   feedback: "make the selected level of everything sentia magenta color
-  to differenciate from standard modes." Releasing either button closes
-  the sub-menu; every change made while it was open stays in effect.
-  `tiles_expression_control_owns_pad_grid()` lets `main.c` skip
-  `standby.h`'s idle scan while this is active, the same way it already
-  does for `game_mode.h` and `octave_control.c`'s transpose mode.
-  **Circle+square held 3 seconds: expression mute.** The same combo
-  hold, continued to `EXPRESSION_MUTE_HOLD_MS` (3000ms, edge-latched via
-  `s_mute_fired` so a single long hold can't re-fire, mirroring
-  `standby.h`'s own circle-hold `*_fired` pattern), toggles a sticky mute
-  that persists until the same 3-second hold toggles it off again --
-  real feedback: "a shortcut that disables everything and leaves basic
-  midi... it acts like a mute." `tiles_haptics_set_muted()` and
+  to differenciate from standard modes." Row 1's column-1 OFF position is
+  the one exception: real feedback, after a first hardware pass, that
+  "the lowest setting is off and should be blinking when active in menu
+  to show its off" -- `row_column_is_off()` flags that one row/column
+  combination specifically (no other row has a true "off" position at
+  column 1, just "least sensitive"), and `render_submenu()` blinks that
+  pad between magenta and dark (`OFF_INDICATOR_BLINK_PERIOD_MS`, 500ms)
+  instead of showing it solid, so the sub-menu itself communicates "off,"
+  not just "lowest." `tiles_expression_control_owns_pad_grid()` lets
+  `main.c` skip `standby.h`'s idle scan while the sub-menu is open, the
+  same way it already does for `game_mode.h` and `octave_control.c`'s
+  transpose mode.
+  **Circle+square held 3 seconds: expression mute.** A separate combo,
+  independent of the sub-menu toggle above -- holding SW6 (circle) and
+  SW5 (square) together for `EXPRESSION_MUTE_HOLD_MS` (3000ms, its own
+  edge latch, `s_mute_fired`) toggles a sticky mute that persists until
+  the same 3-second combo hold toggles it off again -- real feedback: "a
+  shortcut that disables everything and leaves basic midi... it acts
+  like a mute." `tiles_haptics_set_muted()` and
   `tiles_expression_set_muted()` (see those files' own entries) do the
   actual work: pitch bend and poly aftertouch stop being computed/sent,
   every haptic effect stops firing with every active motor cut
   immediately, and note-on/off/velocity are completely unaffected. The
-  sub-menu keeps working while muted (useful for queuing up settings
-  before unmuting); only square's own alone-hold behaviors (pitch-bend
-  click, intensity shift) are suppressed while muted, since square's LED
-  is busy showing the mute indicator instead. That indicator
-  (`render_square_led()`/`mute_blink_level()`) is a repeating two-blink
-  pattern (`MUTE_BLINK_ON_MS`/`_GAP_MS`, 120ms each) followed by a rest
-  at `MUTE_REST_LEVEL` (0.5, medium brightness, `MUTE_REST_MS` 900ms) --
-  real feedback: "sentia should become a blinking light with a two blink
-  pattern and rest at medium brightness to indicate expression functions
-  mute." Outside of mute, square's LED shows `SQUARE_LED_HELD_LEVEL`
-  (1.0, matching default press feedback) while physically held (alone or
-  as part of the combo), and a persistent `SQUARE_LED_TOGGLE_ON_LEVEL`
-  (0.8, "not by a lot" dimmer, same reasoning the reverted circle version
-  used) glow once released, while pitch bend is on; dark otherwise.
+  sub-menu itself keeps working while muted (still useful for queuing up
+  settings before unmuting, and taps aren't gated on mute at all); only
+  square's own ALONE-hold behaviors (pitch-bend click, the sub-menu
+  toggle, and the haptics shift) are suppressed while muted, since
+  square's LED is busy showing the mute indicator instead. That
+  indicator (`render_square_led()`/`mute_blink_level()`) is a repeating
+  two-blink pattern (`MUTE_BLINK_ON_MS`/`_GAP_MS`, 120ms each) followed
+  by a rest at `MUTE_REST_LEVEL` (0.5, medium brightness, `MUTE_REST_MS`
+  900ms) -- real feedback: "sentia should become a blinking light with a
+  two blink pattern and rest at medium brightness to indicate expression
+  functions mute." Outside of mute, square's LED shows
+  `SQUARE_LED_HELD_LEVEL` (1.0, matching default press feedback) while
+  physically held (alone or as part of the combo), and a persistent
+  `SQUARE_LED_TOGGLE_ON_LEVEL` (0.8, "not by a lot" dimmer, same
+  reasoning the reverted circle version used) glow once released, while
+  pitch bend is on; dark otherwise.
   **Defers to game mode.** `services/game_mode.h`'s Pong minigame uses
   SW5/SW6 as its own live right-paddle up/down controls -- this module's
   entire scan bails immediately (keeping only its own press-edge
@@ -333,9 +356,9 @@ not its code.
   already owns the pad grid, so the two mutually-exclusive features can
   never both claim the board at once -- see `game_mode.h`'s entry below.
   **Not yet hardware-verified at all** -- none of the above (the
-  button-identity correction, the sub-menu, the column-to-value mapping,
-  the magenta color choice, or the mute pattern) has been tried on real
-  hardware yet.
+  button-identity correction, the sub-menu and its column-to-value
+  mapping, the off/blink indicator, the magenta color choice, or the
+  mute pattern) has been tried on real hardware yet.
 - `pixel_font.h`/`.c` — done for V1: a shared tiny pixel font, a fixed
   4x4 grid per glyph (one pixel per pad row 1-4, 4 columns wide), used
   by both `standby.c`'s scrolling marquee animation and
@@ -921,28 +944,34 @@ not its code.
   KICK this phase has no overdrive spike to force a fast start -- a low
   duty and a very short window compound each other's "never gets going"
   problem. Not yet re-verified on real hardware after this change.
-  **Global intensity control added** -- real feedback: "when you hold
-  and press - or + you can adjust intensity of haptics on device."
-  `tiles_haptics_adjust_intensity()` steps a single global scalar
-  (`s_haptic_intensity`, `HAPTIC_INTENSITY_STEP` 0.1, clamped
-  `HAPTIC_INTENSITY_MIN`-`_MAX` 0.2-1.0) up or down; applied once, inside
+  **Global intensity control added, then made column-based** -- real
+  feedback: "when you hold and press - or + you can adjust intensity of
+  haptics on device." A single global scalar (`s_haptic_intensity`,
+  clamped `HAPTIC_INTENSITY_MIN`-`_MAX` 0.0-1.0) applies once, inside
   `set_motor_level()` -- the single low-level write every haptic path
   (KICK, its overdrive spike, SUSTAIN, TOUCH_PULSE) already funnels
   through -- so the one knob scales every effect consistently rather
-  than needing a separate multiplier wired into each. Floored above 0
-  (not a true mute) to match this file's existing "even the weakest
-  strike still gets some feel" stance (`MIN_KICK_DUTY`, and
-  `services/expression.c`'s `MIN_VELOCITY`). No persistence
-  (`services/storage/` is still an empty skeleton) -- resets to full
-  (1.0) on every boot. Driven by `services/expression_control.c`'s
+  than needing a separate multiplier wired into each. `0.0` is now a
+  real, legitimate "haptics off" floor, not just a low value -- real
+  feedback after a first hardware pass: "the lowest setting is off."
+  `tiles_haptics_set_intensity()` is the *only* way this scalar ever
+  changes -- there used to also be a step-by-notch
+  `tiles_haptics_adjust_intensity()` for `services/expression_control.c`'s
   square-button (SW5, "sentia") shift window (hold square alone, tap
-  SW1/SW2) -- see `expression_control.h`'s entry below. An earlier pass
-  wired this to circle by mistake before real feedback corrected which
-  button "sentia" actually is. A direct-set variant,
-  `tiles_haptics_set_intensity()`, was added alongside for
-  `expression_control.h`'s sub-menu (row 1) to jump straight to a
-  computed value from a single pad tap rather than stepping. Not yet
-  hardware-verified.
+  SW1/SW2), but that let the scalar drift to a value that didn't
+  correspond to any of the expression sub-menu's 6 defined columns --
+  real feedback: "theres no continuity between menu and arrow keys
+  control for haptics... any changes that affect those 4 parameters
+  should always be reflected on the menu." Fixed by removing the
+  step-by-notch function entirely: "-"/"+" now step the sub-menu's own
+  row-1 COLUMN (`expression_control.c`'s `step_haptics_column()`) through
+  the exact same `apply_row()`/`tiles_haptics_set_intensity()` path a pad
+  tap uses, so the two controls can never disagree about what's actually
+  applied -- see `expression_control.h`'s entry below. An earlier pass
+  wired the shift gesture to circle by mistake before real feedback
+  corrected which button "sentia" actually is. No persistence
+  (`services/storage/` is still an empty skeleton) -- resets to full
+  (1.0) on every boot. Not yet hardware-verified.
   **Expression mute added** -- real feedback: "a shortcut that disables
   everything and leaves basic midi... it acts like a mute."
   `tiles_haptics_set_muted()`, driven by
