@@ -2,14 +2,35 @@
 
 /*
  * Per-pad haptic feedback: a strike gives a brief, strong "kick" pulse
- * mapped to velocity, then goes silent. Continuous aftertouch-mapped
- * sustain while held is built but currently DISABLED
- * (TILES_HAPTICS_SUSTAIN_ENABLED 0 in haptics.c) -- on real hardware it
- * felt like continuous buzzing rather than the single, clean click the
- * user wants, and the magnets aren't in their final position yet (see
- * standby.c's own TILES_STANDBY_HALL_WAKE_ENABLED for the same class of
- * issue), so the aftertouch value it would ramp against is currently
- * meaningless. Re-enable and re-evaluate once Hall is calibrated.
+ * mapped to velocity, then a continuous SUSTAIN while held, blending
+ * that same strike velocity with ongoing pressure (key travel/
+ * aftertouch) -- real feedback: "map haptics to velocity and key
+ * travel, this is a mix... should feel stronger with more pressure and
+ * ease off when pressure is released slowly." Pressure is the dominant,
+ * real-time driver; velocity just gives a harder strike a fuller
+ * baseline throughout the hold (see haptics.c's SUSTAIN_VELOCITY_WEIGHT
+ * and sustain_target_duty()). The "ease off... slowly" half comes from
+ * an asymmetric slew on the applied motor duty (fast attack, ~30ms to
+ * full swing; slow release, ~200ms -- SUSTAIN_ATTACK_PER_MS/
+ * _RELEASE_PER_MS), run every scan tick so release keeps progressing in
+ * real time even while pressure sits still or updates infrequently.
+ *
+ * SUSTAIN was previously built but disabled
+ * (TILES_HAPTICS_SUSTAIN_ENABLED 0): on real hardware it read as
+ * continuous buzzing rather than a real pressure signal. Two things
+ * changed since: the magnets are now seated (previously not, meaning
+ * the depth/aftertouch signal it would have tracked was noise against a
+ * meaningless baseline), and services/expression.c's aftertouch is now
+ * calibrated from a real capture session and smoothed (previously raw
+ * and unscaled) -- plausibly the actual cause of the old "buzzing"
+ * complaint, not sustain as a concept. Re-enabled and reworked into the
+ * velocity+pressure mix above rather than a simple retry of the
+ * original aftertouch-only design.
+ *
+ * The kick itself was also boosted -- real feedback: "the haptic kick
+ * is too soft for the touch... boost it a lot." KICK_DURATION_MS,
+ * KICK_OVERDRIVE_MS, and MIN_KICK_DUTY (the floor even the weakest
+ * strike gets) were all raised; see their own comments in haptics.c.
  *
 
  * HARDWARE CONSTRAINT, read before changing pulse shapes: each motor is
@@ -40,11 +61,13 @@
  *
  *   KICK (tiles_haptics_trigger_kick, overdrive spike -> velocity-mapped)
  *     -> GAP (hard zero -- the "brake" moment)
- *       -> currently: IDLE (silence -- a single click, see
- *          TILES_HAPTICS_SUSTAIN_ENABLED above)
- *       -> when sustain is re-enabled: SUSTAIN (aftertouch-mapped,
- *          live-updated via tiles_haptics_set_sustain_level while held)
+ *       -> SUSTAIN (velocity+pressure mix, live-updated via
+ *          tiles_haptics_set_sustain_level while held, slewed toward its
+ *          target every scan tick rather than jumping)
  *          -> hard cutoff to 0 on tiles_haptics_stop (note-off)
+ *   (TILES_HAPTICS_SUSTAIN_ENABLED 0 in haptics.c falls back to KICK ->
+ *   GAP -> IDLE, a single click with no sustain at all, if SUSTAIN ever
+ *   needs disabling again -- the code path stays in place for that.)
  *
  * A kick may first sit briefly in an internal PENDING state (see
  * haptics.c) if another kick started too recently -- see
@@ -87,10 +110,12 @@ void tiles_haptics_scan(void);
 void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127);
 
 /* Called by expression.c whenever aftertouch changes while a note is
- * held, with the same value sent as MIDI poly aftertouch. Only actually
- * reaches the motor once this pad's kick+gap window has elapsed --
- * harmless to call during KICK/GAP, the value is just cached for when
- * SUSTAIN begins. */
+ * held, with the same value sent as MIDI poly aftertouch. Only updates
+ * this pad's target -- the actual motor duty is driven continuously by
+ * tiles_haptics_scan()'s per-tick attack/release slew toward that
+ * target (blended with this strike's velocity), not written directly
+ * here. Harmless to call during KICK/GAP; the value is just cached for
+ * when SUSTAIN begins. */
 void tiles_haptics_set_sustain_level(uint8_t logical_pad, uint8_t aftertouch_0_127);
 
 /* Called by expression.c at note-off. Immediately hard-cuts the motor

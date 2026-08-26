@@ -393,20 +393,37 @@ not its code.
   (opens with a brief overdrive spike at max duty regardless of
   velocity, to overcome the motor's static friction/inertia fast, then
   settles to the velocity-mapped duty for the rest of the window) ->
-  GAP (hard zero) -> silence. A kick may sit briefly in an internal
+  GAP (hard zero) -> SUSTAIN. A kick may sit briefly in an internal
   PENDING state first if another kick started too recently -- see
   `KICK_STAGGER_MIN_GAP_MS` below.
-  The continuous, aftertouch-mapped SUSTAIN phase (the motor ramping
-  with press depth while held) is built but currently **disabled**
-  (`TILES_HAPTICS_SUSTAIN_ENABLED 0`): on real hardware it read as
-  continuous buzzing rather than the single, clean click the user
-  actually wants, and the magnets aren't in their final position yet
-  (same root issue as `standby.c`'s disabled Hall wake path -- see that
-  entry above), so the aftertouch value it would ramp against is
-  currently against meaningless Hall data. Every pad's envelope is
-  currently just KICK -> GAP -> silence; re-enable SUSTAIN and
-  re-evaluate once Hall is calibrated, rather than assuming uncalibrated
-  data was the whole story.
+  Kick boosted -- real feedback: "the haptic kick is too soft for the
+  touch... boost it a lot." `KICK_DURATION_MS` 30ms -> 45ms,
+  `KICK_OVERDRIVE_MS` 6ms -> 10ms, `MIN_KICK_DUTY` (the floor even the
+  weakest strike gets) 0.35 -> 0.65.
+  SUSTAIN, previously built but disabled, is now **re-enabled**
+  (`TILES_HAPTICS_SUSTAIN_ENABLED 1`) and reworked: real feedback said
+  "map haptics to velocity and key travel, this is a mix... should feel
+  stronger with more pressure and ease off when pressure is released
+  slowly," not the old aftertouch-only design. `sustain_target_duty()`
+  blends `sustain_base_from_velocity()` (this strike's velocity, scaled
+  into the same `[0, MAX_SUSTAIN_DUTY]` range as the pressure term --
+  deliberately not reusing `kick_duty_from_velocity()`'s boosted range,
+  which would otherwise impose an inflated floor regardless of how
+  gently a pad is held) with `sustain_duty_from_aftertouch()` (ongoing
+  pressure/key travel), weighted `SUSTAIN_VELOCITY_WEIGHT` (0.3)
+  toward velocity so pressure stays the dominant real-time driver. The
+  *applied* motor duty then chases that blended target via an
+  asymmetric slew run every scan tick (not just when aftertouch
+  changes, so release keeps progressing even while pressure sits
+  still) -- fast attack (`SUSTAIN_ATTACK_PER_MS`, full swing in ~30ms)
+  but much slower release (`SUSTAIN_RELEASE_PER_MS`, ~200ms), the
+  "ease off... slowly" feel. Two things changed since SUSTAIN was first
+  disabled that made re-enabling it worth trying again: the magnets are
+  now seated (previously not, so the depth/aftertouch signal it tracked
+  was against a meaningless baseline), and `expression.c`'s aftertouch
+  is now calibrated from a real capture session and smoothed
+  (previously raw/unscaled) -- plausibly the real cause of the original
+  "continuous buzzing" complaint, not sustain as a concept.
   **Hardware constraint, not a software choice:** each motor is a
   single low-side NMOS (AO3400A) to a fixed supply rail -- no H-bridge,
   no dedicated haptic driver IC (confirmed against the board map, see
@@ -444,12 +461,16 @@ not its code.
   `tiles_buttons_pca9685_for_addr()`.
   **Not done:** every duty/timing constant (`KICK_DURATION_MS`,
   `KICK_OVERDRIVE_MS`, `KICK_GAP_MS`, `MIN_KICK_DUTY`,
-  `MAX_SUSTAIN_DUTY`, `KICK_STAGGER_MIN_GAP_MS`) is an unmeasured
-  placeholder -- no per-motor current/duty data exists yet (see the
-  board map's `measured_current_required` TODOs). Has now been tried on
-  real hardware (kicks fire and feel like clicks, matching the
-  KICK->GAP->silence design), but not reliably -- see the intermittent
-  dropout note above, still open.
+  `MAX_SUSTAIN_DUTY`, `KICK_STAGGER_MIN_GAP_MS`, and the new
+  `SUSTAIN_VELOCITY_WEIGHT`/`SUSTAIN_ATTACK_PER_MS`/
+  `SUSTAIN_RELEASE_PER_MS`) is an unmeasured placeholder -- no per-motor
+  current/duty data exists yet (see the board map's
+  `measured_current_required` TODOs). The boosted kick and the
+  re-enabled/reworked SUSTAIN mix above have NOT been tried on real
+  hardware yet at all. The pre-boost kick had been tried on real
+  hardware (kicks fired and felt like clicks, matching the
+  KICK->GAP->silence design that was live then), but not reliably --
+  see the intermittent dropout note above, still open.
 - `pedal.h`/`.c` — done: sustain (MIDI CC64) on by default, debounced
   with hysteresis, polarity defaults to the usual normally-open
   footswitch convention and is switchable at runtime

@@ -9,6 +9,7 @@
 
 #include "pico/time.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 
@@ -16,8 +17,9 @@
  * spin-up/current data exists yet (see the board map's
  * measured_current_required TODOs). Total duration of the KICK phase,
  * including the overdrive spike below (KICK_OVERDRIVE_MS is a sub-window
- * of this, not additional time). */
-#define KICK_DURATION_MS 30u
+ * of this, not additional time). Lengthened from an initial 30ms --
+ * real feedback that the kick was "too soft for the touch." */
+#define KICK_DURATION_MS 45u
 
 /* Overdrive: a brief spike at MAX_KICK_DUTY regardless of velocity, at
  * the very start of every kick, before settling to the velocity-mapped
@@ -28,39 +30,64 @@
  * fast-starting jolt. Distinct from KICK_GAP_MS below, which is about
  * stopping quickly, not starting quickly -- overdrive can't substitute
  * for real braking (still physically impossible here, see haptics.h),
- * but it's a legitimate, standard technique for the attack. */
-#define KICK_OVERDRIVE_MS 6u
+ * but it's a legitimate, standard technique for the attack. Lengthened
+ * alongside KICK_DURATION_MS above, same "boost it a lot" feedback. */
+#define KICK_OVERDRIVE_MS 10u
 
 /* The hard-zero "brake" gap after KICK -- see haptics.h's file header
  * for why this, not a soft ramp, is the achievable analog to braking on
  * this hardware. */
 #define KICK_GAP_MS 8u
 
-/* Even the weakest strike should give a felt kick, not nothing. */
-#define MIN_KICK_DUTY 0.35f
+/* Even the weakest strike should give a felt kick, not nothing --
+ * raised from an initial 0.35 (real feedback: the kick read as "too
+ * soft for the touch," boost it a lot) so even a light strike still
+ * lands as a real, strong jolt rather than a mild nudge; velocity still
+ * has real room to be felt between here and MAX_KICK_DUTY. */
+#define MIN_KICK_DUTY 0.65f
 #define MAX_KICK_DUTY 1.0f
 
 /* Capped below the kick's peak, and below 1.0, because sustain can be
  * held continuously for seconds (a long-held chord) where a brief
  * kick's inrush/thermal risk doesn't apply the same way -- unmeasured,
- * a conservative starting guess pending real current data. Only matters
- * while TILES_HAPTICS_SUSTAIN_ENABLED is 1 (see below). */
+ * a conservative starting guess pending real current data. */
 #define MAX_SUSTAIN_DUTY 0.6f
 
-/* Continuous, aftertouch-mapped sustain after the kick -- DISABLED for
- * now. On real hardware this felt like continuous buzzing the whole
- * time a pad was held, not the single, brief click the user actually
- * wants; the SUSTAIN phase's code stays in place (real, desired
- * behavior once it's tunable) rather than being deleted. A very
- * plausible contributor: the magnets aren't in their final position yet
- * (see standby.c's TILES_STANDBY_HALL_WAKE_ENABLED for the same root
- * issue elsewhere), so the aftertouch value driving sustain_duty is
- * currently against meaningless Hall data -- worth re-enabling once
- * that's calibrated (see diagnostics/calibration.h) and re-evaluating
- * from there, rather than assuming this alone was the whole problem.
- * With this at 0, every pad's envelope is just KICK -> GAP -> silence
- * (IDLE) -- a single click, nothing continuous. */
-#define TILES_HAPTICS_SUSTAIN_ENABLED 0
+/* Continuous sustain after the kick, re-enabled now that both of its
+ * real blockers are gone: the magnets are seated (previously not,
+ * making the depth/aftertouch signal driving it meaningless) and
+ * services/expression.c's aftertouch is now calibrated + smoothed
+ * (previously raw and noisy, which is what likely read as "continuous
+ * buzzing" rather than a real pressure signal the first time this was
+ * tried). Reworked into a deliberate mix rather than aftertouch alone --
+ * real feedback: "map haptics to velocity and key travel, this is a
+ * mix" -- see sustain_target_duty() below for the blend, and
+ * SUSTAIN_ATTACK_PER_MS/_RELEASE_PER_MS for the "feel stronger with
+ * more pressure and ease off... slowly" shaping. */
+#define TILES_HAPTICS_SUSTAIN_ENABLED 1
+
+/* How much of the strike's own velocity colors the ongoing sustain
+ * level, vs. how much comes from current pressure (key travel) --
+ * pressure stays the dominant, real-time driver ("feel stronger with
+ * more pressure"); velocity just gives a harder-struck note a
+ * perceptibly fuller baseline throughout the hold, not only at the
+ * instant of the strike. Both terms are scaled into the same
+ * [0, MAX_SUSTAIN_DUTY] range before blending (see
+ * sustain_base_from_velocity() below) so this weight is a true mix, not
+ * one term dominating just because of how it happens to be scaled.
+ * Unmeasured -- a starting guess at the ratio. */
+#define SUSTAIN_VELOCITY_WEIGHT 0.3f
+
+/* Asymmetric slew on the *applied* sustain motor duty, run every scan
+ * tick (not just when aftertouch changes) so release keeps progressing
+ * in real time even while held steady: fast attack (reaches a full
+ * MAX_SUSTAIN_DUTY swing in ~30ms, so pressing harder is felt almost
+ * immediately) but a much slower release (~200ms for a full swing) --
+ * real feedback: "should feel stronger with more pressure and ease off
+ * when pressure is released slowly." Both unmeasured, first guesses at
+ * a feel rather than derived from anything measured. */
+#define SUSTAIN_ATTACK_PER_MS 0.020f
+#define SUSTAIN_RELEASE_PER_MS 0.003f
 
 /* Minimum spacing enforced between actual kick starts (not trigger
  * calls), per the hardware handoff's "stagger motor starts >= 15ms"
@@ -86,9 +113,11 @@ typedef enum {
 typedef struct {
     haptic_phase_t phase;
     uint32_t phase_start_ms; /* while PENDING: this pad's scheduled start time, not a phase-entry timestamp */
-    uint8_t kick_velocity_0_127; /* this kick's velocity -- reused at the overdrive->normal duty transition within KICK */
+    uint8_t kick_velocity_0_127; /* this kick's velocity -- reused at the overdrive->normal duty transition within KICK, and as the sustain mix's velocity term */
     bool kick_overdrive_active;
-    uint8_t sustain_target_0_127; /* latest aftertouch value, applied once SUSTAIN begins */
+    uint8_t sustain_target_aftertouch_0_127; /* latest aftertouch (key travel/pressure) value */
+    float sustain_current_duty;    /* the slewed, actually-applied sustain duty -- see SUSTAIN_ATTACK_PER_MS/_RELEASE_PER_MS */
+    uint32_t sustain_last_update_ms; /* for computing real-time-elapsed slew steps, not iteration-count-based ones */
 } haptic_pad_state_t;
 
 static haptic_pad_state_t s_pads[TILES_NUM_PADS];
@@ -149,6 +178,32 @@ static float sustain_duty_from_aftertouch(uint8_t aftertouch_0_127) {
     return MAX_SUSTAIN_DUTY * ((float)aftertouch_0_127 / 127.0f);
 }
 
+/* Velocity's own contribution to the sustain mix, scaled into the same
+ * [0, MAX_SUSTAIN_DUTY] range sustain_duty_from_aftertouch() uses --
+ * deliberately NOT kick_duty_from_velocity() above, whose
+ * [MIN_KICK_DUTY, MAX_KICK_DUTY] range (now boosted, see MIN_KICK_DUTY's
+ * own comment) would otherwise impose an inflated floor on every
+ * sustain regardless of how gently a pad is actually being held. */
+static float sustain_base_from_velocity(uint8_t velocity_0_127) {
+    return MAX_SUSTAIN_DUTY * ((float)velocity_0_127 / 127.0f);
+}
+
+/* The blended sustain target this pad's slew (in tiles_haptics_scan())
+ * chases -- see SUSTAIN_VELOCITY_WEIGHT's own comment for the mix
+ * reasoning. */
+static float sustain_target_duty(const haptic_pad_state_t *s) {
+    float from_velocity = sustain_base_from_velocity(s->kick_velocity_0_127);
+    float from_pressure = sustain_duty_from_aftertouch(s->sustain_target_aftertouch_0_127);
+    float mixed = SUSTAIN_VELOCITY_WEIGHT * from_velocity + (1.0f - SUSTAIN_VELOCITY_WEIGHT) * from_pressure;
+    if (mixed < 0.0f) {
+        mixed = 0.0f;
+    }
+    if (mixed > MAX_SUSTAIN_DUTY) {
+        mixed = MAX_SUSTAIN_DUTY;
+    }
+    return mixed;
+}
+
 static uint8_t active_voice_count(void) {
     uint8_t count = 0;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
@@ -178,7 +233,12 @@ static void start_kick_now(uint8_t idx, const tiles_pad_config_t *cfg, uint8_t v
     s_pads[idx].phase_start_ms = now_ms;
     s_pads[idx].kick_velocity_0_127 = velocity_0_127;
     s_pads[idx].kick_overdrive_active = true;
-    s_pads[idx].sustain_target_0_127 = 0u;
+    s_pads[idx].sustain_target_aftertouch_0_127 = 0u;
+    /* Fresh envelope for this strike -- sustain starts from silence and
+     * attacks up to its target once SUSTAIN begins, rather than
+     * inheriting whatever duty the previous note on this pad ended at. */
+    s_pads[idx].sustain_current_duty = 0.0f;
+    s_pads[idx].sustain_last_update_ms = now_ms;
     set_motor_level(cfg, MAX_KICK_DUTY);
 }
 
@@ -236,15 +296,12 @@ void tiles_haptics_set_sustain_level(uint8_t logical_pad, uint8_t aftertouch_0_1
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
         return;
     }
-    uint8_t idx = (uint8_t)(logical_pad - 1u);
-    s_pads[idx].sustain_target_0_127 = aftertouch_0_127;
-
-    if (s_pads[idx].phase == HAPTIC_PHASE_SUSTAIN) {
-        const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
-        if (cfg != NULL) {
-            set_motor_level(cfg, sustain_duty_from_aftertouch(aftertouch_0_127));
-        }
-    }
+    /* Just updates the target -- tiles_haptics_scan() below owns every
+     * actual motor write for SUSTAIN now, since the attack/release slew
+     * needs to keep progressing in real time every scan tick, not only
+     * on the (comparatively rare) ticks where aftertouch itself
+     * changes. */
+    s_pads[logical_pad - 1u].sustain_target_aftertouch_0_127 = aftertouch_0_127;
 }
 
 void tiles_haptics_stop(uint8_t logical_pad) {
@@ -297,10 +354,17 @@ void tiles_haptics_scan(void) {
         } else if (s->phase == HAPTIC_PHASE_GAP && (now_ms - s->phase_start_ms) >= KICK_GAP_MS) {
 #if TILES_HAPTICS_SUSTAIN_ENABLED
             s->phase = HAPTIC_PHASE_SUSTAIN;
-            const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
-            if (cfg != NULL) {
-                set_motor_level(cfg, sustain_duty_from_aftertouch(s->sustain_target_0_127));
-            }
+            /* Reset here, not just at kick-start -- KICK_DURATION_MS +
+             * KICK_GAP_MS have already elapsed since then, and this
+             * timestamp is what the very first SUSTAIN slew step below
+             * measures its "elapsed" against. Without this reset that
+             * first step would see a large elapsed value and jump
+             * straight to target instead of attacking smoothly. Motor
+             * itself is already at 0 from the KICK->GAP transition, so
+             * no write is needed here -- the SUSTAIN branch below
+             * handles the attack from there on the next iteration. */
+            s->sustain_current_duty = 0.0f;
+            s->sustain_last_update_ms = now_ms;
 #else
             /* Single click only -- see TILES_HAPTICS_SUSTAIN_ENABLED
              * above. Motor is already at 0 from the KICK->GAP
@@ -308,6 +372,37 @@ void tiles_haptics_scan(void) {
              * pad's voice slot. */
             s->phase = HAPTIC_PHASE_IDLE;
 #endif
+        } else if (s->phase == HAPTIC_PHASE_SUSTAIN) {
+            /* Runs every scan tick (not just when aftertouch changes) so
+             * the slow release keeps progressing in real time even
+             * while pressure is held steady or updates infrequently --
+             * see SUSTAIN_ATTACK_PER_MS/_RELEASE_PER_MS's own comment. */
+            uint32_t elapsed = now_ms - s->sustain_last_update_ms;
+            s->sustain_last_update_ms = now_ms;
+
+            float target = sustain_target_duty(s);
+            float previous_duty = s->sustain_current_duty;
+            if (target > s->sustain_current_duty) {
+                s->sustain_current_duty += SUSTAIN_ATTACK_PER_MS * (float)elapsed;
+                if (s->sustain_current_duty > target) {
+                    s->sustain_current_duty = target;
+                }
+            } else if (target < s->sustain_current_duty) {
+                s->sustain_current_duty -= SUSTAIN_RELEASE_PER_MS * (float)elapsed;
+                if (s->sustain_current_duty < target) {
+                    s->sustain_current_duty = target;
+                }
+            }
+
+            /* Skip the I2C write once settled -- held-steady pressure
+             * (the common case) would otherwise re-send an identical
+             * duty on every single main-loop iteration. */
+            if (fabsf(s->sustain_current_duty - previous_duty) > 0.001f) {
+                const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
+                if (cfg != NULL) {
+                    set_motor_level(cfg, s->sustain_current_duty);
+                }
+            }
         }
     }
 }

@@ -174,11 +174,15 @@ first on-hardware note-on test.
   glow was still visible with only the magenta phase excluded).
   `haptics` done for
   V1: an overdrive
-  spike then velocity-mapped kick on strike, then a hard cutoff -- a
-  single click. Continuous aftertouch-mapped sustain while held is
-  built but disabled (felt like continuous buzzing on real hardware,
-  and the magnets aren't calibrated yet -- see `services/README.md`).
-  Staggers actual
+  spike then velocity-mapped kick on strike (boosted -- real feedback
+  it was "too soft for the touch"), then a hard cutoff, then a
+  continuous SUSTAIN blending that strike's velocity with ongoing
+  pressure/key travel (a mix, pressure-dominant, with a fast-attack/
+  slow-release feel on the applied motor duty) -- re-enabled and
+  reworked from an earlier aftertouch-only design that had been
+  disabled for reading as continuous buzzing, now that the magnets are
+  seated and aftertouch itself is calibrated -- see
+  `services/README.md`. Staggers actual
   motor starts >= 15ms apart (no added latency for normal single-note
   play) and enforces `power.c`'s voice ceiling -- see
   `services/README.md` for why real active braking isn't physically
@@ -311,16 +315,21 @@ flashable `.uf2`.
   silently stepping the octave/transpose key underneath the game. Now
   fixed (see `services/octave_control.c`'s entry above), but the fix
   itself hasn't been seen on real hardware.
-- `services/haptics.c`: now tried on real hardware -- kicks fire and
-  feel like the intended single click -- but *not reliably*: real
-  feedback is they "don't activate always." Every duty/timing constant
-  (kick duration, overdrive duration, gap duration, min kick duty, max
-  sustain duty, stagger gap) is still an unmeasured placeholder, and the
-  intermittent-activation root cause is unconfirmed -- prime suspect is
-  `power.c`'s untested `TILES_POWER_MODE_FAULT` silently zeroing the
-  voice ceiling if it flickers in transiently; a new `printf` on every
-  dropped kick should confirm or rule this out next session (see
-  `services/README.md`'s `haptics.h` entry). True active braking isn't
+- `services/haptics.c`: the pre-boost kick was tried on real hardware --
+  it fired and felt like the intended single click -- but *not
+  reliably*: real feedback was it didn't "activate always." Every
+  duty/timing constant (kick duration, overdrive duration, gap
+  duration, min kick duty, max sustain duty, stagger gap, and the new
+  sustain-mix/slew constants) is still an unmeasured placeholder, and
+  the intermittent-activation root cause is unconfirmed -- prime
+  suspect is `power.c`'s untested `TILES_POWER_MODE_FAULT` silently
+  zeroing the voice ceiling if it flickers in transiently; a `printf` on
+  every dropped kick should confirm or rule this out next session (see
+  `services/README.md`'s `haptics.h` entry). The kick has since been
+  boosted a lot (real feedback it was too soft) and SUSTAIN re-enabled
+  as a velocity+pressure mix with its own attack/release feel -- neither
+  of those changes has been tried on real hardware at all yet. True
+  active braking isn't
   physically possible on this board (single low-side NMOS per motor, no
   H-bridge, no haptic driver IC) -- the GAP phase's hard cutoff is the
   closest achievable substitute for stopping quickly, and the overdrive
