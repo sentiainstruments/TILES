@@ -208,7 +208,22 @@ flashable `.uf2`.
 - USB MIDI hasn't had a real on-hardware note-on/off test in a DAW or
   MIDI monitor yet -- the composite descriptor builds and the device
   should enumerate, but "builds clean" and "a host actually receives
-  the right notes" are different claims until checked.
+  the right notes" are different claims until checked. There is real
+  reason to suspect it may not have worked at all until just now: while
+  chasing why the USB-CDC debug console printed nothing on real
+  hardware, found that `main.c` never called `tud_task()` anywhere --
+  the function that actually services the USB stack (control transfers,
+  moving CDC/MIDI data to and from the hardware). pico-sdk's automatic
+  background-IRQ servicing for this is compiled out by design whenever
+  an app links `tinyusb_device` directly and supplies its own
+  descriptors (confirmed by reading pico-sdk's own `pico/stdio_usb.h`),
+  exactly this project's setup -- the app is expected to call
+  `tud_task()` itself, and nothing did. Now fixed (`tud_task()` called
+  at the top of every main-loop iteration, see `main.c`), but not yet
+  confirmed on real hardware whether this also explains any past MIDI
+  unreliability -- plausible given `tud_midi_stream_write()` just queues
+  bytes that need `tud_task()` to actually reach the host, but unproven
+  until tested in a DAW.
 - The LED brightness ceiling and idle-baseline/underglow percentages
   (now sourced from `services/power.c`'s per-mode state rather than a
   single hardcoded constant) are still engineering estimates -- tuned

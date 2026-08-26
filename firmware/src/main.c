@@ -33,6 +33,8 @@
 
 #include "pico/stdlib.h"
 
+#include "tusb.h"
+
 #include "board/board_init.h"
 #include "diagnostics/calibration.h"
 #include "diagnostics/i2c_scan.h"
@@ -170,6 +172,29 @@ int main(void) {
     uint32_t last_scan_ms = to_ms_since_boot(get_absolute_time());
 
     while (true) {
+        /* MUST run every iteration: this is what actually services the
+         * USB stack (processes control transfers, moves CDC/MIDI data
+         * to and from the hardware FIFOs) -- pico_stdio_usb's automatic
+         * background-IRQ tud_task() servicing (which the loop-end
+         * comment below used to claim happens "regardless of what this
+         * loop does") is compiled out by pico-sdk whenever the
+         * application links tinyusb_device directly and provides its
+         * own descriptors, exactly what midi/usb_device.h describes --
+         * see pico-sdk's pico/stdio_usb.h:
+         * PICO_STDIO_USB_ENABLE_IRQ_BACKGROUND_TASK defaults to 0
+         * whenever LIB_TINYUSB_DEVICE is set, specifically so the
+         * application calls tud_task() itself instead. Nothing here
+         * ever did, which is a real, confirmed bug: printf() over
+         * USB-CDC (the debug/calibration console) produced zero bytes
+         * on real hardware, and the same missing pump plausibly
+         * explains why USB MIDI has never been verified end-to-end in
+         * a DAW either (see firmware/README.md's known gaps) -- without
+         * this, DTR/line-state never gets processed so
+         * stdio_usb_connected() never returns true, and queued MIDI
+         * bytes never actually reach the host even if tud_midi_mounted()
+         * happens to read true. */
+        tud_task();
+
         /* Runs first: lighting's ceiling_level() and any future
          * haptics/CV consumer read tiles_power_get_state() during this
          * same iteration, so the debounced state should already be
@@ -242,10 +267,12 @@ int main(void) {
         }
 
         /* No sleep here (was sleep_ms(10), then sleep_ms(1)): removed
-         * entirely for latency -- it bought nothing. pico_stdio_usb's
-         * tud_task() runs from its own background IRQ regardless of
-         * what this loop does (see midi/usb_device.c's header comment),
-         * there's no watchdog yet to starve, and
+         * entirely for latency -- it bought nothing. tud_task() is now
+         * called explicitly at the top of this loop every iteration
+         * (see that call's comment for why pico_stdio_usb's automatic
+         * background-IRQ servicing does NOT cover this app, contrary to
+         * what this comment used to claim), there's no watchdog yet to
+         * starve, and
          * services/expression.c's strike-detection window needs as
          * many loop iterations as possible landing inside it. The
          * resulting loop period is still unmeasured (depends on real

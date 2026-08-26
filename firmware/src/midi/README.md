@@ -20,6 +20,19 @@ rate limiting for continuous expression data.
   `tusb_init()` and USB descriptor provision to us
   (`LIB_TINYUSB_DEVICE`-gated, pico-sdk's own documented mechanism for
   this) -- see the comment in `tusb_config.h` for the full reasoning.
+  That same gate also disables pico_stdio_usb's automatic background-IRQ
+  `tud_task()` servicing, and a real bug slipped through as a result:
+  nothing anywhere in this firmware called `tud_task()`, so the USB
+  stack was never actually serviced past whatever the low-level
+  enumeration ISR handles on its own -- found while chasing why the
+  USB-CDC debug console printed nothing at all on real hardware. Fixed:
+  `main.c` now calls `tud_task()` at the top of every main-loop
+  iteration; see its call site and `usb_device.h`'s updated header for
+  the full explanation. This plausibly also explains why USB MIDI below
+  has never been confirmed working in a DAW (queued
+  `tud_midi_stream_write()` bytes need `tud_task()` to actually reach
+  the host) -- not proven yet, but a real hardware test of MIDI note
+  output is now worth retrying specifically because of this fix.
 - `midi_out.{h,c}` — done: `tiles_midi_note_on(note, velocity)`,
   `tiles_midi_note_off(note)`, `tiles_midi_send_poly_aftertouch(note, pressure)`,
   `tiles_midi_send_cc(controller, value)` -- all on a single V1 MIDI
