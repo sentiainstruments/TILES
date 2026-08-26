@@ -130,6 +130,13 @@ static const tiles_key_info_t s_key_table[12] = {
 
 static bool s_prev_minus_pressed;
 static bool s_prev_plus_pressed;
+/* True once the CURRENT press of that button has been part of both_held
+ * at any point -- suppresses that press's eventual release from firing
+ * a solo octave/key step. Reset on that button's own fresh press-edge.
+ * See tiles_octave_control_scan()'s own comment on why the solo step
+ * fires on release, not press, and why that's what this exists for. */
+static bool s_minus_became_combo;
+static bool s_plus_became_combo;
 
 static bool s_combo_was_held;
 static bool s_combo_fired;
@@ -141,6 +148,8 @@ static uint32_t s_transpose_flash_anchor_ms;
 void tiles_octave_control_init(void) {
     s_prev_minus_pressed = false;
     s_prev_plus_pressed = false;
+    s_minus_became_combo = false;
+    s_plus_became_combo = false;
     s_combo_was_held = false;
     s_combo_fired = false;
     s_transpose_mode = false;
@@ -250,36 +259,58 @@ void tiles_octave_control_scan(void) {
     bool both_held = minus_pressed && plus_pressed;
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
+    /* Real feedback: "transpose menu enter and exit accidentally
+     * triggers octave up or down on enter or exit because button
+     * [presses land] before entering menu because simultaneous press is
+     * impossible." True: a human can never press SW1/SW2 in exactly the
+     * same tick, so the first of the two to register used to read as a
+     * genuine solo press (both_held still false at that instant) and
+     * fired a real octave/key step an instant before the second button
+     * joined and the combo took over -- both entering AND exiting
+     * transpose mode this way. Fixed by moving the solo step from the
+     * PRESS edge to the RELEASE edge, gated on whether this press ever
+     * became part of both_held at any point during its hold
+     * (s_minus_became_combo/s_plus_became_combo, reset on that button's
+     * own fresh press) -- so a press that's about to become half of a
+     * combo never fires its solo action first, no matter which button's
+     * press happened to land a few ms earlier. Same "click vs. long
+     * action" shape services/expression_control.c's own square-button
+     * handling already uses. */
+    if (minus_pressed && !s_prev_minus_pressed) {
+        s_minus_became_combo = false;
+    }
+    if (plus_pressed && !s_prev_plus_pressed) {
+        s_plus_became_combo = false;
+    }
+
     if (both_held && !s_combo_was_held) {
         s_combo_hold_start_ms = now_ms;
         s_combo_fired = false;
     }
-    if (both_held && !s_combo_fired && (now_ms - s_combo_hold_start_ms) >= TRANSPOSE_COMBO_HOLD_MS) {
-        s_combo_fired = true;
-        transpose_toggle(now_ms);
+    if (both_held) {
+        s_minus_became_combo = true;
+        s_plus_became_combo = true;
+        if (!s_combo_fired && (now_ms - s_combo_hold_start_ms) >= TRANSPOSE_COMBO_HOLD_MS) {
+            s_combo_fired = true;
+            transpose_toggle(now_ms);
+        }
     }
     s_combo_was_held = both_held;
 
-    /* Individual rising-edge actions are suppressed for as long as both
-     * buttons are held together, so the two presses that make up a
-     * combo never also fire a plain octave/key step alongside the mode
-     * toggle. */
-    if (!both_held) {
-        if (minus_pressed && !s_prev_minus_pressed) {
-            if (s_transpose_mode) {
-                tiles_note_map_set_key_offset((int8_t)(tiles_note_map_get_key_offset() - 1));
-                s_transpose_flash_anchor_ms = now_ms;
-            } else {
-                tiles_note_map_set_octave_shift((int8_t)(tiles_note_map_get_octave_shift() - 1));
-            }
+    if (!minus_pressed && s_prev_minus_pressed && !s_minus_became_combo) {
+        if (s_transpose_mode) {
+            tiles_note_map_set_key_offset((int8_t)(tiles_note_map_get_key_offset() - 1));
+            s_transpose_flash_anchor_ms = now_ms;
+        } else {
+            tiles_note_map_set_octave_shift((int8_t)(tiles_note_map_get_octave_shift() - 1));
         }
-        if (plus_pressed && !s_prev_plus_pressed) {
-            if (s_transpose_mode) {
-                tiles_note_map_set_key_offset((int8_t)(tiles_note_map_get_key_offset() + 1));
-                s_transpose_flash_anchor_ms = now_ms;
-            } else {
-                tiles_note_map_set_octave_shift((int8_t)(tiles_note_map_get_octave_shift() + 1));
-            }
+    }
+    if (!plus_pressed && s_prev_plus_pressed && !s_plus_became_combo) {
+        if (s_transpose_mode) {
+            tiles_note_map_set_key_offset((int8_t)(tiles_note_map_get_key_offset() + 1));
+            s_transpose_flash_anchor_ms = now_ms;
+        } else {
+            tiles_note_map_set_octave_shift((int8_t)(tiles_note_map_get_octave_shift() + 1));
         }
     }
     s_prev_minus_pressed = minus_pressed;

@@ -208,7 +208,9 @@ not its code.
   rather than duplicating it.
 - `octave_control.h`/`.c` — done for V1: the default function of SW1
   ("-") and SW2 ("+") is octave shift down/up, one octave per press
-  (rising edge, not while held), driving `note_map.c`'s shift above.
+  (fires on release, not the press itself -- see this entry's own
+  "solo-step race" fix further below for why), driving `note_map.c`'s
+  shift above.
   Claims both buttons permanently via `buttons.c`'s new per-button
   override -- their LEDs stop following "lit while held" and instead
   show the active direction's shift magnitude via a distinct pattern,
@@ -282,9 +284,48 @@ not its code.
   standby-active flag for the same reason; the expression sub-menu
   doesn't touch SW1/SW2's LEDs at all, so they simply keep their normal
   default "lit while pressed" behavior throughout).
+  **Solo-step race fixed after a real-hardware pass** -- real feedback:
+  "the transpose menu erases the previous selected transpose setting...
+  transpose menu enter and exit accidentally triggers octave up or down
+  on enter or exit because button [presses land] before entering menu
+  because simultaneous press is impossible." True: a human can never
+  press SW1/SW2 in exactly the same tick, so whichever button registered
+  first used to read as a genuine solo press (`both_held` still false at
+  that exact instant) and fire a real octave-shift or key-offset step an
+  instant before the second button joined and the combo took over -- on
+  BOTH entering and exiting transpose mode, since `s_transpose_mode`'s
+  current value at that instant decided which one fired. Exiting was the
+  more damaging case: a stray key-offset step landing right as the combo
+  closed, invisible until the next time transpose mode reopened and the
+  letter had silently drifted -- read by real feedback as the mode
+  "erasing" the setting, though it was really an undetected off-by-one
+  each cycle, not a reset. Fixed by moving the solo step from the PRESS
+  edge to the RELEASE edge, gated on whether that specific press ever
+  became part of `both_held` at any point during its hold
+  (`s_minus_became_combo`/`s_plus_became_combo`, reset on that button's
+  own fresh press, set true the instant `both_held` is seen regardless of
+  which button led) -- the same "click vs. long action" shape
+  `services/expression_control.c`'s own square-button handling already
+  established. Whichever button happens to land first no longer matters:
+  its release, once the combo has formed, is already flagged and fires
+  nothing.
+  **Now claims the pad grid from `expression.c` too** -- real feedback:
+  "playing the grid in transpose menu exits the menu." Diagnosis:
+  `services/expression.c`'s per-pad strike state machine had no idea
+  transpose mode existed, so touching pads while adjusting the key still
+  fired real notes/haptics underneath the letter display -- unlike the
+  expression sub-menu, which was already correctly suppressing new
+  strikes via `tiles_expression_control_owns_pad_grid()`.
+  `tiles_octave_control_is_transpose_active()` is now ALSO checked
+  there, alongside that existing check, so a tap meant only to read/set
+  the key never also plays a note (a pad already mid-strike or held when
+  transpose mode opens is still left alone to finish normally, same as
+  the sub-menu's own rule).
   **Not hardware-verified:** the combo-hold threshold, both flash
   durations, the cross's row/column placement, and the amber accent
-  color are all first-pass judgment calls, not measurements.
+  color are all first-pass judgment calls, not measurements. The
+  solo-step-race and pad-grid-ownership fixes above are untested on real
+  hardware too.
 - `expression_control.h`/`.c` — done for V1: SW5 (square, "sentia")'s
   function-button role, corrected from an earlier pass that built the
   same behaviors onto circle by mistake -- see `standby.h`'s entry above
@@ -380,13 +421,13 @@ not its code.
   `tiles_expression_set_pitch_bend_sensitivity()`) and row 4 (aftertouch,
   `tiles_expression_set_aftertouch_sensitivity()`) both range the
   opposite direction -- smaller is *more* sensitive for both underlying
-  values -- 0.60/1300 (col 1, least sensitive) -> 0.30/900 (col 4 --
-  0.30 is pitch bend's current default, raised from an original 0.15
-  after real feedback that it was too sensitive/jittery, see
-  `expression.h`'s entry above; 900 is aftertouch's original
-  real-calibrated default, unchanged) -> 0.15/600 (col 6, most
-  sensitive). All of row 1/2/4's non-default anchors are unmeasured first
-  attempts, not felt or captured on real hardware yet.
+  values -- 0.40/1300 (col 1, least sensitive) -> 0.20/900 (col 4 --
+  0.20 is pitch bend's current default, after real feedback pushed it
+  0.15 -> 0.30 -> back down to 0.20, see `expression.h`'s entry above for
+  the full history; 900 is aftertouch's original real-calibrated
+  default, unchanged) -> 0.10/600 (col 6, most sensitive). All of row
+  1/2/4's non-default anchors are unmeasured first attempts, not felt or
+  captured on real hardware yet.
   The selected pad in every row lights Sentia Instruments Magenta
   (#FF00FF, the same brand color `boot_sequence.h`'s final pulse phase
   uses); every OTHER pad in the grid sits at `SUBMENU_UNSELECTED_LEVEL`
@@ -839,24 +880,79 @@ not its code.
   as `|B|` shrinks with a harder press, purely from the ratio's own
   math, with zero actual sideways motion involved. `claim_pitch_bend_
   owner()` now also seeds `s_pitch_bend_baseline_depth` alongside the
-  existing baseline cosine; each tick, `PITCH_BEND_DEPTH_COMPENSATION_
-  MAX` (0.12) of EXTRA deadzone is added on top of the fixed
-  `PITCH_BEND_DEADZONE_COSINE_DELTA`, scaling linearly from 0 at the
-  claim depth up to the full 0.12 once the owner pad's smoothed depth has
-  increased `PITCH_BEND_DEPTH_COMPENSATION_RANGE` (600) past that (a
-  fixed deadzone can only ever be right for one specific press depth;
-  this widens it as the artifact itself grows with depth).
-  `pitch_bend_14bit_from_cosine_delta()` was reworked to take that total
-  deadzone as a parameter instead of reading the fixed constant directly,
+  existing baseline cosine; each tick, EXTRA deadzone -- expressed as a
+  FRACTION of the current `s_pitch_bend_max_cosine_deviation`
+  (`PITCH_BEND_DEPTH_COMPENSATION_MAX_FRACTION`, 0.35, not a fixed
+  absolute amount -- see that constant's own comment for why it has to
+  scale with whatever sensitivity is currently selected) -- is added on
+  top of the fixed `PITCH_BEND_DEADZONE_COSINE_DELTA`, scaling linearly
+  from 0 at the claim depth up to the full fraction once the owner pad's
+  smoothed depth has increased `PITCH_BEND_DEPTH_COMPENSATION_RANGE`
+  (600) past that (a fixed deadzone can only ever be right for one
+  specific press depth; this widens it as the artifact itself grows with
+  depth). `pitch_bend_14bit_from_cosine_delta()` takes that total
+  deadzone as a parameter instead of reading a fixed constant directly,
   so every call site (only the one in the NOTE_ON loop today) supplies
-  its own depth-adjusted value. At full press with default sensitivity,
-  total deadzone is 0.03 + 0.12 = 0.15 out of 0.30 max deviation --
-  still leaves real dynamic range for a genuine tilt even at full press.
-  Unmeasured -- like the deadzone/smoothing/sensitivity changes above,
-  this project has no captured session isolating "how much does X drift
-  from pure straight-down travel alone" the way `MIN_STRIKE_DEPTH_DELTA`
-  elsewhere in this file was measured; not yet re-verified on real
-  hardware after this specific change.
+  its own depth-adjusted value.
+  **Rebalanced again, direction fixed, and a "definitely intentional"
+  confirmation + acceleration added, after a further real-hardware
+  pass** -- real feedback: "still jittery... we need a balance where we
+  get less tilt to trigger bend but enough smoothing and correction so
+  it is definitely intentional. rn its not always bending and also
+  bending when it shouldnt... i think we should also add acceleration to
+  pitch bend so its slightly accelerated if bend is held... also bend is
+  flipped its bending in the opposite way than we need... it should feel
+  like bending a guitar fret." Four changes together:
+  - **Sensitivity/deadzone rebalanced**: `s_pitch_bend_max_cosine_
+    deviation`'s default came back down 0.30 -> 0.20 (more sensitive
+    again -- "less tilt to trigger"), and `PITCH_BEND_DEADZONE_COSINE_
+    DELTA` was halved 0.03 -> 0.015, since the new ARM timing below now
+    does most of the "is this actually intentional" job instead of the
+    amplitude threshold alone trying to carry both jobs at once.
+    `expression_control.c`'s sub-menu row-2 anchors rescaled to match
+    (0.40/0.20/0.10, same 2x/0.5x-of-default spread as always).
+  - **Direction flipped**: the delta fed into
+    `pitch_bend_14bit_from_cosine_delta()` is now `baseline_cosine -
+    smoothed_cosine` (was the reverse) -- the function itself stayed
+    direction-agnostic, only the one call site's subtraction order
+    changed.
+  - **"Definitely intentional" confirmation + "accelerated if held,"
+    together** (`PITCH_BEND_ARM_MS`/`_ACCEL_MAX_BOOST`/`_ACCEL_RAMP_MS`,
+    `pitch_bend_confidence_multiplier()`): a deviation past the deadzone
+    doesn't output anything until it's held steady on the SAME side of
+    center for `PITCH_BEND_ARM_MS` (40ms) -- reset instantly by a drop
+    back within the deadzone or a sign flip (new module-level run-
+    tracking state, `s_pitch_bend_run_active`/`_positive`/`_start_ms`,
+    reset fresh in `claim_pitch_bend_owner()` too so a new note never
+    inherits a stale run). Below that threshold output ramps in from 0
+    (a hard gate would read as a lag-then-jump; a genuinely brief
+    accidental wobble never gets loud enough to matter before it resets)
+    -- that's the "buffer... definitely intentional" half. Past
+    `PITCH_BEND_ARM_MS`, held CONTINUOUSLY, output instead keeps ramping
+    UP past 1.0x -- the "slightly accelerated if held" half, literally
+    real feedback: capped at `PITCH_BEND_ACCEL_MAX_BOOST` (0.35) extra,
+    reached after `PITCH_BEND_ACCEL_RAMP_MS` (600ms) of continuous hold.
+    Both ramps are pure elapsed time, independent of whether the tilt
+    itself moves further during the hold -- a held-steady bend still
+    gradually deepens on its own, the "guitar fret" feel asked for.
+  - **A real note-on ordering bug fixed**: real feedback, "sometimes play
+    lands in bent note." `claim_pitch_bend_owner()` used to run AFTER
+    `tiles_midi_note_on()` in the commit sequence -- if a DIFFERENT pad
+    still owned a non-centered bend the instant a brand-new note fired,
+    the synth received `[note-on]` then `[bend-center]`, a real gap in
+    which it applied the stale bend to the new note the moment it
+    arrived. Now `claim_pitch_bend_owner()` (which sends the center reset
+    when switching owners) runs FIRST, so every note-on is guaranteed to
+    reach the synth already centered.
+  At full press with default sensitivity, total deadzone is
+  0.015 + 0.20*0.35 = 0.085 out of 0.20 max deviation -- still leaves
+  real dynamic range for a genuine tilt even at full press. Unmeasured --
+  like the deadzone/smoothing/sensitivity changes above, this project has
+  no captured session isolating "how much does X drift from pure
+  straight-down travel alone," or real playing data for the ARM/accel
+  timing constants, the way `MIN_STRIKE_DEPTH_DELTA` elsewhere in this
+  file was measured; not yet re-verified on real hardware after this
+  specific change.
   Single hardware axis (X) used as "sideways" -- no hardware doc exists
   for which local Hall axis maps to which physical direction on a
   mounted pad, and MIDI pitch bend is inherently one-dimensional
@@ -928,15 +1024,19 @@ not its code.
   neither pitch bend, aftertouch, nor any haptic effect fires at all,
   while note-on/off/velocity keep working exactly as before (see that
   entry below for the full mute reasoning).
-  **New strikes suppressed while the expression sub-menu owns the pad
-  grid:** `expression_control.h`'s circle+square combo (below) repurposes
-  every pad as a slider tap target -- `tiles_expression_scan()`'s
-  `PAD_STATE_IDLE` branch checks
-  `tiles_expression_control_owns_pad_grid()` and skips
-  `begin_awaiting_strike()`/the touch pulse while it's true, so a slider
-  tap never also fires a MIDI note underneath. A pad already past IDLE
-  (mid-strike or already held) when the sub-menu opens is deliberately
-  left alone to finish normally rather than being cut off.
+  **New strikes suppressed while the expression sub-menu or transpose
+  mode owns the pad grid:** `expression_control.h`'s square-alone hold
+  (below) repurposes every pad as a slider tap target, and
+  `octave_control.h`'s transpose mode (SW1+SW2 held) repurposes it to
+  display the current key -- `tiles_expression_scan()`'s `PAD_STATE_IDLE`
+  branch checks `tiles_expression_control_owns_pad_grid()` AND
+  `tiles_octave_control_is_transpose_active()`, skipping
+  `begin_awaiting_strike()`/the touch pulse while either is true, so a
+  slider tap or a glance at the key display never also fires a MIDI note
+  underneath -- the latter added after real feedback: "playing the grid
+  in transpose menu exits the menu." A pad already past IDLE (mid-strike
+  or already held) when either opens is deliberately left alone to
+  finish normally rather than being cut off.
 - `haptics.h`/`.c` — done for V1: per-pad feedback driven entirely by
   `expression.c`'s calls (not touch/Hall directly). Envelope: KICK
   (opens with a brief overdrive spike at max duty regardless of

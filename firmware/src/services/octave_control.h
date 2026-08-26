@@ -6,9 +6,15 @@
  * (note_map.c owns the actual shift value and applies it to every
  * note -- this module is just the button-driven controller for it).
  *
- * A press (rising edge, not "while held") of "+" moves the shift up by
- * one octave; "-" moves it down by one, clamped to
- * +/-TILES_NOTE_MAP_MAX_OCTAVE_SHIFT (3).
+ * A press of "+" moves the shift up by one octave; "-" moves it down by
+ * one, clamped to +/-TILES_NOTE_MAP_MAX_OCTAVE_SHIFT (3). Fires on
+ * RELEASE, not the press itself (see tiles_octave_control_scan()'s own
+ * comment) -- real feedback found that firing on press let the leading
+ * button of the SW1+SW2 transpose combo below register a real step an
+ * instant before the second button joined, since a human can never
+ * press both in exactly the same tick; a release-gated "did this press
+ * ever become part of the combo" check closes that race regardless of
+ * which button happens to land first.
  *
  * The active-direction button's LED shows the current shift's magnitude
  * via a distinct pattern per level, all built from the same underlying
