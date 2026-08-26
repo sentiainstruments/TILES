@@ -698,6 +698,26 @@ not its code.
   is skipped rather than interrupting real feedback for an
   acknowledgment. Unmeasured -- a first attempt at "clearly felt but
   clearly not a strike," not tuned against real hardware.
+  **Diagnostic prints added to `tiles_haptics_trigger_touch_pulse()`**
+  -- real feedback: "touching the top won't give any haptic pulse." The
+  function had no visibility at all, unlike `start_kick_now()`'s own
+  print -- no way to tell "never called," "called but skipped because
+  the pad was already busy," and "started but never physically felt"
+  apart. Checked the per-pad haptic PCA9685 channel table
+  (`board/pad_config.c`) for the more likely code-level cause first:
+  every one of the 24 pads' `{pca9685_addr, channel}` pairs is unique,
+  with no collisions against each other or against the 6 function
+  buttons' LED channels (confirmed against
+  `docs/hardware/SENTIA_TILES_FIRMWARE_HANDOFF.md`, which also confirms
+  the function buttons have no motors at all -- only 24 motor PWM
+  channels exist on the two PCA9685s, one per pad, entirely separate
+  from the buttons' LED channels). No channel-mapping bug found, so
+  visibility was the missing piece: `[haptics] pad N touch pulse
+  started: pca=... channel=... duty=...` on success,
+  `[haptics] pad N touch pulse skipped -- already busy (phase=...)` when
+  a pad already mid-KICK/SUSTAIN correctly declines the pulse. Still
+  open pending a session that watches for these while testing "the
+  top" specifically.
   **Not done:** every duty/timing constant (`KICK_DURATION_MS`,
   `KICK_OVERDRIVE_MS`, `KICK_GAP_MS`, `MIN_KICK_DUTY`,
   `MAX_SUSTAIN_DUTY`, `KICK_STAGGER_MIN_GAP_MS`, and the new

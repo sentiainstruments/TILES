@@ -384,15 +384,26 @@ void tiles_haptics_trigger_touch_pulse(uint8_t logical_pad) {
     }
     uint8_t idx = (uint8_t)(logical_pad - 1u);
     if (s_pads[idx].phase != HAPTIC_PHASE_IDLE) {
+        /* Temporary bring-up visibility -- real feedback: "touching the
+         * top won't give any haptic pulse." Distinguishes "never even
+         * called" from "called but skipped because this pad was already
+         * doing something else" from "started but never felt" (wiring/
+         * hardware) -- three different problems this print set can tell
+         * apart. */
+        printf("[haptics] pad %u touch pulse skipped -- already busy (phase=%d)\n", logical_pad,
+               (int)s_pads[idx].phase);
         return;
     }
     const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
     if (cfg == NULL) {
+        printf("[haptics] pad %u touch pulse skipped -- no board config\n", logical_pad);
         return;
     }
     s_pads[idx].phase = HAPTIC_PHASE_TOUCH_PULSE;
     s_pads[idx].phase_start_ms = to_ms_since_boot(get_absolute_time());
     set_motor_level(cfg, TOUCH_PULSE_DUTY);
+    printf("[haptics] pad %u touch pulse started: pca=0x%02x channel=%u duty=%.2f\n", logical_pad,
+           cfg->haptic.pca9685_i2c_addr, cfg->haptic.channel, (double)TOUCH_PULSE_DUTY);
 }
 
 void tiles_haptics_set_sustain_level(uint8_t logical_pad, uint8_t aftertouch_0_127) {
