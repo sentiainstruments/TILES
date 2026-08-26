@@ -14,21 +14,27 @@
  * feedback: "root should be blue and black keys shouldnt have led this
  * in rest non pressed moment... push should be regular white illumination"
  * (unchanged, see pad_level_for_press() below, still used whenever a pad
- * IS touched, root or not). A root pad's blue uses this brighter,
- * dedicated percentage rather than TILES_LIGHTING_IDLE_BASELINE_PERCENT
- * above -- blue reads dimmer than white at the same per-channel level
- * (only one of three channels lit, and human vision is less sensitive to
- * blue), so reusing the natural-key baseline directly would have made
- * the root landmark this feature is meant to add barely visible instead
- * of standing out. Unmeasured -- a first attempt at "clearly a landmark,
- * not clearly a full press," not calibrated against real LED
+ * IS touched, root or not), then, after a first hardware pass: "make the
+ * blue sentia purple for root notes but dim it a bit more than standard
+ * non pressed pads." Root now uses Sentia Instruments' own brand
+ * magenta/purple (#FF00FF -- the same color services/expression_control.c
+ * uses for its sub-menu's selected-pad indicator and
+ * services/boot_sequence.c uses for its final pulse phase) instead of
+ * plain blue, at TILES_LIGHTING_ROOT_BASELINE_PERCENT -- deliberately
+ * LOWER than TILES_LIGHTING_IDLE_BASELINE_PERCENT above (the natural-key
+ * baseline), a reversal of this feature's first pass, which had root
+ * brighter than naturals to stand out as a landmark; real feedback
+ * called for the opposite, a subtler root indicator that reads as dimmer
+ * than the surrounding white keys rather than a bright highlight.
+ * Unmeasured -- a first attempt at "visibly dimmer than a natural key,
+ * not so dim it disappears," not calibrated against real LED
  * brightness/diffusion. Sharp/black keys get no baseline floor at all
  * when idle (true black, see write_pad() below) -- unlike every other
  * idle pad in this file, which is deliberately never allowed to go
  * fully dark (see tiles_lighting_set_pad_press()'s header); this is a
  * narrow, deliberate exception specifically for the natural/sharp
  * readability distinction real feedback asked for. */
-#define TILES_LIGHTING_ROOT_BASELINE_PERCENT 30u
+#define TILES_LIGHTING_ROOT_BASELINE_PERCENT 6u
 
 /* Underglow's own fixed brightness, out of 255 -- deliberately NOT
  * scaled by ceiling_level()/the power state. It used to be a percentage
@@ -135,17 +141,21 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
         pixel = tiles_sk6805_pack_rgb(level, level, level);
     } else {
         /* Idle (untouched), normal chromatic play: color by note role --
-         * real feedback: "root should be blue and black keys shouldnt
-         * have led this in rest non pressed moment." A touch (above)
-         * always overrides this with plain white regardless of note
-         * role -- "when pressed the regular white illumination is
-         * fine." Root checked first since a root pad can itself be a
-         * sharp/black key depending on the current key offset (see
-         * tiles_note_map_is_root_pad()'s own comment) -- root's blue
-         * always wins over that. */
+         * real feedback: "root should be blue [later: purple] and black
+         * keys shouldnt have led this in rest non pressed moment." A
+         * touch (above) always overrides this with plain white
+         * regardless of note role -- "when pressed the regular white
+         * illumination is fine." Root checked first since a root pad can
+         * itself be a sharp/black key depending on the current key
+         * offset (see tiles_note_map_is_root_pad()'s own comment) --
+         * root's color always wins over that. */
         uint8_t logical_pad = (uint8_t)(pad_index + 1u);
         if (tiles_note_map_is_root_pad(logical_pad)) {
-            pixel = tiles_sk6805_pack_rgb(0u, 0u, root_baseline_level());
+            uint8_t root_level = root_baseline_level();
+            /* Sentia Instruments Magenta (#FF00FF) -- R and B channels
+             * only, G stays 0 -- see TILES_LIGHTING_ROOT_BASELINE_PERCENT's
+             * own comment for the color and brightness reasoning. */
+            pixel = tiles_sk6805_pack_rgb(root_level, 0u, root_level);
         } else if (tiles_note_map_is_natural_pad(logical_pad)) {
             uint8_t baseline = idle_baseline_level();
             pixel = tiles_sk6805_pack_rgb(baseline, baseline, baseline);

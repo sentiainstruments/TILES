@@ -337,6 +337,37 @@ static float s_pitch_bend_max_cosine_deviation = 0.30f;
  * MIN_STRIKE_DEPTH_DELTA elsewhere in this file was. */
 #define PITCH_BEND_DEADZONE_COSINE_DELTA 0.03f
 
+/* Extra deadzone, ON TOP OF PITCH_BEND_DEADZONE_COSINE_DELTA above,
+ * that grows as the owner pad is pressed deeper past the depth it had
+ * the moment it claimed pitch bend (s_pitch_bend_baseline_depth) --
+ * real feedback, after the fixed deadzone above still left real-hardware
+ * jitter: "theres a lot of noise when pressed and tilt is not
+ * intentional. we have to compensate for unintentional tilt." The
+ * likely real cause isn't sensor noise at all here, but geometry: the
+ * direction-cosine ratio (X / |B|) is only truly depth-invariant for a
+ * PERFECTLY on-axis magnet (see this file's "Pitch bend from sideways
+ * motion" section) -- any small real assembly misalignment (a fixed
+ * real X/Y offset, not noise) becomes proportionally MORE visible in
+ * that ratio as |B| shrinks with a harder press, purely from the
+ * ratio's own math, with zero actual sideways motion involved. Scaling
+ * the deadzone up with press depth compensates for exactly that without
+ * needing per-pad calibration data this project doesn't have yet (no
+ * captured session has isolated "how much does X drift from pure
+ * straight-down travel alone" the way MIN_STRIKE_DEPTH_DELTA's capture
+ * isolated touch-only contact from a real strike). Linear from 0 extra
+ * deadzone at the claim depth up to PITCH_BEND_DEPTH_COMPENSATION_MAX
+ * extra deadzone once depth has increased by
+ * PITCH_BEND_DEPTH_COMPENSATION_RANGE past that (roughly "claim depth
+ * near the strike threshold, up to a full press" -- see
+ * MIN_STRIKE_DEPTH_DELTA/DEPTH_TO_AFTERTOUCH_FULL_SCALE's own real-data
+ * comments for that range), clamped beyond. Unmeasured -- a first
+ * attempt at "grows enough to swallow a typical full-press's worth of
+ * this artifact, still leaves real dynamic range for a genuine tilt at
+ * any depth" (0.30 - 0.03 - 0.12 = 0.15 of real range remaining even at
+ * full press, at the current default sensitivity). */
+#define PITCH_BEND_DEPTH_COMPENSATION_MAX 0.12f
+#define PITCH_BEND_DEPTH_COMPENSATION_RANGE 600.0f
+
 /* EMA smoothing on the cosine signal itself. Lowered from an initial
  * 0.35 (the same starting value AFTERTOUCH_SMOOTHING_ALPHA above still
  * uses) specifically for the same "very jittery" real feedback the
@@ -451,6 +482,10 @@ static uint8_t s_pitch_bend_owner_pad; /* 0 = no owner */
 static float s_pitch_bend_baseline_cosine;
 static float s_pitch_bend_smoothed_cosine;
 static uint16_t s_pitch_bend_last_sent;
+/* Depth at the moment ownership was claimed -- see
+ * PITCH_BEND_DEPTH_COMPENSATION_MAX's own comment for why the deadzone
+ * grows as the owner pad is pressed deeper past this. */
+static float s_pitch_bend_baseline_depth;
 
 /* "Expression mute" -- services/expression_control.h's circle+square
  * 3-second combo hold. A hard kill switch for pitch bend and poly
@@ -471,6 +506,7 @@ void tiles_expression_init(void) {
     s_pitch_bend_enabled = false;
     s_pitch_bend_owner_pad = 0u;
     s_pitch_bend_last_sent = PITCH_BEND_CENTER;
+    s_pitch_bend_baseline_depth = 0.0f;
     s_expression_muted = false;
 }
 
@@ -494,28 +530,33 @@ static float hall_x_direction_cosine(int16_t x, int16_t y, int16_t z) {
 
 /* Maps a cosine delta (current direction cosine minus this note's
  * baseline) to the 14-bit MIDI pitch bend wire value -- see
- * s_pitch_bend_max_cosine_deviation's own comment. Deadzone applied as a
- * "soft knee," not a hard cutoff -- see PITCH_BEND_DEADZONE_COSINE_
- * DELTA's own comment for why: within the deadzone, output is exactly
- * centered; just past it, output ramps continuously from 0 rather than
- * jumping straight to some nonzero value, and still reaches full swing
- * at exactly the same real deviation (s_pitch_bend_max_cosine_deviation)
- * as before the deadzone existed. */
-static uint16_t pitch_bend_14bit_from_cosine_delta(float delta) {
+ * s_pitch_bend_max_cosine_deviation's own comment. `deadzone` is the
+ * CALLER-computed total (PITCH_BEND_DEADZONE_COSINE_DELTA plus however
+ * much PITCH_BEND_DEPTH_COMPENSATION_MAX's depth-based widening applies
+ * right now -- see that constant's own comment), not a fixed value,
+ * since it varies per call with how deep the owner pad is currently
+ * pressed. Deadzone applied as a "soft knee," not a hard cutoff: within
+ * it, output is exactly centered; just past it, output ramps
+ * continuously from 0 rather than jumping straight to some nonzero
+ * value, and still reaches full swing at exactly the same real
+ * deviation (s_pitch_bend_max_cosine_deviation) as before any deadzone
+ * existed. */
+static uint16_t pitch_bend_14bit_from_cosine_delta(float delta, float deadzone) {
     float magnitude = fabsf(delta);
     float sign = (delta < 0.0f) ? -1.0f : 1.0f;
-    if (magnitude <= PITCH_BEND_DEADZONE_COSINE_DELTA) {
+    if (magnitude <= deadzone) {
         magnitude = 0.0f;
     } else {
-        magnitude -= PITCH_BEND_DEADZONE_COSINE_DELTA;
+        magnitude -= deadzone;
     }
-    float usable_range = s_pitch_bend_max_cosine_deviation - PITCH_BEND_DEADZONE_COSINE_DELTA;
+    float usable_range = s_pitch_bend_max_cosine_deviation - deadzone;
     if (usable_range < 0.01f) {
         /* Guards against services/expression_control.h's sub-menu (row
          * 2) ever being tuned to a sensitivity at or below the deadzone
-         * itself, which would otherwise divide by zero or a negative
-         * range -- floors to a narrow but well-defined usable range
-         * instead of clamping the sub-menu's own values. */
+         * itself (fixed + depth-widened together), which would
+         * otherwise divide by zero or a negative range -- floors to a
+         * narrow but well-defined usable range instead of clamping the
+         * sub-menu's own values. */
         usable_range = 0.01f;
     }
     float normalized = sign * (magnitude / usable_range);
@@ -644,6 +685,7 @@ static void claim_pitch_bend_owner(uint8_t pad) {
     tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
     s_pitch_bend_baseline_cosine = hall_x_direction_cosine(hs.x, hs.y, hs.z);
     s_pitch_bend_smoothed_cosine = s_pitch_bend_baseline_cosine;
+    s_pitch_bend_baseline_depth = (float)tiles_hall_get_depth(pad);
     s_pitch_bend_last_sent = PITCH_BEND_CENTER;
 }
 
@@ -839,8 +881,24 @@ void tiles_expression_scan(void) {
             if (hs.valid) {
                 float cosine = hall_x_direction_cosine(hs.x, hs.y, hs.z);
                 s_pitch_bend_smoothed_cosine += PITCH_BEND_SMOOTHING_ALPHA * (cosine - s_pitch_bend_smoothed_cosine);
-                uint16_t bend =
-                    pitch_bend_14bit_from_cosine_delta(s_pitch_bend_smoothed_cosine - s_pitch_bend_baseline_cosine);
+
+                /* See PITCH_BEND_DEPTH_COMPENSATION_MAX's own comment --
+                 * widens the deadzone as this pad is pressed deeper past
+                 * its depth at the moment it claimed pitch bend, using
+                 * the same smoothed depth aftertouch above already
+                 * computed this tick rather than a fresh raw read. */
+                float depth_past_baseline = s->smoothed_depth - s_pitch_bend_baseline_depth;
+                if (depth_past_baseline < 0.0f) {
+                    depth_past_baseline = 0.0f;
+                }
+                float depth_fraction = depth_past_baseline / PITCH_BEND_DEPTH_COMPENSATION_RANGE;
+                if (depth_fraction > 1.0f) {
+                    depth_fraction = 1.0f;
+                }
+                float deadzone = PITCH_BEND_DEADZONE_COSINE_DELTA + PITCH_BEND_DEPTH_COMPENSATION_MAX * depth_fraction;
+
+                uint16_t bend = pitch_bend_14bit_from_cosine_delta(
+                    s_pitch_bend_smoothed_cosine - s_pitch_bend_baseline_cosine, deadzone);
                 if (bend != s_pitch_bend_last_sent) {
                     s_pitch_bend_last_sent = bend;
                     tiles_midi_send_pitch_bend(bend);

@@ -44,25 +44,35 @@ not its code.
   `tiles_note_map_is_root_pad()`/`_is_natural_pad()` for whichever pad
   it's about to render, but ONLY while that pad is untouched -- a touch
   always still collapses straight to plain white at `pad_level_for_press()`
-  regardless of note role, unchanged. A root pad glows blue at a
-  dedicated, brighter `root_baseline_level()`
-  (`TILES_LIGHTING_ROOT_BASELINE_PERCENT`, 30% of ceiling -- higher than
-  the natural-key baseline below since a single blue channel reads
-  dimmer than three white channels at the same per-channel level, and
-  this is meant to stand out as a clear landmark); a natural (white) key
-  keeps exactly the previous idle-white behavior at
-  `idle_baseline_level()` (`TILES_LIGHTING_IDLE_BASELINE_PERCENT`, 10%);
-  a sharp (black) key goes to TRUE black -- a deliberate, narrow
-  exception to this file's usual "pads never go fully dark" floor,
-  scoped specifically to this readability distinction. Root checked
-  first: a root pad can itself be a sharp/black key depending on the
-  current key offset, and root's blue always wins over that (see
-  `tiles_note_map_is_root_pad()`'s own comment on why root is exactly 2
-  fixed physical pads regardless of key, while natural/sharp
-  classification genuinely does shift with the key). No new wiring
-  needed for a live key change to repaint idle pads correctly --
-  `tiles_lighting_service()`'s existing round-robin already revisits
-  every pad continuously regardless of whether its press value changed.
+  regardless of note role, unchanged. A natural (white) key keeps exactly
+  the previous idle-white behavior at `idle_baseline_level()`
+  (`TILES_LIGHTING_IDLE_BASELINE_PERCENT`, 10%); a sharp (black) key
+  goes to TRUE black -- a deliberate, narrow exception to this file's
+  usual "pads never go fully dark" floor, scoped specifically to this
+  readability distinction. Root checked first: a root pad can itself be
+  a sharp/black key depending on the current key offset, and root's own
+  color always wins over that (see `tiles_note_map_is_root_pad()`'s own
+  comment on why root is exactly 2 fixed physical pads regardless of
+  key, while natural/sharp classification genuinely does shift with the
+  key). No new wiring needed for a live key change to repaint idle pads
+  correctly -- `tiles_lighting_service()`'s existing round-robin already
+  revisits every pad continuously regardless of whether its press value
+  changed.
+  **Root recolored to Sentia purple, and dimmed, after a first hardware
+  pass** -- real feedback: "make the blue sentia purple for root notes
+  but dim it a bit more than standard non pressed pads." Root now lights
+  Sentia Instruments Magenta (#FF00FF, R and B channels only -- the same
+  brand color `expression_control.c`'s sub-menu and `boot_sequence.c`'s
+  final pulse already use) instead of plain blue, at
+  `root_baseline_level()` (`TILES_LIGHTING_ROOT_BASELINE_PERCENT`, now
+  6% of ceiling) -- deliberately LOWER than the natural-key baseline's
+  10%, a reversal of this feature's first pass (which had root brighter,
+  reasoning that a single-channel color reads dimmer than three-channel
+  white at the same level and wanted a clear landmark). Real feedback
+  called for the opposite: a subtler root indicator, dimmer than the
+  surrounding naturals rather than a bright highlight. Unmeasured -- a
+  first attempt at "visibly dimmer, not so dim it disappears," not
+  calibrated against real LED brightness/diffusion.
   Unmeasured -- root's brighter percentage and the natural/sharp
   distinction reading clearly at actual LED brightness/diffusion are
   both first attempts.
@@ -817,8 +827,36 @@ not its code.
   range to a small positive value, in case the sub-menu is ever tuned to
   a sensitivity at or below the deadzone itself. All three values are
   unmeasured first attempts, not derived from a captured real-noise
-  session the way `MIN_STRIKE_DEPTH_DELTA` above was -- not yet
-  re-verified on real hardware after this specific change.
+  session the way `MIN_STRIKE_DEPTH_DELTA` above was.
+  **Depth-correlated noise compensation, added after that first fix still
+  left real-hardware jitter specifically while pressing** -- real
+  feedback: "theres a lot of noise when pressed and tilt is not
+  intentional. we have to compensate for unintentional tilt." Diagnosis:
+  the direction-cosine ratio is only truly depth-invariant for a
+  *perfectly* on-axis magnet (see this section's own physics writeup
+  above) -- any small real assembly misalignment (a fixed real X/Y
+  offset, not noise) becomes proportionally MORE visible in that ratio
+  as `|B|` shrinks with a harder press, purely from the ratio's own
+  math, with zero actual sideways motion involved. `claim_pitch_bend_
+  owner()` now also seeds `s_pitch_bend_baseline_depth` alongside the
+  existing baseline cosine; each tick, `PITCH_BEND_DEPTH_COMPENSATION_
+  MAX` (0.12) of EXTRA deadzone is added on top of the fixed
+  `PITCH_BEND_DEADZONE_COSINE_DELTA`, scaling linearly from 0 at the
+  claim depth up to the full 0.12 once the owner pad's smoothed depth has
+  increased `PITCH_BEND_DEPTH_COMPENSATION_RANGE` (600) past that (a
+  fixed deadzone can only ever be right for one specific press depth;
+  this widens it as the artifact itself grows with depth).
+  `pitch_bend_14bit_from_cosine_delta()` was reworked to take that total
+  deadzone as a parameter instead of reading the fixed constant directly,
+  so every call site (only the one in the NOTE_ON loop today) supplies
+  its own depth-adjusted value. At full press with default sensitivity,
+  total deadzone is 0.03 + 0.12 = 0.15 out of 0.30 max deviation --
+  still leaves real dynamic range for a genuine tilt even at full press.
+  Unmeasured -- like the deadzone/smoothing/sensitivity changes above,
+  this project has no captured session isolating "how much does X drift
+  from pure straight-down travel alone" the way `MIN_STRIKE_DEPTH_DELTA`
+  elsewhere in this file was measured; not yet re-verified on real
+  hardware after this specific change.
   Single hardware axis (X) used as "sideways" -- no hardware doc exists
   for which local Hall axis maps to which physical direction on a
   mounted pad, and MIDI pitch bend is inherently one-dimensional
