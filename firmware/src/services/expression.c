@@ -14,48 +14,26 @@
 #include <stdio.h>
 
 /* ============================================================================
- * Strike detection -- rebuilt from a real captured session (see
- * docs/architecture/defaults-and-safeguards.md-style reasoning below),
- * not another guess. Two rounds of guessed constants (15, then 30 for
- * MIN_STRIKE_DEPTH_DELTA; 0.05 for ACCEL_TO_VELOCITY_SCALE) both failed
- * on real hardware: "any touch still triggers midi... different
- * velocity doesn't trigger anything either, it's all the same
- * velocity." A debug-console capture of the `[expression]` print below
- * across ~140 real touches gave the actual numbers this section is now
- * built from:
- *   - Hall depth reads in steps of 16 raw counts (sensor/driver
- *     quantization) -- 32 (2 steps) was by far the single most common
- *     depth_delta observed (66 of 115 fired notes), with a long tail up
- *     to 96 -- this is bare capacitive contact / incidental mechanical
- *     settling, not an intentional press. Genuine deliberate presses in
- *     the same capture reached 192-736 (out of the ~900-unit full-press
- *     range from the earlier Hall calibration session) -- a clear gap
- *     between "just touched it" and "actually pressed it."
- *   - peak_accel across the same capture ranged 0-23, with the vast
- *     majority under 18. ACCEL_TO_VELOCITY_SCALE (0.05) mapped every one
- *     of those to a floored 0, so velocity was 115-for-115 stuck at
- *     MIN_VELOCITY (8) regardless of how hard anything was struck --
- *     confirming "it's all the same velocity" outright, not a subtle
- *     miscalibration.
- * Fixes below: MIN_STRIKE_DEPTH_DELTA raised well past the observed
- * touch-only ceiling; ACCEL_TO_VELOCITY_SCALE raised to actually spread
- * the observed 0-23 accel range across a meaningful chunk of MIDI 0-127;
- * the fixed MIN_STRIKE_WINDOW_MS time floor is gone (see below) since it
- * no longer does any useful work once depth itself gates the commit;
- * MAX_STRIKE_WINDOW_MS extended since requiring more real travel before
- * firing means genuine (if less explosive) presses need more time to
- * reach it than the old 60ms window meant to catch touch-only taps ever
- * needed.
+ * Strike detection -- gated on real measured depth travel
+ * (MIN_STRIKE_DEPTH_DELTA below), not touch alone. Velocity is derived
+ * from elapsed TIME to reach that travel, not acceleration -- see the
+ * "Velocity" section further below for why that changed and what it
+ * replaced.
+ *
+ * Rebuilt from a real captured session, not a guess: two earlier rounds
+ * of guessed constants (15, then 30 for MIN_STRIKE_DEPTH_DELTA) failed
+ * on real hardware: "any touch still triggers midi." A debug-console
+ * capture of the `[expression]` print below across ~140 real touches
+ * gave the actual numbers MIN_STRIKE_DEPTH_DELTA is picked from: Hall
+ * depth reads in steps of 16 raw counts (sensor/driver quantization) --
+ * 32 (2 steps) was by far the single most common depth_delta observed
+ * (66 of 115 fired notes), with a long tail up to 96 -- this is bare
+ * capacitive contact / incidental mechanical settling, not an
+ * intentional press. Genuine deliberate presses in the same capture
+ * reached 192-736 (out of the ~900-unit full-press range from the
+ * earlier Hall calibration session) -- a clear gap between "just
+ * touched it" and "actually pressed it."
  * ==========================================================================*/
-
-/* Need at least this many fresh Hall samples before trusting an
- * acceleration estimate (2 velocity values need 3 depth samples). No
- * longer paired with a fixed minimum elapsed-ms floor -- MIN_STRIKE_
- * DEPTH_DELTA below is what actually gates whether a touch counts as a
- * real press; requiring extra elapsed time on top of that no longer
- * screens out anything real depth-gating doesn't already catch, and
- * would only slow down a fast, hard strike's response for no benefit. */
-#define MIN_STRIKE_SAMPLES 3u
 
 /* Bridges a brief capacitive touch dropout -- real feedback: "hard fast
  * press is not working properly, it won't trigger note." A hard,
@@ -83,18 +61,6 @@
  * undo that. Unmeasured -- a first attempt at "long enough to bridge a
  * real bounce, short enough not to be felt as release lag." */
 #define TOUCH_DROPOUT_GRACE_MS 12u
-
-/* Safety timeout: once a real press has actually been detected (see
- * MIN_STRIKE_DEPTH_DELTA below), commit with whatever accel data exists
- * once this much time has passed since touch-down, even without 3 clean
- * samples yet -- e.g. if the background/priority scan couldn't keep up.
- * Does NOT by itself make a bare touch fire a note -- see below.
- * Extended from 60ms: that value was picked when *any* touch lasting
- * that long would fire (the original bug); now that real travel past
- * MIN_STRIKE_DEPTH_DELTA is required first, a deliberate-but-unhurried
- * press can reasonably take longer than 60ms to reach it, and shouldn't
- * get force-committed on a stale accel estimate before it even arrives. */
-#define MAX_STRIKE_WINDOW_MS 250u
 
 /* Minimum real depth travel (Hall units) since touch-down before a
  * touch counts as an actual press worth firing a note for, rather than
@@ -148,48 +114,70 @@
  * meaningfully delay a genuinely fast intentional retrigger. */
 #define RETRIGGER_GRACE_MS 50u
 
-/* ---- Velocity curve --------------------------------------------------
- * Real feedback on the first (linear) accel->velocity mapping: "velocity
- * curve is bad, very light press is not giving low velocity enough. We
- * need a better velocity curve that's closer to a piano or a synth
- * keybed. Also give some flat full velocity at the max velocity, meaning
- * there's some space that we count as full velocity before the highest
- * full reading, to aid aftertouch."
+/* ---- Velocity: elapsed-time-to-actuation, not acceleration -----------
+ * Two prior attempts at accel-based velocity (double-differencing 3
+ * Hall depth samples) both failed on real hardware, most recently:
+ * "max sudden push does not trigger notes properly and light low depth
+ * presses also trigger randomly hard. The logic and measurement method
+ * is not working." That's a fair assessment of the *method*, not just
+ * its constants: a double-difference over only 3 samples is extremely
+ * sensitive to exactly which samples happen to land where, at exactly
+ * what spacing -- and depth itself reads in coarse 16-count steps (see
+ * this file's strike-detection header above), so a genuinely fast,
+ * hard strike is precisely the case most likely to blow past
+ * MIN_STRIKE_DEPTH_DELTA in only 1-2 samples, without ever reaching a
+ * stable 3-sample accel estimate at all -- exactly matching "max sudden
+ * push does not trigger properly." A slower press, meanwhile, gets
+ * whatever accel its particular sample spacing happened to produce,
+ * which the captured data showed had no reliable relationship to how
+ * hard the press actually felt -- matching "light presses trigger
+ * randomly hard."
  *
- * A straight linear scale (accel * constant) can't satisfy both "very
- * light stays genuinely quiet" and "a confidently hard hit reliably
- * maxes out" at once -- pushing the low end down by raising the scale
- * just pushes the whole curve down with it, and vice versa. A real
- * piano/synth action instead uses a *curved* response: a power curve
- * with VELOCITY_CURVE_EXPONENT > 1 suppresses the low end relative to
- * linear (a light touch reads noticeably quieter than a linear mapping
- * would give it -- real energy is required to sound loud, matching how
- * an acoustic action feels), then ramps up more steeply as accel
- * approaches ACCEL_FULL_VELOCITY. Past that point velocity is pinned at
- * 127 -- a deliberate flat plateau *below* the mechanically hardest hit
- * this hardware could ever register, per the explicit ask: a confident
- * hit should reliably read as full velocity without needing to find the
- * single hardest possible strike, and everything past that plateau
- * feeds aftertouch instead (services/expression.c's aftertouch is
- * already a wholly separate signal off raw depth, not velocity, so this
- * plateau doesn't cost aftertouch anything -- it just stops velocity
- * from trying to also account for that same extra travel).
+ * Replaced with the same technique real weighted-action MIDI keyboards
+ * and drum pads use: measure the elapsed TIME between two fixed points
+ * of travel, and derive velocity from how fast that gap was crossed --
+ * a dual-contact-switch timing measurement, not a differentiated
+ * position signal. Concretely: touch_start_sample_ms marks the first
+ * fresh Hall sample after touch begins (the same reference
+ * touch_start_depth already used), and strike_time_ms (see pad_expr_t)
+ * is set exactly once, the moment peak_depth_delta first crosses
+ * MIN_STRIKE_DEPTH_DELTA, as the gap between those two sample
+ * timestamps. This needs only two timestamps, not a differentiated
+ * series -- immune to the per-sample noise/quantization that broke the
+ * accel approach, and well-defined even when only one or two samples
+ * arrive before the threshold is crossed (a fast, hard strike no longer
+ * needs 3 clean samples to register at all -- MIN_STRIKE_SAMPLES and
+ * the whole 3-sample accel history are gone, along with the
+ * MAX_STRIKE_WINDOW_MS fallback timeout they existed to support: with
+ * nothing left to "wait for," a real press now commits the instant it's
+ * measured, whether that took 3ms or 300ms).
  *
- * ACCEL_FULL_VELOCITY (20) sits just below the real captured peak_accel
- * range's high end (0-23, per the strike-detection rebuild above) --
- * genuinely hard strikes in that capture already reliably crossed
- * "most of the way there," so 20 should read as "hit it with real
- * intent," not "the single hardest hit ever recorded." Both this and
- * VELOCITY_CURVE_EXPONENT (1.8, chosen to noticeably suppress accel
- * readings under ~8-10 the way the captured light-touch-adjacent hits
- * did) are first attempts at a *feel*, not derived from a curve
- * measured on real hardware -- there's no substitute for playing it. */
-#define ACCEL_FULL_VELOCITY 20.0f
+ * STRIKE_TIME_MAX_VELOCITY_MS/_MIN_VELOCITY_MS bound the curve: at or
+ * below the "max" time, velocity pins at 127 -- the same deliberate
+ * plateau *below* the fastest strike this hardware could ever produce
+ * that the previous accel-based curve also aimed for, per real
+ * feedback ("give some flat full velocity... to aid aftertouch"), so a
+ * confidently fast hit reliably maxes out. At or above the "min" time,
+ * velocity floors at MIN_VELOCITY -- a slow, deliberate push. Between
+ * them, VELOCITY_CURVE_EXPONENT (> 1) shapes the curve the same way it
+ * did before: suppressing the low end relative to a straight line, so
+ * a merely-adequate-speed press reads noticeably quieter than a
+ * confidently fast one, closer to how an acoustic action feels than a
+ * linear response would. All three constants are first attempts, not
+ * measured against real strikes -- there's no equivalent captured data
+ * yet for "how many ms does a hard strike actually take to cross
+ * MIN_STRIKE_DEPTH_DELTA on this hardware," unlike the depth-delta
+ * numbers above. The `[expression]` print below now reports
+ * strike_time_ms directly on every commit specifically so the next
+ * real-hardware session can calibrate these three constants from real
+ * numbers instead of guessing a third velocity model. */
+#define STRIKE_TIME_MAX_VELOCITY_MS 10u
+#define STRIKE_TIME_MIN_VELOCITY_MS 150u
 #define VELOCITY_CURVE_EXPONENT 1.8f
 
 /* Even a strike weak enough to barely clear MIN_STRIKE_DEPTH_DELTA
  * should produce an audible note, not near-silence -- the curve above
- * can push a very light qualifying strike's raw output below this, so
+ * can push a very slow qualifying strike's raw output below this, so
  * it's still clamped up to a floor rather than left near-silent. */
 #define MIN_VELOCITY 8u
 
@@ -213,14 +201,14 @@
  * over the depth signal feeding aftertouch_from_depth() below, tuned to
  * be smooth without adding perceptible lag (the professional-feel goal
  * a real weighted-key/wind controller's aftertouch has). Deliberately
- * NOT applied to the velocity path above: velocity is a one-shot
- * peak-acceleration estimate over a handful of samples during a ~15-60ms
- * window, where smoothing would blunt the exact transient it's trying
- * to measure; aftertouch is a continuous signal sent for as long as a
- * note is held, where smoothing is what makes it feel like modulation
- * instead of jitter. Unmeasured -- a starting guess at the right amount
- * of smoothing, not derived from the capture session above (that only
- * measured static full-press depth, not how noisy a held reading is). */
+ * NOT applied to the velocity measurement above: velocity is a one-shot
+ * elapsed-time measurement over the strike itself, where smoothing
+ * would blunt the exact transient it's trying to measure; aftertouch is
+ * a continuous signal sent for as long as a note is held, where
+ * smoothing is what makes it feel like modulation instead of jitter.
+ * Unmeasured -- a starting guess at the right amount of smoothing, not
+ * derived from the capture session above (that only measured static
+ * full-press depth, not how noisy a held reading is). */
 #define AFTERTOUCH_SMOOTHING_ALPHA 0.35f
 
 typedef enum {
@@ -249,6 +237,12 @@ typedef struct {
     float touch_start_depth;
     bool has_touch_start_depth;
 
+    /* Hall sample timestamp (same clock as touch_start_ms, but the
+     * sample's own time rather than the scan loop's) paired with
+     * touch_start_depth -- the reference strike_time_ms below measures
+     * elapsed time from. Set at the same moment as touch_start_depth. */
+    uint32_t touch_start_sample_ms;
+
     /* Highest depth_delta (relative to touch_start_depth) seen at any
      * point since touch began, not just the current instant. Real
      * feedback: "strong hard presses don't trigger anything" -- a fast,
@@ -261,13 +255,18 @@ typedef struct {
      * "pressed" even after it springs back. */
     float peak_depth_delta;
 
-    /* Up to 3 most recent (time, depth) samples seen since touch began. */
-    uint32_t t[3];
-    float d[3];
-    uint8_t sample_count;
-    uint32_t last_seen_sample_time_ms;
+    /* Set exactly once, the moment peak_depth_delta first crosses
+     * MIN_STRIKE_DEPTH_DELTA -- the elapsed time (Hall sample clock)
+     * between touch_start_sample_ms and that crossing, which
+     * velocity_from_strike_time() maps to a MIDI velocity. See this
+     * file's "Velocity: elapsed-time-to-actuation" section for why this
+     * replaced an acceleration estimate. threshold_crossed guards the
+     * one-time capture (a later, larger peak shouldn't overwrite the
+     * timing of when the strike was first detected). */
+    uint32_t strike_time_ms;
+    bool threshold_crossed;
 
-    float peak_accel;
+    uint32_t last_seen_sample_time_ms;
 
     /* When the current note actually fired -- gates RETRIGGER_ARM_
      * DEPTH_DELTA below with a short grace period (RETRIGGER_GRACE_MS)
@@ -315,55 +314,29 @@ static void begin_awaiting_strike(pad_expr_t *s, uint32_t now_ms) {
     s->touch_start_ms = now_ms;
     s->has_touch_start_depth = false;
     s->peak_depth_delta = 0.0f;
-    s->sample_count = 0;
-    s->peak_accel = 0.0f;
+    s->threshold_crossed = false;
+    s->strike_time_ms = 0;
     s->last_seen_sample_time_ms = 0;
 }
 
-/* Pushes a fresh (time, depth) sample into the pad's short history and
- * updates its peak-acceleration-so-far once 3 samples are available. */
-static void update_strike_history(pad_expr_t *s, uint32_t t_ms, float depth) {
-    s->t[0] = s->t[1];
-    s->d[0] = s->d[1];
-    s->t[1] = s->t[2];
-    s->d[1] = s->d[2];
-    s->t[2] = t_ms;
-    s->d[2] = depth;
-    if (s->sample_count < 3u) {
-        s->sample_count++;
-    }
-
-    if (s->sample_count < 3u) {
-        return;
-    }
-
-    uint32_t dt1 = s->t[1] - s->t[0];
-    uint32_t dt2 = s->t[2] - s->t[1];
-    if (dt1 == 0u || dt2 == 0u) {
-        return; /* duplicate timestamps -- shouldn't happen given the caller only pushes on a new sample_time_ms, but avoid a divide-by-zero regardless */
-    }
-
-    float v1 = (s->d[1] - s->d[0]) / (float)dt1;
-    float v2 = (s->d[2] - s->d[1]) / (float)dt2;
-    float accel = (v2 - v1) / ((float)(dt1 + dt2) / 2.0f);
-    if (accel > s->peak_accel) {
-        s->peak_accel = accel;
-    }
-}
-
-static uint8_t velocity_from_peak_accel(float peak_accel) {
-    if (peak_accel <= 0.0f) {
-        return (uint8_t)MIN_VELOCITY;
-    }
-    if (peak_accel >= ACCEL_FULL_VELOCITY) {
+/* Maps elapsed strike time (ms, touch_start_sample_ms to the moment
+ * peak_depth_delta crossed MIN_STRIKE_DEPTH_DELTA) to a MIDI velocity --
+ * see this file's "Velocity: elapsed-time-to-actuation" section for the
+ * full reasoning. Faster (smaller ms) is a harder strike. */
+static uint8_t velocity_from_strike_time(uint32_t strike_time_ms) {
+    if (strike_time_ms <= STRIKE_TIME_MAX_VELOCITY_MS) {
         return 127u;
     }
-    /* Power curve, not linear -- see this section's own header comment.
-     * normalized in (0, 1), exponent > 1 suppresses the low end relative
-     * to a straight line. */
-    float normalized = peak_accel / ACCEL_FULL_VELOCITY;
+    if (strike_time_ms >= STRIKE_TIME_MIN_VELOCITY_MS) {
+        return (uint8_t)MIN_VELOCITY;
+    }
+    /* Power curve, not linear -- normalized in (0, 1) as "how much of
+     * the way from slow to fast," exponent > 1 suppresses the low
+     * (slow) end relative to a straight line. */
+    float normalized = (float)(STRIKE_TIME_MIN_VELOCITY_MS - strike_time_ms) /
+                        (float)(STRIKE_TIME_MIN_VELOCITY_MS - STRIKE_TIME_MAX_VELOCITY_MS);
     float curved = powf(normalized, VELOCITY_CURVE_EXPONENT);
-    int vel = (int)(curved * 127.0f);
+    int vel = (int)((float)MIN_VELOCITY + (float)(127u - MIN_VELOCITY) * curved);
     if (vel < (int)MIN_VELOCITY) {
         vel = (int)MIN_VELOCITY;
     }
@@ -405,7 +378,7 @@ void tiles_expression_scan(void) {
         if (s->state == PAD_STATE_AWAITING_STRIKE) {
             /* Only read a fresh Hall sample while still touched -- once
              * released there's nothing new to gather, the commit
-             * decision below just uses whatever peak was already
+             * decision below just uses whatever peak/timing was already
              * measured. */
             if (touched) {
                 tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
@@ -417,12 +390,18 @@ void tiles_expression_scan(void) {
                          * field's comment for why this, not a read taken
                          * immediately at touch-down, is the right reference. */
                         s->touch_start_depth = depth;
+                        s->touch_start_sample_ms = hs.sample_time_ms;
                         s->has_touch_start_depth = true;
                     }
-                    update_strike_history(s, hs.sample_time_ms, depth);
                     float delta = depth - s->touch_start_depth;
                     if (delta > s->peak_depth_delta) {
                         s->peak_depth_delta = delta;
+                    }
+                    if (!s->threshold_crossed && s->peak_depth_delta >= MIN_STRIKE_DEPTH_DELTA) {
+                        /* First sample to cross the actuation threshold --
+                         * see strike_time_ms's own comment. */
+                        s->threshold_crossed = true;
+                        s->strike_time_ms = hs.sample_time_ms - s->touch_start_sample_ms;
                     }
                 }
             }
@@ -433,30 +412,23 @@ void tiles_expression_scan(void) {
              * reading taken *right now* would still show it past
              * threshold, which silently lost real hard strikes before
              * this fix ("strong hard presses don't trigger anything"). */
-            bool pressed = s->peak_depth_delta >= MIN_STRIKE_DEPTH_DELTA;
-            bool have_accel_data = s->sample_count >= MIN_STRIKE_SAMPLES;
+            bool pressed = s->threshold_crossed;
 
-            /* "ready": a real press has been measured and there's enough
-             * sample history to trust the accel estimate -- fires the
-             * instant both are true, however fast or slow that took, no
-             * fixed elapsed-ms floor. "timed_out": a real press has been
-             * measured but accel history still isn't there yet after
-             * MAX_STRIKE_WINDOW_MS (e.g. the background scan couldn't
-             * keep up) -- commits anyway with whatever peak_accel was
-             * observed rather than leaving a clearly-struck pad silent.
+            /* "ready": a real press has been measured -- fires the
+             * instant it's detected, however fast or slow that took, no
+             * fixed elapsed-ms floor and no waiting for more samples (see
+             * this file's velocity section for why that wait is gone).
              * "commit_on_release": touch already ended, but a real press
-             * was measured before it did -- commit now with whatever
-             * accel data exists rather than discarding a genuine hit
-             * just because contact happened to end first (a real,
-             * common shape for a fast percussive strike). */
-            uint32_t elapsed = now_ms - s->touch_start_ms;
-            bool ready = touched && pressed && have_accel_data;
-            bool timed_out = touched && pressed && !have_accel_data && (elapsed >= MAX_STRIKE_WINDOW_MS);
+             * was measured before it did -- commit now rather than
+             * discarding a genuine hit just because contact happened to
+             * end first (a real, common shape for a fast percussive
+             * strike). */
+            bool ready = touched && pressed;
             bool commit_on_release = !touched && pressed;
 
-            if (ready || timed_out || commit_on_release) {
+            if (ready || commit_on_release) {
                 s->active_note = tiles_note_map_get_note(pad);
-                uint8_t velocity = velocity_from_peak_accel(s->peak_accel);
+                uint8_t velocity = velocity_from_strike_time(s->strike_time_ms);
                 /* Temporary bring-up visibility -- prints exactly what
                  * the commit decision was based on, so a real-hardware
                  * session can read off actual numbers instead of
@@ -464,9 +436,9 @@ void tiles_expression_scan(void) {
                  * usb_vendor/ diagnostics stream once that exists, same
                  * reasoning as touch.c/standby.c's own temporary
                  * prints. */
-                printf("[expression] pad %u note-on: %s, peak_depth_delta=%d peak_accel=%d velocity=%u\n", pad,
-                       commit_on_release ? "commit_on_release" : (timed_out ? "timed_out" : "ready"),
-                       (int)s->peak_depth_delta, (int)s->peak_accel, velocity);
+                printf("[expression] pad %u note-on: %s, peak_depth_delta=%d strike_time_ms=%u velocity=%u\n", pad,
+                       commit_on_release ? "commit_on_release" : "ready", (int)s->peak_depth_delta,
+                       s->strike_time_ms, velocity);
                 tiles_midi_note_on(s->active_note, velocity);
                 /* Same velocity value driving both -- "mapped to the
                  * velocity curve by default" means the kick and the MIDI

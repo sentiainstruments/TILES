@@ -358,182 +358,113 @@ not its code.
   seen on real hardware yet.
 - `expression.h`/`.c` — done for V1: touch+Hall fusion. Touch remains
   the authoritative note on/off *timing* gate (more reliable to detect
-  than inferring press/release from Hall depth alone); Hall supplies
-  velocity (from peak acceleration accumulated while awaiting a real
-  strike) and gates *whether* a note fires at all (see
-  `MIN_STRIKE_DEPTH_DELTA` below), plus ongoing aftertouch (from press
-  depth while held), sent as MIDI poly key pressure. Per-pad state
-  machine: IDLE -> AWAITING_STRIKE (touched, not yet committed) ->
-  NOTE_ON, with AWAITING_STRIKE cancelling back to IDLE (no note sent)
-  if released before a real press is ever detected.
-  **Strike detection rebuilt from real captured data** -- real feedback,
-  in two rounds: first "touch is triggering notes not press velocity,
-  the lightest touch of capacitance is doing this without even getting
-  to a velocity curve," then, after a first guessed fix (a
-  `MIN_STRIKE_DEPTH_DELTA` of 15, then 30) still didn't hold on real
-  hardware: "any touch still triggers midi... different velocity doesn't
-  trigger anything either, it's all the same velocity." Rather than
-  guess a third value blindly, a `[expression] pad N note-on:
-  ready/timed_out, depth_delta=... peak_accel=... velocity=...` print
-  (added during the second attempt) was captured over a debug console
-  across ~140 real touches, and the constants below are now derived from
-  that data instead of a starting guess:
-  - Hall depth reads in steps of 16 raw counts; bare capacitive
-    contact/incidental settling clustered overwhelmingly at depth_delta
-    32 (66 of 115 fired notes) with a long tail up to 96, while
-    deliberate presses in the same capture reached 192-736 (of the
-    ~900-unit full-press range) -- a real, measurable gap between
-    "touched it" and "pressed it." `MIN_STRIKE_DEPTH_DELTA` raised
-    30 -> 150, sitting in that gap with margin on both sides.
-  - `peak_accel` across the same capture ranged 0-23 (mostly under 18).
-    At the old `ACCEL_TO_VELOCITY_SCALE` (0.05), every single one of
-    those floored to velocity 8 -- directly confirming "it's all the
-    same velocity" as a real miscalibration, not a subtle one. Raised
-    0.05 -> 4.5, mapping that observed range across most of MIDI's
-    velocity span (23 -> ~103, 10 -> ~45) while leaving headroom above
-    it for a harder strike than anything this capture saw.
-  - The fixed `MIN_STRIKE_WINDOW_MS` (15ms) elapsed-time floor is gone
-    entirely -- once depth itself gates whether a press is real, an
-    extra fixed time floor on top no longer screens out anything real
-    depth-gating doesn't already catch, and only added latency to a
-    fast, hard strike's response for no benefit. `ready` now fires the
-    instant both a real press (past `MIN_STRIKE_DEPTH_DELTA`) and enough
-    accel history (`MIN_STRIKE_SAMPLES`) exist, however long that took.
-  - `MAX_STRIKE_WINDOW_MS` extended 60 -> 250ms: that value was picked
-    back when *any* touch lasting that long would fire regardless of
-    real motion (the original bug); now that genuine travel past
-    `MIN_STRIKE_DEPTH_DELTA` is required first, a deliberate-but-
-    unhurried press can reasonably take longer than 60ms to reach it and
-    shouldn't get force-committed on a stale/incomplete accel estimate
-    before it even arrives. `timed_out` is now explicitly the
-    "pressed, but still missing accel history" fallback, distinct from
-    `ready`'s "pressed, with real accel history" path, rather than the
-    two conditions silently overlapping.
-  The reference depth `MIN_STRIKE_DEPTH_DELTA` measures against
-  (`touch_start_depth`) is captured from the *first fresh Hall sample
-  taken after touch begins* (`has_touch_start_depth`), not a read taken
-  immediately at touch-down -- an untouched pad only gets hall.c's slow
-  background round-robin coverage, so a read taken the instant touch
-  starts (before the pad switches to hall.c's every-call priority scan)
-  could be stale by many scan cycles; comparing that against a fresh
-  in-window reading could read as "movement" from nothing more than
-  ordinary drift over the stale gap, not an actual press. This was a
-  real, separate bug caught between the first and second guessed
-  threshold attempts.
-  **Peak-depth tracking + commit-on-release, and retrigger without a
-  full release** -- a third round of real feedback on the rebuilt
-  detection above: "contact with pad has to be broken for retrigger,
-  that's bad, we also are not getting constant reliable velocity at
-  all, strong hard presses don't trigger anything." A fresh debug
-  capture showed several genuine touch-and-release cycles (150-200+ms
-  long, not a graze) with no `[expression]` note-on at all between them
-  -- real hits being silently dropped. Root cause: `pressed` was
-  computed from *whatever the depth reading happened to be at the exact
-  instant this scan checked it*, not the peak reached during the touch
-  -- a fast, percussive strike can spring back down (Hall depth
-  rebounding, or touch itself ending) before that instantaneous check
-  ever sees it past `MIN_STRIKE_DEPTH_DELTA`, discarding a real hit
-  outright. Fixed via a new `peak_depth_delta` field, updated to the
-  running max every time a fresh sample arrives; `pressed` now checks
-  that peak, not the instant value, so a hit that already cleared
-  threshold stays "pressed" even after springing back. AWAITING_STRIKE's
-  release handling changed to match: instead of unconditionally
-  cancelling to IDLE on release, a `commit_on_release` path fires the
-  note anyway (with whatever accel data was gathered) if the peak had
-  already cleared threshold before contact ended -- a real, common shape
-  for a fast strike, not an edge case. `ready`/`timed_out` now also
-  explicitly require `touched` (previously implied but not stated) so
-  the three commit paths -- `ready`, `timed_out`, `commit_on_release` --
-  are mutually exclusive and each printed by name in the `[expression]`
-  line.
-  Separately, retrigger-without-lifting: `RETRIGGER_ARM_DEPTH_DELTA`
-  (40) lets a *held* note (`PAD_STATE_NOTE_ON`) retrigger without touch
-  ever going false -- once depth eases back down to within 40 of the
-  pad's *original* touch-down reference (not just down from this note's
-  own peak), it's treated exactly like a release-and-retouch: note-off
-  fires for the held note and the pad drops back into
-  `begin_awaiting_strike()` using the current depth as a fresh
-  reference, so a subsequent real press runs through the exact same
-  strike-detection path as any other hit, freshly computed velocity
-  included. Gated by `RETRIGGER_GRACE_MS` (50ms) after the note fires,
-  since a fast strike's own post-impact rebound could otherwise read as
-  an immediate deliberate release and fire a spurious retrigger cycle
-  milliseconds after the real note-on -- the same physical mechanism
-  `peak_depth_delta` above exists to see past, just checked from the
-  other direction here. Deliberately conservative (close to "as light as
-  the original touch again," not just "eased off the peak") since a
-  looser threshold risks cutting off an ordinary sustained hold the
-  instant the player eases pressure slightly for aftertouch's own sake
-  -- the acknowledged flip side is that a genuinely gradual pressure
-  fade-out while still holding a note could also ease below this and get
-  cut early. Both new constants are first attempts, not tuned against
-  either failure mode on real hardware yet.
-  **Touch-bounce tolerance, added after a fourth round of real
-  feedback:** "hard fast press is not working properly, it won't trigger
-  note." A hard, percussive impact is exactly the scenario most likely
-  to cause a brief real dropout in the MPR121's touched reading (a
-  finger physically bouncing slightly off the sensing surface at the
-  moment of impact) -- and this module treated any observed `!touched`
-  as a real release, restarting strike detection from scratch right at
-  (or after) the strike's true peak, so the freshly-restarted window
-  would only ever see the rebound heading back down, never a fresh rise
-  past threshold. `TOUCH_DROPOUT_GRACE_MS` (12ms) now bridges a brief
-  dropout by treating touch as still active for a short window after the
-  last raw `true` reading (`last_touched_ms`/`last_touched_valid`),
-  computed once at the top of the per-pad loop and used everywhere
-  downstream instead of the raw reading directly -- `touch.c`'s own
-  diagnostic prints are untouched and still reflect the true,
-  undebounced hardware state. Deliberately short, so it doesn't
-  meaningfully undo this session's separate MPR121 release-threshold fix
-  for snappy release (see `drivers/README.md`'s `mpr121.c` entry).
-  Unmeasured -- a first attempt, and this specific failure mode
-  (capacitive bounce on hard impact) is inferred from the symptom, not
-  directly observed in a capture.
-  **Velocity curve rebuilt**, same round of feedback: "velocity curve is
-  bad, very light press is not giving low velocity enough, we need a
-  better velocity curve that's closer to a piano or a synth keybed. Also
-  give some flat full velocity at the max velocity... to aid
-  aftertouch." A linear `peak_accel * scale` mapping can't satisfy both
-  "very light stays genuinely quiet" and "a confident hard hit reliably
-  maxes out" at once -- raising the scale to fix one end just drags the
-  other end along with it. Replaced with a power curve:
-  `ACCEL_TO_VELOCITY_SCALE` is gone, replaced by `ACCEL_FULL_VELOCITY`
-  (20, just below the real captured peak_accel range's high end of 23)
-  and `VELOCITY_CURVE_EXPONENT` (1.8, > 1 so it suppresses the low end
-  relative to linear -- real energy is now required to sound loud,
-  matching an acoustic action's feel, instead of a light touch reading
-  nearly as loud as a firm one). Past `ACCEL_FULL_VELOCITY`, velocity
-  pins at 127 -- a deliberate plateau *below* the mechanically hardest
-  possible strike, exactly per the ask: a confidently hard hit should
-  reliably read as full velocity without needing to find the single
-  hardest hit this hardware could ever register, and the remaining
-  travel past that point feeds aftertouch instead (already a wholly
-  separate signal off raw depth, not velocity, so the plateau costs
-  aftertouch nothing). Both new constants are first attempts at a feel,
-  not derived from a curve measured on real hardware.
-  **Haptic feedback reported lost** ("we lost the haptic preview a few
-  prompts ago") -- reviewed `tiles_haptics_trigger_kick()`'s voice-
-  ceiling/stealing path, the shared PCA9685 wiring between this module
-  and `buttons.c` (both chips, different channels -- see `haptics.h`'s
-  entry below), and all three debug captures from this session: zero
-  `[haptics] dropped/stealing` lines anywhere, and `[power]` consistently
-  read a healthy `USB_ONLY, max_haptic_voices=5` the whole time, ruling
-  out both the voice ceiling and `power.c`'s previously-suspected FAULT
-  mode as the cause. No code-level regression found via review. Added a
-  `[haptics] pad N kick started: velocity=... duty=...` print at the
-  actual motor-drive call (`start_kick_now()`, see `haptics.h`'s entry)
-  so the next test session can tell whether the trigger path itself is
-  the problem or something downstream of it (wiring, the PCA9685 write,
-  a specific pad) is -- still an open question, not yet resolved.
-  **Not yet hardware-verified with these exact numbers:** the ~140-touch
-  capture mixed light touches and real presses in one session without
-  labeling which was which as they happened, so `MIN_STRIKE_DEPTH_DELTA`
-  (150) and `ACCEL_TO_VELOCITY_SCALE` (4.5) are real-data-informed, not
-  from a controlled, labeled trial -- revisit with an explicit "N light
-  touches, N deliberate presses" capture if light touches still get
-  through, deliberate soft presses stop registering, or velocity still
-  doesn't spread out enough in practice. The `[expression]` print stays
-  in place specifically to make that follow-up capture easy.
+  than inferring press/release from Hall depth alone); Hall gates
+  *whether* a note fires at all (`MIN_STRIKE_DEPTH_DELTA`, real measured
+  depth travel required, not touch alone), supplies velocity (elapsed
+  time to reach that travel -- see below for why this isn't
+  acceleration-based), and drives ongoing aftertouch (from press depth
+  while held), sent as MIDI poly key pressure. Per-pad state machine:
+  IDLE -> AWAITING_STRIKE (touched, not yet committed) -> NOTE_ON, with
+  AWAITING_STRIKE cancelling back to IDLE (no note sent) if released
+  before a real press is ever detected.
+  This module went through five rounds of real-hardware feedback to get
+  here, each catching a genuine bug or forcing a real architectural
+  change rather than a constant tweak:
+  1. **"Touch is triggering notes not press velocity"** -- the original
+     safety-timeout fallback fired a note at floor velocity purely
+     because touch had lasted a fixed window, with no check on whether
+     the pad had moved at all. First fix (`MIN_STRIKE_DEPTH_DELTA` = 15,
+     then 30) still failed on hardware: **a second bug**, the reference
+     depth that threshold measured against was read immediately at
+     touch-down from whatever `hall.c` had cached from its slow
+     background round-robin (an untouched pad isn't scanned every call);
+     comparing that stale reading against a fresh one once touch
+     switched the pad to `hall.c`'s every-call priority scan could read
+     as "movement" from nothing more than ordinary drift. Fixed via
+     `has_touch_start_depth`: the reference (`touch_start_depth`) is now
+     set from the *first fresh sample actually taken at the fast rate*,
+     not a read taken before that rate even starts.
+  2. **"Any touch still triggers midi... it's all the same velocity"**
+     -- rather than guess a third threshold blindly, an `[expression]`
+     debug print was captured across ~140 real touches. The data showed
+     Hall depth reads in steps of 16 raw counts, with bare capacitive
+     contact clustering overwhelmingly at depth_delta 32 (a long tail to
+     96) while deliberate presses reached 192-736 (of the ~900-unit
+     full-press range) -- a real, measurable gap. `MIN_STRIKE_DEPTH_DELTA`
+     raised to 150, sitting in that gap with margin both sides.
+  3. **"Contact has to be broken for retrigger... strong hard presses
+     don't trigger anything"** -- a fresh capture showed genuine
+     touch-and-release cycles (150-200+ms, not a graze) with no note-on
+     between them: real hits silently dropped. Root cause: "pressed" was
+     computed from the depth reading at one instant, not the peak
+     reached during the touch -- a fast strike can spring back (or end
+     contact) before that instant ever sees it past threshold. Fixed via
+     `peak_depth_delta`, the running max since touch began, checked
+     instead of the instantaneous value; `commit_on_release` added so a
+     touch that ends after the peak already cleared threshold still
+     fires, instead of being discarded. Separately, `RETRIGGER_ARM_DEPTH_DELTA`
+     (40) added real retrigger-without-lifting: once a *held* note's
+     depth eases back down within 40 of the pad's original touch-down
+     reference (not just down from that note's own peak), it's treated
+     as release-and-retouch -- note-off fires and the pad drops back
+     into `begin_awaiting_strike()` for a genuinely fresh strike, gated
+     by `RETRIGGER_GRACE_MS` (50ms) so a strike's own post-impact
+     rebound doesn't immediately misfire this. Deliberately conservative
+     (close to "as light as the original touch," not just "eased off
+     the peak") since looser risks cutting off an ordinary sustained
+     hold's natural pressure fluctuation -- the acknowledged flip side
+     is a genuinely gradual fade-out could also trip this early.
+  4. **"Hard fast press won't trigger... velocity curve is bad... no
+     haptic preview"** -- three separate findings. First, a capacitive
+     touch bounce: a hard impact can momentarily break contact for a
+     couple of ms, which this module read as a real release, restarting
+     strike detection right at the strike's own peak and missing it
+     entirely. `TOUCH_DROPOUT_GRACE_MS` (12ms) bridges this by treating
+     touch as active for a short window past the last raw `true`
+     reading (`touch.c`'s own prints stay undebounced -- this tolerance
+     is purely an expression-layer interpretation). Second, the velocity
+     curve was a flat linear scale on acceleration, which can't make
+     both "light stays quiet" and "hard reliably maxes out" true at
+     once. Third, haptic feedback was reported missing -- reviewed
+     against three clean debug captures and found no code-level cause
+     (see `haptics.h`'s entry); a confirmation print was added at the
+     actual motor-drive call instead of guessing further.
+  5. **"Max sudden push does not trigger notes properly... light presses
+     trigger randomly hard... the logic and measurement method is not
+     working"** -- this was the real verdict on acceleration itself as
+     the velocity measure, not just its constants. A double-difference
+     over only 3 Hall samples is extremely sensitive to exactly which
+     samples land where and how far apart, on top of depth's own coarse
+     16-count quantization -- and a genuinely fast, hard strike is
+     precisely the case most likely to blow past `MIN_STRIKE_DEPTH_DELTA`
+     in only 1-2 samples, never reaching a stable 3-sample estimate at
+     all (matching "sudden push doesn't trigger"), while a slower press
+     got whatever accel its particular sample spacing produced with no
+     reliable relationship to actual force (matching "randomly hard").
+     **Velocity is now elapsed TIME, not acceleration** -- the same
+     technique real weighted-action MIDI keyboards and drum pads use: a
+     dual-contact-point timing measurement, not a differentiated
+     position signal. `touch_start_sample_ms` marks the first fresh Hall
+     sample after touch begins; `strike_time_ms` is set exactly once,
+     the moment `peak_depth_delta` first crosses `MIN_STRIKE_DEPTH_DELTA`,
+     as the gap between those two Hall-sample timestamps.
+     `MIN_STRIKE_SAMPLES` and the whole 3-sample accel history
+     (`update_strike_history()`, `t[]`/`d[]`/`peak_accel`) are gone
+     entirely, along with `MAX_STRIKE_WINDOW_MS` -- with nothing left to
+     "wait for," a real press now commits the instant it's measured,
+     whether that took 3ms or 300ms. `velocity_from_strike_time()`
+     replaces `velocity_from_peak_accel()`: `STRIKE_TIME_MAX_VELOCITY_MS`
+     (10ms, at or below which velocity pins at 127 -- the same
+     deliberate plateau below the fastest possible strike the prior
+     curve also aimed for) and `STRIKE_TIME_MIN_VELOCITY_MS` (150ms, at
+     or above which velocity floors at `MIN_VELOCITY`) bound a power
+     curve (`VELOCITY_CURVE_EXPONENT`, still > 1, still suppressing the
+     low/slow end relative to linear) between them. The `[expression]`
+     print now reports `strike_time_ms` directly on every commit, since
+     there's no equivalent captured timing data yet for these two new
+     bounds -- unlike the depth-delta numbers above, they're first
+     attempts at a feel, and this print exists specifically so the next
+     real-hardware session can calibrate them from real numbers.
   `DEPTH_TO_AFTERTOUCH_FULL_SCALE` is now real, not a placeholder: 900,
   derived from a serial-driven full-press capture session
   (`diagnostics/calibration.h`'s 'f' command) with all 24 magnets
@@ -556,12 +487,12 @@ not its code.
   `AFTERTOUCH_SMOOTHING_ALPHA` is a first guess, not measured against
   how jittery a real held reading actually is -- the full-press capture
   session that calibrated `DEPTH_TO_AFTERTOUCH_FULL_SCALE` measured
-  static depth, not held-reading noise. `ACCEL_FULL_VELOCITY`,
-  `VELOCITY_CURVE_EXPONENT`, and `MIN_STRIKE_DEPTH_DELTA` are
-  real-data-informed now rather than blind guesses -- see the
-  strike-detection rebuild and velocity curve rebuild above for exactly
-  what data and why, and their own notes on what a follow-up labeled
-  capture (or, for the velocity curve, real playing) would still refine.
+  static depth, not held-reading noise. `MIN_STRIKE_DEPTH_DELTA` is
+  real-data-informed (see round 2 above); `STRIKE_TIME_MAX_VELOCITY_MS`,
+  `STRIKE_TIME_MIN_VELOCITY_MS`, and `VELOCITY_CURVE_EXPONENT` (round 5)
+  are first attempts at a feel with no equivalent captured timing data
+  yet -- see round 5's own note on why the `[expression]` print now
+  reports `strike_time_ms` specifically to get that data next session.
   Also drives `haptics.c` at the same three points it
   drives `midi_out.c` (note-on -> kick, note-off -> stop, aftertouch
   change -> sustain level) with the exact same velocity/aftertouch
