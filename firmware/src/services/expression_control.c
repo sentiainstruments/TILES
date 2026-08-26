@@ -198,23 +198,23 @@ static void apply_row_haptics(uint8_t column) {
 
 /* Row 2 -- expression.c's pitch bend sensitivity (max cosine deviation).
  * SMALLER is MORE sensitive (less real motion needed for full bend), so
- * column 1 gets the LARGEST value (0.40, least sensitive) and column 6
- * the SMALLEST (0.10, most sensitive); column 4 is exactly 0.20, the
- * feature's current default. History: 0.15 -> 0.30 (with anchors
- * rescaled to match, same 2x/0.5x-of-default spread each time) after
- * "too sensitive and jittery," then back down to 0.20 after a further
- * pass found 0.30 "not always bending and also bending when it
- * shouldnt" -- see expression.c's own s_pitch_bend_max_cosine_deviation
- * comment for the fuller fix (this scalar plus the ARM-timing
- * confirmation that now does most of the "is this intentional" work,
- * rather than the amplitude threshold alone). Column 6's 0.10 stays
- * comfortably above PITCH_BEND_DEADZONE_COSINE_DELTA (0.015) so even the
+ * column 1 gets the LARGEST value (0.30, least sensitive) and column 6
+ * the SMALLEST (0.075, most sensitive); column 4 is exactly 0.15, the
+ * feature's current default. History: 0.15 -> 0.30 -> 0.20, each paired
+ * with an ever-more-elaborate downstream compensation stack, back down
+ * to 0.15 (with these anchors rescaled to match, same 2x/0.5x-of-default
+ * spread throughout) after real feedback that the whole stack was
+ * "jittery at rest AND requires too much tilt... might break the keys"
+ * -- see expression.c's own s_pitch_bend_max_cosine_deviation comment
+ * for the fuller reasoning on resetting to a simpler pipeline instead of
+ * continuing to add compensating layers. Column 6's 0.075 stays
+ * comfortably above PITCH_BEND_DEADZONE_COSINE_DELTA (0.02) so even the
  * most sensitive column keeps a real usable range. Unmeasured -- same
  * caveat as expression.c's own pitch-bend-sensitivity history: no
  * captured real-hardware data yet for how far this should actually
  * range. */
 static void apply_row_pitch_bend(uint8_t column) {
-    float value = piecewise_column_value(column, 0.40f, 0.20f, 0.10f);
+    float value = piecewise_column_value(column, 0.30f, 0.15f, 0.075f);
     tiles_expression_set_pitch_bend_sensitivity(value);
 }
 

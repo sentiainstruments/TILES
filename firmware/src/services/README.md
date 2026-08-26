@@ -869,90 +869,74 @@ not its code.
   a sensitivity at or below the deadzone itself. All three values are
   unmeasured first attempts, not derived from a captured real-noise
   session the way `MIN_STRIKE_DEPTH_DELTA` above was.
-  **Depth-correlated noise compensation, added after that first fix still
-  left real-hardware jitter specifically while pressing** -- real
-  feedback: "theres a lot of noise when pressed and tilt is not
-  intentional. we have to compensate for unintentional tilt." Diagnosis:
-  the direction-cosine ratio is only truly depth-invariant for a
-  *perfectly* on-axis magnet (see this section's own physics writeup
-  above) -- any small real assembly misalignment (a fixed real X/Y
-  offset, not noise) becomes proportionally MORE visible in that ratio
-  as `|B|` shrinks with a harder press, purely from the ratio's own
-  math, with zero actual sideways motion involved. `claim_pitch_bend_
-  owner()` now also seeds `s_pitch_bend_baseline_depth` alongside the
-  existing baseline cosine; each tick, EXTRA deadzone -- expressed as a
-  FRACTION of the current `s_pitch_bend_max_cosine_deviation`
-  (`PITCH_BEND_DEPTH_COMPENSATION_MAX_FRACTION`, 0.35, not a fixed
-  absolute amount -- see that constant's own comment for why it has to
-  scale with whatever sensitivity is currently selected) -- is added on
-  top of the fixed `PITCH_BEND_DEADZONE_COSINE_DELTA`, scaling linearly
-  from 0 at the claim depth up to the full fraction once the owner pad's
-  smoothed depth has increased `PITCH_BEND_DEPTH_COMPENSATION_RANGE`
-  (600) past that (a fixed deadzone can only ever be right for one
-  specific press depth; this widens it as the artifact itself grows with
-  depth). `pitch_bend_14bit_from_cosine_delta()` takes that total
-  deadzone as a parameter instead of reading a fixed constant directly,
-  so every call site (only the one in the NOTE_ON loop today) supplies
-  its own depth-adjusted value.
-  **Rebalanced again, direction fixed, and a "definitely intentional"
-  confirmation + acceleration added, after a further real-hardware
-  pass** -- real feedback: "still jittery... we need a balance where we
-  get less tilt to trigger bend but enough smoothing and correction so
-  it is definitely intentional. rn its not always bending and also
-  bending when it shouldnt... i think we should also add acceleration to
-  pitch bend so its slightly accelerated if bend is held... also bend is
-  flipped its bending in the opposite way than we need... it should feel
-  like bending a guitar fret." Four changes together:
-  - **Sensitivity/deadzone rebalanced**: `s_pitch_bend_max_cosine_
-    deviation`'s default came back down 0.30 -> 0.20 (more sensitive
-    again -- "less tilt to trigger"), and `PITCH_BEND_DEADZONE_COSINE_
-    DELTA` was halved 0.03 -> 0.015, since the new ARM timing below now
-    does most of the "is this actually intentional" job instead of the
-    amplitude threshold alone trying to carry both jobs at once.
-    `expression_control.c`'s sub-menu row-2 anchors rescaled to match
-    (0.40/0.20/0.10, same 2x/0.5x-of-default spread as always).
-  - **Direction flipped**: the delta fed into
-    `pitch_bend_14bit_from_cosine_delta()` is now `baseline_cosine -
-    smoothed_cosine` (was the reverse) -- the function itself stayed
-    direction-agnostic, only the one call site's subtraction order
-    changed.
-  - **"Definitely intentional" confirmation + "accelerated if held,"
-    together** (`PITCH_BEND_ARM_MS`/`_ACCEL_MAX_BOOST`/`_ACCEL_RAMP_MS`,
-    `pitch_bend_confidence_multiplier()`): a deviation past the deadzone
-    doesn't output anything until it's held steady on the SAME side of
-    center for `PITCH_BEND_ARM_MS` (40ms) -- reset instantly by a drop
-    back within the deadzone or a sign flip (new module-level run-
-    tracking state, `s_pitch_bend_run_active`/`_positive`/`_start_ms`,
-    reset fresh in `claim_pitch_bend_owner()` too so a new note never
-    inherits a stale run). Below that threshold output ramps in from 0
-    (a hard gate would read as a lag-then-jump; a genuinely brief
-    accidental wobble never gets loud enough to matter before it resets)
-    -- that's the "buffer... definitely intentional" half. Past
-    `PITCH_BEND_ARM_MS`, held CONTINUOUSLY, output instead keeps ramping
-    UP past 1.0x -- the "slightly accelerated if held" half, literally
-    real feedback: capped at `PITCH_BEND_ACCEL_MAX_BOOST` (0.35) extra,
-    reached after `PITCH_BEND_ACCEL_RAMP_MS` (600ms) of continuous hold.
-    Both ramps are pure elapsed time, independent of whether the tilt
-    itself moves further during the hold -- a held-steady bend still
-    gradually deepens on its own, the "guitar fret" feel asked for.
-  - **A real note-on ordering bug fixed**: real feedback, "sometimes play
-    lands in bent note." `claim_pitch_bend_owner()` used to run AFTER
-    `tiles_midi_note_on()` in the commit sequence -- if a DIFFERENT pad
-    still owned a non-centered bend the instant a brand-new note fired,
-    the synth received `[note-on]` then `[bend-center]`, a real gap in
-    which it applied the stale bend to the new note the moment it
-    arrived. Now `claim_pitch_bend_owner()` (which sends the center reset
-    when switching owners) runs FIRST, so every note-on is guaranteed to
-    reach the synth already centered.
-  At full press with default sensitivity, total deadzone is
-  0.015 + 0.20*0.35 = 0.085 out of 0.20 max deviation -- still leaves
-  real dynamic range for a genuine tilt even at full press. Unmeasured --
-  like the deadzone/smoothing/sensitivity changes above, this project has
-  no captured session isolating "how much does X drift from pure
-  straight-down travel alone," or real playing data for the ARM/accel
-  timing constants, the way `MIN_STRIKE_DEPTH_DELTA` elsewhere in this
-  file was measured; not yet re-verified on real hardware after this
-  specific change.
+  **Two rounds of downstream compensation layers (depth-correlated
+  deadzone widening, then a "hold to confirm" timing gate stacked with
+  an acceleration ramp on top) were tried and then REMOVED** after real
+  feedback on the combined result: "so jittery at rest and at the same
+  time it requires too much tilt to register that it might break the
+  keys." Both complaints at once, after two rounds of each fix fighting
+  the previous round's fix for the other symptom, was a real signal the
+  layered-workarounds approach had reached diminishing returns rather
+  than something to keep tuning knobs on. Replaced with a simpler
+  pipeline and one fix aimed at what was probably the actual root cause,
+  not more downstream compensation:
+  - **Baseline settle window** (`PITCH_BEND_SETTLE_MS`, 25ms): the real
+    likely culprit for "jittery at rest" -- `claim_pitch_bend_owner()`
+    used to capture the baseline cosine from ONE raw, instantaneous
+    sample at the exact (often percussive) instant a note fires, just as
+    susceptible to raw sensor noise as any later reading; if that one
+    sample landed off from true rest, every subsequent comparison was
+    against an already-wrong reference, which no amount of downstream
+    deadzone/timing tuning on the LIVE signal could ever fix. Now
+    ownership is claimed without capturing a baseline yet
+    (`s_pitch_bend_baseline_settled = false`); the NOTE_ON loop keeps
+    running the existing EMA (`PITCH_BEND_SMOOTHING_ALPHA`) and only
+    captures baseline from the SETTLED value once `PITCH_BEND_SETTLE_MS`
+    has passed, staying centered (no bend sent at all) during that brief
+    window.
+  - **Sensitivity/deadzone reset to their original values**:
+    `s_pitch_bend_max_cosine_deviation` back to 0.15 (from 0.30, then
+    0.20), `PITCH_BEND_DEADZONE_COSINE_DELTA` a single fixed 0.02 (the
+    depth-scaled extra deadzone is gone entirely) -- direct response to
+    "too much tilt... might break the keys," and no longer needing to
+    also absorb a bad-baseline problem the settle window now addresses
+    at the source. `expression_control.c`'s sub-menu row-2 anchors
+    rescaled to match (0.30/0.15/0.075, back to their original spread).
+  - **`PITCH_BEND_ARM_MS` kept, but shrunk to a brief 15ms noise-transient
+    filter with NO acceleration past 1.0x** (`pitch_bend_confidence_
+    multiplier()` now just ramps 0..1 and stops) -- the previous
+    multi-hundred-ms "hold to arm, then keep accelerating" version could
+    itself make an unsettled baseline worse: a persistent-but-wrong
+    offset looks identical to real held intent to a pure time-based
+    filter, so accelerating past 1.0x would have accelerated the error
+    right along with any genuine tilt.
+  - **Direction still flipped** (delta is `baseline_cosine -
+    smoothed_cosine`) and **the note-on ordering fix still in place**
+    (`claim_pitch_bend_owner()` runs before `tiles_midi_note_on()`, see
+    below) -- both unrelated to the jitter/sensitivity rework, carried
+    over unchanged.
+  - **A real diagnostic print added** (`[expression] pad N pitch bend
+    sent: bend=... delta=...`, on every actual send): unlike
+    `MIN_STRIKE_DEPTH_DELTA`/`DEPTH_TO_AFTERTOUCH_FULL_SCALE` elsewhere
+    in this file, no round of this feature's tuning has ever been
+    calibrated from a real captured session -- every constant above is
+    still an unmeasured guess. This exists so the next real-hardware
+    pass can read actual numbers (how big is rest-state noise really,
+    how big does a deliberate tilt actually register) instead of
+    continuing to guess blind.
+  **A real note-on ordering bug, unrelated to the jitter/sensitivity
+  rework above, fixed the same round**: real feedback, "sometimes play
+  lands in bent note." `claim_pitch_bend_owner()` used to run AFTER
+  `tiles_midi_note_on()` in the commit sequence -- if a DIFFERENT pad
+  still owned a non-centered bend the instant a brand-new note fired, the
+  synth received `[note-on]` then `[bend-center]`, a real gap in which it
+  applied the stale bend to the new note the moment it arrived. Now
+  `claim_pitch_bend_owner()` (which sends the center reset when switching
+  owners) runs FIRST, so every note-on is guaranteed to reach the synth
+  already centered.
+  Unmeasured, like every pitch-bend constant's entire history in this
+  file -- not yet re-verified on real hardware after this specific
+  change.
   Single hardware axis (X) used as "sideways" -- no hardware doc exists
   for which local Hall axis maps to which physical direction on a
   mounted pad, and MIDI pitch bend is inherently one-dimensional
