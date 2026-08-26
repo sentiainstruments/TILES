@@ -398,11 +398,21 @@ flashable `.uf2`.
   had been flattening entirely to one floor velocity. See
   `services/README.md`'s `expression.h`/`.c` entry for the full data and
   reasoning, including a real stale-reference bug also caught and fixed
-  along the way. Still not verified with a controlled, labeled capture
-  (the ~140-touch session mixed light touches and presses without
-  labeling which was which as they happened) -- the `[expression]` print
-  stays in place to make that follow-up easy if light touches still get
-  through or velocity still doesn't spread out enough in practice.
+  along the way. A follow-up round of real feedback on that rebuild --
+  "contact with pad has to be broken for retrigger, that's bad, we also
+  are not getting constant reliable velocity at all, strong hard presses
+  don't trigger anything" -- caught a second real bug (the commit
+  decision checked the depth reading at one instant rather than the
+  peak reached during the touch, silently dropping fast strikes that
+  had already sprung back or ended contact before that instant) and
+  added a genuinely new capability (retriggering a held note without a
+  full release, by watching for depth easing back near its original
+  touch-down level). See `services/README.md`'s `expression.h`/`.c`
+  entry for the full detail on both. Still not verified with a
+  controlled, labeled capture (the original ~140-touch session mixed
+  light touches and presses without labeling which was which as they
+  happened) -- the `[expression]` print stays in place to make that
+  follow-up easy if any of this still isn't right in practice.
 - MPR121 touch thresholds started at Freescale's generic quickstart
   defaults (12/6), not tuned for this board's actual electrode/keycap/
   acrylic stack. The release side was since narrowed to 9 -- real

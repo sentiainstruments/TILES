@@ -420,6 +420,54 @@ not its code.
   ordinary drift over the stale gap, not an actual press. This was a
   real, separate bug caught between the first and second guessed
   threshold attempts.
+  **Peak-depth tracking + commit-on-release, and retrigger without a
+  full release** -- a third round of real feedback on the rebuilt
+  detection above: "contact with pad has to be broken for retrigger,
+  that's bad, we also are not getting constant reliable velocity at
+  all, strong hard presses don't trigger anything." A fresh debug
+  capture showed several genuine touch-and-release cycles (150-200+ms
+  long, not a graze) with no `[expression]` note-on at all between them
+  -- real hits being silently dropped. Root cause: `pressed` was
+  computed from *whatever the depth reading happened to be at the exact
+  instant this scan checked it*, not the peak reached during the touch
+  -- a fast, percussive strike can spring back down (Hall depth
+  rebounding, or touch itself ending) before that instantaneous check
+  ever sees it past `MIN_STRIKE_DEPTH_DELTA`, discarding a real hit
+  outright. Fixed via a new `peak_depth_delta` field, updated to the
+  running max every time a fresh sample arrives; `pressed` now checks
+  that peak, not the instant value, so a hit that already cleared
+  threshold stays "pressed" even after springing back. AWAITING_STRIKE's
+  release handling changed to match: instead of unconditionally
+  cancelling to IDLE on release, a `commit_on_release` path fires the
+  note anyway (with whatever accel data was gathered) if the peak had
+  already cleared threshold before contact ended -- a real, common shape
+  for a fast strike, not an edge case. `ready`/`timed_out` now also
+  explicitly require `touched` (previously implied but not stated) so
+  the three commit paths -- `ready`, `timed_out`, `commit_on_release` --
+  are mutually exclusive and each printed by name in the `[expression]`
+  line.
+  Separately, retrigger-without-lifting: `RETRIGGER_ARM_DEPTH_DELTA`
+  (40) lets a *held* note (`PAD_STATE_NOTE_ON`) retrigger without touch
+  ever going false -- once depth eases back down to within 40 of the
+  pad's *original* touch-down reference (not just down from this note's
+  own peak), it's treated exactly like a release-and-retouch: note-off
+  fires for the held note and the pad drops back into
+  `begin_awaiting_strike()` using the current depth as a fresh
+  reference, so a subsequent real press runs through the exact same
+  strike-detection path as any other hit, freshly computed velocity
+  included. Gated by `RETRIGGER_GRACE_MS` (50ms) after the note fires,
+  since a fast strike's own post-impact rebound could otherwise read as
+  an immediate deliberate release and fire a spurious retrigger cycle
+  milliseconds after the real note-on -- the same physical mechanism
+  `peak_depth_delta` above exists to see past, just checked from the
+  other direction here. Deliberately conservative (close to "as light as
+  the original touch again," not just "eased off the peak") since a
+  looser threshold risks cutting off an ordinary sustained hold the
+  instant the player eases pressure slightly for aftertouch's own sake
+  -- the acknowledged flip side is that a genuinely gradual pressure
+  fade-out while still holding a note could also ease below this and get
+  cut early. Both new constants are first attempts, not tuned against
+  either failure mode on real hardware yet.
   **Not yet hardware-verified with these exact numbers:** the ~140-touch
   capture mixed light touches and real presses in one session without
   labeling which was which as they happened, so `MIN_STRIKE_DEPTH_DELTA`
