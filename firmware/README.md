@@ -393,9 +393,9 @@ flashable `.uf2`.
   assumed to be the vertical-press axis for every pad (unverified per-
   pad), and `hall.c`'s depth is a raw, uncalibrated magnitude with no
   dead zone, offset correction, or saturation margin.
-- `services/expression.c`'s strike detection went through six rounds of
-  real-hardware feedback, each catching a genuine bug or forcing a real
-  architectural change rather than a constant tweak -- see
+- `services/expression.c`'s strike detection went through seven rounds
+  of real-hardware feedback, each catching a genuine bug or forcing a
+  real architectural change rather than a constant tweak -- see
   `services/README.md`'s `expression.h`/`.c` entry for the full blow-by-
   blow (a stale-reference bug, a "check the peak not the instant" bug
   plus new retrigger-without-lifting, a capacitive touch-bounce fix, and
@@ -405,25 +405,32 @@ flashable `.uf2`.
   the logic and measurement method is not working" was a verdict on
   acceleration itself, not its constants -- a double-difference over
   only 3 Hall samples is too sensitive to exact sample timing and
-  depth's own coarse quantization, and a genuinely fast strike is
-  precisely the case most likely to never gather a stable 3-sample
-  estimate at all. Velocity is now elapsed TIME between two fixed points
-  of travel (`touch_start_sample_ms` to the moment
-  `MIN_STRIKE_DEPTH_DELTA` is crossed), the same technique real
-  weighted-action keyboards and drum pads use. Round 6 then caught a
-  real bug in *that* fix: the zero reference was captured from the first
-  fresh Hall sample after touch begins, but a genuinely fast, hard
-  strike can already be well past threshold by the time that sample
-  arrives -- "if I press really fast and hard nothing happens." Fixed by
-  capturing the reference immediately at touch-down instead, from
-  hall.c's already-baseline-relative cached depth (no waiting needed).
-  The same round also deepened `MIN_STRIKE_DEPTH_DELTA` (150 -> 300)
-  since a shallow checkpoint let a fast-but-light flick read as a hard
-  strike ("when I press faster but not deep the reading is still
-  strong"), and added a genuinely new capability -- a light touch-only
-  haptic pulse, independent of the note-strike kick, after "haptic pulse
-  on touch without pressure" was raised three times with increasingly
-  specific wording (see `services/README.md`'s `haptics.h` entry).
+  depth's own coarse quantization. Velocity is now elapsed TIME between
+  two fixed points of travel, the same technique real weighted-action
+  keyboards and drum pads use. Rounds 6 and 7 then found two more real
+  bugs in how the reference point for "how far pressed" was captured --
+  both traced to the same root mistake (a *delta from a per-touch
+  reference*, rather than the raw depth `hall.c` already provides
+  baseline-relative), and both hitting hardest exactly on the fastest,
+  hardest strikes: "if I press really fast and hard nothing happens,"
+  then, after round 6's partial fix, "sudden full force press is not
+  triggering the notes... touch is detected... just no midi." A
+  debug capture logging depth on *every* cancelled release (not just
+  successful commits) caught it directly: the reference depth at
+  touch-down was sometimes already 880-1040 -- essentially full
+  mechanical compression -- because a hard enough strike can finish
+  faster than capacitive touch detection catches up. Fixed by dropping
+  the per-touch reference entirely: raw depth's own running peak is now
+  compared straight against the actuation threshold, so an
+  already-fully-compressed first reading correctly registers as an
+  instantaneous, max-velocity strike instead of starting its own delta
+  at 0. The same stretch also deepened `MIN_STRIKE_DEPTH_DELTA`
+  (150 -> 300) since a shallow checkpoint let a fast-but-light flick
+  read as a hard strike, and added a genuinely new capability -- a
+  light touch-only haptic pulse, independent of the note-strike kick,
+  after "haptic pulse on touch without pressure" was raised three times
+  with increasingly specific wording (see `services/README.md`'s
+  `haptics.h` entry).
 - MPR121 touch thresholds started at Freescale's generic quickstart
   defaults (12/6), not tuned for this board's actual electrode/keycap/
   acrylic stack. The release side was since narrowed to 9 -- real

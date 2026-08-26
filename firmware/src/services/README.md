@@ -511,6 +511,38 @@ not its code.
      touch ever clears `MIN_STRIKE_DEPTH_DELTA` -- a light "I felt you"
      tick distinct from the note-strike kick, which still requires a
      real press exactly as before.
+  7. **"Sudden full force press is not triggering the notes... touch is
+     detected... just no midi"** -- round 6's fix (capture the reference
+     immediately, not on a later sample) was necessary but not
+     sufficient. A targeted debug capture, logging depth on *every*
+     cancelled (no-note) release rather than only on a successful
+     commit, showed the smoking gun directly: `touch_start_depth` values
+     of 880-1040 -- essentially full mechanical compression, at or past
+     the ~900-1184 full-press range -- captured at the instant touch was
+     first detected, for several hits that produced nothing. For a hard
+     enough strike, the entire compression can complete faster than
+     capacitive touch detection catches up, so by the time software
+     sees "touched," the press has already finished. The bug: this
+     module was tracking `peak_depth_delta`, a *delta from a per-touch
+     reference* captured at touch-down -- so even when that initial
+     reading was already near full compression, its own delta started
+     at 0, discarding exactly the information needed to recognize "this
+     already happened." There was never a real need for that second,
+     per-touch reference on top of `hall.c`'s depth in the first place --
+     `hall.c`'s depth is already baseline-relative (drift-compensated
+     for untouched pads by its own tracker). Fixed by removing
+     `touch_start_depth` entirely: `peak_depth` now tracks the raw
+     depth's own running max directly, gated against
+     `MIN_STRIKE_DEPTH_DELTA` with no subtraction. `begin_awaiting_strike()`
+     checks the very first reading against threshold immediately -- if
+     already past it, `threshold_crossed` is set true on the spot with
+     `strike_time_ms = 0`, correctly registering as an instantaneous,
+     max-velocity strike rather than "not pressed yet." The retrigger
+     check (`RETRIGGER_ARM_DEPTH_DELTA`) updated to match: it now
+     compares raw depth directly against near-true-rest, which is
+     actually a cleaner, more meaningful reference than "wherever touch
+     happened to start" was anyway. Every failing case in the capture
+     that motivated this fix would now register correctly.
   `DEPTH_TO_AFTERTOUCH_FULL_SCALE` is now real, not a placeholder: 900,
   derived from a serial-driven full-press capture session
   (`diagnostics/calibration.h`'s 'f' command) with all 24 magnets

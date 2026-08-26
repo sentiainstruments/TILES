@@ -96,14 +96,14 @@
 #define MIN_STRIKE_DEPTH_DELTA 300.0f
 
 /* Retrigger threshold for a held note -- real feedback: "contact with
- * pad has to be broken for retrigger, that's bad." Depth (relative to
- * the ORIGINAL touch_start_depth, the same reference the strike itself
- * was measured against) has to ease back down to within this of that
- * original light-touch reading -- not just down from this note's own
- * peak -- before a renewed press is treated as a brand-new strike. This
- * is deliberately conservative and close to "as light as the initial
- * touch again": a real held note's pressure is expected to fluctuate
- * somewhat for aftertouch's own sake, and a threshold any looser risks
+ * pad has to be broken for retrigger, that's bad." Raw depth (already
+ * baseline-relative, same as everywhere else in this file) has to ease
+ * back down to at or below this -- close to true rest -- before a
+ * renewed press is treated as a brand-new strike, not just down from
+ * this note's own peak. This is deliberately conservative and close to
+ * "as light as touching it at all": a real held note's pressure is
+ * expected to fluctuate somewhat for aftertouch's own sake, and a
+ * threshold any looser risks
  * cutting off ordinary sustained holds the instant the player eases
  * pressure slightly, not just when they're clearly done with the note
  * and about to strike again. The flip side of that same conservatism:
@@ -148,15 +148,17 @@
  * and drum pads use: measure the elapsed TIME between two fixed points
  * of travel, and derive velocity from how fast that gap was crossed --
  * a dual-contact-switch timing measurement, not a differentiated
- * position signal. Concretely: touch_start_sample_ms marks the first
- * fresh Hall sample after touch begins (the same reference
- * touch_start_depth already used), and strike_time_ms (see pad_expr_t)
- * is set exactly once, the moment peak_depth_delta first crosses
- * MIN_STRIKE_DEPTH_DELTA, as the gap between those two sample
- * timestamps. This needs only two timestamps, not a differentiated
- * series -- immune to the per-sample noise/quantization that broke the
- * accel approach, and well-defined even when only one or two samples
- * arrive before the threshold is crossed (a fast, hard strike no longer
+ * position signal. Concretely: touch_start_sample_ms marks the instant
+ * touch begins, and strike_time_ms (see pad_expr_t) is set exactly
+ * once, the moment peak_depth first crosses MIN_STRIKE_DEPTH_DELTA, as
+ * the gap between those two timestamps -- including the degenerate case
+ * where depth was already past threshold at touch_start_sample_ms
+ * itself (an extremely fast strike), which correctly comes out as
+ * strike_time_ms ~= 0. This needs only two timestamps, not a
+ * differentiated series -- immune to the per-sample noise/quantization
+ * that broke the accel approach, and well-defined even when only one or
+ * two samples arrive before the threshold is crossed (a fast, hard
+ * strike no longer
  * needs 3 clean samples to register at all -- MIN_STRIKE_SAMPLES and
  * the whole 3-sample accel history are gone, along with the
  * MAX_STRIKE_WINDOW_MS fallback timeout they existed to support: with
@@ -232,49 +234,47 @@ typedef struct {
     pad_expr_state_t state;
     uint32_t touch_start_ms;
 
-    /* Reference depth MIN_STRIKE_DEPTH_DELTA below measures real travel
-     * against -- captured immediately in begin_awaiting_strike(), at the
-     * exact scan tick touch is first detected, using whatever depth
-     * hall.c already has cached for this pad. NOT "wait for the first
-     * fresh Hall sample after touch begins" (an earlier version of this
-     * field) -- that seemed safer against hall.c's background-round-
-     * robin staleness, but broke fast strikes outright: a hard, fast
-     * press can already be well past MIN_STRIKE_DEPTH_DELTA by the time
-     * the *first* Hall sample after touch begins actually arrives, so
-     * using that sample as the zero reference made peak_depth_delta
-     * start near 0 and unable to ever reach threshold again on the way
-     * back down -- "if I press really fast and hard nothing happens."
-     * hall.c's depth is already baseline-relative (drift-compensated for
-     * untouched pads via its own background tracker), so a cached
-     * pre-touch reading is a perfectly valid zero point -- the earlier
-     * "staleness" concern was solving a problem that didn't actually
-     * exist, at the cost of one that very much did. Always valid the
-     * instant AWAITING_STRIKE begins, hence no longer a bool-guarded
-     * "first sample" flag. */
-    float touch_start_depth;
-
-    /* Paired with touch_start_depth -- the reference strike_time_ms
-     * below measures elapsed time from. Set at the same moment, from
-     * the scan tick's own clock (the same to_ms_since_boot() clock Hall
-     * sample timestamps use, so directly comparable to them later). */
+    /* Hall sample clock reference (same to_ms_since_boot() clock as Hall
+     * sample timestamps, so directly comparable) strike_time_ms below
+     * measures elapsed time from. Set the instant AWAITING_STRIKE
+     * begins. */
     uint32_t touch_start_sample_ms;
 
-    /* Highest depth_delta (relative to touch_start_depth) seen at any
-     * point since touch began, not just the current instant. Real
-     * feedback: "strong hard presses don't trigger anything" -- a fast,
-     * percussive strike can bounce back down (Hall depth springing back,
-     * or touch itself ending) before the *current* reading still shows
-     * it past MIN_STRIKE_DEPTH_DELTA, silently losing a real hit that
-     * clearly happened. Gating on the peak ever reached, instead of
-     * whatever the reading happens to be at the exact instant this scan
-     * checks it, means a hit that already cleared the threshold stays
-     * "pressed" even after it springs back. */
-    float peak_depth_delta;
+    /* Highest RAW depth (tiles_hall_get_depth(), NOT a delta from any
+     * per-touch reference) seen at any point since touch began,
+     * including the very first reading captured the instant touch was
+     * detected. Real feedback, two rounds: "strong hard presses don't
+     * trigger anything" (fixed by tracking the peak instead of the
+     * instantaneous value, since a fast strike can spring back down
+     * before a check made *right now* would still see it past
+     * threshold), then "sudden full force press is not triggering the
+     * notes... touch is detected... just no midi" -- a real debug
+     * capture showed the depth reading *at the instant touch was first
+     * detected* already sitting at 880-1040 (essentially full mechanical
+     * compression, out of the ~900-1184 full-press range) for several
+     * failed hits: for a hard enough strike, the entire compression can
+     * complete faster than capacitive touch detection catches up, so by
+     * the time software sees "touched," the press already happened.
+     * An earlier version of this tracking subtracted a per-touch
+     * "reference depth" captured at touch-down, meaning even an
+     * already-fully-compressed initial reading started its own delta at
+     * 0 -- discarding exactly the information needed to recognize "this
+     * already happened." hall.c's depth is already baseline-relative
+     * (drift-compensated for untouched pads via its own background
+     * tracker -- see hall.c), so there was never a need for a *second*,
+     * per-touch reference on top of it; comparing the raw peak directly
+     * against MIN_STRIKE_DEPTH_DELTA handles both a strike that develops
+     * gradually after touch begins and one that had already finished
+     * before touch was even detected. */
+    float peak_depth;
 
-    /* Set exactly once, the moment peak_depth_delta first crosses
+    /* Set exactly once, the moment peak_depth first crosses
      * MIN_STRIKE_DEPTH_DELTA -- the elapsed time (Hall sample clock)
      * between touch_start_sample_ms and that crossing, which
-     * velocity_from_strike_time() maps to a MIDI velocity. See this
+     * velocity_from_strike_time() maps to a MIDI velocity. Naturally
+     * comes out as ~0 (max velocity) when the very first reading at
+     * touch-down was already past threshold -- correct: that reading
+     * means the strike was already essentially instantaneous. See this
      * file's "Velocity: elapsed-time-to-actuation" section for why this
      * replaced an acceleration estimate. threshold_crossed guards the
      * one-time capture (a later, larger peak shouldn't overwrite the
@@ -328,19 +328,22 @@ void tiles_expression_init(void) {
 static void begin_awaiting_strike(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
     s->state = PAD_STATE_AWAITING_STRIKE;
     s->touch_start_ms = now_ms;
-    /* Captured immediately, not on a later "first fresh sample" -- see
-     * touch_start_depth's own comment for why. */
-    s->touch_start_depth = (float)tiles_hall_get_depth(pad);
     s->touch_start_sample_ms = now_ms;
-    s->peak_depth_delta = 0.0f;
-    s->threshold_crossed = false;
-    s->strike_time_ms = 0;
     s->last_seen_sample_time_ms = 0;
+
+    /* Checked immediately, not just seeded -- see peak_depth's own
+     * comment: for a hard enough strike, compression can already be
+     * complete by the time touch is detected at all, and that has to
+     * count as an instant (max-velocity) strike, not "not pressed yet". */
+    float initial_depth = (float)tiles_hall_get_depth(pad);
+    s->peak_depth = initial_depth;
+    s->threshold_crossed = (initial_depth >= MIN_STRIKE_DEPTH_DELTA);
+    s->strike_time_ms = 0;
 }
 
 /* Maps elapsed strike time (ms, touch_start_sample_ms to the moment
- * peak_depth_delta crossed MIN_STRIKE_DEPTH_DELTA) to a MIDI velocity --
- * see this file's "Velocity: elapsed-time-to-actuation" section for the
+ * peak_depth crossed MIN_STRIKE_DEPTH_DELTA) to a MIDI velocity -- see
+ * this file's "Velocity: elapsed-time-to-actuation" section for the
  * full reasoning. Faster (smaller ms) is a harder strike. */
 static uint8_t velocity_from_strike_time(uint32_t strike_time_ms) {
     if (strike_time_ms <= STRIKE_TIME_MAX_VELOCITY_MS) {
@@ -408,11 +411,10 @@ void tiles_expression_scan(void) {
                 if (hs.valid && hs.sample_time_ms != s->last_seen_sample_time_ms) {
                     s->last_seen_sample_time_ms = hs.sample_time_ms;
                     float depth = (float)tiles_hall_get_depth(pad);
-                    float delta = depth - s->touch_start_depth;
-                    if (delta > s->peak_depth_delta) {
-                        s->peak_depth_delta = delta;
+                    if (depth > s->peak_depth) {
+                        s->peak_depth = depth;
                     }
-                    if (!s->threshold_crossed && s->peak_depth_delta >= MIN_STRIKE_DEPTH_DELTA) {
+                    if (!s->threshold_crossed && s->peak_depth >= MIN_STRIKE_DEPTH_DELTA) {
                         /* First sample to cross the actuation threshold --
                          * see strike_time_ms's own comment. */
                         s->threshold_crossed = true;
@@ -422,11 +424,11 @@ void tiles_expression_scan(void) {
             }
 
             /* Gated on the PEAK depth reached, not the current instant --
-             * see peak_depth_delta's own comment for why: a fast,
-             * percussive strike can spring back (or end touch) before a
-             * reading taken *right now* would still show it past
-             * threshold, which silently lost real hard strikes before
-             * this fix ("strong hard presses don't trigger anything"). */
+             * see peak_depth's own comment for why: a fast, percussive
+             * strike can spring back (or end touch) before a reading
+             * taken *right now* would still show it past threshold,
+             * which silently lost real hard strikes before this fix
+             * ("strong hard presses don't trigger anything"). */
             bool pressed = s->threshold_crossed;
 
             /* "ready": a real press has been measured -- fires the
@@ -451,9 +453,9 @@ void tiles_expression_scan(void) {
                  * usb_vendor/ diagnostics stream once that exists, same
                  * reasoning as touch.c/standby.c's own temporary
                  * prints. */
-                printf("[expression] pad %u note-on: %s, peak_depth_delta=%d strike_time_ms=%u velocity=%u\n", pad,
-                       commit_on_release ? "commit_on_release" : "ready", (int)s->peak_depth_delta,
-                       s->strike_time_ms, velocity);
+                printf("[expression] pad %u note-on: %s, peak_depth=%d strike_time_ms=%u velocity=%u\n", pad,
+                       commit_on_release ? "commit_on_release" : "ready", (int)s->peak_depth, s->strike_time_ms,
+                       velocity);
                 tiles_midi_note_on(s->active_note, velocity);
                 /* Same velocity value driving both -- "mapped to the
                  * velocity curve by default" means the kick and the MIDI
@@ -479,9 +481,8 @@ void tiles_expression_scan(void) {
                  * depth genuinely never moved or something else is
                  * wrong -- this print exists specifically to answer
                  * that on the next capture. */
-                printf("[expression] pad %u cancelled (no press): touch_start_depth=%d peak_depth_delta=%d "
-                       "touch_duration_ms=%u\n",
-                       pad, (int)s->touch_start_depth, (int)s->peak_depth_delta, now_ms - s->touch_start_ms);
+                printf("[expression] pad %u cancelled (no press): peak_depth=%d touch_duration_ms=%u\n", pad,
+                       (int)s->peak_depth, now_ms - s->touch_start_ms);
                 s->state = PAD_STATE_IDLE;
             }
             continue;
@@ -498,18 +499,16 @@ void tiles_expression_scan(void) {
         float raw_depth = (float)tiles_hall_get_depth(pad);
 
         /* Retrigger without a full release -- real feedback: "contact
-         * with pad has to be broken for retrigger, that's bad." Once
-         * depth has eased back down close to the pad's original
-         * touch-down reading (not just down from this note's peak --
-         * see RETRIGGER_ARM_DEPTH_DELTA), treat it exactly like touch
-         * had been released and retouched: send note-off for the held
-         * note and drop back into strike-detection using the current
-         * depth as a fresh reference, all without touch itself ever
-         * going false. A subsequent real press is then measured and
-         * fires a brand-new note-on with its own freshly computed
-         * velocity through the exact same path as any other strike. */
-        if ((now_ms - s->note_on_ms) >= RETRIGGER_GRACE_MS &&
-            (raw_depth - s->touch_start_depth) <= RETRIGGER_ARM_DEPTH_DELTA) {
+         * with pad has to be broken for retrigger, that's bad." Once raw
+         * depth has eased back down close to true rest (not just down
+         * from this note's own peak -- see RETRIGGER_ARM_DEPTH_DELTA),
+         * treat it exactly like touch had been released and retouched:
+         * send note-off for the held note and drop back into
+         * strike-detection, all without touch itself ever going false.
+         * A subsequent real press is then measured and fires a
+         * brand-new note-on with its own freshly computed velocity
+         * through the exact same path as any other strike. */
+        if ((now_ms - s->note_on_ms) >= RETRIGGER_GRACE_MS && raw_depth <= RETRIGGER_ARM_DEPTH_DELTA) {
             tiles_midi_note_off(s->active_note);
             tiles_haptics_stop(pad);
             begin_awaiting_strike(s, pad, now_ms);
