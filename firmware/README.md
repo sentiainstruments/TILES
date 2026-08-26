@@ -384,11 +384,20 @@ flashable `.uf2`.
   pad), and `hall.c`'s depth is a raw, uncalibrated magnitude with no
   dead zone, offset correction, or saturation margin.
 - `services/expression.c`'s acceleration->velocity scale, depth->
-  aftertouch range, and strike-detection window durations are all
+  aftertouch range, strike-detection window durations, and the new
+  `MIN_STRIKE_DEPTH_DELTA` (real press vs. bare touch) are all
   explicitly-flagged placeholder constants -- there is no calibrated
   mT/LSB relationship to derive them from yet, so they're starting
   guesses that will need real-hardware tuning once this can actually be
-  played and heard.
+  played and heard. `MIN_STRIKE_DEPTH_DELTA` specifically fixes a real
+  bug just caught on hardware: "touch is triggering notes not press
+  velocity, the lightest touch of capacitance is doing this without even
+  getting to a velocity curve" -- the strike-detection safety timeout
+  used to fire a note at floor velocity purely because touch had lasted
+  60ms, with no check on whether the pad had moved at all. Both the
+  normal commit path and that timeout now require measured depth to have
+  moved past this threshold since touch-down first; untested on real
+  hardware yet.
 - MPR121 touch thresholds started at Freescale's generic quickstart
   defaults (12/6), not tuned for this board's actual electrode/keycap/
   acrylic stack. The release side was since narrowed to 9 -- real

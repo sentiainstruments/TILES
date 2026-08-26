@@ -357,14 +357,30 @@ not its code.
   round-end/line-clear/point flash timings are all first attempts, none
   seen on real hardware yet.
 - `expression.h`/`.c` — done for V1: touch+Hall fusion. Touch remains
-  the authoritative note on/off timing gate (more reliable to detect
+  the authoritative note on/off *timing* gate (more reliable to detect
   than inferring press/release from Hall depth alone); Hall supplies
   velocity (from peak acceleration observed during a short
-  strike-detection window right after touch-down) and ongoing
+  strike-detection window right after touch-down), gates *whether* a
+  note fires at all (see `MIN_STRIKE_DEPTH_DELTA` below), and ongoing
   aftertouch (from press depth while held), sent as MIDI poly key
   pressure. Per-pad state machine: IDLE -> AWAITING_STRIKE (touched, not
   yet committed) -> NOTE_ON, with AWAITING_STRIKE cancelling back to
   IDLE (no note sent) if released before enough samples arrive.
+  **Real press now required, not just touch** -- real feedback: "touch
+  is triggering notes not press velocity, the lightest touch of
+  capacitance is doing this without even getting to a velocity curve."
+  Root cause: `MAX_STRIKE_WINDOW_MS`'s safety-timeout fallback (meant for
+  "a real strike happened but the background Hall scan couldn't gather 3
+  clean samples in time") fired a note at floor velocity purely because
+  60ms had elapsed since touch-down, with no check at all on whether the
+  pad had actually moved -- a bare capacitive touch with zero press
+  reliably hit exactly that path. `MIN_STRIKE_DEPTH_DELTA` (a new field,
+  `touch_start_depth`, captures the Hall depth right at touch-down) now
+  gates both the normal "ready" commit and the timeout fallback: neither
+  can fire until measured depth has moved at least that far past where
+  it was when touch began. A touch that never presses just sits in
+  AWAITING_STRIKE until release cancels it with no note ever sent --
+  matching how a real key requires an actual press, not just contact.
   `DEPTH_TO_AFTERTOUCH_FULL_SCALE` is now real, not a placeholder: 900,
   derived from a serial-driven full-press capture session
   (`diagnostics/calibration.h`'s 'f' command) with all 24 magnets
@@ -389,7 +405,13 @@ not its code.
   since the capture session above only measured static full-press
   depth, not strike dynamics. `AFTERTOUCH_SMOOTHING_ALPHA` is also a
   first guess, not measured against how jittery a real held reading
-  actually is. Also drives `haptics.c` at the same three points it
+  actually is. `MIN_STRIKE_DEPTH_DELTA` (15 units) is likewise an
+  unmeasured guess at "clearly more than capacitive-only noise" -- the
+  full-press capture session measured static full-press depth, not the
+  noise floor of a pad that's touched but never pressed, so there's no
+  equivalent real data for this specific number yet; raise it if light
+  touches still sneak a note through, lower it if genuine soft presses
+  stop registering. Also drives `haptics.c` at the same three points it
   drives `midi_out.c` (note-on -> kick, note-off -> stop, aftertouch
   change -> sustain level) with the exact same velocity/aftertouch
   values, so haptic and MIDI output never disagree.

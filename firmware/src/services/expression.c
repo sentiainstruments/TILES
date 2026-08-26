@@ -18,11 +18,32 @@
 #define MIN_STRIKE_SAMPLES 3u
 #define MIN_STRIKE_WINDOW_MS 15u
 
-/* Safety timeout: commit regardless once this much time has passed
- * since touch-down, even without 3 clean samples -- e.g. if the
- * background/priority scan couldn't keep up. Ensures a note always
- * either fires or gets cancelled by release, never hangs forever. */
+/* Safety timeout: once a real press has actually been detected (see
+ * MIN_STRIKE_DEPTH_DELTA below), commit regardless of sample count once
+ * this much time has passed since touch-down -- e.g. if the background/
+ * priority scan couldn't keep up and never gathered 3 clean samples.
+ * Does NOT by itself make a bare touch fire a note -- see below. */
 #define MAX_STRIKE_WINDOW_MS 60u
+
+/* Minimum real depth travel (Hall units) since touch-down before a
+ * touch counts as an actual press worth firing a note for, rather than
+ * a light touch/rest with no real key motion. Real feedback: "touch is
+ * triggering notes not press velocity... the lightest touch of
+ * capacitance is doing this without even getting to a velocity curve"
+ * -- MAX_STRIKE_WINDOW_MS's safety-timeout fallback used to fire a note
+ * at floor velocity purely because touch had lasted 60ms, with zero
+ * regard for whether the pad had actually moved at all; a bare
+ * capacitive touch with no press reliably hit that path. Now both the
+ * "ready" and "timed out" commit conditions below require this much
+ * measured travel first -- a touch that never presses just sits in
+ * PAD_STATE_AWAITING_STRIKE until release cancels it with no note ever
+ * sent, matching how a real key requires an actual press, not just
+ * contact. Unmeasured -- a starting guess for "clearly more than
+ * capacitive-only noise," a small fraction of the ~900-unit full-press
+ * range the real calibration session measured (that session measured
+ * full press, not the noise floor of an untouched-but-contacted pad, so
+ * there's no equivalent real data for this specific number yet). */
+#define MIN_STRIKE_DEPTH_DELTA 15.0f
 
 /* V1 PLACEHOLDER, unmeasured: raw Hall LSB-per-ms^2 that maps to full
  * MIDI velocity (127). There's no calibrated mT/LSB relationship yet
@@ -74,6 +95,12 @@ typedef struct {
     pad_expr_state_t state;
     uint32_t touch_start_ms;
 
+    /* Hall depth at the moment touch began -- the reference
+     * MIN_STRIKE_DEPTH_DELTA below measures real travel against, so a
+     * pad that was already resting at some nonzero depth for whatever
+     * reason doesn't get an unfair head start toward "pressed". */
+    float touch_start_depth;
+
     /* Up to 3 most recent (time, depth) samples seen since touch began. */
     uint32_t t[3];
     float d[3];
@@ -105,9 +132,10 @@ void tiles_expression_init(void) {
     }
 }
 
-static void begin_awaiting_strike(pad_expr_t *s, uint32_t now_ms) {
+static void begin_awaiting_strike(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
     s->state = PAD_STATE_AWAITING_STRIKE;
     s->touch_start_ms = now_ms;
+    s->touch_start_depth = (float)tiles_hall_get_depth(pad);
     s->sample_count = 0;
     s->peak_accel = 0.0f;
     s->last_seen_sample_time_ms = 0;
@@ -170,7 +198,7 @@ void tiles_expression_scan(void) {
 
         if (s->state == PAD_STATE_IDLE) {
             if (touched) {
-                begin_awaiting_strike(s, now_ms);
+                begin_awaiting_strike(s, pad, now_ms);
             }
             continue;
         }
@@ -189,9 +217,12 @@ void tiles_expression_scan(void) {
                 update_strike_history(s, hs.sample_time_ms, (float)tiles_hall_get_depth(pad));
             }
 
+            float depth_delta = (float)tiles_hall_get_depth(pad) - s->touch_start_depth;
+            bool pressed = depth_delta >= MIN_STRIKE_DEPTH_DELTA;
+
             uint32_t elapsed = now_ms - s->touch_start_ms;
-            bool ready = (s->sample_count >= MIN_STRIKE_SAMPLES) && (elapsed >= MIN_STRIKE_WINDOW_MS);
-            bool timed_out = elapsed >= MAX_STRIKE_WINDOW_MS;
+            bool ready = pressed && (s->sample_count >= MIN_STRIKE_SAMPLES) && (elapsed >= MIN_STRIKE_WINDOW_MS);
+            bool timed_out = pressed && (elapsed >= MAX_STRIKE_WINDOW_MS);
 
             if (ready || timed_out) {
                 s->active_note = tiles_note_map_get_note(pad);
