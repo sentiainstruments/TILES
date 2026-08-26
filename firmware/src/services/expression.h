@@ -46,20 +46,46 @@
  */
 
 #include <stdbool.h>
+#include <stdint.h>
 
 void tiles_expression_init(void);
 
 /* Runs the per-pad state machine described above for every pad. Call
  * every main-loop iteration, after tiles_touch_scan() and
- * tiles_hall_scan() so both have fresh data this iteration. */
+ * tiles_hall_scan() so both have fresh data this iteration. New strikes
+ * (IDLE -> AWAITING_STRIKE) are suppressed for as long as
+ * services/expression_control.h's sub-menu owns the pad grid (see
+ * tiles_expression_control_owns_pad_grid()), so a slider tap there never
+ * also fires a MIDI note underneath -- a pad already mid-strike or held
+ * when the sub-menu opens is left alone to finish normally rather than
+ * being cut off. */
 void tiles_expression_scan(void);
 
-/* Called by services/standby.c on a genuine circle (SW6) short click --
- * see expression.c's "Pitch bend from sideways motion" section. Turning
- * it off while a note currently owns the bend resets to center
- * immediately rather than leaving that note stuck bent. */
+/* Called by services/expression_control.h on a genuine square ("sentia")
+ * short click -- see expression.c's "Pitch bend from sideways motion"
+ * section. Turning it off while a note currently owns the bend resets to
+ * center immediately rather than leaving that note stuck bent. */
 void tiles_expression_toggle_pitch_bend(void);
 
-/* Current pitch-bend-enabled state, for services/standby.c to drive the
- * circle button's persistent toggle-state LED glow. */
+/* Current pitch-bend-enabled state, for services/expression_control.h to
+ * drive the square button's persistent toggle-state LED glow. */
 bool tiles_expression_is_pitch_bend_enabled(void);
+
+/* Runtime sensitivity setters for services/expression_control.h's
+ * expression sub-menu (rows 2 and 4) -- replace what used to be fixed
+ * expression.c compile-time constants (PITCH_BEND_MAX_COSINE_DEVIATION,
+ * DEPTH_TO_AFTERTOUCH_FULL_SCALE) so a pad tap in the sub-menu can adjust
+ * them live. Both default to exactly their old fixed values (0.15f,
+ * 900u) until changed -- see expression.c's own section comments for
+ * what each value means and why those particular defaults were chosen. */
+void tiles_expression_set_pitch_bend_sensitivity(float max_cosine_deviation);
+void tiles_expression_set_aftertouch_sensitivity(uint16_t depth_full_scale);
+
+/* Called by services/expression_control.h when "expression mute" (the
+ * circle+square 3-second combo hold) toggles on/off. While muted, pitch
+ * bend and poly aftertouch both stop being computed/sent -- if a note
+ * currently owns pitch bend, it's reset to center immediately, the same
+ * "never leave a note stuck bent" rule tiles_expression_toggle_pitch_bend
+ * already follows. Note-on/off and velocity are NOT affected -- basic
+ * MIDI keeps working while muted, only the expressive layer stops. */
+void tiles_expression_set_muted(bool muted);

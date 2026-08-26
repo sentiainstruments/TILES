@@ -116,6 +116,7 @@
  * map's "measured_current_required" TODOs).
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* Zeroes internal per-pad state. Motor channels themselves are already
@@ -156,14 +157,31 @@ void tiles_haptics_set_sustain_level(uint8_t logical_pad, uint8_t aftertouch_0_1
  * achievable here anyway) and frees this pad's voice slot. */
 void tiles_haptics_stop(uint8_t logical_pad);
 
-/* Called by services/standby.c while the circle (SW6) shift gesture is
- * held and SW1 ("-") / SW2 ("+") are pressed -- direction < 0 steps the
- * global intensity scalar down one notch, > 0 up one -- see haptics.c's
- * HAPTIC_INTENSITY_STEP/_MIN/_MAX and s_haptic_intensity's own comment
- * for the full reasoning (applies uniformly to every haptic effect,
- * resets to full on every boot). */
+/* Called by services/expression_control.h while square ("sentia") is
+ * held alone (not combined with circle) and SW1 ("-") / SW2 ("+") are
+ * pressed -- direction < 0 steps the global intensity scalar down one
+ * notch, > 0 up one -- see haptics.c's HAPTIC_INTENSITY_STEP/_MIN/_MAX
+ * and s_haptic_intensity's own comment for the full reasoning (applies
+ * uniformly to every haptic effect, resets to full on every boot). */
 void tiles_haptics_adjust_intensity(int8_t direction);
+
+/* Direct-set variant for services/expression_control.h's haptics slider
+ * row (row 1 of the expression sub-menu, held via circle+square) --
+ * sets the scalar straight to a computed value rather than stepping by
+ * HAPTIC_INTENSITY_STEP, so a single pad tap jumps directly to that
+ * column's level. Clamped to [HAPTIC_INTENSITY_MIN, HAPTIC_INTENSITY_MAX]
+ * same as the step adjustment above. */
+void tiles_haptics_set_intensity(float level_0_to_1);
 
 /* Current global intensity scalar (HAPTIC_INTENSITY_MIN-_MAX). For
  * diagnostics/future UI -- not needed by the adjustment path itself. */
 float tiles_haptics_get_intensity(void);
+
+/* Called by services/expression_control.h when "expression mute" (the
+ * circle+square 3-second combo hold) toggles on/off. While muted, every
+ * haptic trigger (touch pulse, kick, sustain-level update) becomes a
+ * no-op and every currently-active motor is immediately cut to 0 -- MIDI
+ * note-on/off keep working completely unaffected, only the physical
+ * haptic feedback stops. See expression_control.h's own "expression
+ * mute" section for the full reasoning. */
+void tiles_haptics_set_muted(bool muted);

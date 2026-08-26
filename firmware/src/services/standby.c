@@ -3,9 +3,7 @@
 #include "board_layout.h"
 #include "board_pins.h"
 #include "buttons.h"
-#include "expression.h"
 #include "hall.h"
-#include "haptics.h"
 #include "lighting.h"
 #include "pedal.h"
 #include "pixel_font.h"
@@ -1860,47 +1858,13 @@ static bool s_manual_screensaver;
  * "holding for 10 sec send into power off standby... holding for 6
  * seconds send into screensaver animations... remember and set up
  * circle as our general shift button unless pressed for the intervals
- * we said." Circle is now the first real instance of that general-
- * purpose "shift" role: a short click (press+release before 6s) toggles
- * pitch bend (services/expression.c), and SW1/SW2 while circle is held
- * (but before 6s) adjust haptic intensity instead of their normal
- * octave-shift function -- see handle_circle_shift_input() and
- * tiles_standby_circle_shift_active() below. Same "meant to become a
- * modifier, V1 doesn't build the framework yet" stance
- * octave_control.h already took for SW1/SW2 -- this is that framework's
- * first real user. */
+ * we said." */
 #define TILES_CIRCLE_SCREENSAVER_HOLD_MS 6000u
 #define TILES_CIRCLE_DEEP_SLEEP_HOLD_MS 10000u
 static bool s_circle_was_held;
 static uint32_t s_circle_hold_start_ms;
 static bool s_circle_screensaver_fired;
 static bool s_circle_deep_sleep_fired;
-
-/* Circle's own LED, claimed via the same per-button override mechanism
- * octave_control.c uses for SW1/SW2 (services/buttons.h) -- its default
- * "lit while pressed" behavior would otherwise fight with the
- * persistent pitch-bend-toggle glow below. Real feedback: "if pitch
- * bend on then solid light on, if pitch bend off then no light on. The
- * toggle brightness is less than the regular click brightness but not
- * by a lot." CIRCLE_LED_HELD_LEVEL (1.0) matches default press feedback
- * exactly, so pressing circle still feels tactile regardless of what
- * the press turns out to be; CIRCLE_LED_TOGGLE_ON_LEVEL is the resting
- * glow once pitch bend is on and circle isn't currently held --
- * deliberately close to 1.0, not dramatically dimmer, per "not by a
- * lot." Unmeasured -- a first guess at how much dimmer reads as
- * "toggled on" rather than "still being pressed." */
-#define CIRCLE_LED_HELD_LEVEL 1.0f
-#define CIRCLE_LED_TOGGLE_ON_LEVEL 0.8f
-
-/* Edge-tracking for handle_circle_shift_input() below -- real feedback:
- * "when you hold and press - or + you can adjust intensity of haptics
- * on device." Separate from octave_control.c's own SW1/SW2 edge state
- * for the same reason s_scroll_prev_minus/plus below is: that module
- * skips its own processing entirely while this mode owns the buttons
- * (see tiles_standby_circle_shift_active()), and each mode needs its
- * own independent "was this pressed last tick" memory. */
-static bool s_shift_prev_minus;
-static bool s_shift_prev_plus;
 
 /* Edge-tracking for handle_manual_scroll_input() below -- separate from
  * octave_control.c's own SW1/SW2 edge state, since that module skips
@@ -2094,37 +2058,6 @@ static void enter_deep_sleep(void) {
     s_last_frame_ms = 0u; /* forces an immediate first frame */
 }
 
-/* SW1/SW2 as haptic-intensity controls -- only called while circle is
- * held and hasn't yet reached the 6s screensaver threshold (see
- * handle_circle_hold() below) -- real feedback: "when you hold and
- * press - or + you can adjust intensity of haptics on device." */
-static void handle_circle_shift_input(void) {
-    bool minus = tiles_button_is_pressed(1u); /* SW1 "-" */
-    bool plus = tiles_button_is_pressed(2u);  /* SW2 "+" */
-
-    if (minus && !s_shift_prev_minus) {
-        tiles_haptics_adjust_intensity(-1);
-    }
-    if (plus && !s_shift_prev_plus) {
-        tiles_haptics_adjust_intensity(1);
-    }
-
-    s_shift_prev_minus = minus;
-    s_shift_prev_plus = plus;
-}
-
-/* Circle's LED -- see CIRCLE_LED_HELD_LEVEL/_TOGGLE_ON_LEVEL's own
- * comment above. Called every tick from handle_circle_hold() below,
- * regardless of state; a no-op while standby-active claims the button
- * LEDs instead (tiles_buttons_set_override_led()'s own documented
- * behavior), so this doesn't need to know or care whether the deep-
- * sleep pulse animation is currently rendering the same button. */
-static void render_circle_led(bool held) {
-    float level = held ? CIRCLE_LED_HELD_LEVEL
-                        : (tiles_expression_is_pitch_bend_enabled() ? CIRCLE_LED_TOGGLE_ON_LEVEL : 0.0f);
-    tiles_buttons_set_override_led(TILES_CIRCLE_BUTTON_ID, level);
-}
-
 /* Circle (SW6)'s dedicated long-press gesture -- see this file's
  * s_manual_screensaver/TILES_CIRCLE_*_HOLD_MS comments above for the
  * full reasoning. Runs unconditionally at the very top of
@@ -2134,12 +2067,7 @@ static void render_circle_led(bool held) {
  * the 6s threshold (enters/escalates to a manual STANDBY) before the 10s
  * one (escalates further to DEEP_SLEEP -- the exact same state the
  * normal inactivity timeout below reaches, not a separate one), each
- * firing exactly once per hold via its own *_fired latch. Below the 6s
- * threshold, a continuous hold is the "shift" window: SW1/SW2 adjust
- * haptic intensity (handle_circle_shift_input() above), and release
- * without ever reaching 6s is a genuine short click, toggling pitch
- * bend -- real feedback: "when you press sentia button once it turns on
- * and off the pitch bend." */
+ * firing exactly once per hold via its own *_fired latch. */
 static void handle_circle_hold(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
 
@@ -2160,16 +2088,9 @@ static void handle_circle_hold(uint32_t now_ms) {
             s_last_activity_ms = now_ms;
             enter_standby(now_ms);
             s_manual_screensaver = true;
-        } else if (!s_circle_screensaver_fired) {
-            handle_circle_shift_input();
         }
-    } else if (s_circle_was_held && !s_circle_screensaver_fired && !s_circle_deep_sleep_fired) {
-        /* Released without ever reaching a long-press gesture -- a
-         * genuine short click. */
-        tiles_expression_toggle_pitch_bend();
     }
 
-    render_circle_led(held);
     s_circle_was_held = held;
 }
 
@@ -2250,15 +2171,8 @@ void tiles_standby_init(void) {
     s_circle_was_held = false;
     s_circle_screensaver_fired = false;
     s_circle_deep_sleep_fired = false;
-    s_shift_prev_minus = false;
-    s_shift_prev_plus = false;
     s_scroll_prev_minus = false;
     s_scroll_prev_plus = false;
-    /* Claims circle's LED permanently, same one-time-forever pattern
-     * octave_control.c uses for SW1/SW2 -- see CIRCLE_LED_HELD_LEVEL's
-     * own comment for why the default "lit while pressed" behavior needs
-     * to be overridden here. */
-    tiles_buttons_set_override_active(TILES_CIRCLE_BUTTON_ID, true);
     srand(now_ms);
 }
 
@@ -2348,14 +2262,4 @@ bool tiles_standby_is_deep_sleep(void) {
 
 bool tiles_standby_owns_octave_buttons(void) {
     return s_state == TILES_STANDBY_STATE_STANDBY && s_manual_screensaver;
-}
-
-/* True while circle is currently held down but hasn't yet reached the
- * 6s screensaver threshold -- the "shift" window handle_circle_shift_
- * input() owns SW1/SW2 during. Checked by octave_control.c so it
- * doesn't *also* silently step the octave/transpose key underneath an
- * intensity-adjustment press, the same deferral pattern it already uses
- * for tiles_game_mode_is_active()/tiles_standby_owns_octave_buttons(). */
-bool tiles_standby_circle_shift_active(void) {
-    return s_circle_was_held && !s_circle_screensaver_fired && !s_circle_deep_sleep_fired;
 }

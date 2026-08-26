@@ -7,6 +7,7 @@
 #include "note_map.h"
 #include "midi_out.h"
 #include "haptics.h"
+#include "expression_control.h"
 
 #include "pico/time.h"
 
@@ -206,8 +207,13 @@
  * instead of every pad capping out early to accommodate the single
  * least-sensitive one. A real per-pad calibration curve (correcting for
  * that spread individually) is still explicitly out of V1 scope -- see
- * hall.h. */
-#define DEPTH_TO_AFTERTOUCH_FULL_SCALE 900u
+ * hall.h.
+ *
+ * Runtime, not a fixed #define, so services/expression_control.h's
+ * sub-menu (row 4, aftertouch sensitivity) can adjust it live via
+ * tiles_expression_set_aftertouch_sensitivity() below. Defaults to
+ * exactly this same calibrated 900 value. */
+static uint16_t s_depth_to_aftertouch_full_scale = 900u;
 
 /* Aftertouch is meant to read like continuing pressure after the
  * strike, not raw per-sample noise -- an exponential moving average
@@ -235,7 +241,7 @@
  * while a note is already held (PAD_STATE_NOTE_ON), the same "only
  * matters once the strike itself is decided" scoping aftertouch already
  * uses. Toggled globally via tiles_expression_toggle_pitch_bend() (see
- * services/standby.c's circle-button short-click handling).
+ * services/expression_control.c's square-button short-click handling).
  *
  * The math: naively using raw X (or X minus a baseline captured once)
  * as "how far sideways" would fail the "compensate for vertical
@@ -298,8 +304,14 @@
  * data yet for how much a deliberate sideways push actually moves this
  * ratio on this board's magnet/sensor geometry, unlike the depth-based
  * constants elsewhere in this file. A first attempt at a sensitivity
- * that's neither "barely moves" nor "hits max bend from a light touch." */
-#define PITCH_BEND_MAX_COSINE_DEVIATION 0.15f
+ * that's neither "barely moves" nor "hits max bend from a light touch."
+ *
+ * Runtime, not a fixed #define, so services/expression_control.h's
+ * sub-menu (row 2, pitch bend sensitivity) can adjust it live via
+ * tiles_expression_set_pitch_bend_sensitivity() below -- a SMALLER value
+ * here means MORE sensitive (less real motion needed to reach full
+ * bend). Defaults to exactly this same 0.15 starting value. */
+static float s_pitch_bend_max_cosine_deviation = 0.15f;
 
 /* EMA smoothing on the cosine signal itself, same reasoning and same
  * starting value as AFTERTOUCH_SMOOTHING_ALPHA above -- a continuous,
@@ -412,6 +424,17 @@ static float s_pitch_bend_baseline_cosine;
 static float s_pitch_bend_smoothed_cosine;
 static uint16_t s_pitch_bend_last_sent;
 
+/* "Expression mute" -- services/expression_control.h's circle+square
+ * 3-second combo hold. A hard kill switch for pitch bend and poly
+ * aftertouch, deliberately separate from s_pitch_bend_enabled above
+ * (that's the player's own on/off preference; this overrides it
+ * entirely, on top, without disturbing what it was set to) -- unmuting
+ * restores exactly whatever tiles_expression_toggle_pitch_bend() state
+ * was already in effect before muting. Note-on/off/velocity are read
+ * directly from touch+Hall, never gated by this flag -- see
+ * tiles_expression_set_muted()'s own comment. */
+static bool s_expression_muted;
+
 void tiles_expression_init(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_pads[i] = (pad_expr_t){0};
@@ -420,6 +443,7 @@ void tiles_expression_init(void) {
     s_pitch_bend_enabled = false;
     s_pitch_bend_owner_pad = 0u;
     s_pitch_bend_last_sent = PITCH_BEND_CENTER;
+    s_expression_muted = false;
 }
 
 /* See this file's "Pitch bend from sideways motion" section for the
@@ -444,7 +468,7 @@ static float hall_x_direction_cosine(int16_t x, int16_t y, int16_t z) {
  * baseline) to the 14-bit MIDI pitch bend wire value -- see
  * PITCH_BEND_MAX_COSINE_DEVIATION's own comment. */
 static uint16_t pitch_bend_14bit_from_cosine_delta(float delta) {
-    float normalized = delta / PITCH_BEND_MAX_COSINE_DEVIATION;
+    float normalized = delta / s_pitch_bend_max_cosine_deviation;
     if (normalized > 1.0f) {
         normalized = 1.0f;
     }
@@ -462,10 +486,10 @@ static uint16_t pitch_bend_14bit_from_cosine_delta(float delta) {
 }
 
 /* Real feedback: "when you press sentia button once it turns on and off
- * the pitch bend" -- called by services/standby.c on a genuine circle
- * (SW6) short click (see its own handle_circle_hold()). Turning it off
- * while a note currently owns the bend resets to center immediately
- * rather than leaving that note stuck bent. */
+ * the pitch bend" -- called by services/expression_control.h on a
+ * genuine square ("sentia") short click. Turning it off while a note
+ * currently owns the bend resets to center immediately rather than
+ * leaving that note stuck bent. */
 void tiles_expression_toggle_pitch_bend(void) {
     s_pitch_bend_enabled = !s_pitch_bend_enabled;
     printf("[expression] pitch bend %s\n", s_pitch_bend_enabled ? "enabled" : "disabled");
@@ -478,6 +502,32 @@ void tiles_expression_toggle_pitch_bend(void) {
 
 bool tiles_expression_is_pitch_bend_enabled(void) {
     return s_pitch_bend_enabled;
+}
+
+void tiles_expression_set_pitch_bend_sensitivity(float max_cosine_deviation) {
+    s_pitch_bend_max_cosine_deviation = max_cosine_deviation;
+    printf("[expression] pitch bend sensitivity (max cosine deviation) now %.3f\n",
+           (double)s_pitch_bend_max_cosine_deviation);
+}
+
+void tiles_expression_set_aftertouch_sensitivity(uint16_t depth_full_scale) {
+    /* Never 0 -- aftertouch_from_depth() divides by this. */
+    s_depth_to_aftertouch_full_scale = depth_full_scale > 0u ? depth_full_scale : 1u;
+    printf("[expression] aftertouch sensitivity (full-scale depth) now %u\n", s_depth_to_aftertouch_full_scale);
+}
+
+void tiles_expression_set_muted(bool muted) {
+    s_expression_muted = muted;
+    printf("[expression] muted=%d\n", (int)s_expression_muted);
+    if (muted && s_pitch_bend_owner_pad != 0u) {
+        /* Same "never leave a note stuck bent" rule
+         * tiles_expression_toggle_pitch_bend() already follows -- reset
+         * to center immediately rather than waiting for that note's own
+         * release/retrigger to clear it. */
+        tiles_midi_send_pitch_bend(PITCH_BEND_CENTER);
+        s_pitch_bend_last_sent = PITCH_BEND_CENTER;
+        s_pitch_bend_owner_pad = 0u;
+    }
 }
 
 static void begin_awaiting_strike(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
@@ -524,7 +574,7 @@ static uint8_t velocity_from_strike_time(uint32_t strike_time_ms) {
 }
 
 static uint8_t aftertouch_from_depth(uint16_t depth) {
-    uint32_t scaled = ((uint32_t)depth * 127u) / DEPTH_TO_AFTERTOUCH_FULL_SCALE;
+    uint32_t scaled = ((uint32_t)depth * 127u) / s_depth_to_aftertouch_full_scale;
     return (uint8_t)(scaled > 127u ? 127u : scaled);
 }
 
@@ -532,9 +582,9 @@ static uint8_t aftertouch_from_depth(uint16_t depth) {
  * see this file's "Pitch bend from sideways motion" section. If a
  * DIFFERENT pad currently owns the bend (still held from an earlier
  * strike), resets to center first so this new note doesn't inherit its
- * offset. No-op if pitch bend is disabled. */
+ * offset. No-op if pitch bend is disabled or expression mute is active. */
 static void claim_pitch_bend_owner(uint8_t pad) {
-    if (!s_pitch_bend_enabled) {
+    if (!s_pitch_bend_enabled || s_expression_muted) {
         return;
     }
     if (s_pitch_bend_owner_pad != 0u && s_pitch_bend_owner_pad != pad) {
@@ -577,7 +627,13 @@ void tiles_expression_scan(void) {
             raw_touched || (s->last_touched_valid && (now_ms - s->last_touched_ms) < TOUCH_DROPOUT_GRACE_MS);
 
         if (s->state == PAD_STATE_IDLE) {
-            if (touched) {
+            /* services/expression_control.h's sub-menu (circle+square
+             * held) claims the pad grid for its own slider taps -- a
+             * fresh touch while it's showing must never also start a
+             * real strike underneath. A pad already past IDLE when the
+             * sub-menu opens is deliberately left alone (see the loop
+             * below), only a brand-new touch is suppressed here. */
+            if (touched && !tiles_expression_control_owns_pad_grid()) {
                 begin_awaiting_strike(s, pad, now_ms);
                 /* Touch-only haptic acknowledgment, independent of
                  * whether this ever becomes a real press -- see
@@ -712,7 +768,14 @@ void tiles_expression_scan(void) {
         uint8_t at = aftertouch_from_depth((uint16_t)s->smoothed_depth);
         if (at != s->last_sent_aftertouch) {
             s->last_sent_aftertouch = at;
-            tiles_midi_send_poly_aftertouch(s->active_note, at);
+            /* "Expression mute" (services/expression_control.h) silences
+             * poly aftertouch specifically -- basic note-on/off/velocity
+             * above are unaffected. tiles_haptics_set_sustain_level()
+             * doesn't need a matching guard here: haptics.c's own mute
+             * flag already makes it a no-op (see tiles_haptics_set_muted). */
+            if (!s_expression_muted) {
+                tiles_midi_send_poly_aftertouch(s->active_note, at);
+            }
             tiles_haptics_set_sustain_level(pad, at);
         }
 

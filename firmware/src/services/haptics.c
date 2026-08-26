@@ -187,8 +187,44 @@ void tiles_haptics_adjust_intensity(int8_t direction) {
     printf("[haptics] intensity now %.2f\n", (double)s_haptic_intensity);
 }
 
+void tiles_haptics_set_intensity(float level_0_to_1) {
+    if (level_0_to_1 < HAPTIC_INTENSITY_MIN) {
+        level_0_to_1 = HAPTIC_INTENSITY_MIN;
+    }
+    if (level_0_to_1 > HAPTIC_INTENSITY_MAX) {
+        level_0_to_1 = HAPTIC_INTENSITY_MAX;
+    }
+    s_haptic_intensity = level_0_to_1;
+    printf("[haptics] intensity set directly to %.2f\n", (double)s_haptic_intensity);
+}
+
 float tiles_haptics_get_intensity(void) {
     return s_haptic_intensity;
+}
+
+/* Expression mute (services/expression_control.h's circle+square 3s
+ * combo) -- a hard kill switch for every haptic effect, separate from
+ * s_haptic_intensity above (that's "how strong," this is "on at all").
+ * Checked at the top of every trigger/update entry point below rather
+ * than folded into set_motor_level()'s scalar, so a currently-decaying
+ * SUSTAIN's slew state doesn't keep silently computing toward a target
+ * that will never actually reach the motor -- muting hard-stops
+ * immediately instead. */
+static bool s_haptic_muted;
+
+void tiles_haptics_set_muted(bool muted) {
+    s_haptic_muted = muted;
+    if (muted) {
+        /* Immediately cut every currently-active motor -- real feedback's
+         * "hard-stop any currently-active haptics" requirement, not just
+         * "stop triggering new ones." tiles_haptics_stop() is already a
+         * no-op for an IDLE pad, so this is safe to call unconditionally
+         * across all 24. */
+        for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+            tiles_haptics_stop(pad);
+        }
+    }
+    printf("[haptics] muted=%d\n", (int)s_haptic_muted);
 }
 
 /* Mirrors services/buttons.c's set_button_led_level(), parameterized on
@@ -323,6 +359,7 @@ void tiles_haptics_init(void) {
         s_pads[i].phase = HAPTIC_PHASE_IDLE;
     }
     s_next_kick_slot_ms = 0u;
+    s_haptic_muted = false;
 }
 
 /* Actually begins driving the motor: the overdrive spike (see
@@ -357,6 +394,9 @@ static void start_kick_now(uint8_t idx, const tiles_pad_config_t *cfg, uint8_t v
 }
 
 void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
+    if (s_haptic_muted) {
+        return;
+    }
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
         return;
     }
@@ -425,6 +465,9 @@ void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
  * real feedback for a touch acknowledgment -- the pulse is a nicety, a
  * real strike's own feedback always takes priority. */
 void tiles_haptics_trigger_touch_pulse(uint8_t logical_pad) {
+    if (s_haptic_muted) {
+        return;
+    }
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
         return;
     }
@@ -453,6 +496,9 @@ void tiles_haptics_trigger_touch_pulse(uint8_t logical_pad) {
 }
 
 void tiles_haptics_set_sustain_level(uint8_t logical_pad, uint8_t aftertouch_0_127) {
+    if (s_haptic_muted) {
+        return;
+    }
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
         return;
     }

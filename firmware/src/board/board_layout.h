@@ -50,6 +50,11 @@ static inline uint8_t board_button_for_col(uint8_t col) {
 #define TILES_CIRCLE_BUTTON_ID 6u
 #define TILES_CIRCLE_BUTTON_COL 6u
 
+/* SW5 (square), one left of circle -- "sentia" button, a secondary
+ * modifier for expression features (services/expression_control.h). */
+#define TILES_SQUARE_BUTTON_ID 5u
+#define TILES_SQUARE_BUTTON_COL 5u
+
 #define TILES_NUM_UNDERGLOW_ANCHORS 4u
 
 static const tiles_grid_point_t g_tiles_underglow_anchor[TILES_NUM_UNDERGLOW_ANCHORS] = {

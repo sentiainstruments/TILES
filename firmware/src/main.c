@@ -16,11 +16,15 @@
  * services/standby.h), a power-on animation that doubles as a Hall
  * baseline re-capture window (see services/boot_sequence.h), SW1/SW2's
  * default octave-shift function (see services/octave_control.h),
- * player-controlled minigames toggled by holding SW3-SW6 (real snake +
- * brick breaker, distinct from standby's autonomous versions of the
- * same -- see services/game_mode.h), and a serial-driven Hall
- * calibration capture tool (rest/full-press/max-press snapshots -- see
- * diagnostics/calibration.h). Not yet built:
+ * SW5/square ("sentia")'s pitch-bend toggle + haptic-intensity shift,
+ * and its combo with SW6/circle for a 4-row pad-slider expression
+ * sub-menu (haptics/pitch-bend/aftertouch sensitivity, one reserved
+ * row) plus a 3-second-hold expression mute (see
+ * services/expression_control.h), player-controlled minigames toggled
+ * by holding SW3-SW6 (real snake + brick breaker, distinct from
+ * standby's autonomous versions of the same -- see services/game_mode.h),
+ * and a serial-driven Hall calibration capture tool (rest/full-press/
+ * max-press snapshots -- see diagnostics/calibration.h). Not yet built:
  * MPE, DIN, CV/gate, the usb_vendor diagnostics interface, a real
  * per-pad Hall calibration curve (this is capture only, no curve is
  * derived or applied yet) -- added module by module per the bring-up
@@ -42,6 +46,7 @@
 #include "services/boot_sequence.h"
 #include "services/buttons.h"
 #include "services/expression.h"
+#include "services/expression_control.h"
 #include "services/game_mode.h"
 #include "services/hall.h"
 #include "services/haptics.h"
@@ -112,6 +117,14 @@ int main(void) {
      * per-button override -- needs tiles_buttons_init() (above) already
      * run. See services/octave_control.h. */
     tiles_octave_control_init();
+
+    /* SW5 (square, "sentia")'s function-button role: pitch-bend toggle,
+     * a simple haptic-intensity shift, and (combined with SW6/circle)
+     * the expression sub-menu + mute. Claims square's LED via the same
+     * per-button override mechanism octave_control.c uses for SW1/SW2 --
+     * needs tiles_buttons_init() (above) already run. See
+     * services/expression_control.h. */
+    tiles_expression_control_init();
 
     /* Phase 3/5 bring-up: capacitive touch. */
     if (!tiles_touch_init()) {
@@ -207,19 +220,28 @@ int main(void) {
         tiles_octave_control_scan();
         tiles_touch_scan();
         tiles_pedal_scan();
+        /* Must run after tiles_buttons_scan() (fresh circle/square
+         * state) and tiles_touch_scan() (fresh touch state for the
+         * expression sub-menu's slider taps) above, and before
+         * tiles_expression_scan() below so this tick's fresh "does the
+         * sub-menu own the grid" state gates new-strike suppression
+         * correctly. See services/expression_control.h. */
+        tiles_expression_control_scan();
         /* Must run after tiles_buttons_scan()/tiles_touch_scan() above
          * so this iteration's entry-gesture/in-game-control/menu-
          * selection input is fresh. See services/game_mode.h. */
         tiles_game_mode_scan();
-        /* Must run after the three scans above so this iteration's
-         * activity check sees fresh state -- see services/standby.h.
-         * Skipped entirely while game mode or octave_control.c's
-         * transpose mode owns the rendering path, so standby's own idle
-         * timer can't fire mid-game/mid-transpose and fight either of
-         * them over the same pads/buttons/underglow -- see
-         * services/game_mode.h's and services/octave_control.h's file
-         * headers for the full reasoning. */
-        if (!tiles_game_mode_is_active() && !tiles_octave_control_is_transpose_active()) {
+        /* Must run after the scans above so this iteration's activity
+         * check sees fresh state -- see services/standby.h. Skipped
+         * entirely while game mode, octave_control.c's transpose mode,
+         * or expression_control.c's sub-menu owns the rendering path, so
+         * standby's own idle timer can't fire mid-game/mid-transpose/
+         * mid-sub-menu and fight any of them over the same pads/buttons/
+         * underglow -- see services/game_mode.h's,
+         * services/octave_control.h's, and services/expression_control.h's
+         * file headers for the full reasoning. */
+        if (!tiles_game_mode_is_active() && !tiles_octave_control_is_transpose_active() &&
+            !tiles_expression_control_owns_pad_grid()) {
             tiles_standby_scan();
         }
         tiles_lighting_service();

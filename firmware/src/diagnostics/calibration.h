@@ -27,7 +27,7 @@
  * This does NOT persist anything (storage/ doesn't exist yet) or
  * compute/apply a calibration curve automatically -- it prints raw
  * numbers for a human to read off the terminal and use to pick real
- * constants (e.g. expression.c's DEPTH_TO_AFTERTOUCH_FULL_SCALE,
+ * constants (e.g. expression.c's aftertouch full-scale depth default,
  * standby.c's TILES_STANDBY_HALL_WAKE_DEPTH) instead of guessing, and
  * that picking/editing still happens by hand afterward.
  */

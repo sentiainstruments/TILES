@@ -46,24 +46,11 @@
  * *_fired flags) so a single long hold can't re-fire, and both are
  * handled unconditionally every scan regardless of current state.
  *
- * Below 6s, circle is now the first real user of the general-purpose
- * "shift"/modifier role octave_control.h already reserved SW1/SW2's
- * future for -- real feedback: "remember and set up circle as our
- * general shift button unless pressed for the intervals we said," then,
- * once there was something to actually assign it: "when you press
- * sentia button once it turns on and off the pitch bend... when you
- * hold and press - or + you can adjust intensity of haptics on device."
- * A short click (press+release before 6s, neither long-press gesture
- * fired) toggles services/expression.c's pitch bend on/off; while circle
- * is held (still below 6s), SW1/SW2 adjust services/haptics.c's global
- * intensity scalar instead of their normal octave-shift function -- see
- * handle_circle_shift_input() and tiles_standby_circle_shift_active()
- * (checked by octave_control.c the same way it already checks
- * tiles_standby_owns_octave_buttons()). Circle's own LED reflects the
- * pitch-bend toggle state once released (solid, slightly dimmer than
- * normal press feedback, when on; dark when off) -- claimed via the same
- * per-button override mechanism (services/buttons.h) octave_control.c
- * uses for SW1/SW2, see render_circle_led() in standby.c.
+ * Circle is also this board's general-purpose "shift"/power button --
+ * real feedback: "our shift and power button is circle" -- reserved for
+ * the screensaver/deep-sleep gestures above; any other modifier role
+ * lives elsewhere (see services/expression_control.h for square/
+ * "sentia"'s role).
  *
  * Deliberately a lighting-only concept: touch/Hall/expression/MIDI keep
  * running completely unaware standby exists (see standby.c's header for
@@ -129,13 +116,3 @@ bool tiles_standby_is_deep_sleep(void);
  * tiles_game_mode_is_active()) so a scroll press doesn't *also*
  * silently step the octave/transpose key underneath. */
 bool tiles_standby_owns_octave_buttons(void);
-
-/* True only while circle (SW6) is currently held down but hasn't yet
- * reached the 6s screensaver threshold -- see standby.c's
- * handle_circle_shift_input(). While true, SW1/SW2 are repurposed here
- * as haptic-intensity controls instead of their normal octave_control.c
- * function, and octave_control.c must skip its own SW1/SW2 handling
- * entirely (same deferral pattern as tiles_standby_owns_octave_buttons()
- * above) so an intensity-adjustment press doesn't *also* silently step
- * the octave/transpose key underneath. */
-bool tiles_standby_circle_shift_active(void);

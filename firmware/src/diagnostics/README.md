@@ -20,8 +20,8 @@ diagnostics down with it.
   temporary stdio channel as `i2c_scan`: single-character serial
   commands ('r' recapture rest baseline, 'f'/'m' snapshot regular-full-
   press/max-press depth against that baseline) print per-pad tables +
-  averages for a human to read and hand-pick real constants from (e.g.
-  `services/expression.c`'s `DEPTH_TO_AFTERTOUCH_FULL_SCALE`,
+  averages for a human to read and hand-pick real constants/defaults from
+  (e.g. `services/expression.c`'s aftertouch full-scale depth default,
   `services/standby.c`'s `TILES_STANDBY_HALL_WAKE_DEPTH`). Doesn't
   persist anything or derive/apply a calibration curve itself --
   `storage/` and a real per-pad curve don't exist yet.
@@ -35,8 +35,10 @@ diagnostics down with it.
   turned out to already be each pad's mechanical bottom-out (no
   meaningfully-different "harder" position past a normal full press, so
   the 'm' max-press step wasn't needed this session). Used to set
-  `DEPTH_TO_AFTERTOUCH_FULL_SCALE` to 900 -- see `services/README.md`'s
-  `expression.h` entry for the reasoning. `TILES_STANDBY_HALL_WAKE_DEPTH`
+  `expression.c`'s aftertouch full-scale depth default to 900 (now a
+  runtime value, adjustable live via `services/expression_control.h`'s
+  sub-menu row 4 -- see `services/README.md`'s `expression.h` entry for
+  the reasoning). `TILES_STANDBY_HALL_WAKE_DEPTH`
   has NOT been picked from this data yet and Hall-wake stays disabled --
   a wake threshold needs a light-touch data point this session didn't
   capture (only rest and full-press), not just re-running the same two

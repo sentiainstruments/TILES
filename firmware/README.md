@@ -139,8 +139,9 @@ first on-hardware note-on test.
   fusion deriving real velocity (from elapsed time to reach a real
   press, not acceleration -- see `services/README.md` for why that
   changed), aftertouch (from press depth), and optional pitch bend
-  (from sideways Hall motion while held, toggled via the circle button)
-  -- see `services/README.md` for the state machine and the
+  (from sideways Hall motion while held, toggled via the square/"sentia"
+  button -- see `services/expression_control.h`) -- see
+  `services/README.md` for the state machine and the
   explicitly-unmeasured scaling constants.
   `power` done for V1: derives USB-only/external-only/both/fault from
   GP22 + TinyUSB's mounted state (debounced), exposing both a live
@@ -163,19 +164,20 @@ first on-hardware note-on test.
   controls (a longer, 20-minute deep-sleep timeout applies while in this
   manual mode); holding it further, to 10s, escalates straight into that
   *same* deep sleep state directly -- not a separate blank state, per
-  real feedback that the two should be one and the same thing. Circle
-  now also has a real "shift" role below that 6s threshold: a short
-  click toggles `services/expression.c`'s pitch bend on/off (with its
-  own LED reflecting the toggle state), and holding circle while
-  tapping SW1/SW2 adjusts `services/haptics.c`'s global intensity
-  scalar -- the first real use of the general-purpose modifier role
-  this button was reserved for. See
-  `services/README.md` for
-  the button-column/underglow-anchor mapping assumptions this still
-  needs verified on real hardware, for a real bug this rework fixed
-  (standby pads were routing through the touch-driven idle-baseline
-  floor, so they never actually reached true black), and for the full
-  circle-button gesture writeup.
+  real feedback that the two should be one and the same thing. Circle is
+  this board's shift/power button and stays scoped to exactly these two
+  gestures -- an earlier pass built a pitch-bend-toggle + haptic-shift
+  "modifier" role directly onto circle here, on a misreading of which
+  physical button "sentia" is; real feedback corrected it ("our shift
+  and power button is circle. sentia is square button") and that
+  behavior was moved out to `services/expression_control.h`/`.c`
+  entirely (SW5/square, plus a circle+square combo for a fuller
+  expression sub-menu + mute -- see that file's own writeup). See
+  `services/README.md` for the button-column/underglow-anchor mapping
+  assumptions this still needs verified on real hardware, and for a real
+  bug this rework fixed (standby pads were routing through the
+  touch-driven idle-baseline floor, so they never actually reached true
+  black).
   `boot_sequence` done for V1: a ~4-second power-on animation (white
   "rain" flooding down through the pad grid, fade to black, a slow
   smoothstep-eased magenta pulse across pads + underglow) that also
@@ -215,9 +217,11 @@ first on-hardware note-on test.
   `printf` on every dropped kick (mode/ceiling/active-voice-count) is
   meant to confirm this next session, see `services/README.md`. Also
   drives a separate, lighter touch-only pulse (independent of the
-  note-strike kick, fired on capacitive contact alone) and a global
-  intensity scalar adjustable via the circle button's "shift" gesture --
-  see `services/README.md` for both.
+  note-strike kick, fired on capacitive contact alone), a global
+  intensity scalar adjustable via the square button's "shift" gesture,
+  and a hard expression-mute kill switch
+  (`services/expression_control.h`'s circle+square 3-second combo) --
+  see `services/README.md` for all three.
   Everything else (a real per-pad Hall calibration
   curve -- capture-only exists, see `diagnostics/`; DIN MIDI; CV/gate)
   not built.
@@ -302,11 +306,18 @@ flashable `.uf2`.
   guesses, and whether excluding SW1/SW2 (and circle itself) from the
   wake check while scrolling actually feels right in practice (versus,
   say, accidentally exiting scroll mode) hasn't been observed yet.
-  Circle's new "shift" role (short click toggles pitch bend, hold +
+  Square's "sentia" role (short click toggles pitch bend, hold alone +
   SW1/SW2 adjusts haptic intensity, its own LED reflecting the toggle
-  state) is also completely untested on real hardware -- `CIRCLE_LED_
-  TOGGLE_ON_LEVEL`'s "close to full brightness, not by a lot" and
-  `HAPTIC_INTENSITY_STEP`'s step size are both first guesses.
+  state -- see `services/expression_control.h`) is also completely
+  untested on real hardware -- `SQUARE_LED_TOGGLE_ON_LEVEL`'s "close to
+  full brightness, not by a lot" and `HAPTIC_INTENSITY_STEP`'s step size
+  are both first guesses. The circle+square expression sub-menu (4 rows
+  of pad sliders for haptics/pitch-bend/aftertouch sensitivity, one
+  reserved row) and its 3-second-hold expression mute are equally
+  untested -- the column-to-value mapping for every row, the mute LED's
+  blink pacing, and even whether the Sentia Magenta selected-pad color
+  reads clearly against the sub-menu's otherwise-dark grid are all first
+  attempts, not measurements.
 - `services/boot_sequence.c`: seen on real hardware twice now, reworked
   three times total -- direction/pacing, then buttons dropped entirely
   after residual glow was still visible with only the magenta phase
@@ -388,8 +399,8 @@ flashable `.uf2`.
   a real, confirmed-in-a-debug-capture bug, since raised to 0.6, but
   that fix itself hasn't been re-verified yet. A new global intensity
   scalar (`tiles_haptics_adjust_intensity()`, driven by
-  `services/standby.c`'s circle-button "shift" gesture) applies uniformly
-  to every effect -- also untested. True active braking isn't
+  `services/expression_control.c`'s square-button "shift" gesture)
+  applies uniformly to every effect -- also untested. True active braking isn't
   physically possible on this board (single low-side NMOS per motor, no
   H-bridge, no haptic driver IC) -- the GAP phase's hard cutoff is the
   closest achievable substitute for stopping quickly, and the overdrive
@@ -468,9 +479,12 @@ flashable `.uf2`.
   with the field's direction (X divided by total magnitude, a distance-
   invariant direction cosine) instead of its raw magnitude -- the same
   principle real 3-axis Hall-effect joysticks use. Toggled via a genuine
-  circle-button short click, with only one pad ever "owning" the shared
-  MIDI channel's bend at a time (this project has no MPE yet, so pitch
-  bend is unavoidably channel-wide -- see `midi/README.md`). Not yet
+  square-button ("sentia") short click (an earlier pass wired this to
+  circle by mistake before real feedback corrected which physical button
+  "sentia" is -- see `services/expression_control.h`), with only one pad
+  ever "owning" the shared MIDI channel's bend at a time (this project
+  has no MPE yet, so pitch bend is unavoidably channel-wide -- see
+  `midi/README.md`). Not yet
   hardware-verified at all -- see `services/README.md`'s `expression.h`
   entry for the full physics reasoning.
 - MPR121 touch thresholds started at Freescale's generic quickstart
