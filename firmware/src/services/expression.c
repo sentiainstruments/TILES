@@ -224,6 +224,89 @@
  * full-press depth, not how noisy a held reading is). */
 #define AFTERTOUCH_SMOOTHING_ALPHA 0.35f
 
+/* ---- Pitch bend from sideways motion -----------------------------------
+ * Real feedback: "pitch bend on sideways motion for pads. This is only
+ * relevant after the initial velocity and should compensate for
+ * vertical movement in magnet and drift from aftertouch. Make sure the
+ * math is solid before implementing."
+ *
+ * Only relevant after the initial velocity: strike detection (above)
+ * never touches X/Y at all -- pitch bend is computed and sent only
+ * while a note is already held (PAD_STATE_NOTE_ON), the same "only
+ * matters once the strike itself is decided" scoping aftertouch already
+ * uses. Toggled globally via tiles_expression_toggle_pitch_bend() (see
+ * services/standby.c's circle-button short-click handling).
+ *
+ * The math: naively using raw X (or X minus a baseline captured once)
+ * as "how far sideways" would fail the "compensate for vertical
+ * movement... and drift from aftertouch" requirement directly -- a
+ * magnetic dipole's field strength changes with distance (Z depth), so
+ * X's raw magnitude changes too as a pad is pressed harder or eased off
+ * during aftertouch, even with ZERO real lateral motion. That would
+ * read as spurious pitch bend drift every time the player simply
+ * presses harder or softer, which is exactly the failure mode called
+ * out.
+ *
+ * Fix: work with the field's DIRECTION, not its raw magnitude. For a
+ * magnetic dipole, the ratio between an off-axis field component and
+ * the total field magnitude (X / |B|, where |B| = sqrt(x^2+y^2+z^2)) is
+ * a direction cosine -- it depends only on the angular position
+ * relative to the dipole's axis, not on distance from it. Two field
+ * readings at the same lateral tilt angle but different Z depths (a
+ * harder or softer press, or aftertouch drift) produce the same
+ * direction cosine even though X, Y, and Z individually all change
+ * together with distance -- dividing by the total magnitude cancels
+ * that shared distance-dependence out, leaving (to first order) just
+ * the angle. This is the same principle real 3-axis Hall-effect
+ * joysticks use to derive tilt independent of plunger depth.
+ * hall_x_direction_cosine() below computes this cosine from a raw
+ * sample; claim_pitch_bend_owner() seeds a per-note baseline cosine
+ * (s_pitch_bend_baseline_cosine) at the exact moment a note fires
+ * (mirroring how aftertouch seeds smoothed_depth at note-on, not from
+ * 0), and everything sent afterward is the CHANGE in cosine from that
+ * baseline -- so a strike landing at a slightly different rest tilt
+ * than pad-to-pad manufacturing variance would otherwise imply doesn't
+ * matter; only lateral motion *during* the held note does.
+ *
+ * Single hardware axis (X) chosen as "sideways" -- this project has no
+ * hardware documentation on which local Hall axis corresponds to which
+ * physical direction on a mounted pad, and MIDI pitch bend is
+ * inherently one-dimensional (a single 14-bit value) regardless, so Y
+ * is left unused for now rather than guessing how to blend two axes
+ * into one bend value. Trivially swappable for Y once seen on real
+ * hardware if X turns out to be the wrong physical axis.
+ *
+ * Real MIDI limitation, not a bug: this project is single-channel (see
+ * midi_out.h's own "V1 scope" note, no MPE per-note channel allocation
+ * yet), and Pitch Bend Change is a channel-wide message with no per-note
+ * addressing in the MIDI spec itself -- there is no way to bend one held
+ * note's pitch without also bending every other note currently held on
+ * the same channel. Rather than send confusing, undefined-feeling output
+ * when multiple pads are held, this module tracks a single "owner" pad
+ * (s_pitch_bend_owner_pad, 0 = none) -- only the most recently struck
+ * pad drives the shared channel's bend; when ownership changes (a new
+ * strike while another pad is still held) or the owner releases, bend is
+ * explicitly reset to center (8192) first so a new or otherwise-still-
+ * held note never inherits a stale bend offset. Playing one pad at a
+ * time behaves exactly as expected; holding a chord and bending is a
+ * known, deliberate simplification -- true independent per-note bend
+ * needs real MPE channel allocation, out of V1 scope. */
+#define PITCH_BEND_CENTER 8192u
+
+/* Cosine delta (see the section comment above) that maps to the full
+ * +/-8191 MIDI range. Unmeasured -- there is no captured real-hardware
+ * data yet for how much a deliberate sideways push actually moves this
+ * ratio on this board's magnet/sensor geometry, unlike the depth-based
+ * constants elsewhere in this file. A first attempt at a sensitivity
+ * that's neither "barely moves" nor "hits max bend from a light touch." */
+#define PITCH_BEND_MAX_COSINE_DEVIATION 0.15f
+
+/* EMA smoothing on the cosine signal itself, same reasoning and same
+ * starting value as AFTERTOUCH_SMOOTHING_ALPHA above -- a continuous,
+ * held signal benefits from smoothing against raw per-sample sensor
+ * noise the way a one-shot transient measurement (velocity) would not. */
+#define PITCH_BEND_SMOOTHING_ALPHA 0.35f
+
 typedef enum {
     PAD_STATE_IDLE = 0,
     PAD_STATE_AWAITING_STRIKE,
@@ -318,11 +401,83 @@ typedef struct {
 
 static pad_expr_t s_pads[TILES_NUM_PADS];
 
+/* Pitch bend is module-level, not per-pad, because -- see this file's
+ * "Pitch bend from sideways motion" section -- only ever one pad "owns"
+ * the single shared MIDI channel's bend at a time; there is no
+ * meaningful per-pad bend state to keep for a pad that isn't the
+ * current owner. */
+static bool s_pitch_bend_enabled;
+static uint8_t s_pitch_bend_owner_pad; /* 0 = no owner */
+static float s_pitch_bend_baseline_cosine;
+static float s_pitch_bend_smoothed_cosine;
+static uint16_t s_pitch_bend_last_sent;
+
 void tiles_expression_init(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_pads[i] = (pad_expr_t){0};
         s_pads[i].state = PAD_STATE_IDLE;
     }
+    s_pitch_bend_enabled = false;
+    s_pitch_bend_owner_pad = 0u;
+    s_pitch_bend_last_sent = PITCH_BEND_CENTER;
+}
+
+/* See this file's "Pitch bend from sideways motion" section for the
+ * physics reasoning -- a direction cosine of the raw sample's X
+ * component relative to the total field magnitude, invariant (to first
+ * order) to Z depth for a fixed real lateral tilt. */
+static float hall_x_direction_cosine(int16_t x, int16_t y, int16_t z) {
+    float fx = (float)x;
+    float fy = (float)y;
+    float fz = (float)z;
+    float magnitude = sqrtf(fx * fx + fy * fy + fz * fz);
+    if (magnitude < 1.0f) {
+        /* Guards a near-zero field reading (shouldn't happen with a real
+         * magnet present) from a divide-by-near-zero blowing the ratio
+         * up -- reads as "no lateral information yet" rather than noise. */
+        return 0.0f;
+    }
+    return fx / magnitude;
+}
+
+/* Maps a cosine delta (current direction cosine minus this note's
+ * baseline) to the 14-bit MIDI pitch bend wire value -- see
+ * PITCH_BEND_MAX_COSINE_DEVIATION's own comment. */
+static uint16_t pitch_bend_14bit_from_cosine_delta(float delta) {
+    float normalized = delta / PITCH_BEND_MAX_COSINE_DEVIATION;
+    if (normalized > 1.0f) {
+        normalized = 1.0f;
+    }
+    if (normalized < -1.0f) {
+        normalized = -1.0f;
+    }
+    int32_t bend = (int32_t)PITCH_BEND_CENTER + (int32_t)(normalized * 8191.0f);
+    if (bend < 0) {
+        bend = 0;
+    }
+    if (bend > 16383) {
+        bend = 16383;
+    }
+    return (uint16_t)bend;
+}
+
+/* Real feedback: "when you press sentia button once it turns on and off
+ * the pitch bend" -- called by services/standby.c on a genuine circle
+ * (SW6) short click (see its own handle_circle_hold()). Turning it off
+ * while a note currently owns the bend resets to center immediately
+ * rather than leaving that note stuck bent. */
+void tiles_expression_toggle_pitch_bend(void) {
+    s_pitch_bend_enabled = !s_pitch_bend_enabled;
+    printf("[expression] pitch bend %s\n", s_pitch_bend_enabled ? "enabled" : "disabled");
+    if (!s_pitch_bend_enabled && s_pitch_bend_owner_pad != 0u) {
+        tiles_midi_send_pitch_bend(PITCH_BEND_CENTER);
+        s_pitch_bend_last_sent = PITCH_BEND_CENTER;
+        s_pitch_bend_owner_pad = 0u;
+    }
+}
+
+bool tiles_expression_is_pitch_bend_enabled(void) {
+    return s_pitch_bend_enabled;
 }
 
 static void begin_awaiting_strike(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
@@ -371,6 +526,37 @@ static uint8_t velocity_from_strike_time(uint32_t strike_time_ms) {
 static uint8_t aftertouch_from_depth(uint16_t depth) {
     uint32_t scaled = ((uint32_t)depth * 127u) / DEPTH_TO_AFTERTOUCH_FULL_SCALE;
     return (uint8_t)(scaled > 127u ? 127u : scaled);
+}
+
+/* Claims pitch bend ownership for `pad` at the moment its note fires --
+ * see this file's "Pitch bend from sideways motion" section. If a
+ * DIFFERENT pad currently owns the bend (still held from an earlier
+ * strike), resets to center first so this new note doesn't inherit its
+ * offset. No-op if pitch bend is disabled. */
+static void claim_pitch_bend_owner(uint8_t pad) {
+    if (!s_pitch_bend_enabled) {
+        return;
+    }
+    if (s_pitch_bend_owner_pad != 0u && s_pitch_bend_owner_pad != pad) {
+        tiles_midi_send_pitch_bend(PITCH_BEND_CENTER);
+    }
+    s_pitch_bend_owner_pad = pad;
+    tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
+    s_pitch_bend_baseline_cosine = hall_x_direction_cosine(hs.x, hs.y, hs.z);
+    s_pitch_bend_smoothed_cosine = s_pitch_bend_baseline_cosine;
+    s_pitch_bend_last_sent = PITCH_BEND_CENTER;
+}
+
+/* Releases pitch bend ownership if `pad` currently holds it, resetting
+ * to center so the note ending doesn't leave a stale bend applied to
+ * whatever else might still be held (or to nothing at all). Safe to
+ * call unconditionally on every note-off/retrigger, enabled or not. */
+static void release_pitch_bend_owner_if(uint8_t pad) {
+    if (s_pitch_bend_owner_pad == pad) {
+        tiles_midi_send_pitch_bend(PITCH_BEND_CENTER);
+        s_pitch_bend_last_sent = PITCH_BEND_CENTER;
+        s_pitch_bend_owner_pad = 0u;
+    }
 }
 
 void tiles_expression_scan(void) {
@@ -467,6 +653,7 @@ void tiles_expression_scan(void) {
                 s->smoothed_depth = (float)tiles_hall_get_depth(pad);
                 s->note_on_ms = now_ms;
                 s->state = PAD_STATE_NOTE_ON;
+                claim_pitch_bend_owner(pad);
                 continue;
             }
 
@@ -492,6 +679,7 @@ void tiles_expression_scan(void) {
         if (!touched) {
             tiles_midi_note_off(s->active_note);
             tiles_haptics_stop(pad);
+            release_pitch_bend_owner_if(pad);
             s->state = PAD_STATE_IDLE;
             continue;
         }
@@ -511,6 +699,7 @@ void tiles_expression_scan(void) {
         if ((now_ms - s->note_on_ms) >= RETRIGGER_GRACE_MS && raw_depth <= RETRIGGER_ARM_DEPTH_DELTA) {
             tiles_midi_note_off(s->active_note);
             tiles_haptics_stop(pad);
+            release_pitch_bend_owner_if(pad);
             begin_awaiting_strike(s, pad, now_ms);
             continue;
         }
@@ -525,6 +714,25 @@ void tiles_expression_scan(void) {
             s->last_sent_aftertouch = at;
             tiles_midi_send_poly_aftertouch(s->active_note, at);
             tiles_haptics_set_sustain_level(pad, at);
+        }
+
+        /* Pitch bend: only the current owner pad drives the shared
+         * channel -- see this file's "Pitch bend from sideways motion"
+         * section. pad == 0 never matches a real logical pad, so this
+         * is naturally a no-op both while disabled and for every pad
+         * that isn't the owner, with no separate enabled check needed. */
+        if (pad == s_pitch_bend_owner_pad) {
+            tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
+            if (hs.valid) {
+                float cosine = hall_x_direction_cosine(hs.x, hs.y, hs.z);
+                s_pitch_bend_smoothed_cosine += PITCH_BEND_SMOOTHING_ALPHA * (cosine - s_pitch_bend_smoothed_cosine);
+                uint16_t bend =
+                    pitch_bend_14bit_from_cosine_delta(s_pitch_bend_smoothed_cosine - s_pitch_bend_baseline_cosine);
+                if (bend != s_pitch_bend_last_sent) {
+                    s_pitch_bend_last_sent = bend;
+                    tiles_midi_send_pitch_bend(bend);
+                }
+            }
         }
     }
 }

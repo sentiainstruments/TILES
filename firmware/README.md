@@ -136,9 +136,12 @@ first on-hardware note-on test.
   can't fight over the same pads/buttons/underglow. See
   `services/README.md` for the full reasoning.
   `expression` done for V1: touch+Hall
-  fusion deriving real velocity (from strike acceleration) and
-  aftertouch (from press depth) -- see `services/README.md` for the
-  state machine and the explicitly-unmeasured scaling constants.
+  fusion deriving real velocity (from elapsed time to reach a real
+  press, not acceleration -- see `services/README.md` for why that
+  changed), aftertouch (from press depth), and optional pitch bend
+  (from sideways Hall motion while held, toggled via the circle button)
+  -- see `services/README.md` for the state machine and the
+  explicitly-unmeasured scaling constants.
   `power` done for V1: derives USB-only/external-only/both/fault from
   GP22 + TinyUSB's mounted state (debounced), exposing both a live
   accessor and a change-callback so haptics/CV-gate can plug in once
@@ -160,7 +163,13 @@ first on-hardware note-on test.
   controls (a longer, 20-minute deep-sleep timeout applies while in this
   manual mode); holding it further, to 10s, escalates straight into that
   *same* deep sleep state directly -- not a separate blank state, per
-  real feedback that the two should be one and the same thing. See
+  real feedback that the two should be one and the same thing. Circle
+  now also has a real "shift" role below that 6s threshold: a short
+  click toggles `services/expression.c`'s pitch bend on/off (with its
+  own LED reflecting the toggle state), and holding circle while
+  tapping SW1/SW2 adjusts `services/haptics.c`'s global intensity
+  scalar -- the first real use of the general-purpose modifier role
+  this button was reserved for. See
   `services/README.md` for
   the button-column/underglow-anchor mapping assumptions this still
   needs verified on real hardware, for a real bug this rework fixed
@@ -204,13 +213,20 @@ first on-hardware note-on test.
   hard 0-voice ceiling, silently drops every kick), an untested-on-
   hardware GP22-derived mode that could be flickering transiently; a new
   `printf` on every dropped kick (mode/ceiling/active-voice-count) is
-  meant to confirm this next session, see `services/README.md`.
+  meant to confirm this next session, see `services/README.md`. Also
+  drives a separate, lighter touch-only pulse (independent of the
+  note-strike kick, fired on capacitive contact alone) and a global
+  intensity scalar adjustable via the circle button's "shift" gesture --
+  see `services/README.md` for both.
   Everything else (a real per-pad Hall calibration
   curve -- capture-only exists, see `diagnostics/`; DIN MIDI; CV/gate)
   not built.
 - `midi/` — composite USB CDC+MIDI device done (see `midi/README.md`);
-  note on/off with real velocity, poly aftertouch, and CC (sustain/
-  expression) all wired up, single MIDI channel. Not yet verified with
+  note on/off with real velocity, poly aftertouch, CC (sustain/
+  expression), and pitch bend all wired up, single MIDI channel --
+  pitch bend is channel-wide by MIDI's own spec, a real limitation
+  without MPE that `services/expression.c` works around with a single
+  "owner pad" concept, see `services/README.md`. Not yet verified with
   a real MIDI-receiving host. DIN MIDI and MPE channel allocation not
   built.
 - `usb_vendor/`, `profiles/`, `storage/` still empty module skeletons.
@@ -286,6 +302,11 @@ flashable `.uf2`.
   guesses, and whether excluding SW1/SW2 (and circle itself) from the
   wake check while scrolling actually feels right in practice (versus,
   say, accidentally exiting scroll mode) hasn't been observed yet.
+  Circle's new "shift" role (short click toggles pitch bend, hold +
+  SW1/SW2 adjusts haptic intensity, its own LED reflecting the toggle
+  state) is also completely untested on real hardware -- `CIRCLE_LED_
+  TOGGLE_ON_LEVEL`'s "close to full brightness, not by a lot" and
+  `HAPTIC_INTENSITY_STEP`'s step size are both first guesses.
 - `services/boot_sequence.c`: seen on real hardware twice now, reworked
   three times total -- direction/pacing, then buttons dropped entirely
   after residual glow was still visible with only the magenta phase
@@ -362,7 +383,13 @@ flashable `.uf2`.
   that). A new `HAPTIC_PHASE_TOUCH_PULSE`, fired the instant capacitive
   touch is detected regardless of whether a real press follows, is now
   in place (see `services/README.md`'s `haptics.h` entry) -- untested on
-  real hardware. True active braking isn't
+  real hardware; the duty (0.35, the same value already proven too weak
+  for the kick before it was raised to 0.65+) that duty had at first was
+  a real, confirmed-in-a-debug-capture bug, since raised to 0.6, but
+  that fix itself hasn't been re-verified yet. A new global intensity
+  scalar (`tiles_haptics_adjust_intensity()`, driven by
+  `services/standby.c`'s circle-button "shift" gesture) applies uniformly
+  to every effect -- also untested. True active braking isn't
   physically possible on this board (single low-side NMOS per motor, no
   H-bridge, no haptic driver IC) -- the GAP phase's hard cutoff is the
   closest achievable substitute for stopping quickly, and the overdrive
@@ -393,7 +420,7 @@ flashable `.uf2`.
   assumed to be the vertical-press axis for every pad (unverified per-
   pad), and `hall.c`'s depth is a raw, uncalibrated magnitude with no
   dead zone, offset correction, or saturation margin.
-- `services/expression.c`'s strike detection went through seven rounds
+- `services/expression.c`'s strike detection went through eight rounds
   of real-hardware feedback, each catching a genuine bug or forcing a
   real architectural change rather than a constant tweak -- see
   `services/README.md`'s `expression.h`/`.c` entry for the full blow-by-
@@ -431,6 +458,21 @@ flashable `.uf2`.
   after "haptic pulse on touch without pressure" was raised three times
   with increasingly specific wording (see `services/README.md`'s
   `haptics.h` entry).
+  Once strike detection and velocity felt solid ("it all feels fine for
+  now"), round 8 added pitch bend from sideways Hall motion while a note
+  is held -- real feedback explicitly asked that the math be solid
+  before implementing: "should compensate for vertical movement in
+  magnet and drift from aftertouch." A naive raw-X measurement would
+  fail that directly, since a magnetic dipole's field strength changes
+  with press depth even with zero real lateral motion; fixed by working
+  with the field's direction (X divided by total magnitude, a distance-
+  invariant direction cosine) instead of its raw magnitude -- the same
+  principle real 3-axis Hall-effect joysticks use. Toggled via a genuine
+  circle-button short click, with only one pad ever "owning" the shared
+  MIDI channel's bend at a time (this project has no MPE yet, so pitch
+  bend is unavoidably channel-wide -- see `midi/README.md`). Not yet
+  hardware-verified at all -- see `services/README.md`'s `expression.h`
+  entry for the full physics reasoning.
 - MPR121 touch thresholds started at Freescale's generic quickstart
   defaults (12/6), not tuned for this board's actual electrode/keycap/
   acrylic stack. The release side was since narrowed to 9 -- real

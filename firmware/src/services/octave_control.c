@@ -225,15 +225,19 @@ void tiles_octave_control_scan(void) {
     bool minus_pressed = tiles_button_is_pressed(BUTTON_ID_MINUS);
     bool plus_pressed = tiles_button_is_pressed(BUTTON_ID_PLUS);
 
-    if (tiles_game_mode_is_active() || tiles_standby_owns_octave_buttons()) {
-        /* Either a game has claimed SW1/SW2 as its own controls -- see
-         * the "Deferring to game mode" section of the file header -- or
-         * a manually-entered screensaver has repurposed them as
+    if (tiles_game_mode_is_active() || tiles_standby_owns_octave_buttons() ||
+        tiles_standby_circle_shift_active()) {
+        /* A game has claimed SW1/SW2 as its own controls -- see the
+         * "Deferring to game mode" section of the file header -- or a
+         * manually-entered screensaver has repurposed them as
          * animation-scroll controls (see standby.h's
-         * tiles_standby_owns_octave_buttons()). Same fix either way:
+         * tiles_standby_owns_octave_buttons()) -- or circle (SW6) is
+         * currently held in its "shift" window and SW1/SW2 are adjusting
+         * haptic intensity instead (see standby.h's
+         * tiles_standby_circle_shift_active()). Same fix either way:
          * keep edge-tracking state current and do nothing else, so a
-         * scroll/game press doesn't *also* silently step the octave or
-         * transpose key underneath. */
+         * scroll/game/intensity press doesn't *also* silently step the
+         * octave or transpose key underneath. */
         s_prev_minus_pressed = minus_pressed;
         s_prev_plus_pressed = plus_pressed;
         s_combo_was_held = minus_pressed && plus_pressed;

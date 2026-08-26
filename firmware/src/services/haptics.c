@@ -159,6 +159,38 @@ static uint32_t s_next_voice_seq = 1u;
  * total simultaneous motor inrush across the whole board. */
 static uint32_t s_next_kick_slot_ms;
 
+/* Global intensity scalar, real feedback: "when you hold and press -
+ * or + you can adjust intensity of haptics on device." Applied uniformly
+ * in set_motor_level() below -- the single low-level write every haptic
+ * path (KICK, its overdrive spike, SUSTAIN, TOUCH_PULSE) already funnels
+ * through -- so one knob scales everything consistently rather than
+ * needing a separate multiplier wired into each effect. Deliberately
+ * floored above 0 (see HAPTIC_INTENSITY_MIN below), matching this file's
+ * existing "even the weakest strike still gets some feel" stance
+ * (MIN_KICK_DUTY, MIN_VELOCITY) -- a dedicated mute would be a separate,
+ * clearer feature, not folded into this scalar's minimum. No
+ * persistence yet (services/storage/ is still an empty skeleton) --
+ * resets to full (1.0) on every boot. */
+static float s_haptic_intensity = 1.0f;
+#define HAPTIC_INTENSITY_STEP 0.1f
+#define HAPTIC_INTENSITY_MIN 0.2f
+#define HAPTIC_INTENSITY_MAX 1.0f
+
+void tiles_haptics_adjust_intensity(int8_t direction) {
+    s_haptic_intensity += (direction > 0) ? HAPTIC_INTENSITY_STEP : -HAPTIC_INTENSITY_STEP;
+    if (s_haptic_intensity < HAPTIC_INTENSITY_MIN) {
+        s_haptic_intensity = HAPTIC_INTENSITY_MIN;
+    }
+    if (s_haptic_intensity > HAPTIC_INTENSITY_MAX) {
+        s_haptic_intensity = HAPTIC_INTENSITY_MAX;
+    }
+    printf("[haptics] intensity now %.2f\n", (double)s_haptic_intensity);
+}
+
+float tiles_haptics_get_intensity(void) {
+    return s_haptic_intensity;
+}
+
 /* Mirrors services/buttons.c's set_button_led_level(), parameterized on
  * active_level instead of hardcoding active-low, since motor channels
  * are active-high (pin high = low-side NMOS on = motor driven) while
@@ -169,6 +201,7 @@ static void set_motor_level(const tiles_pad_config_t *cfg, float level_0_to_1) {
     if (pca == NULL) {
         return;
     }
+    level_0_to_1 *= s_haptic_intensity;
     if (level_0_to_1 < 0.0f) {
         level_0_to_1 = 0.0f;
     }

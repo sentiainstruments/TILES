@@ -209,19 +209,23 @@ not its code.
   showing. `tiles_octave_control_is_transpose_active()` lets `main.c`
   skip `standby.c`'s idle scan while this owns the pad grid, mirroring
   the existing `game_mode.c` gate.
-  **Defers to game mode and manual screensaver scrolling:** this
-  module's scan runs unconditionally every tick with no gate of its own,
-  and both `game_mode.h`'s minigames (below) and `standby.h`'s
-  manually-entered screensaver (hold SW6/circle for 6s, see its entry
-  below) reuse SW1/SW2 as their own left/right controls -- without a
-  check here, every in-game or scroll press would *also* silently fire
-  an octave or transpose step underneath. `tiles_game_mode_is_active()`
-  and the new `tiles_standby_owns_octave_buttons()` are both checked at
-  the top of the scan: while either is true, this module only keeps its
-  press-edge tracking current and does nothing else (button-LED writes
-  were already a no-op during game mode, see `game_mode.h`'s entry below
-  for why; during manual screensaver, `standby.c` itself claims the same
-  standby-active flag for the same reason).
+  **Defers to game mode, manual screensaver scrolling, and circle
+  shift:** this module's scan runs unconditionally every tick with no
+  gate of its own, and `game_mode.h`'s minigames (below), `standby.h`'s
+  manually-entered screensaver (hold SW6/circle for 6s), and holding
+  SW6/circle itself (below that same 6s, see `standby.h`'s "shift" role)
+  all reuse SW1/SW2 as their own controls -- without a check here, every
+  in-game, scroll, or intensity-adjustment press would *also* silently
+  fire an octave or transpose step underneath. `tiles_game_mode_is_active()`,
+  `tiles_standby_owns_octave_buttons()`, and
+  `tiles_standby_circle_shift_active()` are all checked at the top of
+  the scan: while any is true, this module only keeps its press-edge
+  tracking current and does nothing else (button-LED writes were
+  already a no-op during game mode, see `game_mode.h`'s entry below for
+  why; during manual screensaver, `standby.c` itself claims the same
+  standby-active flag for the same reason; during circle-shift, SW1/SW2
+  simply keep their normal default "lit while pressed" LED behavior,
+  since that mode doesn't touch their LEDs at all).
   **Not hardware-verified:** the combo-hold threshold, both flash
   durations, the cross's row/column placement, and the amber accent
   color are all first-pass judgment calls, not measurements.
@@ -543,6 +547,60 @@ not its code.
      actually a cleaner, more meaningful reference than "wherever touch
      happened to start" was anyway. Every failing case in the capture
      that motivated this fix would now register correctly.
+  **Pitch bend from sideways motion, added once strike detection and
+  velocity felt solid** ("it all feels fine for now") -- real feedback:
+  "can we implement pitch bend on sideways motion for pads? This is only
+  relevant after the initial velocity and should compensate for vertical
+  movement in magnet and drift from aftertouch. Make sure the math is
+  solid before implementing." Only active while a note is already held
+  (`PAD_STATE_NOTE_ON`) -- strike detection above never touches X/Y at
+  all. The math (full derivation in expression.c's own "Pitch bend from
+  sideways motion" section): a naive raw-X-minus-baseline measurement
+  would fail the "compensate for vertical movement... and drift" ask
+  directly, since a magnetic dipole's field strength changes with Z
+  distance -- X's raw magnitude would drift every time the player simply
+  pressed harder or eased off, with zero real lateral motion. Fixed by
+  working with the field's *direction* instead of magnitude:
+  `hall_x_direction_cosine()` computes X / |B| (|B| = sqrt(x²+y²+z²)), a
+  direction cosine that depends only on angular position relative to the
+  magnet's axis, not distance from it -- the same principle real 3-axis
+  Hall-effect joysticks use to derive tilt independent of plunger depth.
+  A per-note baseline cosine is seeded the instant a note fires
+  (`claim_pitch_bend_owner()`, mirroring how aftertouch seeds
+  `smoothed_depth` at note-on rather than from 0); everything sent
+  afterward is the smoothed *change* in cosine from that baseline
+  (`PITCH_BEND_SMOOTHING_ALPHA`, same value and reasoning as
+  `AFTERTOUCH_SMOOTHING_ALPHA`), scaled to the 14-bit MIDI range by
+  `PITCH_BEND_MAX_COSINE_DEVIATION` (unmeasured -- no captured real data
+  yet for how much a deliberate sideways push actually moves this ratio
+  on this board, unlike the depth-based constants above).
+  Single hardware axis (X) used as "sideways" -- no hardware doc exists
+  for which local Hall axis maps to which physical direction on a
+  mounted pad, and MIDI pitch bend is inherently one-dimensional
+  regardless, so Y is left unused rather than guessing how to blend two
+  axes into one bend value; trivially swappable for Y once seen on real
+  hardware.
+  **Real MIDI limitation, not a bug:** this project has no MPE (no
+  per-note channel allocation -- see `midi/README.md`), and Pitch Bend
+  Change is a channel-wide message with no per-note addressing in the
+  spec itself -- there's no way to bend one held note without also
+  bending every other note currently held on the same channel. Rather
+  than send confusing output with a chord held, this module tracks a
+  single "owner" pad (`s_pitch_bend_owner_pad`, 0 = none): only the most
+  recently struck pad drives the shared channel's bend, and bend is
+  explicitly reset to center (`PITCH_BEND_CENTER`, 8192) whenever
+  ownership changes or the owner releases, so a new or still-held note
+  never inherits a stale offset. Playing one pad at a time behaves
+  exactly as expected; bending while a chord is held is a known,
+  deliberate V1 simplification.
+  Toggled via a genuine circle (SW6) short click -- real feedback: "when
+  you press sentia button once it turns on and off the pitch bend" (see
+  `standby.h`'s entry below for the button-side gesture handling).
+  `tiles_expression_toggle_pitch_bend()` immediately resets to center if
+  a note currently owns the bend when disabled, rather than leaving it
+  stuck. **Not yet hardware-verified at all** -- neither the physics
+  reasoning nor `PITCH_BEND_MAX_COSINE_DEVIATION`'s sensitivity has been
+  tried on a real strike yet.
   `DEPTH_TO_AFTERTOUCH_FULL_SCALE` is now real, not a placeholder: 900,
   derived from a serial-driven full-press capture session
   (`diagnostics/calibration.h`'s 'f' command) with all 24 magnets
@@ -731,6 +789,23 @@ not its code.
   KICK this phase has no overdrive spike to force a fast start -- a low
   duty and a very short window compound each other's "never gets going"
   problem. Not yet re-verified on real hardware after this change.
+  **Global intensity control added** -- real feedback: "when you hold
+  and press - or + you can adjust intensity of haptics on device."
+  `tiles_haptics_adjust_intensity()` steps a single global scalar
+  (`s_haptic_intensity`, `HAPTIC_INTENSITY_STEP` 0.1, clamped
+  `HAPTIC_INTENSITY_MIN`-`_MAX` 0.2-1.0) up or down; applied once, inside
+  `set_motor_level()` -- the single low-level write every haptic path
+  (KICK, its overdrive spike, SUSTAIN, TOUCH_PULSE) already funnels
+  through -- so the one knob scales every effect consistently rather
+  than needing a separate multiplier wired into each. Floored above 0
+  (not a true mute) to match this file's existing "even the weakest
+  strike still gets some feel" stance (`MIN_KICK_DUTY`, and
+  `services/expression.c`'s `MIN_VELOCITY`) -- a dedicated mute would be
+  a separate, clearer feature. No persistence (`services/storage/` is
+  still an empty skeleton) -- resets to full (1.0) on every boot. Driven
+  by `services/standby.c`'s circle-button (SW6) "shift" gesture (hold
+  circle, tap SW1/SW2) -- see `standby.h`'s entry below. Not yet
+  hardware-verified.
   **Not done:** every duty/timing constant (`KICK_DURATION_MS`,
   `KICK_OVERDRIVE_MS`, `KICK_GAP_MS`, `MIN_KICK_DUTY`,
   `MAX_SUSTAIN_DUTY`, `KICK_STAGGER_MIN_GAP_MS`, and the new
@@ -943,14 +1018,6 @@ not its code.
     release) so one long hold can't re-fire either gesture repeatedly,
     and reaching 10s doesn't also re-trigger the 6s screensaver
     transition on the way past it.
-  - A short circle press/release (under 6s) is deliberately a no-op --
-    real feedback: "remember and set up circle as our general shift
-    button unless pressed for the intervals we said (6 or 10 seconds)."
-    Circle is reserved for a future general-purpose "shift"/modifier
-    role for everything below these two thresholds, the same "V1
-    doesn't build the framework yet" status `octave_control.h` already
-    documents for SW1/SW2 -- not implemented yet, just deliberately left
-    unclaimed here rather than wired to anything else.
   - New accessors `tiles_standby_is_deep_sleep()` and
     `tiles_standby_owns_octave_buttons()` (true only while
     `s_manual_screensaver` is set): the latter is checked by
@@ -958,6 +1025,41 @@ not its code.
     manual scroll, the same deferral pattern it already uses for
     `tiles_game_mode_is_active()` -- without it, every scroll press would
     *also* silently step the octave/transpose key underneath.
+  **Circle claims its "shift" role, everything below 6s** -- real
+  feedback: "remember and set up circle as our general shift button
+  unless pressed for the intervals we said," then, once there was
+  something to actually assign it to: "can we implement pitch bend...
+  when you press sentia button once it turns on and off the pitch bend.
+  When you hold and press - or + you can adjust intensity of haptics on
+  device." (Read as "sentia button" = circle, the only button with an
+  established "future shift button" role at the time of the ask.) A
+  short click (press+release before 6s, neither long-press gesture
+  fired) toggles `services/expression.c`'s pitch bend on/off
+  (`tiles_expression_toggle_pitch_bend()`); while circle is held (still
+  below 6s), SW1/SW2 adjust `services/haptics.c`'s global intensity
+  scalar instead of their normal octave-shift function
+  (`handle_circle_shift_input()`, `tiles_haptics_adjust_intensity()`) --
+  a new accessor `tiles_standby_circle_shift_active()` is checked by
+  `octave_control.c` (same deferral pattern as
+  `tiles_standby_owns_octave_buttons()` above) so an intensity press
+  doesn't *also* silently step the octave/transpose key.
+  Circle's own LED (`render_circle_led()`) is claimed via the same
+  per-button override mechanism (`services/buttons.h`) `octave_control.c`
+  already uses for SW1/SW2 -- `tiles_standby_init()` claims it
+  permanently, same one-time-forever pattern. Real feedback: "make it
+  glow like toggled. If pitch bend on then solid light on, if pitch
+  bend off then no light on. The toggle brightness is less than the
+  regular click brightness but not by a lot." While circle is physically
+  held, its LED shows `CIRCLE_LED_HELD_LEVEL` (1.0, matching default
+  "lit while pressed" feedback exactly, so pressing it still feels
+  tactile regardless of what the press turns out to be); once released,
+  it settles into the persistent toggle-state glow --
+  `CIRCLE_LED_TOGGLE_ON_LEVEL` (0.8, deliberately close to 1.0 per "not
+  by a lot") when pitch bend is on, fully dark when off. Both new
+  behaviors are gated on `!s_circle_screensaver_fired` (i.e., strictly
+  before the 6s threshold) so they never conflict with the already-
+  established 6s/10s gestures or the manual-scroll mode those unlock.
+  Not yet hardware-verified.
   **Not done / not hardware-verified:** the button-column and
   underglow-anchor mappings in `board/board_layout.h` are based on the
   user's verbal description of the physical board, not a hardware doc

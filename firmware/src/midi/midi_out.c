@@ -36,3 +36,13 @@ void tiles_midi_send_cc(uint8_t controller, uint8_t value) {
     uint8_t msg[3] = {(uint8_t)(0xB0u | TILES_MIDI_V1_CHANNEL), controller, value};
     tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg));
 }
+
+void tiles_midi_send_pitch_bend(uint16_t bend_14bit) {
+    if (!tud_midi_mounted()) {
+        return;
+    }
+    uint8_t lsb = (uint8_t)(bend_14bit & 0x7Fu);
+    uint8_t msb = (uint8_t)((bend_14bit >> 7) & 0x7Fu);
+    uint8_t msg[3] = {(uint8_t)(0xE0u | TILES_MIDI_V1_CHANNEL), lsb, msb};
+    tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg));
+}

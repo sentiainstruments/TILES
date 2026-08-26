@@ -50,24 +50,31 @@
  * services/standby.h's idle scan while this owns the pad grid, the same
  * way it already does for services/game_mode.h.
  *
- * ---- Deferring to game mode and manual screensaver scrolling ---------
+ * ---- Deferring to game mode, manual screensaver scrolling, and circle
+ * shift ------------------------------------------------------------------
  * services/game_mode.h's minigames (Snake, Brick Breaker, Tetris) also
- * use SW1/SW2 as their own left/right controls, and services/standby.h's
+ * use SW1/SW2 as their own left/right controls, services/standby.h's
  * manually-entered screensaver (hold SW6/circle for 6s) repurposes them
- * as animation-scroll controls -- see
- * tiles_standby_owns_octave_buttons(). This module's scan runs
- * unconditionally every main-loop tick with no gate of its own, so
- * without an explicit check here, every in-game or scroll press would
- * *also* silently step the octave or transpose key underneath. Both
- * tiles_game_mode_is_active() and tiles_standby_owns_octave_buttons()
- * are checked at the top of tiles_octave_control_scan(): while either
- * is true, this module only keeps its press-edge tracking current (so a
- * still-held button doesn't read as a fresh press the instant control
- * hands back) and does nothing else -- button-LED writes are already a
- * no-op during game mode too, since game_mode.c also claims buttons.c's
- * standby-active flag (see tiles_buttons_set_override_led()'s doc
- * comment in buttons.h); during the manual screensaver, standby.c
- * itself owns the same standby-active flag for the same reason.
+ * as animation-scroll controls, and holding SW6/circle itself (below
+ * that same 6s) repurposes them as haptic-intensity controls -- see
+ * tiles_standby_owns_octave_buttons() and
+ * tiles_standby_circle_shift_active() respectively. This module's scan
+ * runs unconditionally every main-loop tick with no gate of its own, so
+ * without an explicit check here, every in-game, scroll, or intensity
+ * press would *also* silently step the octave or transpose key
+ * underneath. tiles_game_mode_is_active(),
+ * tiles_standby_owns_octave_buttons(), and
+ * tiles_standby_circle_shift_active() are all checked at the top of
+ * tiles_octave_control_scan(): while any is true, this module only keeps
+ * its press-edge tracking current (so a still-held button doesn't read
+ * as a fresh press the instant control hands back) and does nothing else
+ * -- button-LED writes are already a no-op during game mode too, since
+ * game_mode.c also claims buttons.c's standby-active flag (see
+ * tiles_buttons_set_override_led()'s doc comment in buttons.h); during
+ * the manual screensaver, standby.c itself owns the same standby-active
+ * flag for the same reason (circle-shift mode doesn't touch SW1/SW2's
+ * LEDs at all, so they simply keep their normal default "lit while
+ * pressed" behavior while intensity is being adjusted).
  *
  * Claims SW1/SW2 permanently via services/buttons.h's per-button
  * override mechanism (tiles_buttons_set_override_active()) -- their

@@ -35,9 +35,18 @@ rate limiting for continuous expression data.
   output is now worth retrying specifically because of this fix.
 - `midi_out.{h,c}` — done: `tiles_midi_note_on(note, velocity)`,
   `tiles_midi_note_off(note)`, `tiles_midi_send_poly_aftertouch(note, pressure)`,
-  `tiles_midi_send_cc(controller, value)` -- all on a single V1 MIDI
-  channel (channel 1). Driven by `services/expression.c` (note
-  on/off/aftertouch, from touch+Hall fusion) and `services/pedal.c`
-  (sustain/expression CC). No MPE (per-note channel allocation) yet --
-  see `docs/architecture/defaults-and-safeguards.md`.
+  `tiles_midi_send_cc(controller, value)`, `tiles_midi_send_pitch_bend(bend_14bit)`
+  -- all on a single V1 MIDI channel (channel 1). Driven by
+  `services/expression.c` (note on/off/aftertouch/pitch bend, from
+  touch+Hall fusion) and `services/pedal.c` (sustain/expression CC). No
+  MPE (per-note channel allocation) yet -- see
+  `docs/architecture/defaults-and-safeguards.md`. Pitch bend in
+  particular is a real, direct consequence of that gap: Pitch Bend
+  Change is a channel-wide MIDI message with no per-note addressing in
+  the spec itself, so bending one held note's pitch on this single
+  channel unavoidably bends every other note currently held on it too --
+  `services/expression.c`'s pitch-bend feature works around this with a
+  single "owner pad" concept rather than pretending independent per-note
+  bend is possible without real MPE channel allocation; see its own
+  "Pitch bend from sideways motion" section for the full reasoning.
 - DIN MIDI IN/OUT, MPE channel allocation -- not built yet.
