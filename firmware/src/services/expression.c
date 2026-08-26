@@ -328,28 +328,28 @@ static uint16_t s_depth_to_aftertouch_full_scale = 900u;
 static float s_pitch_bend_max_cosine_deviation = 0.15f;
 
 /* Small deltas this close to baseline are treated as exactly centered
- * (no bend at all) rather than passed through -- see
- * s_pitch_bend_max_cosine_deviation's own comment for why this is
- * deliberately back to ONE simple fixed value instead of the
- * depth-scaled extra deadzone a previous round added on top of it (that
- * mechanism is gone -- see PITCH_BEND_SETTLE_MS below for what's meant
- * to address the same underlying problem more directly). Applied as a
- * "soft knee" in pitch_bend_14bit_from_cosine_delta() below (subtracted
- * from the magnitude before normalizing, not a hard cutoff-then-jump) so
- * bend still ramps continuously from zero just past this threshold
- * rather than snapping straight to some nonzero value the instant it's
- * crossed. Unmeasured -- a first attempt at "comfortably above the
- * observed rest-state noise floor, still small relative to a deliberate
- * tilt," not derived from a captured real-noise session the way
- * MIN_STRIKE_DEPTH_DELTA elsewhere in this file was. If real testing
- * still finds "at rest" jitter after this change, the `[expression]
- * pitch bend sent` print in the NOTE_ON loop below now reports the raw
- * pre-deadzone delta every time it sends -- read those numbers off a
- * real session instead of guessing a further round; that's what every
- * OTHER real-data-backed constant in this file (MIN_STRIKE_DEPTH_DELTA,
- * DEPTH_TO_AFTERTOUCH_FULL_SCALE) was actually calibrated from, and
- * pitch bend never has been. */
-#define PITCH_BEND_DEADZONE_COSINE_DELTA 0.02f
+ * (no bend at all) rather than passed through -- applied as a "soft
+ * knee" in pitch_bend_14bit_from_cosine_delta() below (subtracted from
+ * the magnitude before normalizing, not a hard cutoff-then-jump) so bend
+ * still ramps continuously from zero just past this threshold rather
+ * than snapping straight to some nonzero value the instant it's crossed.
+ *
+ * Real data, not a guess, for once: a debug-console capture of the
+ * `[expression] pitch bend sent` print below (added specifically because
+ * this constant had been guessed blind through several prior rounds)
+ * during several seconds of a real, ordinary straight-down press with no
+ * intentional tilt -- 1070 sent deltas, median 0.0257, p90 0.0373, p95
+ * 0.0409, p99 0.051, max 0.0945. This confirms what earlier rounds only
+ * speculated: pressing straight down really does move this ratio
+ * substantially on real hardware (the on-axis-magnet assumption in this
+ * file's own physics section doesn't fully hold for this board's real
+ * assembly), not just quantization noise -- the previous 0.02 sat right
+ * at the MEDIAN of that distribution, so over half of an ordinary press
+ * read as some amount of bend. Raised to 0.045 -- comfortably past p90,
+ * short of the single 0.0945 outlier (likely a strike-impact transient,
+ * not steady-state) -- to actually cover the bulk of a real press
+ * instead of guessing a value that sounded reasonable. */
+#define PITCH_BEND_DEADZONE_COSINE_DELTA 0.045f
 
 /* How long AFTER claiming ownership before the baseline cosine is
  * actually captured, letting PITCH_BEND_SMOOTHING_ALPHA's EMA settle

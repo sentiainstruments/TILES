@@ -207,11 +207,15 @@ static void apply_row_haptics(uint8_t column) {
  * "jittery at rest AND requires too much tilt... might break the keys"
  * -- see expression.c's own s_pitch_bend_max_cosine_deviation comment
  * for the fuller reasoning on resetting to a simpler pipeline instead of
- * continuing to add compensating layers. Column 6's 0.075 stays
- * comfortably above PITCH_BEND_DEADZONE_COSINE_DELTA (0.02) so even the
- * most sensitive column keeps a real usable range. Unmeasured -- same
- * caveat as expression.c's own pitch-bend-sensitivity history: no
- * captured real-hardware data yet for how far this should actually
+ * continuing to add compensating layers, and its PITCH_BEND_DEADZONE_
+ * COSINE_DELTA comment for the real captured-data recalibration
+ * (0.02 -> 0.045) that followed once "regular press still is jittery"
+ * showed the fixed-value reset alone hadn't been enough. Column 6's
+ * 0.075 only leaves 0.03 of usable range above that deadzone -- real,
+ * but narrow; worth revisiting if the most sensitive column specifically
+ * turns out too coarse in practice. Unmeasured -- same caveat as
+ * expression.c's own pitch-bend-sensitivity history: no captured
+ * real-hardware data yet for how far this should actually
  * range. */
 static void apply_row_pitch_bend(uint8_t column) {
     float value = piecewise_column_value(column, 0.30f, 0.15f, 0.075f);

@@ -937,6 +937,26 @@ not its code.
   Unmeasured, like every pitch-bend constant's entire history in this
   file -- not yet re-verified on real hardware after this specific
   change.
+  **`PITCH_BEND_DEADZONE_COSINE_DELTA` recalibrated from a real capture,
+  the first pitch-bend constant in this file's history to be** -- real
+  feedback after the reset above: "regular press still is jittery." The
+  new `[expression] pitch bend sent` print (see the note-on ordering fix
+  above) was captured live over several seconds of an ordinary,
+  no-intentional-tilt straight-down press: 1070 sent deltas, median
+  0.0257, p90 0.0373, p95 0.0409, p99 0.051, max 0.0945 (likely a
+  strike-impact transient, not steady-state). This is real confirmation
+  that pressing straight down substantially moves the direction-cosine
+  ratio on this board's actual assembly (the "invariant to depth for a
+  fixed real lateral tilt" physics this feature is built on doesn't hold
+  as cleanly in practice as the math assumes) -- not just quantization
+  noise, and the reset-round's 0.02 deadzone sat right at the MEDIAN of
+  that distribution, so over half of an ordinary press read as some
+  amount of bend. Raised to 0.045 -- past p90, short of the single 0.0945
+  outlier -- to actually cover the bulk of a real press. Leaves
+  `expression_control.h`'s sub-menu row-2 column 6 (most sensitive,
+  0.075) with only 0.03 of real usable range above the new deadzone --
+  narrow but still real; may need its own revisit if that column
+  specifically still reads too coarse.
   Single hardware axis (X) used as "sideways" -- no hardware doc exists
   for which local Hall axis maps to which physical direction on a
   mounted pad, and MIDI pitch bend is inherently one-dimensional
