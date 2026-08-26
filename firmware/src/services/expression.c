@@ -471,7 +471,17 @@ void tiles_expression_scan(void) {
             if (!touched) {
                 /* Released without ever measuring a real press -- a
                  * light tap, not an actual key motion. No note was ever
-                 * sent. */
+                 * sent. Temporary bring-up visibility: real feedback
+                 * ("sudden full force press is not triggering the
+                 * notes") described touches that looked and felt like
+                 * real hard strikes but produced nothing, with no way to
+                 * tell from the existing note-on-only print whether
+                 * depth genuinely never moved or something else is
+                 * wrong -- this print exists specifically to answer
+                 * that on the next capture. */
+                printf("[expression] pad %u cancelled (no press): touch_start_depth=%d peak_depth_delta=%d "
+                       "touch_duration_ms=%u\n",
+                       pad, (int)s->touch_start_depth, (int)s->peak_depth_delta, now_ms - s->touch_start_ms);
                 s->state = PAD_STATE_IDLE;
             }
             continue;
