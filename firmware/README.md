@@ -383,32 +383,26 @@ flashable `.uf2`.
   assumed to be the vertical-press axis for every pad (unverified per-
   pad), and `hall.c`'s depth is a raw, uncalibrated magnitude with no
   dead zone, offset correction, or saturation margin.
-- `services/expression.c`'s acceleration->velocity scale, depth->
-  aftertouch range, strike-detection window durations, and the new
-  `MIN_STRIKE_DEPTH_DELTA` (real press vs. bare touch) are all
-  explicitly-flagged placeholder constants -- there is no calibrated
-  mT/LSB relationship to derive them from yet, so they're starting
-  guesses that will need real-hardware tuning once this can actually be
-  played and heard. `MIN_STRIKE_DEPTH_DELTA` specifically fixes a real
-  bug just caught on hardware: "touch is triggering notes not press
-  velocity, the lightest touch of capacitance is doing this without even
-  getting to a velocity curve" -- the strike-detection safety timeout
-  used to fire a note at floor velocity purely because touch had lasted
-  60ms, with no check on whether the pad had moved at all. Both the
-  normal commit path and that timeout now require measured depth to have
-  moved past this threshold since touch-down first. That first attempt
-  (threshold 15) still fired on a light touch on real hardware -- a
-  second bug, since fixed: the reference depth was read immediately at
-  touch-down from a possibly stale background-round-robin cached value,
-  compared against a fresh in-window reading once touch switched the pad
-  to `hall.c`'s fast every-call scan, so ordinary drift over that stale
-  gap could read as "movement." The reference is now taken from the
-  first sample actually captured at the fast rate instead, and the
-  threshold raised to 30 as a wider margin -- see
-  `services/README.md`'s `expression.h`/`.c` entry for the full history.
-  A `[expression]` note-on print now logs the actual measured
-  depth-delta/peak-accel on every commit so the next hardware session can
-  read real numbers instead of guessing this threshold again.
+- `services/expression.c`'s strike detection was rebuilt from real
+  captured data after two rounds of real-hardware feedback: first
+  "touch is triggering notes not press velocity," then, after a first
+  guessed fix, "any touch still triggers midi... different velocity
+  doesn't trigger anything either, it's all the same velocity." Rather
+  than guess a third value, a `[expression]` debug print (added during
+  the second attempt) was captured across ~140 real touches on a debug
+  console, and `MIN_STRIKE_DEPTH_DELTA` (30 -> 150) and
+  `ACCEL_TO_VELOCITY_SCALE` (0.05 -> 4.5) were derived from what that
+  data actually showed -- a real, measurable gap between bare-touch
+  depth readings (clustered at 32, up to 96) and deliberate presses
+  (192-736), and a real observed peak-accel range (0-23) the old scale
+  had been flattening entirely to one floor velocity. See
+  `services/README.md`'s `expression.h`/`.c` entry for the full data and
+  reasoning, including a real stale-reference bug also caught and fixed
+  along the way. Still not verified with a controlled, labeled capture
+  (the ~140-touch session mixed light touches and presses without
+  labeling which was which as they happened) -- the `[expression]` print
+  stays in place to make that follow-up easy if light touches still get
+  through or velocity still doesn't spread out enough in practice.
 - MPR121 touch thresholds started at Freescale's generic quickstart
   defaults (12/6), not tuned for this board's actual electrode/keycap/
   acrylic stack. The release side was since narrowed to 9 -- real
