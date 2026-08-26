@@ -715,9 +715,22 @@ not its code.
   visibility was the missing piece: `[haptics] pad N touch pulse
   started: pca=... channel=... duty=...` on success,
   `[haptics] pad N touch pulse skipped -- already busy (phase=...)` when
-  a pad already mid-KICK/SUSTAIN correctly declines the pulse. Still
-  open pending a session that watches for these while testing "the
-  top" specifically.
+  a pad already mid-KICK/SUSTAIN correctly declines the pulse.
+  **Found the real bug from that visibility**: a debug capture across
+  ~15 plain touches (no press) on 9 different pads showed the trigger
+  print firing correctly *every single time* -- the software path was
+  never the problem, clarifying the report was about all pads, not just
+  a "top" subset. The actual cause was `TOUCH_PULSE_DUTY` itself: 0.35,
+  the *exact* duty `MIN_KICK_DUTY` used to be before real feedback
+  proved it "too soft for the touch" and forced it up to 0.65+ (see
+  `MIN_KICK_DUTY`'s own comment above) -- reusing an already-invalidated
+  duty for this new feature was always going to be inaudible on the
+  same hardware, for the same reason. Raised to 0.6 (still meaningfully
+  below the kick range, so it should read as lighter/shorter than a real
+  strike) and `TOUCH_PULSE_DURATION_MS` extended 15 -> 25ms, since unlike
+  KICK this phase has no overdrive spike to force a fast start -- a low
+  duty and a very short window compound each other's "never gets going"
+  problem. Not yet re-verified on real hardware after this change.
   **Not done:** every duty/timing constant (`KICK_DURATION_MS`,
   `KICK_OVERDRIVE_MS`, `KICK_GAP_MS`, `MIN_KICK_DUTY`,
   `MAX_SUSTAIN_DUTY`, `KICK_STAGGER_MIN_GAP_MS`, and the new

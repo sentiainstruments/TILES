@@ -104,12 +104,25 @@
 
 /* TOUCH_PULSE: a brief, soft acknowledgment fired on capacitive touch
  * alone -- see this file's header for why this exists as a distinct
- * concept from KICK. Much shorter and softer than a kick (KICK_DURATION_MS
- * 45ms at MIN_KICK_DUTY 0.65+) -- this is a light "tick," not a strike.
- * Unmeasured -- a first attempt at "clearly felt but clearly not a
- * strike," not tuned against real hardware. */
-#define TOUCH_PULSE_DURATION_MS 15u
-#define TOUCH_PULSE_DUTY 0.35f
+ * concept from KICK. Real feedback confirmed the trigger path itself
+ * was firing correctly every time (a debug capture showed
+ * "touch pulse started" on every single touch, correct pad/channel) but
+ * "they don't provide the haptic kick... when touched but not pressed" --
+ * the real bug was TOUCH_PULSE_DUTY (0.35), the *exact* duty
+ * MIN_KICK_DUTY used to be before real feedback proved it "too soft for
+ * the touch" and forced it up to 0.65+ (see MIN_KICK_DUTY's own
+ * comment) -- reusing the same already-invalidated duty for this new
+ * feature was always going to be too weak to feel, on the same
+ * hardware, for the same reason. Raised to 0.6 (still meaningfully
+ * below the kick range, so it should still read as lighter/shorter than
+ * a real strike) and duration extended slightly (15ms -> 25ms, still
+ * far short of KICK_DURATION_MS's 45ms) to give the motor a little more
+ * time to actually spin up and be felt within the pulse -- unlike KICK,
+ * this has no overdrive spike to force a fast start, so a low duty
+ * combined with a very short window compounds the "never gets going"
+ * problem. Not yet re-verified on real hardware after this change. */
+#define TOUCH_PULSE_DURATION_MS 25u
+#define TOUCH_PULSE_DUTY 0.6f
 
 typedef enum {
     HAPTIC_PHASE_IDLE = 0,
