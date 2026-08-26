@@ -137,6 +137,18 @@ show one pixel at a time).
 
 ## Pad baseline calibration and drift compensation
 
+**Implemented** (`firmware/src/services/hall.c`'s `update_drift_tracker()`)
+as of the session that also did the first real Hall calibration capture
+with all 24 magnets seated (see `firmware/src/services/expression.c`'s
+`DEPTH_TO_AFTERTOUCH_FULL_SCALE`, calibrated from that capture: 900,
+derived from a measured 784–1184 range / 918 average across all 24 pads).
+One simplification from the spec below: "no active MIDI note/voice
+currently allocated to that pad" isn't checked as a separate condition,
+because it's already implied by `touched == false` given
+`expression.c`'s state machine -- a note is never active on a pad this
+codebase currently reads as untouched, so checking touched alone already
+covers both. The design as specced:
+
 - **At boot**: full raw capture for all 24 pads (rest, and — per V1 scope
   above — enough of half/bottom to find the depth axis and its sign).
   This is the anchor baseline for the session.

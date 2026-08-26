@@ -16,14 +16,18 @@
  * touched pads concentrates sampling where a strike could actually be
  * in progress.
  *
- * V1 scope: raw XYZ + a per-pad rest baseline (captured once at init)
- * and a derived depth magnitude from it. No axis selection (deciding
- * whether Z is really the right axis for every pad, vs X/Y) -- Z is
- * assumed for all pads per docs/architecture/defaults-and-safeguards.md
- * "V1 sensing scope" (magnet motion is expected to project mostly onto
- * Z given the switch's straight vertical travel and the sensor's flat
- * mount below it). No per-pad calibration curve, no tilt/lateral use of
- * X/Y yet.
+ * V1 scope: raw XYZ + a per-pad rest baseline (captured once at init,
+ * manually re-capturable via tiles_hall_recapture_baseline(), and now
+ * also continuously self-correcting for slow drift in the background --
+ * see update_drift_tracker() in hall.c, implementing the "Pad baseline
+ * calibration and drift compensation" design
+ * docs/architecture/defaults-and-safeguards.md already specs) and a
+ * derived depth magnitude from it. No axis selection (deciding whether Z
+ * is really the right axis for every pad, vs X/Y) -- Z is assumed for
+ * all pads per that same doc's "V1 sensing scope" (magnet motion is
+ * expected to project mostly onto Z given the switch's straight
+ * vertical travel and the sensor's flat mount below it). No per-pad
+ * calibration curve, no tilt/lateral use of X/Y yet.
  */
 
 #include <stdbool.h>
@@ -48,9 +52,13 @@ typedef struct {
  *
  * The baseline capture assumes every pad is at rest (untouched) at the
  * moment this runs -- true for a normal boot, not necessarily true if
- * something is resting on a pad right at power-on. No re-baseline
- * mechanism exists yet (see the defaults doc's gated slow-tracker
- * design, not implemented). */
+ * something is resting on a pad right at power-on. Two re-baseline
+ * mechanisms exist for that: an immediate manual one
+ * (tiles_hall_recapture_baseline()) and a continuous, slow, gated
+ * background tracker (tiles_hall_scan() below) that nudges each pad's
+ * baseline to correct for ordinary thermal/mechanical drift during a
+ * session -- see hall.c's update_drift_tracker() for the gating
+ * conditions. */
 bool tiles_hall_init(void);
 
 /* True if pad (1-24)'s sensor was successfully identified and
@@ -60,7 +68,10 @@ bool tiles_hall_last_init_ok(uint8_t logical_pad);
 /* Services one pad per call if nothing is touched; if any pads are
  * touched, services every touched pad this call (in mux order) before
  * returning, then still advances the background round-robin by one
- * untouched pad. Call every main-loop iteration. */
+ * untouched pad -- and feeds that one background read into the drift
+ * tracker (see hall.c's update_drift_tracker()), so baseline drift
+ * correction only ever happens against untouched pads. Call every
+ * main-loop iteration. */
 void tiles_hall_scan(void);
 
 /* Latest raw sample for one pad (1-24). Returns a zeroed, invalid

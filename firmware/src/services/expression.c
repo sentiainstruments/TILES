@@ -34,9 +34,35 @@
  * detection floor should produce an audible note, not near-silence. */
 #define MIN_VELOCITY 8u
 
-/* V1 PLACEHOLDER, unmeasured: raw Hall LSB depth magnitude that maps to
- * full aftertouch (127). Same caveat as ACCEL_TO_VELOCITY_SCALE above. */
-#define DEPTH_TO_AFTERTOUCH_FULL_SCALE 2000u
+/* Real calibration data, not a placeholder: a serial-driven capture
+ * session (diagnostics/calibration.h's 'f' command) with all 24 magnets
+ * seated measured a normal, regular full press -- which bottoms out the
+ * pad's mechanical travel, there's no further "harder" position -- as
+ * |raw Z - rest baseline| = 784 to 1184 across all 24 pads, average 918.
+ * 900 sits in that range: every pad reaches its own true full press
+ * comfortably past this point (127 well before the mechanical stop, not
+ * exactly at it), and using the average rather than the low end of the
+ * spread keeps real dynamic range across most of a strike's travel
+ * instead of every pad capping out early to accommodate the single
+ * least-sensitive one. A real per-pad calibration curve (correcting for
+ * that spread individually) is still explicitly out of V1 scope -- see
+ * hall.h. */
+#define DEPTH_TO_AFTERTOUCH_FULL_SCALE 900u
+
+/* Aftertouch is meant to read like continuing pressure after the
+ * strike, not raw per-sample noise -- an exponential moving average
+ * over the depth signal feeding aftertouch_from_depth() below, tuned to
+ * be smooth without adding perceptible lag (the professional-feel goal
+ * a real weighted-key/wind controller's aftertouch has). Deliberately
+ * NOT applied to the velocity path above: velocity is a one-shot
+ * peak-acceleration estimate over a handful of samples during a ~15-60ms
+ * window, where smoothing would blunt the exact transient it's trying
+ * to measure; aftertouch is a continuous signal sent for as long as a
+ * note is held, where smoothing is what makes it feel like modulation
+ * instead of jitter. Unmeasured -- a starting guess at the right amount
+ * of smoothing, not derived from the capture session above (that only
+ * measured static full-press depth, not how noisy a held reading is). */
+#define AFTERTOUCH_SMOOTHING_ALPHA 0.35f
 
 typedef enum {
     PAD_STATE_IDLE = 0,
@@ -55,6 +81,12 @@ typedef struct {
     uint32_t last_seen_sample_time_ms;
 
     float peak_accel;
+
+    /* Exponential moving average of depth, feeding aftertouch only --
+     * see AFTERTOUCH_SMOOTHING_ALPHA above. Seeded (not zeroed) at
+     * note-on so aftertouch doesn't start with an artificial ramp-up
+     * from 0. */
+    float smoothed_depth;
 
     /* Cached at note-on and reused for aftertouch/note-off, so a live
      * scale change mid-hold (once scale switching exists) can't send
@@ -170,6 +202,9 @@ void tiles_expression_scan(void) {
                  * note agree exactly, not two independent estimates. */
                 tiles_haptics_trigger_kick(pad, velocity);
                 s->last_sent_aftertouch = 0xFFu;
+                /* Seed the smoother with the real depth right now rather
+                 * than 0 -- see the field's own comment. */
+                s->smoothed_depth = (float)tiles_hall_get_depth(pad);
                 s->state = PAD_STATE_NOTE_ON;
             }
             continue;
@@ -183,7 +218,13 @@ void tiles_expression_scan(void) {
             continue;
         }
 
-        uint8_t at = aftertouch_from_depth(tiles_hall_get_depth(pad));
+        /* EMA toward this scan's raw depth -- both a strengthening press
+         * (more pressure past the strike) and an easing-off one (less
+         * pressure, still touching) move it, smoothly. */
+        float raw_depth = (float)tiles_hall_get_depth(pad);
+        s->smoothed_depth += AFTERTOUCH_SMOOTHING_ALPHA * (raw_depth - s->smoothed_depth);
+
+        uint8_t at = aftertouch_from_depth((uint16_t)s->smoothed_depth);
         if (at != s->last_sent_aftertouch) {
             s->last_sent_aftertouch = at;
             tiles_midi_send_poly_aftertouch(s->active_note, at);

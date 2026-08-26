@@ -25,6 +25,22 @@ diagnostics down with it.
   `services/standby.c`'s `TILES_STANDBY_HALL_WAKE_DEPTH`). Doesn't
   persist anything or derive/apply a calibration curve itself --
   `storage/` and a real per-pad curve don't exist yet.
+  First real capture session with all 24 magnets seated (this console
+  only became usable at all once `main.c` started calling `tud_task()`
+  every loop -- see `midi/usb_device.h`'s entry, without it the
+  USB-CDC channel this tool runs over produced no output at all): 'r'
+  gave a clean rest baseline for every pad, 'f' (done row-by-row rather
+  than all 24 at once -- one person can't press all 24 simultaneously)
+  measured 784-1184 raw depth across all 24 pads, average 918, at what
+  turned out to already be each pad's mechanical bottom-out (no
+  meaningfully-different "harder" position past a normal full press, so
+  the 'm' max-press step wasn't needed this session). Used to set
+  `DEPTH_TO_AFTERTOUCH_FULL_SCALE` to 900 -- see `services/README.md`'s
+  `expression.h` entry for the reasoning. `TILES_STANDBY_HALL_WAKE_DEPTH`
+  has NOT been picked from this data yet and Hall-wake stays disabled --
+  a wake threshold needs a light-touch data point this session didn't
+  capture (only rest and full-press), not just re-running the same two
+  numbers.
 - Everything else in this list (per-pad commands beyond calibration
   capture, calibration save/erase, manufacturing tests) is not built
   yet.

@@ -98,6 +98,28 @@ not its code.
   Hall mux channel across all three TCA9548A devices at a time." A pad
   whose sensor fails identify/init at boot is skipped by future scans
   rather than blocking the other 23.
+  Also implements the gated slow drift tracker
+  `docs/architecture/defaults-and-safeguards.md`'s "Pad baseline
+  calibration and drift compensation" section already specced but never
+  built (`update_drift_tracker()`, fed one pad per call from
+  `tiles_hall_scan()`'s background round-robin pass only -- touched pads
+  never reach it). Nudges a pad's baseline toward its current reading by
+  ~1/128 of the gap (`DRIFT_SLEW_DENOMINATOR`) once that reading has
+  stayed within `DRIFT_NOISE_THRESHOLD` (8 raw counts) of the *previous*
+  background read -- not a fixed anchor -- for `DRIFT_DWELL_MS` (400ms).
+  Comparing against the previous reading rather than a fixed one is
+  deliberate: it's what lets genuine slow drift accumulate over many
+  readings without any single step ever looking "unstable." One
+  simplification from the spec's 3-condition gate: "no active MIDI note"
+  isn't checked separately, since it's already implied by `touched ==
+  false` given `expression.c`'s tight touch/note coupling (a note is
+  never active on a pad this codebase reads as untouched). Reset (via
+  `reset_drift_tracker()`) alongside both `tiles_hall_init()` and
+  `tiles_hall_recapture_baseline()`, so stale pre-reset stability state
+  never immediately nudges away from a freshly forced baseline.
+  **Not hardware-verified:** `DRIFT_NOISE_THRESHOLD`/`_DWELL_MS`/
+  `_SLEW_DENOMINATOR` are first-guess constants, not measured against
+  real thermal drift over a session.
   **Not done:** deciding which raw axis is actually vertical press depth
   per pad (Z is assumed for all pads, unverified), per-pad calibration
   curve (offsets, dead zones, saturation margin), any use of X/Y
@@ -338,15 +360,34 @@ not its code.
   pressure. Per-pad state machine: IDLE -> AWAITING_STRIKE (touched, not
   yet committed) -> NOTE_ON, with AWAITING_STRIKE cancelling back to
   IDLE (no note sent) if released before enough samples arrive.
-  **Explicitly unmeasured, needs real-hardware tuning:** the
-  acceleration->velocity scale, the depth->aftertouch full-scale range,
-  and the strike-detection window durations -- all flagged as
-  placeholders in `expression.c`, none derived from a calibrated
-  mT/LSB relationship since that doesn't exist yet. Also drives
-  `haptics.c` at the same three points it drives `midi_out.c` (note-on
-  -> kick, note-off -> stop, aftertouch change -> sustain level) with
-  the exact same velocity/aftertouch values, so haptic and MIDI output
-  never disagree.
+  `DEPTH_TO_AFTERTOUCH_FULL_SCALE` is now real, not a placeholder: 900,
+  derived from a serial-driven full-press capture session
+  (`diagnostics/calibration.h`'s 'f' command) with all 24 magnets
+  seated -- measured 784-1184 across all 24 pads, average 918; 900 uses
+  the average rather than the low end of that spread so most of a
+  strike's travel keeps real dynamic range, at the cost of the least-
+  sensitive pad or two capping out very slightly before their absolute
+  mechanical limit. Real feedback that prompted this session: "find an
+  average to pin max [pressure] to, and aftertouch detects any
+  additional pressure past that and less as well." Aftertouch also now
+  runs through an exponential moving average (`AFTERTOUCH_SMOOTHING_ALPHA`
+  0.35, a `smoothed_depth` field per pad, seeded from real depth at
+  note-on so it doesn't ramp up from 0) before `aftertouch_from_depth()`
+  -- deliberately not applied to velocity, which is a one-shot transient
+  measurement smoothing would blunt, not a continuous signal that
+  benefits from it. Real feedback: "you will need... smoothing to have
+  good reads and make it feel good like a professional midi piano
+  controller."
+  **Explicitly unmeasured, still needs real-hardware tuning:** the
+  acceleration->velocity scale (`ACCEL_TO_VELOCITY_SCALE`) and the
+  strike-detection window durations -- still flagged as placeholders,
+  since the capture session above only measured static full-press
+  depth, not strike dynamics. `AFTERTOUCH_SMOOTHING_ALPHA` is also a
+  first guess, not measured against how jittery a real held reading
+  actually is. Also drives `haptics.c` at the same three points it
+  drives `midi_out.c` (note-on -> kick, note-off -> stop, aftertouch
+  change -> sustain level) with the exact same velocity/aftertouch
+  values, so haptic and MIDI output never disagree.
 - `haptics.h`/`.c` — done for V1: per-pad feedback driven entirely by
   `expression.c`'s calls (not touch/Hall directly). Envelope: KICK
   (opens with a brief overdrive spike at max duty regardless of
