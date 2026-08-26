@@ -327,9 +327,11 @@ not its code.
   `tiles_expression_set_pitch_bend_sensitivity()`) and row 4 (aftertouch,
   `tiles_expression_set_aftertouch_sensitivity()`) both range the
   opposite direction -- smaller is *more* sensitive for both underlying
-  values -- 0.30/1300 (col 1, least sensitive) -> 0.15/900 (col 4, the
-  original real-calibrated aftertouch default and pitch bend's original
-  starting guess, both preserved exactly) -> 0.075/600 (col 6, most
+  values -- 0.60/1300 (col 1, least sensitive) -> 0.30/900 (col 4 --
+  0.30 is pitch bend's current default, raised from an original 0.15
+  after real feedback that it was too sensitive/jittery, see
+  `expression.h`'s entry above; 900 is aftertouch's original
+  real-calibrated default, unchanged) -> 0.15/600 (col 6, most
   sensitive). All of row 1/2/4's non-default anchors are unmeasured first
   attempts, not felt or captured on real hardware yet.
   The selected pad in every row lights Sentia Instruments Magenta
@@ -742,15 +744,38 @@ not its code.
   (`claim_pitch_bend_owner()`, mirroring how aftertouch seeds
   `smoothed_depth` at note-on rather than from 0); everything sent
   afterward is the smoothed *change* in cosine from that baseline
-  (`PITCH_BEND_SMOOTHING_ALPHA`, same value and reasoning as
-  `AFTERTOUCH_SMOOTHING_ALPHA`), scaled to the 14-bit MIDI range by
+  (`PITCH_BEND_SMOOTHING_ALPHA`), scaled to the 14-bit MIDI range by
   `s_pitch_bend_max_cosine_deviation` (unmeasured -- no captured real data
   yet for how much a deliberate sideways push actually moves this ratio
   on this board, unlike the depth-based constants above). Runtime, not a
   fixed constant, since `expression_control.h`'s sub-menu (below) needs
-  to adjust it live -- `tiles_expression_set_pitch_bend_sensitivity()`
-  defaults to exactly the same 0.15 starting value the old fixed
-  `#define` used.
+  to adjust it live -- `tiles_expression_set_pitch_bend_sensitivity()`.
+  **Made usable after a first real-hardware pass** -- real feedback:
+  "very jittery and not responding to the sideway tilt as expected...
+  even with no tilt it jitters it should be not as sensitive and not
+  jittery." Three changes, together: `s_pitch_bend_max_cosine_deviation`'s
+  default doubled, 0.15 -> 0.30 (half as sensitive, with
+  `expression_control.h`'s sub-menu row-2 anchors rescaled to match, same
+  spread ratio as before); `PITCH_BEND_SMOOTHING_ALPHA` lowered, 0.35 ->
+  0.15 (more EMA smoothing, unlike `AFTERTOUCH_SMOOTHING_ALPHA` which
+  keeps its original 0.35 -- pitch bend needed more aggressive filtering
+  specifically, not aftertouch); and a new `PITCH_BEND_DEADZONE_COSINE_
+  DELTA` (0.03), applied as a "soft knee" in
+  `pitch_bend_14bit_from_cosine_delta()` -- within the deadzone output is
+  exactly centered, just past it output ramps continuously from 0 (not a
+  hard cutoff-then-jump) and still reaches full swing at exactly
+  `s_pitch_bend_max_cosine_deviation`. The deadzone directly targets "even
+  with no tilt it jitters": raw Hall X/Y/Z readings are quantized (~16
+  raw-count steps, same quantization affecting Z elsewhere in this file)
+  and the direction-cosine ratio is sensitive to that even with zero real
+  lateral motion -- smoothing alone reduces but doesn't eliminate it,
+  since it's a low-pass filter, not a floor. A divide-by-zero/negative-
+  range guard in that same function floors the deadzone-adjusted usable
+  range to a small positive value, in case the sub-menu is ever tuned to
+  a sensitivity at or below the deadzone itself. All three values are
+  unmeasured first attempts, not derived from a captured real-noise
+  session the way `MIN_STRIKE_DEPTH_DELTA` above was -- not yet
+  re-verified on real hardware after this specific change.
   Single hardware axis (X) used as "sideways" -- no hardware doc exists
   for which local Hall axis maps to which physical direction on a
   mounted pad, and MIDI pitch bend is inherently one-dimensional

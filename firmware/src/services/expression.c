@@ -303,21 +303,49 @@ static uint16_t s_depth_to_aftertouch_full_scale = 900u;
  * +/-8191 MIDI range. Unmeasured -- there is no captured real-hardware
  * data yet for how much a deliberate sideways push actually moves this
  * ratio on this board's magnet/sensor geometry, unlike the depth-based
- * constants elsewhere in this file. A first attempt at a sensitivity
- * that's neither "barely moves" nor "hits max bend from a light touch."
+ * constants elsewhere in this file. Raised from an initial 0.15 -- real
+ * feedback on real hardware: "very jittery and not responding to the
+ * sideway tilt as expected... it should be not as sensitive." Doubling
+ * it means a given amount of raw sensor noise (see PITCH_BEND_DEADZONE_
+ * COSINE_DELTA below for the other half of that same fix) now maps to
+ * roughly half the perceived bend it used to, alongside requiring a more
+ * deliberate real tilt to reach full swing.
  *
  * Runtime, not a fixed #define, so services/expression_control.h's
  * sub-menu (row 2, pitch bend sensitivity) can adjust it live via
  * tiles_expression_set_pitch_bend_sensitivity() below -- a SMALLER value
  * here means MORE sensitive (less real motion needed to reach full
- * bend). Defaults to exactly this same 0.15 starting value. */
-static float s_pitch_bend_max_cosine_deviation = 0.15f;
+ * bend). Defaults to exactly this same 0.30 starting value. */
+static float s_pitch_bend_max_cosine_deviation = 0.30f;
 
-/* EMA smoothing on the cosine signal itself, same reasoning and same
- * starting value as AFTERTOUCH_SMOOTHING_ALPHA above -- a continuous,
- * held signal benefits from smoothing against raw per-sample sensor
- * noise the way a one-shot transient measurement (velocity) would not. */
-#define PITCH_BEND_SMOOTHING_ALPHA 0.35f
+/* Small deltas this close to baseline are treated as exactly centered
+ * (no bend at all) rather than passed through -- real feedback: "very
+ * jittery... even with no tilt it jitters." Raw Hall X/Y/Z readings are
+ * quantized (~16 raw-count steps -- see this file's strike-detection
+ * section and hall.c for the same quantization affecting Z) and the
+ * direction-cosine ratio is sensitive to that quantization even with
+ * genuinely zero real lateral motion; PITCH_BEND_SMOOTHING_ALPHA's
+ * exponential average (below) reduces but doesn't eliminate that noise
+ * on its own, since it's a low-pass filter, not a floor. Applied as a
+ * "soft knee" in pitch_bend_14bit_from_cosine_delta() below (subtracted
+ * from the magnitude before normalizing, not a hard cutoff-then-jump)
+ * so bend still ramps continuously from zero just past this threshold
+ * rather than snapping straight to some nonzero value the instant it's
+ * crossed. Unmeasured -- a first attempt at "comfortably above the
+ * observed rest-state noise floor, still small relative to a deliberate
+ * tilt," not derived from a captured real-noise session the way
+ * MIN_STRIKE_DEPTH_DELTA elsewhere in this file was. */
+#define PITCH_BEND_DEADZONE_COSINE_DELTA 0.03f
+
+/* EMA smoothing on the cosine signal itself. Lowered from an initial
+ * 0.35 (the same starting value AFTERTOUCH_SMOOTHING_ALPHA above still
+ * uses) specifically for the same "very jittery" real feedback the
+ * deadzone above addresses -- a smaller alpha weighs each new raw sample
+ * less heavily against the running average, trading a little
+ * responsiveness for meaningfully more noise rejection on a continuous,
+ * held signal (unlike velocity's one-shot transient measurement, which
+ * smoothing would only blunt, not clean up). */
+#define PITCH_BEND_SMOOTHING_ALPHA 0.15f
 
 typedef enum {
     PAD_STATE_IDLE = 0,
@@ -466,9 +494,31 @@ static float hall_x_direction_cosine(int16_t x, int16_t y, int16_t z) {
 
 /* Maps a cosine delta (current direction cosine minus this note's
  * baseline) to the 14-bit MIDI pitch bend wire value -- see
- * PITCH_BEND_MAX_COSINE_DEVIATION's own comment. */
+ * s_pitch_bend_max_cosine_deviation's own comment. Deadzone applied as a
+ * "soft knee," not a hard cutoff -- see PITCH_BEND_DEADZONE_COSINE_
+ * DELTA's own comment for why: within the deadzone, output is exactly
+ * centered; just past it, output ramps continuously from 0 rather than
+ * jumping straight to some nonzero value, and still reaches full swing
+ * at exactly the same real deviation (s_pitch_bend_max_cosine_deviation)
+ * as before the deadzone existed. */
 static uint16_t pitch_bend_14bit_from_cosine_delta(float delta) {
-    float normalized = delta / s_pitch_bend_max_cosine_deviation;
+    float magnitude = fabsf(delta);
+    float sign = (delta < 0.0f) ? -1.0f : 1.0f;
+    if (magnitude <= PITCH_BEND_DEADZONE_COSINE_DELTA) {
+        magnitude = 0.0f;
+    } else {
+        magnitude -= PITCH_BEND_DEADZONE_COSINE_DELTA;
+    }
+    float usable_range = s_pitch_bend_max_cosine_deviation - PITCH_BEND_DEADZONE_COSINE_DELTA;
+    if (usable_range < 0.01f) {
+        /* Guards against services/expression_control.h's sub-menu (row
+         * 2) ever being tuned to a sensitivity at or below the deadzone
+         * itself, which would otherwise divide by zero or a negative
+         * range -- floors to a narrow but well-defined usable range
+         * instead of clamping the sub-menu's own values. */
+        usable_range = 0.01f;
+    }
+    float normalized = sign * (magnitude / usable_range);
     if (normalized > 1.0f) {
         normalized = 1.0f;
     }

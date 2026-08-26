@@ -198,13 +198,20 @@ static void apply_row_haptics(uint8_t column) {
 
 /* Row 2 -- expression.c's pitch bend sensitivity (max cosine deviation).
  * SMALLER is MORE sensitive (less real motion needed for full bend), so
- * column 1 gets the LARGEST value (0.30, least sensitive) and column 6
- * the SMALLEST (0.075, most sensitive); column 4 is exactly 0.15, the
- * feature's original fixed default. Unmeasured -- same caveat as
+ * column 1 gets the LARGEST value (0.60, least sensitive) and column 6
+ * the SMALLEST (0.15, most sensitive); column 4 is exactly 0.30, the
+ * feature's current default -- raised from an original 0.15 (with these
+ * anchors rescaled to match, same 2x/0.5x-of-default spread as before)
+ * after real feedback that it read as too sensitive and jittery on real
+ * hardware; see expression.c's own s_pitch_bend_max_cosine_deviation
+ * comment for the fuller fix (this scalar plus a smoothing/deadzone
+ * change together). Column 6's 0.15 stays comfortably above
+ * PITCH_BEND_DEADZONE_COSINE_DELTA (0.03) so even the most sensitive
+ * column keeps a real usable range. Unmeasured -- same caveat as
  * expression.c's own pitch-bend-sensitivity history: no captured
  * real-hardware data yet for how far this should actually range. */
 static void apply_row_pitch_bend(uint8_t column) {
-    float value = piecewise_column_value(column, 0.30f, 0.15f, 0.075f);
+    float value = piecewise_column_value(column, 0.60f, 0.30f, 0.15f);
     tiles_expression_set_pitch_bend_sensitivity(value);
 }
 
