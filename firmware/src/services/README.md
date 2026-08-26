@@ -28,14 +28,44 @@ not its code.
   (230/255, deliberately independent of the power ceiling below -- only
   4 LEDs on that chain, negligible current impact even at full
   brightness, and it was reading as "basically not glowing" when it
-  rode down with the USB-only ceiling), all 24 pads solid white at idle
-  baseline by default, brightening toward the ceiling when `touch.c`
-  reports that pad touched -- written immediately on a press-value
-  change rather than waiting for the round-robin, so touch reads as
-  responsive rather than laggy. Pad brightness ceiling reads live from
-  `power.h`'s `tiles_power_get_state().led_brightness_ceiling_percent`
-  (37% on USB-only, 75% once external power is confirmed) instead of a
+  rode down with the USB-only ceiling); pads brighten to plain white
+  toward the ceiling when `touch.c` reports that pad touched -- written
+  immediately on a press-value change rather than waiting for the
+  round-robin, so touch reads as responsive rather than laggy. Pad
+  brightness ceiling reads live from `power.h`'s
+  `tiles_power_get_state().led_brightness_ceiling_percent` (37% on
+  USB-only, 75% once external power is confirmed) instead of a
   hardcoded constant -- underglow does not use this ceiling at all.
+  **Idle (untouched) coloring by note role, added after real feedback
+  that a uniform white grid was hard to read** -- "root should be blue
+  and black keys shouldnt have led this in rest non pressed moment...
+  when pressed the regular white illumination is fine." `write_pad()`'s
+  non-standby branch now checks `services/note_map.h`'s new
+  `tiles_note_map_is_root_pad()`/`_is_natural_pad()` for whichever pad
+  it's about to render, but ONLY while that pad is untouched -- a touch
+  always still collapses straight to plain white at `pad_level_for_press()`
+  regardless of note role, unchanged. A root pad glows blue at a
+  dedicated, brighter `root_baseline_level()`
+  (`TILES_LIGHTING_ROOT_BASELINE_PERCENT`, 30% of ceiling -- higher than
+  the natural-key baseline below since a single blue channel reads
+  dimmer than three white channels at the same per-channel level, and
+  this is meant to stand out as a clear landmark); a natural (white) key
+  keeps exactly the previous idle-white behavior at
+  `idle_baseline_level()` (`TILES_LIGHTING_IDLE_BASELINE_PERCENT`, 10%);
+  a sharp (black) key goes to TRUE black -- a deliberate, narrow
+  exception to this file's usual "pads never go fully dark" floor,
+  scoped specifically to this readability distinction. Root checked
+  first: a root pad can itself be a sharp/black key depending on the
+  current key offset, and root's blue always wins over that (see
+  `tiles_note_map_is_root_pad()`'s own comment on why root is exactly 2
+  fixed physical pads regardless of key, while natural/sharp
+  classification genuinely does shift with the key). No new wiring
+  needed for a live key change to repaint idle pads correctly --
+  `tiles_lighting_service()`'s existing round-robin already revisits
+  every pad continuously regardless of whether its press value changed.
+  Unmeasured -- root's brighter percentage and the natural/sharp
+  distinction reading clearly at actual LED brightness/diffusion are
+  both first attempts.
   **Not done:** standby animations (needs its own design pass — see the
   defaults doc), Hall-driven (as opposed to touch-driven) brightness.
 - `buttons.h`/`.c` — done for V1: reads all 6 function buttons
@@ -153,6 +183,19 @@ not its code.
   top of octave shift, added for `octave_control.c`'s transpose mode
   (below) -- same "one owner for note-mapping parameters" reasoning as
   octave shift.
+  Two new accessors added for `lighting.c`'s idle pad coloring (above):
+  `tiles_note_map_is_root_pad()` and `_is_natural_pad()`. Root is purely
+  positional -- `pad_degree(cfg) % 12 == 0`, exactly 2 of the 24 pads,
+  always the SAME 2 pads regardless of the current key offset, since
+  transposing shifts every pad's note by the same amount (the offset
+  cancels out algebraically comparing a pad's pitch class against the
+  root's). Natural-vs-sharp is the opposite -- genuinely key-dependent,
+  looked up from a new 12-entry `s_pitch_class_is_natural[]` table
+  indexed by the pad's CURRENT absolute pitch class
+  (`tiles_note_map_get_note(pad) % 12`). `pad_degree()` itself was
+  pulled out of `tiles_note_map_get_note()` into its own small helper so
+  `is_root_pad()` could reuse the exact same row/col-to-degree math
+  rather than duplicating it.
 - `octave_control.h`/`.c` — done for V1: the default function of SW1
   ("-") and SW2 ("+") is octave shift down/up, one octave per press
   (rising edge, not while held), driving `note_map.c`'s shift above.

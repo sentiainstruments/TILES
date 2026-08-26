@@ -1,8 +1,10 @@
 /*
  * SENTIA TILES firmware entry point.
  *
- * Current scope: board bring-up, I2C discovery, LEDs (pad + underglow,
- * white, idle baseline + touch-driven brightness), function buttons
+ * Current scope: board bring-up, I2C discovery, LEDs (pad + underglow;
+ * idle pads colored by note role -- root blue, naturals white, sharps
+ * dark -- brightening to plain white on touch; see services/lighting.h),
+ * function buttons
  * (debounced, LED lit while held), capacitive touch, USB MIDI (single
  * channel; note-on velocity from Hall strike acceleration and ongoing
  * aftertouch from press depth -- see services/expression.h; chromatic

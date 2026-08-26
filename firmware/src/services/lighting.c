@@ -1,6 +1,7 @@
 #include "lighting.h"
 
 #include "board_pins.h"
+#include "note_map.h"
 #include "pad_config.h"
 #include "power.h"
 
@@ -8,6 +9,26 @@
 #include "tca9554.h"
 
 #define TILES_LIGHTING_IDLE_BASELINE_PERCENT 10u
+
+/* Idle (untouched) chromatic-play pad coloring by note role -- real
+ * feedback: "root should be blue and black keys shouldnt have led this
+ * in rest non pressed moment... push should be regular white illumination"
+ * (unchanged, see pad_level_for_press() below, still used whenever a pad
+ * IS touched, root or not). A root pad's blue uses this brighter,
+ * dedicated percentage rather than TILES_LIGHTING_IDLE_BASELINE_PERCENT
+ * above -- blue reads dimmer than white at the same per-channel level
+ * (only one of three channels lit, and human vision is less sensitive to
+ * blue), so reusing the natural-key baseline directly would have made
+ * the root landmark this feature is meant to add barely visible instead
+ * of standing out. Unmeasured -- a first attempt at "clearly a landmark,
+ * not clearly a full press," not calibrated against real LED
+ * brightness/diffusion. Sharp/black keys get no baseline floor at all
+ * when idle (true black, see write_pad() below) -- unlike every other
+ * idle pad in this file, which is deliberately never allowed to go
+ * fully dark (see tiles_lighting_set_pad_press()'s header); this is a
+ * narrow, deliberate exception specifically for the natural/sharp
+ * readability distinction real feedback asked for. */
+#define TILES_LIGHTING_ROOT_BASELINE_PERCENT 30u
 
 /* Underglow's own fixed brightness, out of 255 -- deliberately NOT
  * scaled by ceiling_level()/the power state. It used to be a percentage
@@ -52,6 +73,10 @@ static uint8_t ceiling_level(void) {
 
 static uint8_t idle_baseline_level(void) {
     return (uint8_t)(((uint32_t)ceiling_level() * TILES_LIGHTING_IDLE_BASELINE_PERCENT) / 100u);
+}
+
+static uint8_t root_baseline_level(void) {
+    return (uint8_t)(((uint32_t)ceiling_level() * TILES_LIGHTING_ROOT_BASELINE_PERCENT) / 100u);
 }
 
 static float clamp01(float v) {
@@ -105,9 +130,32 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
         const tiles_rgb01_t *c = &s_pad_standby_rgb[pad_index];
         pixel = tiles_sk6805_pack_rgb(pad_channel_level(c->r), pad_channel_level(c->g),
                                        pad_channel_level(c->b));
-    } else {
+    } else if (s_pad_press[pad_index] > 0.0f) {
         uint8_t level = pad_level_for_press(s_pad_press[pad_index]);
         pixel = tiles_sk6805_pack_rgb(level, level, level);
+    } else {
+        /* Idle (untouched), normal chromatic play: color by note role --
+         * real feedback: "root should be blue and black keys shouldnt
+         * have led this in rest non pressed moment." A touch (above)
+         * always overrides this with plain white regardless of note
+         * role -- "when pressed the regular white illumination is
+         * fine." Root checked first since a root pad can itself be a
+         * sharp/black key depending on the current key offset (see
+         * tiles_note_map_is_root_pad()'s own comment) -- root's blue
+         * always wins over that. */
+        uint8_t logical_pad = (uint8_t)(pad_index + 1u);
+        if (tiles_note_map_is_root_pad(logical_pad)) {
+            pixel = tiles_sk6805_pack_rgb(0u, 0u, root_baseline_level());
+        } else if (tiles_note_map_is_natural_pad(logical_pad)) {
+            uint8_t baseline = idle_baseline_level();
+            pixel = tiles_sk6805_pack_rgb(baseline, baseline, baseline);
+        } else {
+            /* Sharp/black key, idle -- true black, deliberately bypassing
+             * this file's usual "pads never go fully dark" floor (see
+             * TILES_LIGHTING_ROOT_BASELINE_PERCENT's own comment for why
+             * this specific exception exists). */
+            pixel = tiles_sk6805_pack_rgb(0u, 0u, 0u);
+        }
     }
 
     tiles_tca9554_disable_all_muxes(&s_led_mux);

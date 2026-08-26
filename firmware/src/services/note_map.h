@@ -30,6 +30,7 @@
  * hook that will sit behind that once usb_vendor/ and profiles/ exist.
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 
 typedef enum {
@@ -89,3 +90,23 @@ int8_t tiles_note_map_get_key_offset(void);
  * currently selected scale and octave shift. Returns 0 for an
  * out-of-range pad. */
 uint8_t tiles_note_map_get_note(uint8_t logical_pad);
+
+/* True if this pad is currently the key's tonic (root) note -- driven by
+ * services/lighting.c's idle pad coloring (real feedback: "root should
+ * be blue"). Purely positional: always exactly 2 pads out of 24 (one per
+ * octave repeat across the chromatic grid's 2-octave span), regardless
+ * of the current key offset -- transposing the whole grid changes WHICH
+ * note the root pads play, never WHICH pads they are, since every pad
+ * shifts by the same amount together. Returns false for an
+ * out-of-range pad. */
+bool tiles_note_map_is_root_pad(uint8_t logical_pad);
+
+/* True if this pad's CURRENTLY MAPPED note (tiles_note_map_get_note())
+ * is a natural (white key) rather than sharp/flat (black key) --
+ * likewise driven by services/lighting.c's idle pad coloring. Unlike
+ * tiles_note_map_is_root_pad() above, this DOES depend on the current
+ * key offset: transposing changes which absolute pitch class (and so
+ * which natural/sharp classification) each physical pad plays. Returns
+ * true (natural) for an out-of-range pad, matching this function's
+ * "nothing special about this pad" default. */
+bool tiles_note_map_is_natural_pad(uint8_t logical_pad);
