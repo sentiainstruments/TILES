@@ -211,24 +211,24 @@ not its code.
   showing. `tiles_octave_control_is_transpose_active()` lets `main.c`
   skip `standby.c`'s idle scan while this owns the pad grid, mirroring
   the existing `game_mode.c` gate.
-  **Defers to game mode, manual screensaver scrolling, and square's
-  shift window:** this module's scan runs unconditionally every tick with
-  no gate of its own, and `game_mode.h`'s minigames (below), `standby.h`'s
-  manually-entered screensaver (hold SW6/circle for 6s), and holding
-  SW5/square alone (not combined with circle, see
-  `expression_control.h`'s entry below) all reuse SW1/SW2 as their own
-  controls -- without a check here, every in-game, scroll, or
-  intensity-adjustment press would *also* silently fire an octave or
-  transpose step underneath. `tiles_game_mode_is_active()`,
-  `tiles_standby_owns_octave_buttons()`, and
-  `tiles_expression_control_shift_active()` are all checked at the top of
-  the scan: while any is true, this module only keeps its press-edge
-  tracking current and does nothing else (button-LED writes were
-  already a no-op during game mode, see `game_mode.h`'s entry below for
-  why; during manual screensaver, `standby.c` itself claims the same
-  standby-active flag for the same reason; during square's shift window,
-  SW1/SW2 simply keep their normal default "lit while pressed" LED
-  behavior, since that mode doesn't touch their LEDs at all).
+  **Defers to game mode, manual screensaver scrolling, and the
+  expression sub-menu:** this module's scan runs unconditionally every
+  tick with no gate of its own, and `game_mode.h`'s minigames (below),
+  `standby.h`'s manually-entered screensaver (hold SW6/circle for 6s),
+  and `expression_control.h`'s expression sub-menu (visible whenever
+  square is held alone, or left open sticky, see that entry below) all
+  need SW1/SW2 left alone -- without a check here, every in-game,
+  scroll, intensity-adjustment, or sub-menu-dismiss press would *also*
+  silently fire an octave or transpose step underneath.
+  `tiles_game_mode_is_active()`, `tiles_standby_owns_octave_buttons()`,
+  and `tiles_expression_control_owns_pad_grid()` are all checked at the
+  top of the scan: while any is true, this module only keeps its
+  press-edge tracking current and does nothing else (button-LED writes
+  were already a no-op during game mode, see `game_mode.h`'s entry below
+  for why; during manual screensaver, `standby.c` itself claims the same
+  standby-active flag for the same reason; the expression sub-menu
+  doesn't touch SW1/SW2's LEDs at all, so they simply keep their normal
+  default "lit while pressed" behavior throughout).
   **Not hardware-verified:** the combo-hold threshold, both flash
   durations, the cross's row/column placement, and the amber accent
   color are all first-pass judgment calls, not measurements.
@@ -243,8 +243,9 @@ not its code.
   hold-gesture below fires) toggles `services/expression.c`'s pitch bend
   on/off via `tiles_expression_toggle_pitch_bend()` -- real feedback:
   "when you press sentia button once it turns on and off the pitch
-  bend." While square is held alone, SW1/SW2 step the expression
-  sub-menu's row-1 (haptics) COLUMN one at a time
+  bend." From the very first instant square is held alone (no threshold
+  -- see the sub-menu below), SW1/SW2 step the expression sub-menu's
+  row-1 (haptics) COLUMN one at a time
   (`handle_square_shift_input()`/`step_haptics_column()`), through the
   exact same `apply_row()` path a sub-menu pad tap uses -- real feedback:
   "holding just sentia acts like a function shift for modifiers -/+ for
@@ -254,38 +255,55 @@ not its code.
   the menu." (An earlier version stepped `services/haptics.c`'s scalar
   directly via a now-removed `tiles_haptics_adjust_intensity()`, which
   could drift to a value matching no defined column -- see that file's
-  own entry above.) A new accessor, `tiles_expression_control_shift_
-  active()`, is checked by `octave_control.c` (see its entry above) so an
-  intensity press doesn't *also* silently step the octave/transpose key.
-  **Square alone, held 3 seconds: the expression sub-menu.** Real
-  feedback, after the button-identity correction: "it should be when you
-  hold shift and sentia the pads become sliders one for each of the four
-  rows... row one is haptics, row two is pitch bend, 3 is the remaining
-  axis and 4 is aftertouch," then, after a combo-based version (holding
-  circle+square together) was tried on real hardware: "lets change [that]
-  to hold square for 3 seconds alone to toggle that menu." Held ALONE
-  (circle NOT also held) for `EXPRESSION_SUBMENU_TOGGLE_HOLD_MS` (3000ms,
-  edge-latched via `s_submenu_toggle_fired` so one long hold can't
-  re-fire; the alone-streak restarts if circle ever joins mid-hold, same
-  reasoning `standby.h`'s own circle-hold `*_fired` pattern uses), square
-  **toggles** the sub-menu open/closed -- sticky, not shown-only-while-
-  held, so it stays open after square is released and closes only on the
-  next such 3-second hold (`toggle_submenu()`). Open, it claims the pad
-  grid (`tiles_lighting_set_standby_active()`, the same rendering-
-  ownership pattern `octave_control.c`'s transpose mode and `standby.c`'s
-  own animations use) and turns it into 4 rows of 6-pad sliders: row 1
-  (nearest the buttons) = haptics intensity, row 2 = pitch bend
-  sensitivity, row 3 = reserved for a future "remaining axis" (Y) feature
-  (the selected column is stored, `SUBMENU_ROW_Y_AXIS`, but not yet
-  consumed anywhere), row 4 (bottom) = aftertouch sensitivity. Tapping
-  any pad in a row (a capacitive touch rising edge, read directly via
-  `tiles_touch_is_touched()` rather than through `services/expression.c`'s
-  own state machine, which is suppressed for new strikes the whole time
-  this is open -- see that file's entry above) selects that column (1-6,
-  left to right) as the row's new level, applied immediately through
-  each parameter's own setter -- the exact same `apply_row()` the
-  square-alone "-"/"+" shift above uses for row 1, so the two controls
-  can never disagree about what's currently applied.
+  own entry above.) `tiles_expression_control_owns_pad_grid()` is checked
+  by `octave_control.c` (see its entry above) so a shift press -- or a
+  press meant only to dismiss a sticky sub-menu, see below -- doesn't
+  *also* silently step the octave/transpose key.
+  **Square alone, momentary preview + 3-second sticky lock: the
+  expression sub-menu.** Real feedback, after the button-identity
+  correction: "it should be when you hold shift and sentia the pads
+  become sliders one for each of the four rows... row one is haptics,
+  row two is pitch bend, 3 is the remaining axis and 4 is aftertouch,"
+  then, after a combo-based version (holding circle+square together) was
+  tried on real hardware: "lets change [that] to hold square for 3
+  seconds alone to toggle that menu," followed by a second hardware pass:
+  "momentary press should open menu as well but after 3 seconds the
+  toggle should happen." The sub-menu is now visible from the instant
+  square is held alone (`s_submenu_visible`, `set_submenu_visible()`) --
+  a momentary preview that disappears again on release below
+  `EXPRESSION_SUBMENU_TOGGLE_HOLD_MS` (3000ms). Reaching that threshold
+  while still held alone (edge-latched via `s_submenu_toggle_fired`, same
+  `*_fired` shape `standby.h`'s own circle-hold uses; the alone-streak
+  restarts if circle ever joins mid-hold) flips `s_submenu_sticky`
+  instead, locking it visible after release too -- closing again only on
+  the next such 3-second hold, or via the dismiss-button shortcut below.
+  Visible, it claims the pad grid (`tiles_lighting_set_standby_active()`,
+  the same rendering-ownership pattern `octave_control.c`'s transpose
+  mode and `standby.c`'s own animations use) and turns it into 4 rows of
+  6-pad sliders: row 1 (nearest the buttons) = haptics intensity, row 2 =
+  pitch bend sensitivity, row 3 = reserved for a future "remaining axis"
+  (Y) feature (the selected column is stored, `SUBMENU_ROW_Y_AXIS`, but
+  not yet consumed anywhere), row 4 (bottom) = aftertouch sensitivity.
+  Tapping any pad in a row (a capacitive touch rising edge, read directly
+  via `tiles_touch_is_touched()` rather than through
+  `services/expression.c`'s own state machine, which is suppressed for
+  new strikes the whole time this is visible -- see that file's entry
+  above) selects that column (1-6, left to right) as the row's new
+  level, applied immediately through each parameter's own setter -- the
+  exact same `apply_row()` the square-alone "-"/"+" shift above uses for
+  row 1, so the two controls can never disagree about what's currently
+  applied.
+  **Dismissing a sticky sub-menu without re-toggling it.** Real feedback:
+  "any of the 4 function buttons should exit that menu it shouldnt have
+  to be untoggled." `poll_dismiss_button_edge()` tracks SW1-4's press
+  edges unconditionally every tick (so the tracking is never stale by
+  the time it matters -- see its own comment on why that separation from
+  *acting* on an edge is deliberate); a fresh edge on any of them while
+  the sub-menu is sticky AND square is NOT currently held clears
+  `s_submenu_sticky` immediately. Scoped to that passive-viewing case
+  specifically -- while square IS actively held, SW1/SW2 are busy
+  running the haptics shift above, so a press there keeps adjusting
+  rather than exiting.
   Every row shares one mapping function, `piecewise_column_value()`: a
   3-anchor piecewise-linear curve (column 1, column 4, column 6), column
   4 landing on exactly each parameter's previous fixed default (so a
@@ -306,47 +324,61 @@ not its code.
   attempts, not felt or captured on real hardware yet.
   The selected pad in every row lights Sentia Instruments Magenta
   (#FF00FF, the same brand color `boot_sequence.h`'s final pulse phase
-  uses) -- every other pad in the grid stays dark, underglow off -- real
-  feedback: "make the selected level of everything sentia magenta color
-  to differenciate from standard modes." Row 1's column-1 OFF position is
-  the one exception: real feedback, after a first hardware pass, that
-  "the lowest setting is off and should be blinking when active in menu
-  to show its off" -- `row_column_is_off()` flags that one row/column
-  combination specifically (no other row has a true "off" position at
-  column 1, just "least sensitive"), and `render_submenu()` blinks that
-  pad between magenta and dark (`OFF_INDICATOR_BLINK_PERIOD_MS`, 500ms)
-  instead of showing it solid, so the sub-menu itself communicates "off,"
-  not just "lowest." `tiles_expression_control_owns_pad_grid()` lets
-  `main.c` skip `standby.h`'s idle scan while the sub-menu is open, the
-  same way it already does for `game_mode.h` and `octave_control.c`'s
+  uses); every OTHER pad in the grid sits at `SUBMENU_UNSELECTED_LEVEL`
+  (a low 0.06 fraction of full magenta, not fully dark) -- real feedback,
+  after a first hardware pass showed unselected pads reading at the same
+  brightness as the selection: "make the non selected default light pad
+  very dim." Row 1's column-1 OFF position is the one exception: real
+  feedback, also from that pass: "the lowest setting is off and should be
+  blinking when active in menu to show its off" -- `row_column_is_off()`
+  flags that one row/column combination specifically (no other row has a
+  true "off" position at column 1, just "least sensitive"), and
+  `render_submenu()` blinks that pad between full magenta and the same
+  dim baseline every unselected pad sits at (`OFF_INDICATOR_BLINK_
+  PERIOD_MS`, 500ms) rather than showing it solid, so the sub-menu itself
+  communicates "off," not just "lowest."
+  **Available during mute, but doesn't silently escape it.** Real
+  feedback, after mute originally suppressed the sub-menu entirely: "when
+  mute is on the menu is unavailable and we dont want that." Opening,
+  viewing, and adjusting the sub-menu (pad taps or the "-"/"+" shift) now
+  all work identically regardless of mute state -- merely visiting it
+  never changes mute. `apply_row()` (the one funnel every real edit goes
+  through) is also the one place that can tell a genuine value change
+  apart from a no-op re-selection or a clamped step; when it sees a real
+  change while `s_mute_active` is set, it turns mute back off right
+  there (the same `tiles_haptics_set_muted()`/`tiles_expression_set_
+  muted()` calls the mute combo's own toggle uses) -- real feedback:
+  "changes to the menu should override expression mute and turn it off
+  but if the menu is opened just to check settings and no change is made
+  then mute stays on." `tiles_expression_control_owns_pad_grid()` lets
+  `main.c` skip `standby.h`'s idle scan while the sub-menu is visible,
+  the same way it already does for `game_mode.h` and `octave_control.c`'s
   transpose mode.
   **Circle+square held 3 seconds: expression mute.** A separate combo,
-  independent of the sub-menu toggle above -- holding SW6 (circle) and
-  SW5 (square) together for `EXPRESSION_MUTE_HOLD_MS` (3000ms, its own
-  edge latch, `s_mute_fired`) toggles a sticky mute that persists until
-  the same 3-second combo hold toggles it off again -- real feedback: "a
-  shortcut that disables everything and leaves basic midi... it acts
-  like a mute." `tiles_haptics_set_muted()` and
-  `tiles_expression_set_muted()` (see those files' own entries) do the
-  actual work: pitch bend and poly aftertouch stop being computed/sent,
-  every haptic effect stops firing with every active motor cut
-  immediately, and note-on/off/velocity are completely unaffected. The
-  sub-menu itself keeps working while muted (still useful for queuing up
-  settings before unmuting, and taps aren't gated on mute at all); only
-  square's own ALONE-hold behaviors (pitch-bend click, the sub-menu
-  toggle, and the haptics shift) are suppressed while muted, since
-  square's LED is busy showing the mute indicator instead. That
-  indicator (`render_square_led()`/`mute_blink_level()`) is a repeating
-  two-blink pattern (`MUTE_BLINK_ON_MS`/`_GAP_MS`, 120ms each) followed
-  by a rest at `MUTE_REST_LEVEL` (0.5, medium brightness, `MUTE_REST_MS`
-  900ms) -- real feedback: "sentia should become a blinking light with a
-  two blink pattern and rest at medium brightness to indicate expression
-  functions mute." Outside of mute, square's LED shows
-  `SQUARE_LED_HELD_LEVEL` (1.0, matching default press feedback) while
-  physically held (alone or as part of the combo), and a persistent
-  `SQUARE_LED_TOGGLE_ON_LEVEL` (0.8, "not by a lot" dimmer, same
-  reasoning the reverted circle version used) glow once released, while
-  pitch bend is on; dark otherwise.
+  independent of the sub-menu above -- holding SW6 (circle) and SW5
+  (square) together for `EXPRESSION_MUTE_HOLD_MS` (3000ms, its own edge
+  latch, `s_mute_fired`) toggles a sticky mute that persists until the
+  same 3-second combo hold toggles it off again (or an in-menu change
+  auto-unmutes it, above) -- real feedback: "a shortcut that disables
+  everything and leaves basic midi... it acts like a mute."
+  `tiles_haptics_set_muted()` and `tiles_expression_set_muted()` (see
+  those files' own entries) do the actual work: pitch bend and poly
+  aftertouch stop being computed/sent, every haptic effect stops firing
+  with every active motor cut immediately, and note-on/off/velocity are
+  completely unaffected. Square's own pitch-bend-click and the sub-menu's
+  momentary-preview/sticky-lock hold (not the sub-menu's *contents*, see
+  above) are suppressed while muted, since square's LED is busy showing
+  the mute indicator instead. That indicator
+  (`render_square_led()`/`mute_blink_level()`) is a repeating two-blink
+  pattern (`MUTE_BLINK_ON_MS`/`_GAP_MS`, 120ms each) followed by a rest
+  at `MUTE_REST_LEVEL` (0.5, medium brightness, `MUTE_REST_MS` 900ms) --
+  real feedback: "sentia should become a blinking light with a two blink
+  pattern and rest at medium brightness to indicate expression functions
+  mute." Outside of mute, square's LED shows `SQUARE_LED_HELD_LEVEL`
+  (1.0, matching default press feedback) while physically held (alone or
+  as part of the combo), and a persistent `SQUARE_LED_TOGGLE_ON_LEVEL`
+  (0.8, "not by a lot" dimmer, same reasoning the reverted circle version
+  used) glow once released, while pitch bend is on; dark otherwise.
   **Defers to game mode.** `services/game_mode.h`'s Pong minigame uses
   SW5/SW6 as its own live right-paddle up/down controls -- this module's
   entire scan bails immediately (keeping only its own press-edge
@@ -356,9 +388,10 @@ not its code.
   already owns the pad grid, so the two mutually-exclusive features can
   never both claim the board at once -- see `game_mode.h`'s entry below.
   **Not yet hardware-verified at all** -- none of the above (the
-  button-identity correction, the sub-menu and its column-to-value
-  mapping, the off/blink indicator, the magenta color choice, or the
-  mute pattern) has been tried on real hardware yet.
+  button-identity correction, the momentary/sticky sub-menu and its
+  column-to-value mapping, the dismiss-button shortcut, the dim/off
+  indicators, the magenta color choice, the mute-availability change, or
+  the mute pattern itself) has been tried on real hardware yet.
 - `pixel_font.h`/`.c` — done for V1: a shared tiny pixel font, a fixed
   4x4 grid per glyph (one pixel per pad row 1-4, 4 columns wide), used
   by both `standby.c`'s scrolling marquee animation and

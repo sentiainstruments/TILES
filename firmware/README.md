@@ -171,10 +171,11 @@ first on-hardware note-on test.
   physical button "sentia" is; real feedback corrected it ("our shift
   and power button is circle. sentia is square button") and that
   behavior was moved out to `services/expression_control.h`/`.c`
-  entirely -- SW5/square alone (short click, held-shift, and a
-  held-3-seconds-alone toggle for a fuller expression sub-menu), plus a
-  separate circle+square combo held 3 seconds for expression mute -- see
-  that file's own writeup. See
+  entirely -- SW5/square alone (short click, a held-shift, and a
+  momentary-preview-then-3-second-sticky-lock expression sub-menu,
+  dismissible early via any of SW1-4), plus a separate circle+square
+  combo held 3 seconds for expression mute -- see that file's own
+  writeup. See
   `services/README.md` for the button-column/underglow-anchor mapping
   assumptions this still needs verified on real hardware, and for a real
   bug this rework fixed (standby pads were routing through the
@@ -314,13 +315,16 @@ flashable `.uf2`.
   also completely untested on real hardware -- `SQUARE_LED_TOGGLE_ON_
   LEVEL`'s "close to full brightness, not by a lot" is a first guess. The
   expression sub-menu itself (4 rows of pad sliders for haptics/
-  pitch-bend/aftertouch sensitivity, one reserved row, toggled open/
-  closed by holding square alone for 3 seconds) and the separate
-  circle+square 3-second-hold expression mute are equally untested -- the
-  column-to-value mapping for every row, row 1's off/blink indicator at
-  column 1, the mute LED's blink pacing, and even whether the Sentia
-  Magenta selected-pad color reads clearly against the sub-menu's
-  otherwise-dark grid are all first attempts, not measurements.
+  pitch-bend/aftertouch sensitivity, one reserved row; visible from the
+  instant square is held alone, locking open sticky at 3 seconds,
+  dismissible early via any of SW1-4) and the separate circle+square
+  3-second-hold expression mute (which the sub-menu now overrides on any
+  real in-menu change, but not merely by being opened) are equally
+  untested -- the column-to-value mapping for every row, row 1's off/
+  blink indicator and every other pad's dim baseline, the mute LED's
+  blink pacing, and even whether the Sentia Magenta selected-pad color
+  reads clearly against the sub-menu's otherwise-dim grid are all first
+  attempts, not measurements.
 - `services/boot_sequence.c`: seen on real hardware twice now, reworked
   three times total -- direction/pacing, then buttons dropped entirely
   after residual glow was still visible with only the magenta phase

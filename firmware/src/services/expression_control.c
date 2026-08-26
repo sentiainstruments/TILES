@@ -36,12 +36,16 @@
 #define EXPRESSION_MUTE_HOLD_MS 3000u
 
 /* How long square must be held ALONE (circle NOT also held) before the
- * expression sub-menu toggles open/closed -- real feedback, after the
- * combo-based version was tried on real hardware: "lets change [the
- * combo] to hold square for 3 seconds alone to toggle that menu." Same
- * edge-latch shape as EXPRESSION_MUTE_HOLD_MS above (s_submenu_toggle_
- * fired), but tracked against its own independent hold-start timestamp
- * since it's a different gesture on a different button combination. */
+ * sub-menu's momentary preview LOCKS open (sticky) -- real feedback:
+ * "momentary press should open menu as well but after 3 seconds the
+ * toggle should happen." The sub-menu itself is already visible from the
+ * instant square is held (see tiles_expression_control_scan()); this
+ * threshold only governs whether it disappears again on release (below
+ * 3s) or stays visible after release until toggled off the same way
+ * (at/above 3s). Same edge-latch shape as EXPRESSION_MUTE_HOLD_MS above
+ * (s_submenu_toggle_fired), but tracked against its own independent
+ * hold-start timestamp since it's a different gesture on a different
+ * button combination. */
 #define EXPRESSION_SUBMENU_TOGGLE_HOLD_MS 3000u
 
 /* Mute's LED pattern on square -- "a blinking light with a two blink
@@ -65,13 +69,26 @@
 #define SENTIA_MAGENTA_G 0.0f
 #define SENTIA_MAGENTA_B 1.0f
 
+/* Every unselected pad in the sub-menu sits at this fraction of full
+ * magenta rather than fully dark -- real feedback, after a first
+ * hardware pass showed unselected pads reading at the same brightness as
+ * the selection: "make the non selected default light pad very dim."
+ * Also doubles as row 1's "off" indicator's dim phase (see
+ * OFF_INDICATOR_BLINK_PERIOD_MS below) so that blink reads as "dipping
+ * to the same baseline every other pad sits at," not a jump to a
+ * different, unrelated darkness. Unmeasured -- a first guess at "very
+ * dim but still visibly lit," not calibrated against real LED
+ * brightness/diffusion. */
+#define SUBMENU_UNSELECTED_LEVEL 0.06f
+
 /* The "this row's selected level is OFF" indicator -- real feedback,
  * after row 1's column 1 was tried on real hardware as merely "weak"
  * rather than truly off: "the lowest setting is off and should be
  * blinking when active in menu to show its off." Faster/plainer than
  * the mute pattern above (a single on/off toggle, not a blink-blink-rest
- * shape) since this marks one row's state within an already-open menu,
- * not the whole board's mode the way mute's button-LED indicator does. */
+ * shape) since this marks one row's state within an already-visible
+ * menu, not the whole board's mode the way mute's button-LED indicator
+ * does. */
 #define OFF_INDICATOR_BLINK_PERIOD_MS 500u
 
 #define EXPRESSION_SUBMENU_NUM_ROWS 4u
@@ -100,19 +117,32 @@ typedef enum {
  * the menu." */
 static uint8_t s_row_column[EXPRESSION_SUBMENU_NUM_ROWS];
 
-static bool s_submenu_active;
+/* s_submenu_sticky persists across a square release once locked (the 3s
+ * hold); s_submenu_visible is this tick's actual "is it shown right now"
+ * state (square held alone OR sticky) -- what
+ * tiles_expression_control_owns_pad_grid() reports, and what
+ * pad-grid-claim/release + touch-tap edge tracking key off of. Kept
+ * separate because "square held alone" alone should show the sub-menu
+ * (a momentary preview) without necessarily being sticky yet. */
+static bool s_submenu_sticky;
+static bool s_submenu_visible;
 static bool s_prev_pad_touched[TILES_NUM_PADS];
 
 static bool s_circle_was_held;
 static bool s_square_was_held;
-/* True once EITHER a long-hold action (the mute combo, or the sub-menu
- * toggle below) has fired at any point during the CURRENT square press
- * (reset only when square transitions from fully released to held) --
- * suppresses that press's eventual release from also being read as a
- * genuine short click. */
+/* True once EITHER a long-hold action (the mute combo, or the sub-menu's
+ * sticky-lock threshold) has fired at any point during the CURRENT
+ * square press (reset only when square transitions from fully released
+ * to held) -- suppresses that press's eventual release from also being
+ * read as a genuine short click. */
 static bool s_square_press_had_long_action;
 static bool s_prev_minus_pressed;
 static bool s_prev_plus_pressed;
+
+/* SW1-SW4 edge tracking for dismissing a sticky, passively-visible
+ * sub-menu -- see handle_submenu_dismiss_buttons(). Indices 0-3 map to
+ * button ids 1-4. */
+static bool s_prev_dismiss_btn[4];
 
 static bool s_combo_was_held;
 static uint32_t s_combo_hold_start_ms;
@@ -186,7 +216,18 @@ static void apply_row_aftertouch(uint8_t column) {
     tiles_expression_set_aftertouch_sensitivity((uint16_t)value);
 }
 
+/* The single funnel every real edit goes through, whether from a pad tap
+ * (handle_submenu_taps()) or square's own "-"/"+" shift
+ * (step_haptics_column()) -- see s_row_column's own comment for why that
+ * matters for menu/shift continuity. Also the one place that can tell a
+ * genuine CHANGE apart from a no-op re-selection or a clamped step, which
+ * is what lets an in-menu edit override expression mute without simply
+ * opening/viewing the menu also doing so -- real feedback: "changes to
+ * the menu should override expression mute and turn it off but if the
+ * menu is opened just to check settings and no change is made then mute
+ * stays on." */
 static void apply_row(submenu_row_t row, uint8_t column) {
+    bool changed = (s_row_column[row] != column);
     s_row_column[row] = column;
     switch (row) {
     case SUBMENU_ROW_HAPTICS:
@@ -203,6 +244,12 @@ static void apply_row(submenu_row_t row, uint8_t column) {
         break;
     }
     printf("[expression_control] row %d column %u selected\n", (int)row, column);
+    if (changed && s_mute_active) {
+        printf("[expression_control] in-menu change while muted -- unmuting\n");
+        s_mute_active = false;
+        tiles_haptics_set_muted(false);
+        tiles_expression_set_muted(false);
+    }
 }
 
 /* Row 1 (haptics), column 1 only -- see apply_row_haptics()'s own
@@ -229,12 +276,16 @@ void tiles_expression_control_init(void) {
     for (uint8_t i = 0; i < EXPRESSION_SUBMENU_NUM_ROWS; i++) {
         s_row_column[i] = EXPRESSION_SUBMENU_DEFAULT_COLUMN;
     }
-    s_submenu_active = false;
+    s_submenu_sticky = false;
+    s_submenu_visible = false;
     s_circle_was_held = false;
     s_square_was_held = false;
     s_square_press_had_long_action = false;
     s_prev_minus_pressed = false;
     s_prev_plus_pressed = false;
+    for (uint8_t i = 0; i < 4u; i++) {
+        s_prev_dismiss_btn[i] = false;
+    }
     s_combo_was_held = false;
     s_mute_fired = false;
     s_mute_active = false;
@@ -252,29 +303,24 @@ void tiles_expression_control_init(void) {
 }
 
 bool tiles_expression_control_owns_pad_grid(void) {
-    return s_submenu_active;
+    return s_submenu_visible;
 }
 
-bool tiles_expression_control_shift_active(void) {
-    return s_square_was_held && !s_circle_was_held;
-}
-
-/* Sticky toggle (not "shown only while held") -- real feedback: "hold
- * square for 3 seconds alone to toggle that menu." Called once per
- * EXPRESSION_SUBMENU_TOGGLE_HOLD_MS edge-latch fire, see
- * tiles_expression_control_scan(). */
-static void toggle_submenu(void) {
-    s_submenu_active = !s_submenu_active;
-    tiles_lighting_set_standby_active(s_submenu_active);
-    if (s_submenu_active) {
-        /* A finger already resting on a pad the instant the menu opens
-         * shouldn't immediately read as a fresh tap -- only a genuine
-         * rising edge captured *after* this selects a column. */
+/* Called on the rising edge of "the sub-menu should be shown" (square
+ * freshly held alone) and the falling edge (square released while not
+ * sticky, or a dismiss/sticky-off while square isn't held) -- claims/
+ * releases the pad grid and, on entry only, seeds the touch-edge tracker
+ * so a finger already resting on a pad doesn't immediately read as a
+ * fresh tap. */
+static void set_submenu_visible(bool visible) {
+    s_submenu_visible = visible;
+    tiles_lighting_set_standby_active(visible);
+    if (visible) {
         for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
             s_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
         }
     }
-    printf("[expression_control] sub-menu %s\n", s_submenu_active ? "opened" : "closed");
+    printf("[expression_control] sub-menu %s\n", visible ? "visible" : "hidden");
 }
 
 static void toggle_mute(void) {
@@ -301,6 +347,25 @@ static void handle_submenu_taps(void) {
     }
 }
 
+/* Tracks SW1-4 press edges unconditionally, every tick, regardless of
+ * sub-menu state -- deliberately separate from ACTING on an edge (see
+ * the call site) so s_prev_dismiss_btn[] never goes stale while the
+ * sub-menu is hidden or square is actively held; a button already down
+ * at the exact moment the passive-sticky window opens must never read
+ * as a fresh press just because tracking hadn't been running. Returns
+ * true if any of the 4 had a rising edge this tick. */
+static bool poll_dismiss_button_edge(void) {
+    bool edge = false;
+    for (uint8_t i = 0; i < 4u; i++) {
+        bool pressed = tiles_button_is_pressed((uint8_t)(i + 1u));
+        if (pressed && !s_prev_dismiss_btn[i]) {
+            edge = true;
+        }
+        s_prev_dismiss_btn[i] = pressed;
+    }
+    return edge;
+}
+
 static void render_submenu(uint32_t now_ms) {
     bool blink_on = ((now_ms / OFF_INDICATOR_BLINK_PERIOD_MS) % 2u) == 0u;
 
@@ -310,12 +375,10 @@ static void render_submenu(uint32_t now_ms) {
         bool off = row_column_is_off(row_enum, selected_col);
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             uint8_t pad = board_pad_for_row_col(row, col);
-            bool lit = (col == selected_col) && (!off || blink_on);
-            if (lit) {
-                tiles_lighting_set_standby_pad_rgb(pad, SENTIA_MAGENTA_R, SENTIA_MAGENTA_G, SENTIA_MAGENTA_B);
-            } else {
-                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
-            }
+            bool bright = (col == selected_col) && (!off || blink_on);
+            float level = bright ? 1.0f : SUBMENU_UNSELECTED_LEVEL;
+            tiles_lighting_set_standby_pad_rgb(pad, SENTIA_MAGENTA_R * level, SENTIA_MAGENTA_G * level,
+                                                SENTIA_MAGENTA_B * level);
         }
     }
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
@@ -324,12 +387,13 @@ static void render_submenu(uint32_t now_ms) {
 }
 
 /* Square's own "-"/"+" shift input -- only called while square is held
- * alone (see tiles_expression_control_scan()) and mute is inactive
- * (square's LED is busy showing the mute pattern instead, and per the
- * file header, "expression functions mute" suppresses this too). Steps
- * the sub-menu's row 1 (haptics) COLUMN, through the exact same
- * apply_row() path a pad tap uses, rather than haptics.c's intensity
- * scalar directly -- see s_row_column's own comment for why. */
+ * alone (see tiles_expression_control_scan()). Works regardless of mute
+ * (see the file header's "Available during expression mute" section) --
+ * a genuine step through apply_row() will auto-unmute via that
+ * function's own change check. Steps the sub-menu's row 1 (haptics)
+ * COLUMN, through the exact same apply_row() path a pad tap uses,
+ * rather than haptics.c's intensity scalar directly -- see
+ * s_row_column's own comment for why. */
 static void handle_square_shift_input(void) {
     bool minus = tiles_button_is_pressed(1u); /* SW1 "-" */
     bool plus = tiles_button_is_pressed(2u);  /* SW2 "+" */
@@ -383,7 +447,10 @@ void tiles_expression_control_scan(void) {
          * doesn't read as a fresh press/combo the instant control hands
          * back, and don't touch the LED (game_mode.c already claims
          * buttons.c's standby-active flag, making override writes a
-         * no-op during play anyway). */
+         * no-op during play anyway). Sub-menu visibility can't be true
+         * here -- game_mode.c's own gm_combo_held() refuses to enter
+         * while it is -- so it's deliberately left untouched rather than
+         * force-cleared. */
         s_square_was_held = square_held;
         s_circle_was_held = circle_held;
         s_combo_was_held = circle_held && square_held;
@@ -397,14 +464,14 @@ void tiles_expression_control_scan(void) {
 
     if (square_held && !s_square_was_held) {
         /* Fresh press from fully released -- this press cycle hasn't had
-         * a long-hold action (mute combo, sub-menu toggle) yet, so a
-         * plain release should still be read as a genuine short click
+         * a long-hold action (mute combo, sub-menu sticky-lock) yet, so
+         * a plain release should still be read as a genuine short click
          * unless one of the blocks below sets this true first. */
         s_square_press_had_long_action = false;
     }
 
     /* Mute: circle+square held EXPRESSION_MUTE_HOLD_MS -- independent of
-     * the sub-menu toggle below, see the file header. */
+     * the sub-menu below, see the file header. */
     if (combo_held && !s_combo_was_held) {
         s_combo_hold_start_ms = now_ms;
         s_mute_fired = false;
@@ -418,18 +485,21 @@ void tiles_expression_control_scan(void) {
     }
     s_combo_was_held = combo_held;
 
-    /* Sub-menu toggle + haptics shift: square held ALONE. The alone
-     * streak (and its 3s timer) restarts any time circle joins mid-hold
-     * -- see the file header. */
+    /* Sub-menu sticky-lock threshold + haptics shift: square held ALONE.
+     * The alone streak (and its 3s timer) restarts any time circle joins
+     * mid-hold -- see the file header. Both work regardless of mute (see
+     * "Available during expression mute" there); a real edit auto-
+     * unmutes via apply_row() itself. */
     if (square_alone_held && !s_square_alone_was_held) {
         s_square_alone_hold_start_ms = now_ms;
         s_submenu_toggle_fired = false;
     }
-    if (square_alone_held && !s_mute_active) {
+    if (square_alone_held) {
         if (!s_submenu_toggle_fired && (now_ms - s_square_alone_hold_start_ms) >= EXPRESSION_SUBMENU_TOGGLE_HOLD_MS) {
             s_submenu_toggle_fired = true;
             s_square_press_had_long_action = true;
-            toggle_submenu();
+            s_submenu_sticky = !s_submenu_sticky;
+            printf("[expression_control] sub-menu sticky=%d\n", (int)s_submenu_sticky);
         }
         handle_square_shift_input();
     }
@@ -442,7 +512,24 @@ void tiles_expression_control_scan(void) {
         tiles_expression_toggle_pitch_bend();
     }
 
-    if (s_submenu_active) {
+    /* Always polled/tracked (see poll_dismiss_button_edge()'s own
+     * comment on why), but only ACTED on -- dismissing a sticky,
+     * passively-visible sub-menu -- while square isn't actively held
+     * (SW1/SW2 are busy doing the haptics shift instead while it is, see
+     * the file header). Real feedback: "any of the 4 function buttons
+     * should exit that menu it shouldnt have to be untoggled." Clears
+     * s_submenu_sticky before the visibility recompute just below, so
+     * the dismiss takes effect this same tick. */
+    bool dismiss_edge = poll_dismiss_button_edge();
+    if (s_submenu_sticky && !square_alone_held && dismiss_edge) {
+        s_submenu_sticky = false;
+    }
+
+    bool submenu_should_be_visible = square_alone_held || s_submenu_sticky;
+    if (submenu_should_be_visible != s_submenu_visible) {
+        set_submenu_visible(submenu_should_be_visible);
+    }
+    if (s_submenu_visible) {
         handle_submenu_taps();
         render_submenu(now_ms);
     }
