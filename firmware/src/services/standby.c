@@ -12,6 +12,7 @@
 #include "pico/time.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 /* Demo defaults per the user's own direction: 1 minute is fine for
@@ -1496,6 +1497,29 @@ static const underglow_fn_t s_animation_underglow_override[] = {
 };
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
 
+/* Selection weight, parallel to s_animations[] -- real feedback: the
+ * videogame screensavers (snake, brick breaker, Tetris, Pong) should
+ * come up less often than the "regular" ambient ones. Regular = 2,
+ * game = 1, so each regular animation is twice as likely to be picked
+ * as each game animation on any given switch (see
+ * pick_random_animation() below). */
+#define ANIM_WEIGHT_REGULAR 2u
+#define ANIM_WEIGHT_GAME 1u
+static const uint8_t s_animation_weight[] = {
+    ANIM_WEIGHT_REGULAR, /* wave */
+    ANIM_WEIGHT_REGULAR, /* glow */
+    ANIM_WEIGHT_REGULAR, /* shooting stars */
+    ANIM_WEIGHT_GAME,    /* snake */
+    ANIM_WEIGHT_REGULAR, /* rgb showcase */
+    ANIM_WEIGHT_REGULAR, /* equalizer */
+    ANIM_WEIGHT_REGULAR, /* underglow circle */
+    ANIM_WEIGHT_GAME,    /* brick breaker */
+    ANIM_WEIGHT_REGULAR, /* marquee */
+    ANIM_WEIGHT_REGULAR, /* bounce */
+    ANIM_WEIGHT_GAME,    /* tetris */
+    ANIM_WEIGHT_GAME,    /* pong */
+};
+
 /* Function-button LEDs read noticeably brighter than pad LEDs at the
  * same commanded duty (different LED/diffusion/drive path -- PCA9685
  * PWM vs SK6805 addressable) -- observed on real hardware as the top
@@ -1552,6 +1576,30 @@ static uint32_t s_animation_switch_ms;
 static uint8_t s_animation_index;
 static uint8_t s_prev_animation_index; /* the one that played immediately before s_animation_index */
 
+/* Real feedback that touch doesn't reliably wake standby -- prints
+ * which specific input caused a wake, so a debug session can see
+ * whether the MPR121 ever registers the touch that's supposed to be
+ * waking it (pairs with touch.c's per-pad touched/released prints) or
+ * whether wakes are only ever coming from a button/pedal instead. Only
+ * called on the actual wake transition (tiles_standby_scan() below),
+ * never every scan, so this stays cheap and non-spammy despite the
+ * linear re-scan. */
+static void print_wake_source(uint32_t now_ms) {
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        if (tiles_touch_is_touched(pad)) {
+            printf("[standby] waking: touch pad %u (t=%u ms)\n", pad, now_ms);
+            return;
+        }
+    }
+    for (uint8_t button = 1u; button <= TILES_NUM_FUNCTION_BUTTONS; button++) {
+        if (tiles_button_is_pressed(button)) {
+            printf("[standby] waking: button %u (t=%u ms)\n", button, now_ms);
+            return;
+        }
+    }
+    printf("[standby] waking: pedal (t=%u ms)\n", now_ms);
+}
+
 /* Touch/button/pedal only -- deliberately NOT Hall (see
  * hall_depth_wake_triggered() below for why Hall is kept separate).
  * Used both to decide whether to enter standby and, once in it, as one
@@ -1601,18 +1649,40 @@ static bool hall_depth_wake_triggered(void) {
  * no real history to avoid repeating). Excluding both the animation
  * about to end AND the one before it means a switch never immediately
  * repeats the current animation, and never bounces straight back to
- * the one two animations ago either (e.g. A, B, A back-to-back) -- with
- * NUM_ANIMATIONS==5 this still leaves 3 valid choices, so the loop
- * always terminates. */
+ * the one two animations ago either (e.g. A, B, A back-to-back) --
+ * with NUM_ANIMATIONS==12 this still leaves at least 9 valid choices.
+ *
+ * Weighted by s_animation_weight[] (regular animations twice as likely
+ * as game ones) rather than a uniform rand() % NUM_ANIMATIONS: sums the
+ * weight of every non-excluded animation, rolls a random value in that
+ * range, then walks the cumulative weights to find which animation that
+ * roll landed on. A single pass, not a retry loop -- unlike the
+ * previous uniform version's "re-roll until it isn't excluded," which
+ * would need reweighting on every retry to stay correctly weighted. */
 static uint8_t pick_random_animation(uint8_t exclude_a, uint8_t exclude_b) {
     if (NUM_ANIMATIONS <= 2u) {
         return 0u;
     }
-    uint8_t next;
-    do {
-        next = (uint8_t)(rand() % NUM_ANIMATIONS);
-    } while (next == exclude_a || next == exclude_b);
-    return next;
+
+    uint16_t total_weight = 0u;
+    for (uint8_t i = 0; i < NUM_ANIMATIONS; i++) {
+        if (i == exclude_a || i == exclude_b) {
+            continue;
+        }
+        total_weight += s_animation_weight[i];
+    }
+
+    uint16_t roll = (uint16_t)(rand() % total_weight);
+    for (uint8_t i = 0; i < NUM_ANIMATIONS; i++) {
+        if (i == exclude_a || i == exclude_b) {
+            continue;
+        }
+        if (roll < s_animation_weight[i]) {
+            return i;
+        }
+        roll = (uint16_t)(roll - s_animation_weight[i]);
+    }
+    return 0u; /* unreachable: total_weight > 0 whenever NUM_ANIMATIONS > 2 */
 }
 
 static void enter_standby(uint32_t now_ms) {
@@ -1696,6 +1766,7 @@ void tiles_standby_scan(void) {
     if (real_input_active()) {
         s_last_activity_ms = now_ms;
         if (s_state != TILES_STANDBY_STATE_AWAKE) {
+            print_wake_source(now_ms);
             exit_standby();
         }
         return;

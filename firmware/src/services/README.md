@@ -74,6 +74,15 @@ not its code.
   = idle baseline). Touch state + lighting only -- MIDI now lives in
   `expression.c`, which reads `tiles_touch_is_touched()` itself rather
   than touch.c reaching into MIDI.
+  Now prints an edge-triggered `[touch] pad N: touched`/`released`
+  diagnostic on every state change -- real feedback that touch doesn't
+  reliably wake `standby.c` from idle; this makes it directly observable
+  whether the MPR121 ever registers the touch in question at all
+  (hardware/EMI-level question) as opposed to registering it but
+  something downstream not acting on it (a logic bug), pairing with
+  `standby.c`'s new wake-source print. Temporary bring-up visibility,
+  same as the other periodic prints in `main.c` -- replace with a real
+  `usb_vendor/` diagnostics stream once that exists.
 - `hall.h`/`.c` — done for V1: scans all 24 pads' TMAG5273 sensors
   through their Hall mux channels, storing raw XYZ plus a per-pad rest-Z
   baseline (captured once at init, re-capturable on demand via
@@ -445,11 +454,21 @@ not its code.
   explicit demo-mode default, expected to change once this isn't just a
   demo) with no touch/button/pedal activity, the pad grid + 6 function
   buttons + underglow stop reflecting real input and instead run one of
-  9 rotating ambient animations, switching to a random one every 2
+  12 rotating ambient animations, switching to a random one every 2
   minutes (also a starting guess, not tuned against how it actually
   feels to watch) -- excludes both the animation ending and the one
   before it, so a switch never immediately repeats itself and never
-  bounces straight back to the animation two ago either:
+  bounces straight back to the animation two ago either. The pick is
+  also weighted (`s_animation_weight[]`, `ANIM_WEIGHT_REGULAR` 2 vs
+  `ANIM_WEIGHT_GAME` 1): the four videogame ones (4 snake, 8 brick
+  breaker, 11 Tetris, 12 Pong) are each half as likely as any of the
+  eight regular ones on a given switch -- real feedback that the
+  videogame screensavers should come up less often than the regular
+  ones. `pick_random_animation()` sums the weight of every
+  non-excluded animation and rolls into that range in one pass, rather
+  than the previous uniform version's "re-roll until it isn't
+  excluded" (which would need reweighting on every retry to stay
+  correctly weighted once picks aren't uniform):
   1. diagonal traveling wave
   2. a sharp, squared-contrast ring pulsing outward from center
   3. comet-tailed "shooting stars" with per-star randomized speed/tail/twinkle -- fall speed roughly halved (`STAR_SPEED_ROWS_PER_MS_MIN`/`_MAX`) from real feedback that it read as too fast
@@ -481,7 +500,14 @@ not its code.
   while the pad animation runs (buttons/pedal wake it fine) is a
   separate, still-open issue, most likely candidate being the pad-LED
   SK6805 chain's continuous ~25fps rewrite interfering with capacitive
-  sensing, not confirmed.
+  sensing, not confirmed. `print_wake_source()` now prints exactly which
+  input (`touch pad N` / `button N` / `pedal`) caused each wake, paired
+  with `touch.c`'s new per-pad `touched`/`released` prints -- meant to
+  finally confirm or rule out the SK6805-interference theory: if MPR121
+  never reports a touch at all while an animation is running, that's a
+  hardware/EMI question outside this file's reach; if it does report one
+  but standby still doesn't wake, that's a real logic bug still to find
+  here.
   Deliberately a lighting-only concept: touch/Hall/
   expression/MIDI keep running completely unaware standby exists, so
   playing still works exactly as normal even while idle animations are
