@@ -31,7 +31,24 @@
 #define NUM_ELECTRODES 12u
 
 #define TOUCH_THRESHOLD 12u
-#define RELEASE_THRESHOLD 6u
+/* Narrowed from Freescale's quickstart 6 (a 2:1 touch:release gap) to 9
+ * (a tighter 4:3 gap) -- real feedback with the keycap/pad assembly now
+ * seated: "release is sticking, lifting and losing contact is not
+ * muting the note fast... should release as fast as a keyboard piano."
+ * services/expression.c sends MIDI note-off the very same scan tick
+ * tiles_touch_is_touched() goes false, with no debounce of its own (see
+ * that file), so a sluggish-feeling release traces back to the raw
+ * touch/release status itself, not anything downstream -- the electrode
+ * signal has to swing all the way back down to within RELEASE_THRESHOLD
+ * of baseline before the status bit clears, and requiring it to close
+ * half the original touch swing (6 of 12) left more room for a lingering
+ * near-threshold signal (residual capacitive coupling through the
+ * keycap as a finger lifts) to still read as "touched" than a real piano
+ * key's release feels like. Still a real hysteresis band (not equal to
+ * the touch threshold), just a smaller one -- unmeasured against actual
+ * chatter risk on the real keycap material, revisit if release starts
+ * feeling twitchy instead of sticky. */
+#define RELEASE_THRESHOLD 9u
 
 static bool write_reg(i2c_inst_t *bus, uint8_t addr, uint8_t reg, uint8_t value) {
     uint8_t buf[2] = {reg, value};

@@ -260,8 +260,8 @@ int main(void) {
             tiles_hall_sample_t s = tiles_hall_get_sample(1);
             printf("[hall] pad 1: x=%d y=%d z=%d valid=%d\n", s.x, s.y, s.z, s.valid);
 
-            printf("[standby] active=%d power_saving=%d sleeping=%d manual_scroll=%d\n", tiles_standby_is_active(),
-                   tiles_standby_is_power_saving(), tiles_standby_is_sleeping(), tiles_standby_owns_octave_buttons());
+            printf("[standby] active=%d deep_sleep=%d manual_scroll=%d\n", tiles_standby_is_active(),
+                   tiles_standby_is_deep_sleep(), tiles_standby_owns_octave_buttons());
 
             last_scan_ms = now_ms;
         }

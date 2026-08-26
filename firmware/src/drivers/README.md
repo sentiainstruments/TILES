@@ -40,9 +40,23 @@ bit-banged over PIO), `dac80502` (CV DAC).
 - `mpr121.h`/`.c` — done. Register map and init sequence (soft reset,
   baseline filter, per-electrode touch/release thresholds, Run Mode)
   confirmed against the real Freescale/NXP datasheet. Threshold values
-  (12/6) are Freescale's own published quickstart defaults, not final
-  per-key tuning — real thresholds still need calibration once the
-  enclosure/keycaps are assembled, per the hardware handoff. One
+  started at Freescale's own published quickstart defaults (12/6), not
+  final per-key tuning — real thresholds still need full calibration
+  once the enclosure/keycaps are assembled, per the hardware handoff.
+  **Release threshold narrowed 6 -> 9** (touch stays 12) now that the
+  keycap/pad assembly is actually seated -- real feedback: "release is
+  sticking, lifting and losing contact is not muting the note fast... it
+  should release as fast as a keyboard piano." `services/expression.c`
+  sends MIDI note-off the same scan tick touch goes false with no
+  debounce of its own, so a sluggish release traces back to the raw
+  touch/release status itself: the old 12/6 gap meant the electrode
+  signal had to swing all the way back down to half its touch-triggering
+  level before "released" registered, giving a lingering near-threshold
+  signal (residual capacitive coupling through the keycap as a finger
+  lifts) more room to still read as touched. Still a real hysteresis
+  band (9, not 12) to guard against chatter, just a smaller one --
+  unmeasured against actual chatter risk on the real keycap material,
+  revisit if release starts feeling twitchy instead of sticky. One
   deviation from the quickstart defaults, for latency: ESI (electrode
   sample interval) is set to 1ms instead of Freescale's 16ms default --
   the chip's own internal sample interval is a real latency floor no

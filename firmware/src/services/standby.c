@@ -26,11 +26,17 @@
 /* After 15 minutes of TOTAL inactivity (same s_last_activity_ms clock
  * that gates entering standby in the first place -- not 15 minutes of
  * animation specifically, 15 minutes since the last real touch/button/
- * pedal event), standby's animations stop and the board drops to a
- * deeper power-saving indicator: everything dark except the circle
- * button pulsing gently. See enter_power_saving() below. Explicit
- * demo-mode default, like the other timings here. */
-#define TILES_STANDBY_POWER_SAVING_TIMEOUT_MS 900000u /* 15 * 60 * 1000 */
+ * pedal event), standby's animations stop and the board drops to deep
+ * sleep: everything dark except the circle button pulsing slowly, the
+ * one indicator that it's in this state. See enter_deep_sleep() below.
+ * This is also the *exact same* state holding circle (SW6) for
+ * TILES_CIRCLE_DEEP_SLEEP_HOLD_MS reaches directly -- real feedback:
+ * "the sleep mode after 10 secs is the same as the timeout of the
+ * animations, not two separate things... rename that to deep sleep."
+ * An earlier version had a second, distinct all-the-way-blank state for
+ * the 10s hold; this collapses the two into one. Explicit demo-mode
+ * default, like the other timings here. */
+#define TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS 900000u /* 15 * 60 * 1000 */
 
 /* ~25fps. Unmeasured against real I2C bus load (every pad write is a
  * mux-select-enable-disable dance, see lighting.c) -- if 24 pads + 6
@@ -520,25 +526,38 @@ static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_
  * "too flashy and fast," the falling peak marker read as "dropping red
  * lights" rather than a hold indicator, and at only 4 rows of
  * resolution the effect just looked broken, not like a VU meter. Third
- * pass (current): the peak-hold marker is gone entirely -- red only
- * ever appears on row 1 because that's that row's own bar color, never
- * as a separate roaming marker. The instant-attack pop is replaced with
- * a short attack ramp (EQ_ATTACK_FRACTION) so each hit swells up rather
+ * pass: the peak-hold marker was removed entirely -- red only ever
+ * appears on row 1 because that's that row's own bar color, never as a
+ * separate roaming marker. The instant-attack pop was replaced with a
+ * short attack ramp (EQ_ATTACK_FRACTION) so each hit swells up rather
  * than flashing on -- closer to a real VU needle's fast-attack/slower-
- * release ballistics. Tempo slowed slightly (127bpm -> ~107bpm,
- * EQ_BEAT_MS) and the busiest columns' subdivision lowered (4/beat ->
- * 3/beat) for less density. Function buttons are fully off; underglow
- * is a simple constant blue accent (see eq_underglow below) rather than
- * tracking the bars -- doesn't correspond to any one column, so there's
- * nothing meaningful for it to track. */
+ * release ballistics. Tempo slowed (127bpm -> ~107bpm, EQ_BEAT_MS) and
+ * the busiest columns' subdivision lowered (4/beat -> 3/beat).
+ *
+ * Fourth pass (current), more real feedback: still "too fast" and
+ * "moving too crazy," and row 1 (red, "redline") almost never actually
+ * lit -- envelope*velocity needed to land right at 1.0 to clear row 1's
+ * threshold, which the old velocity range (0.55-1.0, smoothly varying)
+ * essentially never hit exactly. Tempo slowed further to 90bpm
+ * (EQ_BEAT_MS), every column's hit-rate subdivision lowered again (the
+ * busiest column now 2/beat, not 3), and velocity now deliberately
+ * guarantees a real redline: the top ~6% of hits (by the same
+ * deterministic golden-angle key already used for velocity variance)
+ * jump straight to 1.0 instead of the smooth 0.55-1.0 curve, so row 1
+ * genuinely flashes red every so often instead of practically never.
+ * Function buttons are fully off; underglow is a simple constant blue
+ * accent (see eq_underglow below) rather than tracking the bars --
+ * doesn't correspond to any one column, so there's nothing meaningful
+ * for it to track. */
 
 #define EQ_NUM_COLS 6u
 #define EQ_LIT_LEVEL 0.85f
 #define EQ_UNDERGLOW_LEVEL 0.7f
-/* One quarter note at ~107bpm (slowed slightly from an initial 127bpm
- * per real feedback that it was "too flashy and fast") -- the shared
- * pulse every column's hit rate subdivides. */
-#define EQ_BEAT_MS 560.0f
+/* One quarter note at 90bpm (slowed from ~107bpm, itself slowed from an
+ * initial 127bpm -- real feedback across two rounds that it was "too
+ * fast"/"moving too crazy") -- the shared pulse every column's hit rate
+ * subdivides. */
+#define EQ_BEAT_MS 667.0f
 /* Fraction of hits that get deterministically dropped to 0 -- "some
  * empty space" without a multi-second silent stretch. */
 #define EQ_MISS_FRACTION 0.12f
@@ -547,13 +566,18 @@ static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_
  * a short ramp (rather than the old instant-attack pop) reads as less
  * of a flash and more like a meter reacting. */
 #define EQ_ATTACK_FRACTION 0.18f
+/* Fraction of hits (by velocity_key below) that redline -- jump straight
+ * to full velocity (1.0) instead of the smooth 0.55-0.95 curve, so row 1
+ * (red) genuinely lights up every so often. Deliberately rare: a real VU
+ * meter redlines occasionally, not on every beat. */
+#define EQ_REDLINE_FRACTION 0.06f
 
 /* Per-column hit rate, in hits per beat -- pairs of columns share a rate
  * (low/low/mid/mid/high/high) so the six bars still read left-to-right
- * as low to high register, like a real EQ's frequency axis. Busiest
- * columns lowered from 4/beat to 3/beat (less density) per real
- * feedback. */
-static const float s_eq_col_hits_per_beat[EQ_NUM_COLS] = {1.0f, 1.0f, 2.0f, 2.0f, 3.0f, 3.0f};
+ * as low to high register, like a real EQ's frequency axis. Lowered
+ * again (3/beat -> 2/beat busiest) per real feedback that the meter was
+ * still moving too fast/chaotically even after the first density cut. */
+static const float s_eq_col_hits_per_beat[EQ_NUM_COLS] = {1.0f, 1.0f, 1.5f, 1.5f, 2.0f, 2.0f};
 /* Per-column decay shape for the percussive envelope -- lower (slower
  * subdivisions / bass) rings out over more of its hit window; higher
  * (faster subdivisions / treble) snaps back almost immediately. */
@@ -588,9 +612,19 @@ static float eq_bar_level(uint8_t col, uint32_t now_ms) {
 
     /* Per-hit velocity variance (same golden-angle trick, different
      * offset) so hits that do land aren't all identically full-height --
-     * still real dynamic range without needing every hit to be a peak. */
+     * still real dynamic range without needing every hit to be a peak.
+     * The top EQ_REDLINE_FRACTION of that same key jumps straight to a
+     * guaranteed 1.0 instead of the smooth curve, so envelope*velocity
+     * actually reaches row 1's 1.0 threshold every so often -- see this
+     * animation's file comment on why the old smooth-only curve almost
+     * never redlined. */
     float velocity_key = fmodf(hit_index * 0.6180339887f + (float)i * 0.37f + 0.5f, 1.0f);
-    float velocity = 0.55f + 0.45f * velocity_key;
+    float velocity;
+    if (velocity_key >= (1.0f - EQ_REDLINE_FRACTION)) {
+        velocity = 1.0f;
+    } else {
+        velocity = 0.55f + 0.40f * (velocity_key / (1.0f - EQ_REDLINE_FRACTION));
+    }
     return clamp01(envelope * velocity);
 }
 
@@ -834,25 +868,38 @@ static tiles_standby_color_t bb_underglow(uint8_t pixel_index, uint32_t now_ms) 
 }
 
 /* ---- Animation 9: scrolling marquee ---------------------------------------
- * "SENTIA - TILES - " scrolls across the pad grid using
- * services/pixel_font.h's shared 4-row font -- underglow and function
- * buttons both stay off, keeping the whole thing purely a pad-grid text
- * effect. The message is a sequence of glyphs with a blank spacing
- * column automatically inserted after each one, and the whole thing
- * scrolls by indexing into that sequence at a virtual column offset
- * that advances with time and wraps around (marquee_total_width()), so
- * the message repeats seamlessly.
+ * "TILES - " scrolls across the pad grid using services/pixel_font.h's
+ * shared 4-row font -- underglow and function buttons both stay off,
+ * keeping the whole thing purely a pad-grid text effect. The message is
+ * a sequence of glyphs with a blank spacing column automatically
+ * inserted after each one, and the whole thing scrolls by indexing into
+ * that sequence at a virtual column offset that advances with time and
+ * wraps around (marquee_total_width()), so the message repeats
+ * seamlessly.
  *
- * Reworked from real feedback that the font itself needed fixing (the
- * glyphs used to live here as a one-off, hand-guessed set -- moved into
- * pixel_font.h/.c so this and services/octave_control.c's transpose key
- * display share one already-checked font instead of each guessing its
- * own) and that the scroll was too fast -- slowed accordingly
- * (MARQUEE_MS_PER_COLUMN). */
+ * Reworked twice from real feedback. First: the font itself needed
+ * fixing (the glyphs used to live here as a one-off, hand-guessed set --
+ * moved into pixel_font.h/.c so this and services/octave_control.c's
+ * transpose key display share one already-checked font instead of each
+ * guessing its own) and the scroll was too fast (slowed via
+ * MARQUEE_MS_PER_COLUMN). Second (current): still "not readable" -- the
+ * message dropped "SENTIA - " entirely (just "TILES - " now, real
+ * feedback: "we can get rid of sentia"), both to shorten it and because
+ * a shorter, more repetitive message is easier to lock onto while
+ * scrolling. MARQUEE_GLYPH_GAP doubled (1 -> 2 blank columns between
+ * letters) so adjacent glyphs that both fill their top/bottom row (e.g.
+ * back-to-back full-width bars) read as two distinct letters rather than
+ * blurring into one continuous bar across only a single dark column, and
+ * the scroll slowed further still (MARQUEE_MS_PER_COLUMN) to give the
+ * eye more time to resolve each letter as it crosses the grid -- the
+ * individual glyphs themselves (T, I, L, E, S) were re-checked bit by
+ * bit against pixel_font.c and are each a clean, unambiguous shape on
+ * their own, so the actual readability problem was pacing/separation,
+ * not the letterforms. */
 
 #define MARQUEE_NUM_GLYPHS ((uint8_t)(sizeof(s_marquee_message) / sizeof(s_marquee_message[0])))
-#define MARQUEE_GLYPH_GAP 1u
-#define MARQUEE_MS_PER_COLUMN 420u
+#define MARQUEE_GLYPH_GAP 2u
+#define MARQUEE_MS_PER_COLUMN 600u
 #define MARQUEE_LIT_LEVEL 0.9f
 
 /* Pointers, not struct copies -- TILES_GLYPH_* are extern objects
@@ -860,9 +907,7 @@ static tiles_standby_color_t bb_underglow(uint8_t pixel_index, uint32_t now_ms) 
  * its address) isn't a compile-time constant to this translation unit,
  * so a static initializer can't copy the struct by value. */
 static const tiles_glyph_t *const s_marquee_message[] = {
-    &TILES_GLYPH_S,     &TILES_GLYPH_E, &TILES_GLYPH_N, &TILES_GLYPH_T, &TILES_GLYPH_I, &TILES_GLYPH_A,
-    &TILES_GLYPH_SPACE, &TILES_GLYPH_DASH, &TILES_GLYPH_SPACE,
-    &TILES_GLYPH_T,     &TILES_GLYPH_I, &TILES_GLYPH_L, &TILES_GLYPH_E, &TILES_GLYPH_S,
+    &TILES_GLYPH_T, &TILES_GLYPH_I, &TILES_GLYPH_L, &TILES_GLYPH_E, &TILES_GLYPH_S,
     &TILES_GLYPH_SPACE, &TILES_GLYPH_DASH, &TILES_GLYPH_SPACE,
 };
 
@@ -1481,7 +1526,21 @@ static tiles_standby_color_t pong_underglow(uint8_t pixel_index, uint32_t now_ms
  * grid; once every column is completely full, it holds for a moment
  * then clears and the fill starts over. Function buttons stay off;
  * underglow mirrors the pad field like animations 1-5/10, so a dot
- * landing near an anchor lights it up naturally. */
+ * landing near an anchor lights it up naturally.
+ *
+ * Slowed down and cross-faded between rows -- real feedback: "slow down
+ * falling dots animation and make it smoother." FALLINGDOTS_STEP_MS and
+ * FALLINGDOTS_SPAWN_INTERVAL_MS both raised (roughly 1.8x) for a calmer
+ * fall/spawn rate. All active dots share one global step clock
+ * (s_fallingdots_last_step_ms below), so anim_fallingdots() can compute
+ * a single 0-1 progress-through-the-current-step value from it and use
+ * that to cross-fade every falling dot's brightness between its current
+ * row (fading out) and the next one (fading in), smoothstep-eased --
+ * rather than the previous hard, instant jump from one row to the next
+ * every FALLINGDOTS_STEP_MS. A dot about to lock (its next row is
+ * blocked) skips the fade-in target, since there's nowhere to fade into
+ * -- it just holds steady at full brightness for the rest of that step
+ * before locking. */
 
 #define FALLINGDOTS_MIN_ROW 1u
 #define FALLINGDOTS_MAX_ROW TILES_GRID_MAX_ROW
@@ -1489,8 +1548,8 @@ static tiles_standby_color_t pong_underglow(uint8_t pixel_index, uint32_t now_ms
 #define FALLINGDOTS_MAX_COL TILES_GRID_MAX_COL
 #define FALLINGDOTS_ROWS 4u
 #define FALLINGDOTS_COLS 6u
-#define FALLINGDOTS_STEP_MS 180u           /* how fast a falling dot drops one row */
-#define FALLINGDOTS_SPAWN_INTERVAL_MS 500u /* how often a new dot spawns, while there's still room */
+#define FALLINGDOTS_STEP_MS 320u           /* how long a falling dot takes to cross one row */
+#define FALLINGDOTS_SPAWN_INTERVAL_MS 900u /* how often a new dot spawns, while there's still room */
 #define FALLINGDOTS_MAX_CONCURRENT 4u
 #define FALLINGDOTS_FULL_PAUSE_MS 1800u /* how long the fully-filled grid holds before clearing */
 #define FALLINGDOTS_ACTIVE_LEVEL 1.0f
@@ -1575,20 +1634,29 @@ static void fallingdots_spawn(void) {
      * exhaustively. */
 }
 
+/* Shared by fallingdots_step() (decides whether to advance or lock) and
+ * anim_fallingdots() (decides whether to render a fade-in target on the
+ * next row) -- true if this dot's next row is off the bottom of the
+ * grid or already occupied. */
+static bool fallingdots_next_blocked(const fallingdots_dot_t *dot) {
+    int8_t next_row = (int8_t)(dot->row + 1);
+    if (next_row > (int8_t)FALLINGDOTS_MAX_ROW) {
+        return true;
+    }
+    return fallingdots_cell_filled((uint8_t)next_row, dot->col);
+}
+
 static void fallingdots_step(uint32_t now_ms) {
     for (uint8_t i = 0; i < FALLINGDOTS_MAX_CONCURRENT; i++) {
         fallingdots_dot_t *dot = &s_fallingdots_active[i];
         if (!dot->active) {
             continue;
         }
-        int8_t next_row = (int8_t)(dot->row + 1);
-        bool blocked =
-            (next_row > (int8_t)FALLINGDOTS_MAX_ROW) || fallingdots_cell_filled((uint8_t)next_row, dot->col);
-        if (blocked) {
+        if (fallingdots_next_blocked(dot)) {
             s_fallingdots_filled[dot->row - (int8_t)FALLINGDOTS_MIN_ROW][dot->col - FALLINGDOTS_MIN_COL] = true;
             dot->active = false;
         } else {
-            dot->row = next_row;
+            dot->row++;
         }
     }
 
@@ -1623,6 +1691,14 @@ static void fallingdots_update(uint32_t now_ms) {
     fallingdots_step(now_ms);
 }
 
+/* Standard smoothstep -- eases the linear per-frame progress fraction
+ * into a slow-in/slow-out curve so the cross-fade between rows reads as
+ * a natural ease rather than a linear ramp. */
+static float smoothstep01(float t) {
+    t = clamp01(t);
+    return t * t * (3.0f - 2.0f * t);
+}
+
 static tiles_standby_color_t anim_fallingdots(uint8_t row, uint8_t col, uint32_t now_ms) {
     fallingdots_update(now_ms);
 
@@ -1630,10 +1706,26 @@ static tiles_standby_color_t anim_fallingdots(uint8_t row, uint8_t col, uint32_t
         return white(0.0f);
     }
 
+    float progress = smoothstep01((float)(now_ms - s_fallingdots_last_step_ms) / (float)FALLINGDOTS_STEP_MS);
+
     for (uint8_t i = 0; i < FALLINGDOTS_MAX_CONCURRENT; i++) {
         const fallingdots_dot_t *dot = &s_fallingdots_active[i];
-        if (dot->active && dot->row == (int8_t)row && dot->col == col) {
-            return white(FALLINGDOTS_ACTIVE_LEVEL);
+        if (!dot->active || dot->col != col) {
+            continue;
+        }
+        if (fallingdots_next_blocked(dot)) {
+            /* About to lock at dot->row -- nowhere to fade into, so hold
+             * steady at full brightness for the rest of this step. */
+            if (dot->row == (int8_t)row) {
+                return white(FALLINGDOTS_ACTIVE_LEVEL);
+            }
+            continue;
+        }
+        if (dot->row == (int8_t)row) {
+            return white(FALLINGDOTS_ACTIVE_LEVEL * (1.0f - progress));
+        }
+        if ((int8_t)(dot->row + 1) == (int8_t)row) {
+            return white(FALLINGDOTS_ACTIVE_LEVEL * progress);
         }
     }
 
@@ -1740,8 +1832,7 @@ static void render_frame(uint8_t animation_index, uint32_t now_ms) {
 typedef enum {
     TILES_STANDBY_STATE_AWAKE = 0,
     TILES_STANDBY_STATE_STANDBY,
-    TILES_STANDBY_STATE_POWER_SAVING,
-    TILES_STANDBY_STATE_SLEEP,
+    TILES_STANDBY_STATE_DEEP_SLEEP,
 } standby_state_t;
 
 static standby_state_t s_state;
@@ -1755,11 +1846,12 @@ static uint8_t s_prev_animation_index; /* the one that played immediately before
  * the manual 6s circle-hold gesture (handle_circle_hold() below), not
  * the normal 60s auto-idle path. Changes two things while true: SW1/SW2
  * become animation-scroll controls instead of a wake signal (see
- * real_input_active()), and the STANDBY -> POWER_SAVING timeout extends
- * to TILES_STANDBY_MANUAL_POWER_SAVING_TIMEOUT_MS (20 minutes) instead
+ * real_input_active()), and the STANDBY -> DEEP_SLEEP timeout extends
+ * to TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS (20 minutes) instead
  * of the normal 15 -- both real feedback. Cleared on every way of
- * leaving STANDBY (waking, dropping to POWER_SAVING, or escalating to
- * SLEEP) so a later *normal* auto-idle STANDBY never inherits these. */
+ * leaving STANDBY (waking, dropping to DEEP_SLEEP, or the 10s hold
+ * escalating straight there) so a later *normal* auto-idle STANDBY never
+ * inherits these. */
 static bool s_manual_screensaver;
 
 /* Circle (SW6)'s dedicated long-press handling -- real feedback:
@@ -1772,11 +1864,11 @@ static bool s_manual_screensaver;
  * yet" stance octave_control.h already takes for SW1/SW2), not
  * something this module should claim a meaning for. */
 #define TILES_CIRCLE_SCREENSAVER_HOLD_MS 6000u
-#define TILES_CIRCLE_SLEEP_HOLD_MS 10000u
+#define TILES_CIRCLE_DEEP_SLEEP_HOLD_MS 10000u
 static bool s_circle_was_held;
 static uint32_t s_circle_hold_start_ms;
 static bool s_circle_screensaver_fired;
-static bool s_circle_sleep_fired;
+static bool s_circle_deep_sleep_fired;
 
 /* Edge-tracking for handle_manual_scroll_input() below -- separate from
  * octave_control.c's own SW1/SW2 edge state, since that module skips
@@ -1786,10 +1878,10 @@ static bool s_circle_sleep_fired;
 static bool s_scroll_prev_minus;
 static bool s_scroll_prev_plus;
 
-/* Extended STANDBY -> POWER_SAVING timeout for a manually-entered
+/* Extended STANDBY -> DEEP_SLEEP timeout for a manually-entered
  * screensaver -- real feedback: "animation timeout time changes to 20
  * minutes when done through that path." */
-#define TILES_STANDBY_MANUAL_POWER_SAVING_TIMEOUT_MS 1200000u /* 20 * 60 * 1000 */
+#define TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS 1200000u /* 20 * 60 * 1000 */
 
 /* Real feedback that touch doesn't reliably wake standby -- prints
  * which specific input caused a wake, so a debug session can see
@@ -1931,13 +2023,13 @@ static void enter_standby(uint32_t now_ms) {
     tiles_buttons_set_standby_active(true);
 }
 
-/* Wakes to AWAKE from STANDBY, POWER_SAVING, or SLEEP -- the same
- * teardown either way (hand rendering back to touch-driven behavior),
- * so one function covers all three. Also clears s_manual_screensaver
- * (a later *normal* auto-idle STANDBY should never inherit a manual
- * session's behavior) and the circle hold-tracker (so a hold
- * interrupted by some other real input starts fresh on the next tick
- * rather than resuming a stale timer). */
+/* Wakes to AWAKE from STANDBY or DEEP_SLEEP -- the same teardown either
+ * way (hand rendering back to touch-driven behavior), so one function
+ * covers both. Also clears s_manual_screensaver (a later *normal*
+ * auto-idle STANDBY should never inherit a manual session's behavior)
+ * and the circle hold-tracker (so a hold interrupted by some other real
+ * input starts fresh on the next tick rather than resuming a stale
+ * timer). */
 static void exit_standby(void) {
     s_state = TILES_STANDBY_STATE_AWAKE;
     s_manual_screensaver = false;
@@ -1946,42 +2038,28 @@ static void exit_standby(void) {
     tiles_buttons_set_standby_active(false);
 }
 
-/* Deeper dormant state after the current power-saving timeout (see
- * current_power_saving_timeout_ms()) of total inactivity: animations
- * stop, everything goes dark except the circle button (SW6, the
- * rightmost -- see TILES_CIRCLE_BUTTON_COL in board_layout.h), which
- * pulses gently to show how to wake it back up. lighting/buttons
- * standby-active is already true from enter_standby() -- this only
- * changes s_state, no need to re-claim the rendering path. */
-static void enter_power_saving(void) {
-    s_state = TILES_STANDBY_STATE_POWER_SAVING;
-    s_manual_screensaver = false;
-    s_last_frame_ms = 0u; /* forces an immediate first frame */
-}
-
-/* Real feedback: "holding for 10 sec send into power off standby
- * meaning no animations just sleep." Distinct from POWER_SAVING (which
- * still pulses the circle button) -- this is a true blank: everything
- * dark, no animation loop running at all, nothing to render again until
- * real input wakes it. Rendered once here rather than every frame,
- * since nothing about a blank state changes over time. */
-static void enter_sleep(uint32_t now_ms) {
-    s_state = TILES_STANDBY_STATE_SLEEP;
+/* Deep sleep: the single dormant state reached either by
+ * current_deep_sleep_timeout_ms() of total inactivity from STANDBY, OR
+ * directly by holding circle (SW6) for TILES_CIRCLE_DEEP_SLEEP_HOLD_MS
+ * (10s) -- real feedback: "the sleep mode after 10 secs is the same as
+ * the timeout of the animations, not two separate things... both behave
+ * as sleep with a single circle light indicator pulsing slowly." An
+ * earlier version had the 10s hold jump to a second, fully-blank state
+ * instead of this one; that's gone now, this is the only "sleep" this
+ * firmware has. Animations stop, everything goes dark except the circle
+ * button (SW6, the rightmost -- see TILES_CIRCLE_BUTTON_COL in
+ * board_layout.h), which pulses slowly as the one way to tell the board
+ * is in deep sleep rather than fully off. Explicitly (re)asserts the
+ * lighting/buttons standby-active claim rather than assuming
+ * enter_standby() already made it -- true whenever this is reached via
+ * the normal STANDBY timeout path, but the 10s circle hold can in
+ * principle land here without ever having passed through STANDBY. */
+static void enter_deep_sleep(void) {
+    s_state = TILES_STANDBY_STATE_DEEP_SLEEP;
     s_manual_screensaver = false;
     tiles_lighting_set_standby_active(true);
     tiles_buttons_set_standby_active(true);
-    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
-    }
-    for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
-        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-            tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), 0.0f, 0.0f, 0.0f);
-        }
-    }
-    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
-        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
-    }
-    (void)now_ms;
+    s_last_frame_ms = 0u; /* forces an immediate first frame */
 }
 
 /* Circle (SW6)'s dedicated long-press gesture -- see this file's
@@ -1989,25 +2067,26 @@ static void enter_sleep(uint32_t now_ms) {
  * full reasoning. Runs unconditionally at the very top of
  * tiles_standby_scan(), regardless of current state, so the gesture
  * works whether the board is currently AWAKE, already in STANDBY, or
- * in POWER_SAVING -- a continuous hold naturally passes through the 6s
- * threshold (enters/escalates to a manual STANDBY) before the 10s one
- * (escalates further to SLEEP), each firing exactly once per hold via
- * its own *_fired latch. */
+ * already in DEEP_SLEEP -- a continuous hold naturally passes through
+ * the 6s threshold (enters/escalates to a manual STANDBY) before the 10s
+ * one (escalates further to DEEP_SLEEP -- the exact same state the
+ * normal inactivity timeout below reaches, not a separate one), each
+ * firing exactly once per hold via its own *_fired latch. */
 static void handle_circle_hold(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
 
     if (held && !s_circle_was_held) {
         s_circle_hold_start_ms = now_ms;
         s_circle_screensaver_fired = false;
-        s_circle_sleep_fired = false;
+        s_circle_deep_sleep_fired = false;
     }
 
     if (held) {
         uint32_t held_ms = now_ms - s_circle_hold_start_ms;
-        if (held_ms >= TILES_CIRCLE_SLEEP_HOLD_MS && !s_circle_sleep_fired) {
-            s_circle_sleep_fired = true;
+        if (held_ms >= TILES_CIRCLE_DEEP_SLEEP_HOLD_MS && !s_circle_deep_sleep_fired) {
+            s_circle_deep_sleep_fired = true;
             s_last_activity_ms = now_ms;
-            enter_sleep(now_ms);
+            enter_deep_sleep();
         } else if (held_ms >= TILES_CIRCLE_SCREENSAVER_HOLD_MS && !s_circle_screensaver_fired) {
             s_circle_screensaver_fired = true;
             s_last_activity_ms = now_ms;
@@ -2051,18 +2130,18 @@ static void handle_manual_scroll_input(uint32_t now_ms) {
     s_scroll_prev_plus = plus;
 }
 
-static uint32_t current_power_saving_timeout_ms(void) {
-    return s_manual_screensaver ? TILES_STANDBY_MANUAL_POWER_SAVING_TIMEOUT_MS : TILES_STANDBY_POWER_SAVING_TIMEOUT_MS;
+static uint32_t current_deep_sleep_timeout_ms(void) {
+    return s_manual_screensaver ? TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS : TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS;
 }
 
-#define POWER_SAVING_PULSE_PERIOD_MS 3000.0f
-#define POWER_SAVING_PULSE_MIN 0.03f
-#define POWER_SAVING_PULSE_MAX 0.35f
+#define DEEP_SLEEP_PULSE_PERIOD_MS 3000.0f
+#define DEEP_SLEEP_PULSE_MIN 0.03f
+#define DEEP_SLEEP_PULSE_MAX 0.35f
 
-static void render_power_saving_frame(uint32_t now_ms) {
-    float phase = (float)now_ms / POWER_SAVING_PULSE_PERIOD_MS;
+static void render_deep_sleep_frame(uint32_t now_ms) {
+    float phase = (float)now_ms / DEEP_SLEEP_PULSE_PERIOD_MS;
     float raw = 0.5f + 0.5f * sinf(2.0f * TILES_STANDBY_PI * phase);
-    float pulse = POWER_SAVING_PULSE_MIN + (POWER_SAVING_PULSE_MAX - POWER_SAVING_PULSE_MIN) * raw;
+    float pulse = DEEP_SLEEP_PULSE_MIN + (DEEP_SLEEP_PULSE_MAX - DEEP_SLEEP_PULSE_MIN) * raw;
 
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         float level = (col == TILES_CIRCLE_BUTTON_COL) ? pulse : 0.0f;
@@ -2095,7 +2174,7 @@ void tiles_standby_init(void) {
     s_manual_screensaver = false;
     s_circle_was_held = false;
     s_circle_screensaver_fired = false;
-    s_circle_sleep_fired = false;
+    s_circle_deep_sleep_fired = false;
     s_scroll_prev_minus = false;
     s_scroll_prev_plus = false;
     srand(now_ms);
@@ -2106,7 +2185,7 @@ void tiles_standby_scan(void) {
 
     /* Runs regardless of current state -- see the function's own
      * comment for why (the gesture needs to work from AWAKE, STANDBY,
-     * or POWER_SAVING alike). May change s_state out from under
+     * or DEEP_SLEEP alike). May change s_state out from under
      * everything below on this same call. */
     handle_circle_hold(now_ms);
 
@@ -2130,15 +2209,8 @@ void tiles_standby_scan(void) {
         return;
     }
 
-    if (s_state == TILES_STANDBY_STATE_SLEEP) {
-        /* Nothing to render -- enter_sleep() already blanked everything
-         * once and nothing about a blank state changes over time; just
-         * wait for real_input_active() above to wake it. */
-        return;
-    }
-
-    /* STANDBY or POWER_SAVING: real_input_active() above was false, so
-     * the only remaining wake path is Hall depth -- see
+    /* STANDBY or DEEP_SLEEP: real_input_active() above was false, so the
+     * only remaining wake path is Hall depth -- see
      * hall_depth_wake_triggered()'s comment for why it's checked only
      * here, not folded into real_input_active(). Applies to both states
      * equally -- same underlying "not fully awake" concern. */
@@ -2148,17 +2220,17 @@ void tiles_standby_scan(void) {
         return;
     }
 
-    if (s_state == TILES_STANDBY_STATE_POWER_SAVING) {
+    if (s_state == TILES_STANDBY_STATE_DEEP_SLEEP) {
         if (now_ms - s_last_frame_ms >= TILES_STANDBY_FRAME_INTERVAL_MS) {
-            render_power_saving_frame(now_ms);
+            render_deep_sleep_frame(now_ms);
             s_last_frame_ms = now_ms;
         }
         return;
     }
 
     /* STATE_STANDBY */
-    if (now_ms - s_last_activity_ms >= current_power_saving_timeout_ms()) {
-        enter_power_saving();
+    if (now_ms - s_last_activity_ms >= current_deep_sleep_timeout_ms()) {
+        enter_deep_sleep();
         return;
     }
 
@@ -2188,12 +2260,8 @@ bool tiles_standby_is_active(void) {
     return s_state == TILES_STANDBY_STATE_STANDBY;
 }
 
-bool tiles_standby_is_power_saving(void) {
-    return s_state == TILES_STANDBY_STATE_POWER_SAVING;
-}
-
-bool tiles_standby_is_sleeping(void) {
-    return s_state == TILES_STANDBY_STATE_SLEEP;
+bool tiles_standby_is_deep_sleep(void) {
+    return s_state == TILES_STANDBY_STATE_DEEP_SLEEP;
 }
 
 bool tiles_standby_owns_octave_buttons(void) {

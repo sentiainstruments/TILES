@@ -146,23 +146,21 @@ first on-hardware note-on test.
   and `haptics.c`'s voice ceiling, not yet hardware-tested against a
   real source-switch transition.
   `standby` done for a demo V1: after 1 minute idle, pads + buttons +
-  underglow run one of 9 rotating ambient animations (diagonal wave,
-  sharp center-out ring, complex shooting stars, an actual game of snake
-  that eats food and grows, a blue/purple RGB showcase where underglow
-  shows the same color as the pads, a graphic equalizer with per-column
-  peak-hold, a circular underglow-only wave, brick breaker, and a
-  scrolling "SENTIA - TILES -" marquee in a tiny pixel font), in
-  randomized order (never repeating the current
-  animation or the one before it), instead of reflecting touch state,
-  until any touch/button/pedal activity exits it. After 15 minutes of
-  total inactivity it drops further into power-saving: everything dark
-  except the circle button pulsing gently. Holding the circle button
-  (SW6) for 6s now manually forces the screensaver on early and repurposes
-  SW1/SW2 as scroll-without-waking animation controls (a longer, 20-minute
-  power-saving timeout applies while in this manual mode); holding it
-  further, to 10s, escalates to a new SLEEP state -- everything blanked
-  once and left alone until real input wakes it, a deliberate "power off"
-  distinct from power-saving's still-pulsing circle LED. See
+  underglow run one of 13 rotating ambient animations (see
+  `services/README.md` for the full list, including Snake/Tetris/Pong
+  "attract mode" demos and a scrolling "TILES -" marquee in a tiny pixel
+  font), weighted so plain ambient ones show up roughly twice as often as
+  the game demos and never immediately repeating the current animation or
+  the one before it, instead of reflecting touch state, until any
+  touch/button/pedal activity exits it. After 15 minutes of total
+  inactivity it drops further into deep sleep: everything dark except the
+  circle button pulsing slowly, the one indicator it's in this state.
+  Holding the circle button (SW6) for 6s manually forces the screensaver
+  on early and repurposes SW1/SW2 as scroll-without-waking animation
+  controls (a longer, 20-minute deep-sleep timeout applies while in this
+  manual mode); holding it further, to 10s, escalates straight into that
+  *same* deep sleep state directly -- not a separate blank state, per
+  real feedback that the two should be one and the same thing. See
   `services/README.md` for
   the button-column/underglow-anchor mapping assumptions this still
   needs verified on real hardware, for a real bug this rework fixed
@@ -265,9 +263,9 @@ flashable `.uf2`.
   underglow-anchor mappings (`board/board_layout.h`) are based on the
   user's verbal description of the physical board rather than a hardware
   doc -- confirmed absent from `docs/hardware/`. The 1-minute idle
-  timeout, 2-minute animation-cycle period, and 15-minute power-saving
+  timeout, 2-minute animation-cycle period, and 15-minute deep-sleep
   timeout are explicit demo-mode defaults, not final values. Animations
-  1-3, 5-7 and the power-saving state are based on user feedback from
+  1-3, 5-7 and the deep sleep state are based on user feedback from
   watching an earlier version on real hardware (animation 3's fall speed
   most recently halved after still reading as too fast); animation 4's
   real-snake rework and animations 8 (brick breaker), 9 (marquee,
@@ -277,14 +275,14 @@ flashable `.uf2`.
   (Pong, AI-vs-AI), and 13 (falling dots, a slow "filling up"
   screensaver) have NOT been seen on real hardware at all yet --
   every one of their constants
-  (`EQ_PEAK_DECAY_PER_MS`, `CIRCLE_PERIOD_MS`,
-  `POWER_SAVING_PULSE_PERIOD_MS`, `BOUNCE_ROW_PERIOD_MS`,
+  (`EQ_BEAT_MS`, `CIRCLE_PERIOD_MS`,
+  `DEEP_SLEEP_PULSE_PERIOD_MS`, `BOUNCE_ROW_PERIOD_MS`,
   `TETRIS_STEP_MS`, `FALLINGDOTS_STEP_MS`, etc.) is a first guess. `BUTTON_STANDBY_BRIGHTNESS_SCALE`
   (0.35) is likewise still an unmeasured guess at how much dimmer buttons need to be, not a measured
   match to pad brightness. The circle-button (SW6) 6s/10s long-press
-  gestures, the new SLEEP state, and manual scroll-through-animations
+  gestures, the deep sleep consolidation, and manual scroll-through-animations
   mode are all brand new and untested on real hardware -- both hold
-  thresholds and the 20-minute manual power-saving timeout are first
+  thresholds and the 20-minute manual deep-sleep timeout are first
   guesses, and whether excluding SW1/SW2 (and circle itself) from the
   wake check while scrolling actually feels right in practice (versus,
   say, accidentally exiting scroll mode) hasn't been observed yet.
@@ -391,11 +389,18 @@ flashable `.uf2`.
   mT/LSB relationship to derive them from yet, so they're starting
   guesses that will need real-hardware tuning once this can actually be
   played and heard.
-- MPR121 touch thresholds (12/6) are Freescale's generic quickstart
-  defaults, not tuned for this board's actual electrode/keycap/acrylic
-  stack. Touch works and feels responsive on hardware as of the
-  latency fix in `services/lighting.c`, but sensitivity tuning is still
-  open.
+- MPR121 touch thresholds started at Freescale's generic quickstart
+  defaults (12/6), not tuned for this board's actual electrode/keycap/
+  acrylic stack. The release side was since narrowed to 9 -- real
+  feedback with the assembly now seated: "release is sticking... should
+  release as fast as a keyboard piano" (`services/expression.c` sends
+  MIDI note-off the same tick touch clears, so the sluggishness traced
+  back to the raw touch/release hysteresis itself, not anything
+  downstream -- see `drivers/README.md`'s `mpr121.h`/`.c` entry). Touch
+  works and feels responsive on hardware as of the latency fix in
+  `services/lighting.c`, but this narrower release threshold hasn't
+  itself been tried on real hardware yet, and full per-electrode
+  sensitivity tuning is still open.
 - No MPE (per-note channel allocation) yet -- V1 MIDI is single
   channel. Velocity and aftertouch are now real (Hall-derived), not
   fixed, but unverified against actual playing since USB MIDI itself

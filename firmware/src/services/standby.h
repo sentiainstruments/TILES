@@ -16,12 +16,12 @@
  * animation is running -- see TILES_STANDBY_HALL_WAKE_DEPTH in
  * standby.c.
  *
- * After TILES_STANDBY_POWER_SAVING_TIMEOUT_MS (15 minutes) of TOTAL
- * inactivity, standby's animations stop and the board drops to a deeper
- * power-saving state: everything dark except the circle function button
- * pulsing gently to show how to wake it back up. Same wake conditions as
- * standby (any touch/button/pedal activity, or Hall depth once that's
- * re-enabled).
+ * After TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS (15 minutes) of TOTAL
+ * inactivity, standby's animations stop and the board drops to deep
+ * sleep: everything dark except the circle function button pulsing
+ * slowly, the one indicator that it's in this state rather than fully
+ * off. Same wake conditions as standby (any touch/button/pedal activity,
+ * or Hall depth once that's re-enabled).
  *
  * ---- Circle button (SW6) long-press gestures --------------------------
  * Holding circle for TILES_CIRCLE_SCREENSAVER_HOLD_MS (6s) manually
@@ -32,22 +32,24 @@
  * tiles_standby_owns_octave_buttons() (checked by octave_control.c so it
  * doesn't also step the octave/transpose key underneath the same
  * presses). Manually-entered screensaver also gets a longer runway
- * before dropping to power-saving: TILES_STANDBY_MANUAL_POWER_SAVING_TIMEOUT_MS
+ * before dropping to deep sleep: TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS
  * (20 minutes) instead of the normal 15, since the user is actively
  * choosing to watch it. Holding circle further, to
- * TILES_CIRCLE_SLEEP_HOLD_MS (10s), escalates straight to a new SLEEP
- * state: everything blanked once and left alone (no pulsing circle, no
- * animation loop at all) until real input wakes it -- a deliberate
- * "power off" gesture, distinct from power-saving's still-breathing
- * circle LED. Both thresholds are edge-latched per hold (see
- * handle_circle_hold()'s *_fired flags) so a single long hold can't
- * re-fire, and both are handled unconditionally every scan regardless of
- * current state. A short circle press/release (under 6s) is deliberately
- * a no-op here: circle is reserved as this product's future
- * general-purpose "shift"/modifier button (the same "V1 doesn't build
- * the framework yet" status already noted for SW1/SW2 in
- * octave_control.h) for everything below these two long-press
- * thresholds.
+ * TILES_CIRCLE_DEEP_SLEEP_HOLD_MS (10s), escalates straight into deep
+ * sleep -- the *exact same* state the normal inactivity timeout above
+ * reaches, not a separate one; real feedback: "the sleep mode after 10
+ * secs is the same as the timeout of the animations, not two separate
+ * things... both behave as sleep with a single circle light indicator
+ * pulsing slowly... rename that to deep sleep." (An earlier version had
+ * the 10s hold jump to a second, fully-blank state instead -- removed.)
+ * Both thresholds are edge-latched per hold (see handle_circle_hold()'s
+ * *_fired flags) so a single long hold can't re-fire, and both are
+ * handled unconditionally every scan regardless of current state. A
+ * short circle press/release (under 6s) is deliberately a no-op here:
+ * circle is reserved as this product's future general-purpose
+ * "shift"/modifier button (the same "V1 doesn't build the framework yet"
+ * status already noted for SW1/SW2 in octave_control.h) for everything
+ * below these two long-press thresholds.
  *
  * Deliberately a lighting-only concept: touch/Hall/expression/MIDI keep
  * running completely unaware standby exists (see standby.c's header for
@@ -91,21 +93,17 @@ void tiles_standby_init(void);
  * iteration's activity check sees fresh state. */
 void tiles_standby_scan(void);
 
-/* For diagnostics. True only for the animated standby state, not
- * power-saving -- see tiles_standby_is_power_saving() below for that. */
+/* For diagnostics. True only for the animated standby state, not deep
+ * sleep -- see tiles_standby_is_deep_sleep() below for that. */
 bool tiles_standby_is_active(void);
 
-/* For diagnostics. True only for the deeper power-saving state (15
- * minutes of total inactivity past entering standby, or 20 if that
- * standby was manually entered -- see tiles_standby_owns_octave_buttons()
- * below). */
-bool tiles_standby_is_power_saving(void);
-
-/* For diagnostics. True only for SLEEP -- the true blank state entered
- * by holding SW6 (circle) for 10 seconds: everything dark, no animation
- * running at all, distinct from POWER_SAVING's still-pulsing circle
- * button. */
-bool tiles_standby_is_sleeping(void);
+/* For diagnostics. True for deep sleep -- the single dormant state
+ * reached either by 15 minutes of total inactivity past entering
+ * standby (20 if that standby was manually entered, see
+ * tiles_standby_owns_octave_buttons() below), or directly by holding
+ * SW6 (circle) for 10 seconds. Everything dark except the circle button
+ * pulsing slowly. */
+bool tiles_standby_is_deep_sleep(void);
 
 /* True only while a screensaver manually entered by holding SW6
  * (circle) for 6 seconds is showing -- see standby.c's

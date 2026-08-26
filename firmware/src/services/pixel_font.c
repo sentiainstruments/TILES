@@ -25,8 +25,6 @@ static const uint8_t COLS_G[] = {6u, 9u, 13u, 13u};
 static const uint8_t COLS_I[] = {9u, 15u, 15u, 9u};
 /* #...    #...    #...    #### */
 static const uint8_t COLS_L[] = {15u, 8u, 8u, 8u};
-/* #..#    ##.#    #.##    #..# */
-static const uint8_t COLS_N[] = {15u, 2u, 4u, 15u};
 /* .###    #...    ...#    ###. */
 static const uint8_t COLS_S[] = {10u, 9u, 9u, 5u};
 /* ####    .##.    .##.    .##. */
@@ -44,7 +42,6 @@ const tiles_glyph_t TILES_GLYPH_F = {COLS_F, 4u};
 const tiles_glyph_t TILES_GLYPH_G = {COLS_G, 4u};
 const tiles_glyph_t TILES_GLYPH_I = {COLS_I, 4u};
 const tiles_glyph_t TILES_GLYPH_L = {COLS_L, 4u};
-const tiles_glyph_t TILES_GLYPH_N = {COLS_N, 4u};
 const tiles_glyph_t TILES_GLYPH_S = {COLS_S, 4u};
 const tiles_glyph_t TILES_GLYPH_T = {COLS_T, 4u};
 const tiles_glyph_t TILES_GLYPH_DASH = {COLS_DASH, 4u};

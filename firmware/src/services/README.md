@@ -8,7 +8,7 @@ Built: Hall scan, touch, lighting, buttons, pedal, note mapping (with
 octave shift), the SW1/SW2 octave-shift button controller, real
 player-controlled minigames (snake, brick breaker), touch+Hall
 expression fusion (velocity/aftertouch), power source state, standby
-idle animations (plus a power-saving state after 15 minutes), a
+idle animations (plus a deep sleep state after 15 minutes), a
 power-on boot animation, and per-pad haptic feedback -- see Status
 below. Still planned: per-pad Hall calibration, X/Y tilt -> pitch/
 timbre, storage glue.
@@ -234,8 +234,8 @@ not its code.
   instead of each guessing its own. Format: one byte per glyph column
   (always 4 columns except `SPACE`), bit0 = row 1 (top) ... bit3 = row 4
   (bottom). Covers exactly the letters needed -- A-G (the seven natural
-  note names) plus I/L/N/S/T (for "SENTIA - TILES -"), a dash, and a
-  space -- not a full alphabet, since nothing else uses this yet.
+  note names) plus I/L/S/T (for the "TILES -" marquee message), a dash,
+  and a space -- not a full alphabet, since nothing else uses this yet.
   `tiles_pixel_font_glyph_for_note_letter()` is the runtime lookup
   `octave_control.c` needs for a variable key letter; `standby.c`'s
   marquee references the glyphs directly since its message is fixed.
@@ -244,8 +244,9 @@ not its code.
   mistake (E and F were nearly indistinguishable, E was missing its
   bottom bar); this version moved to a fixed 4x4 grid styled after the
   user-supplied "FOUR BIT" reference font (bold, blocky, geometric) --
-  true monospacing, no gap column needed, and the extra column let N
-  get a real diagonal instead of the old H-like compromise.
+  true monospacing, no gap column needed. `N` (only ever needed for
+  "SENTIA") was later deleted along with that word -- see the marquee's
+  own entry above.
   **Not hardware-verified:** every glyph is hand-drawn specifically for
   4x4 (there's no off-the-shelf font at exactly this size to have copied
   instead) and hasn't been seen lit yet -- legibility at actual LED
@@ -554,14 +555,14 @@ not its code.
   3. comet-tailed "shooting stars" with per-star randomized speed/tail/twinkle -- fall speed roughly halved (`STAR_SPEED_ROWS_PER_MS_MIN`/`_MAX`) from real feedback that it read as too fast
   4. an actual game of snake: starts 2 segments long (real feedback: 3 felt cramped on a board this small), a pulsing red food dot appears, the snake (green, brighter head) moves toward it a cell at a time and eats it (grows by one segment, a new dot appears) -- direction each step is greedy-toward-the-food with a randomized perturbation (`SNAKE_RANDOM_TURN_WEIGHT`) so the path varies run to run, and it resets to a short length at a randomized start position/direction whenever it grows past `SNAKE_MAX_LENGTH` or traps itself with nowhere to go, so it doesn't settle into one repeating pattern long-term either. Reworked from an earlier version that was just a fixed-length segment ping-ponging a deterministic path -- real feedback was that it didn't feel like an actual game.
   5. a blue/purple RGB showcase where underglow shows the same moving color as the pads -- the whole point being to show off both
-  6. a graphic equalizer: each column is a fake EQ/VU bar, bottom-up blue/blue/yellow/red -- red is only ever row 1's own bar color now, not a separate marker (see rework below). Reworked three times: an early pass was too fast/continuously lit, the fix for that (a long, low-biased "phrase" envelope forcing multi-second silences) overshot into "too slow" with "almost no peaks"; a second pass added a percussive, tempo-locked hit envelope at 127bpm (`EQ_BEAT_MS`) plus a separate red "peak-hold" marker that could land on any row and slowly fall back down -- but real feedback was that this was now "too flashy and fast," the falling marker read as "dropping red lights," and at only 4 rows of resolution it just looked broken rather than like a VU meter. Third (current) pass removes the peak-hold marker entirely, replaces the instant-attack pop with a short rise (`EQ_ATTACK_FRACTION`, closer to a real VU needle's fast-attack/slower-release ballistics), slows the tempo slightly (127bpm -> ~107bpm) and lowers the busiest columns' subdivision (`s_eq_col_hits_per_beat` 4/beat -> 3/beat, less density). A deterministic golden-angle-stepped "miss" still occasionally drops a hit to 0 for breathing room. Function buttons are fully off; underglow is a constant blue accent unrelated to any one column.
+  6. a graphic equalizer: each column is a fake EQ/VU bar, bottom-up blue/blue/yellow/red -- red is only ever row 1's own bar color, not a separate marker. Reworked four times: an early pass was too fast/continuously lit, the fix for that (a long, low-biased "phrase" envelope forcing multi-second silences) overshot into "too slow" with "almost no peaks"; a second pass added a percussive, tempo-locked hit envelope at 127bpm plus a separate red "peak-hold" marker that could land on any row and slowly fall back down -- but real feedback was that this was now "too flashy and fast," the falling marker read as "dropping red lights," and at only 4 rows of resolution it just looked broken rather than like a VU meter; a third pass removed the peak-hold marker, added a short attack ramp (`EQ_ATTACK_FRACTION`, closer to a real VU needle's ballistics), and slowed the tempo to ~107bpm. Fourth (current) pass, more real feedback ("still too fast," "moving too crazy," and row 1/red almost never actually lighting): tempo slowed again to 90bpm (`EQ_BEAT_MS`), every column's hit-rate subdivision lowered again (busiest column now 2/beat, not 3 -- `s_eq_col_hits_per_beat`), and velocity now guarantees a real occasional redline -- the top `EQ_REDLINE_FRACTION` (6%) of hits (by the same deterministic golden-angle key already used for per-hit velocity variance) jump straight to full velocity instead of the old smooth 0.55-1.0 curve, which needed to land almost exactly at 1.0 to ever clear row 1's threshold and essentially never did. A deterministic golden-angle-stepped "miss" still occasionally drops a hit to 0 for breathing room. Function buttons are fully off; underglow is a constant blue accent unrelated to any one column.
   7. a circular underglow wave: only underglow moves, a wave traveling around the 4 pixels in their actual physical circular order (`g_tiles_underglow_circular_position` in `board/board_layout.h` -- chain order 0,1,2,3 zigzags diagonally, the real ring order is 0,1,3,2), each pixel rising and dimming significantly as the wave passes through, going around and around; pads/buttons sit at a flat, minimal, non-animated brightness.
   8. brick breaker: the function-button row is a wall of bricks, a 3-pad-wide cyan paddle (bottom pad row) tracks a warm-white/yellow ball with simple AI (moves at most one column per step toward the ball), the ball bounces around knocking orange bricks out until every brick is broken (won) or it gets past the paddle (lost) -- either way underglow flashes red and purple for a few seconds, then a fresh round starts. Ball checked before paddle in the render order so it draws on top during a bounce, when they briefly occupy the same cell.
-  9. a scrolling marquee: "SENTIA - TILES - " scrolls across the pad grid using the shared font in `services/pixel_font.h`/`.c` (see its own entry above), with automatic inter-glyph spacing and seamless wraparound (`marquee_total_width()`) rather than a fixed animation; underglow and function buttons both stay off, keeping it purely a pad-grid text effect. Scroll speed slowed (`MARQUEE_MS_PER_COLUMN` 260ms -> 420ms per column) from real feedback, at the same time the font itself moved out to the shared module to fix a real mistake in the old one-off glyphs (E and F were nearly indistinguishable).
+  9. a scrolling marquee: "TILES - " scrolls across the pad grid using the shared font in `services/pixel_font.h`/`.c` (see its own entry above), with automatic inter-glyph spacing and seamless wraparound (`marquee_total_width()`) rather than a fixed animation; underglow and function buttons both stay off, keeping it purely a pad-grid text effect. Reworked twice from real feedback. First: scroll speed slowed (`MARQUEE_MS_PER_COLUMN` 260ms -> 420ms per column), and the font itself moved out to the shared module to fix a real mistake in the old one-off glyphs (E and F were nearly indistinguishable). Second (current): still "not readable" -- the message dropped "SENTIA - " entirely (now just "TILES - ", real feedback: "we can get rid of sentia"), `MARQUEE_GLYPH_GAP` doubled (1 -> 2 blank columns between letters, so adjacent full-width glyphs don't blur into one bar across only a single dark column), and the scroll slowed further still (420ms -> 600ms per column). The now-unused `N` glyph was removed from `pixel_font.h`/`.c` along with it. The individual letterforms themselves (T, I, L, E, S) were re-checked bit by bit and are each unambiguous on their own -- the readability problem was pacing/separation, not the glyphs.
   10. bouncing glow: the "simple but elegant" one -- a single soft white point bounces diagonally around the pad grid like a screensaver ball, purely a closed-form position (a triangle wave per axis -- a bounce-off-the-walls reflection with no velocity/state to track) with a soft falloff around it, no particle array or game state at all. Row and col bounce at different, non-integer-ratio periods (`BOUNCE_ROW_PERIOD_MS`/`BOUNCE_COL_PERIOD_MS`) so the path slowly traces a Lissajous-like figure instead of repeating quickly. Function buttons stay off; underglow mirrors the pad field like animations 1-4, so the glow naturally spills into it near an anchor.
   11. Tetris: the AI-played autonomous counterpart to `game_mode.h`'s real Tetris (below) -- same custom 5-piece small set/colors (dot, domino, 3-cell straight tromino, 3-cell corner tromino, 2x2 square -- NOT the standard 7 tetrominoes, which real feedback said were too big for this board), deliberately separate state and code from the interactive version, matching this file's existing snake/brick-breaker precedent. Pieces carry a variable `num_cells` (1-4) rather than always 4. A lightweight greedy AI (`tetris_ai_place()`) picks each piece's rotation and column at spawn by simulating every fitting placement and keeping whichever lands the piece's topmost cell deepest (a cheap "keep the stack low" proxy, no real hole-counting), then the piece visibly falls one row at a time toward that spot. A line clear triggers a brief, fast-toggling dramatic white underglow strobe (`TETRIS_LINE_CLEAR_FLASH_MS`/`_TOGGLE_MS`); topping out instead blinks plain red (not the red/purple alternation brick breaker's flash uses), then the well clears and a new game starts. Function buttons stay off.
   12. Pong: the AI-vs-AI autonomous counterpart to `game_mode.h`'s real, two-player Pong (below) -- same court/paddle/ball layout and colors, deliberately separate state and code. Each paddle uses the "move at most one row per step toward the ball" simple AI animation 8's paddle already established (`pong_ai_track()`), but only for the side the ball is currently heading toward -- the other side drifts back to its rest position instead (`pong_ai_recenter()`). Reworked from an earlier version where both paddles tracked the ball every step regardless of direction, which made them move in lockstep/mirror each other constantly -- real feedback: "doing the same on both sides," didn't feel like a real game. Rallies still essentially never end on their own; on the rare miss, a brief white underglow flash plays and the ball re-serves immediately -- the same "stay in this animation and continue" behavior the interactive version uses instead of a win/lose round-end. Function buttons stay off.
-  13. falling dots: white dots fall one row at a time from the top, landing wherever they hit the bottom or an already-landed dot below and staying there -- a slow "filling up" screensaver. Unlike every other animation here, this one has real state that accumulates over its whole run instead of looping continuously: up to `FALLINGDOTS_MAX_CONCURRENT` (4) dots fall at once, new ones spawn periodically (`FALLINGDOTS_SPAWN_INTERVAL_MS`) into columns that still have room, and once the entire grid is full it holds for `FALLINGDOTS_FULL_PAUSE_MS` then clears and starts over. Dots always land on top of whatever's already stacked in their column (like Tetris pieces, no gaps), so checking whether row 1 is empty is a valid, cheap proxy for both "does this column have room" and "is the whole grid full." The actively-falling dot is full brightness, landed ones dimmer, for a bit of depth. Function buttons stay off; underglow mirrors the pad field like animations 1-5/10.
+  13. falling dots: white dots fall one row at a time from the top, landing wherever they hit the bottom or an already-landed dot below and staying there -- a slow "filling up" screensaver. Unlike every other animation here, this one has real state that accumulates over its whole run instead of looping continuously: up to `FALLINGDOTS_MAX_CONCURRENT` (4) dots fall at once, new ones spawn periodically (`FALLINGDOTS_SPAWN_INTERVAL_MS`) into columns that still have room, and once the entire grid is full it holds for `FALLINGDOTS_FULL_PAUSE_MS` then clears and starts over. Dots always land on top of whatever's already stacked in their column (like Tetris pieces, no gaps), so checking whether row 1 is empty is a valid, cheap proxy for both "does this column have room" and "is the whole grid full." The actively-falling dot is full brightness, landed ones dimmer, for a bit of depth. Function buttons stay off; underglow mirrors the pad field like animations 1-5/10. **Slowed and smoothed** -- real feedback: "slow down falling dots animation and make it smoother." `FALLINGDOTS_STEP_MS`/`_SPAWN_INTERVAL_MS` both raised (~1.8x) for a calmer pace, and every falling dot now cross-fades (smoothstep-eased) between its current row and the next as it falls, instead of the old hard instant jump every step -- all active dots share one global step clock (`s_fallingdots_last_step_ms`), so `anim_fallingdots()` derives one 0-1 progress value from it and uses that to fade the current row out while fading the next row in. A dot about to lock (next row blocked) skips the fade-in target and just holds steady until it locks, since there's nowhere to fade into.
 
   Touch/button/pedal activity exits standby immediately. A Hall-depth wake fallback exists in the code
   (`hall_depth_wake_triggered()`, checked only while already in standby,
@@ -641,14 +642,14 @@ not its code.
   `g_tiles_underglow_circular_position[]`) moved out to
   `board/board_layout.h`, shared with `boot_sequence.c` below rather than
   duplicated.
-  After `TILES_STANDBY_POWER_SAVING_TIMEOUT_MS` (15 minutes of *total*
+  After `TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS` (15 minutes of *total*
   inactivity, not 15 minutes of animation specifically -- same
   `s_last_activity_ms` clock that gates entering standby in the first
   place, just a longer threshold checked while already in standby)
-  standby's animations stop and the board drops to a third state,
-  power-saving: everything dark except the circle button (SW6, the
-  rightmost) pulsing gently to show how to wake it. Same wake conditions
-  as standby.
+  standby's animations stop and the board drops to a third state, deep
+  sleep: everything dark except the circle button (SW6, the rightmost)
+  pulsing slowly, the one indicator that it's in this state rather than
+  fully off. Same wake conditions as standby.
   **Circle button (SW6) long-press gestures added**, running
   unconditionally every scan regardless of current state
   (`handle_circle_hold()`) -- real feedback: "build into the circle
@@ -669,19 +670,23 @@ not its code.
     check unconditionally, otherwise holding circle to reach either
     threshold would immediately wake the device the instant it's
     pressed, defeating both gestures before they could ever fire.
-    Manual screensaver also gets a longer runway before dropping to
-    power-saving -- `TILES_STANDBY_MANUAL_POWER_SAVING_TIMEOUT_MS` (20
-    minutes) instead of the normal 15 (`current_power_saving_timeout_ms()`
-    picks between the two) -- since a user who deliberately entered this
-    mode to browse animations is more likely still watching than idle.
-  - Holding 10s (`TILES_CIRCLE_SLEEP_HOLD_MS`) escalates straight to a
-    new fourth state, SLEEP: every pad/button/underglow zeroed once
-    (`enter_sleep()`, not per-frame -- there's no animation loop at all
-    in this state, unlike power-saving's still-pulsing circle LED) and
-    left alone until real input wakes it. A deliberate "power off"
-    gesture distinct from power-saving's "still breathing" state.
+    Manual screensaver also gets a longer runway before dropping to deep
+    sleep -- `TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS` (20 minutes)
+    instead of the normal 15 (`current_deep_sleep_timeout_ms()` picks
+    between the two) -- since a user who deliberately entered this mode
+    to browse animations is more likely still watching than idle.
+  - Holding 10s (`TILES_CIRCLE_DEEP_SLEEP_HOLD_MS`) escalates straight
+    into deep sleep -- **the exact same state** the normal inactivity
+    timeout above reaches, not a separate one. Real feedback caught a
+    real design mistake here: an earlier version had this hold jump to a
+    *second*, fully-blank SLEEP state instead ("the sleep mode after 10
+    secs is the same as the timeout of the animations, not two separate
+    things... both behave as sleep with a single circle light indicator
+    pulsing slowly... rename that to deep sleep"). `enter_sleep()` and
+    `TILES_STANDBY_STATE_SLEEP` are gone; the 10s hold now just calls the
+    same `enter_deep_sleep()` the timeout path uses.
   - Both thresholds are edge-latched per continuous hold
-    (`s_circle_screensaver_fired`/`s_circle_sleep_fired`, reset on
+    (`s_circle_screensaver_fired`/`s_circle_deep_sleep_fired`, reset on
     release) so one long hold can't re-fire either gesture repeatedly,
     and reaching 10s doesn't also re-trigger the 6s screensaver
     transition on the way past it.
@@ -693,7 +698,7 @@ not its code.
     doesn't build the framework yet" status `octave_control.h` already
     documents for SW1/SW2 -- not implemented yet, just deliberately left
     unclaimed here rather than wired to anything else.
-  - New accessors `tiles_standby_is_sleeping()` and
+  - New accessors `tiles_standby_is_deep_sleep()` and
     `tiles_standby_owns_octave_buttons()` (true only while
     `s_manual_screensaver` is set): the latter is checked by
     `octave_control.c` so its own SW1/SW2 handling goes inert during
@@ -706,9 +711,9 @@ not its code.
   (checked: not documented in `docs/hardware/`) -- easy to correct there
   if the real LED1-4 order or button alignment turns out different once
   seen lit. The animation frame rate (~25fps) and every animation's own
-  timing constants (including the new power-saving pulse period and the
+  timing constants (including the deep sleep pulse period and the
   15-minute timeout itself) are unmeasured against real I2C bus load /
-  how it actually looks. Animations 1-3, 5-7 and the power-saving state
+  how it actually looks. Animations 1-3, 5-7 and the deep sleep state
   have been seen on real hardware in some earlier form (several already
   reworked from that feedback, including animation 3's fall-speed halving
   above); animation 4's real-snake rework and animations 8 (brick
@@ -719,10 +724,10 @@ not its code.
   measured against how legible it actually is at 4 pixels tall), brick
   breaker's/Tetris's/Pong's paddle-or-placement AI reaction, and bouncing
   glow's periods/radius are all first attempts. The circle-button 6s/10s
-  hold gestures, SLEEP state, and manual animation-scroll mode above are
-  also all untested on real hardware -- both hold thresholds and the
-  20-minute manual power-saving timeout are unmeasured starting guesses,
-  same as every other timing constant in this file.
+  hold gestures, the deep sleep consolidation, and manual animation-scroll
+  mode above are also all untested on real hardware -- both hold
+  thresholds and the 20-minute manual deep sleep timeout are unmeasured
+  starting guesses, same as every other timing constant in this file.
 - `boot_sequence.h`/`.c` — done for V1: a ~4-second, blocking power-on
   animation run once from `main.c`, before the main loop starts (nothing
   else needs to run concurrently -- USB stays alive via TinyUSB's own

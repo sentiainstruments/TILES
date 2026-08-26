@@ -6,15 +6,18 @@
  * Register map and init sequence per the real MPR121 datasheet
  * (Freescale MPR121 Rev 4, 02/2013), fetched and read directly rather
  * than recalled from memory. Baseline-filter values (MHD/NHD/NCL/FDL)
- * and the touch/release thresholds (12/6) match Freescale's own
- * published quickstart configuration -- the datasheet itself defers
- * exact filter tuning to a separate app note (AN3891) rather than
- * mandating one value, so these are a reasonable functional starting
- * point, not final-tuned thresholds. Per
- * SENTIA_TILES_FIRMWARE_HANDOFF.md, real thresholds must be calibrated
- * after the complete keycap/acrylic/flex/enclosure assembly -- this
- * driver's job is just "touch detection works at all," not tuned
- * sensitivity.
+ * match Freescale's own published quickstart configuration -- the
+ * datasheet itself defers exact filter tuning to a separate app note
+ * (AN3891) rather than mandating one value, so these are a reasonable
+ * functional starting point, not final-tuned. The touch/release
+ * thresholds (12/9, mpr121.c) started at the quickstart's 12/6 but the
+ * release side was narrowed once the keycap/pad assembly was actually
+ * seated -- see mpr121.c's own comment for the real-hardware feedback
+ * ("release is sticking") that motivated it. Per
+ * SENTIA_TILES_FIRMWARE_HANDOFF.md, real thresholds still need full
+ * per-electrode calibration after the complete keycap/acrylic/flex/
+ * enclosure assembly -- this driver's job is "touch detection works
+ * well," not final-tuned sensitivity.
  */
 
 #include <stdbool.h>

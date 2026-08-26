@@ -19,12 +19,10 @@
  * constraint rather than an off-the-shelf font shrunk down, since no
  * existing font is designed for exactly 4 rows. Reworked once already:
  * the original version used variable-width 3-column glyphs with a
- * separate gap column between letters; this version moved to a fixed
- * 4x4 grid per the "FOUR BIT" reference and widened N's diagonal (the
- * extra column made a real diagonal possible instead of the old
- * H-like compromise). Only the letters actually needed exist: A-G (the
- * seven natural note names, for the transpose key display) plus
- * I/L/N/S/T (for "SENTIA - TILES -"), a dash, and a blank space.
+ * separate gap column between letters. Only the letters actually needed
+ * exist: A-G (the seven natural note names, for the transpose key
+ * display) plus I/L/S/T (for the "TILES -" marquee message), a dash,
+ * and a blank space.
  */
 
 #include <stdint.h>
@@ -43,7 +41,6 @@ extern const tiles_glyph_t TILES_GLYPH_F;
 extern const tiles_glyph_t TILES_GLYPH_G;
 extern const tiles_glyph_t TILES_GLYPH_I;
 extern const tiles_glyph_t TILES_GLYPH_L;
-extern const tiles_glyph_t TILES_GLYPH_N;
 extern const tiles_glyph_t TILES_GLYPH_S;
 extern const tiles_glyph_t TILES_GLYPH_T;
 extern const tiles_glyph_t TILES_GLYPH_DASH;
