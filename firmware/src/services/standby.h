@@ -3,10 +3,13 @@
 /*
  * Standby (idle) animations: after 1 minute with no touch/Hall/button/
  * pedal activity, the pad grid + function buttons + underglow stop
- * reflecting real input and instead run one of 7 rotating ambient
- * animations, switching to a new random one (never the current
- * animation or the one before it) every couple of minutes -- see
- * standby.c's s_animations[]. Any activity exits standby immediately and
+ * reflecting real input and instead run one of several rotating ambient
+ * animations (see standby.c's s_animations[] -- includes ambient fades,
+ * Snake/Tetris/Pong "attract mode" demos, and falling dots; weighted so
+ * plain ambient ones show up roughly twice as often as the game demos,
+ * see s_animation_weight[]/pick_random_animation()), switching to a new
+ * random one (never the current animation or the one before it) every
+ * couple of minutes. Any real activity exits standby immediately and
  * hands rendering back to touch.c/buttons.c's normal behavior. Hall
  * depth is included alongside touch specifically because real hardware
  * showed MPR121 touch alone not reliably waking standby while the pad
@@ -19,6 +22,32 @@
  * pulsing gently to show how to wake it back up. Same wake conditions as
  * standby (any touch/button/pedal activity, or Hall depth once that's
  * re-enabled).
+ *
+ * ---- Circle button (SW6) long-press gestures --------------------------
+ * Holding circle for TILES_CIRCLE_SCREENSAVER_HOLD_MS (6s) manually
+ * forces standby's screensaver to start immediately (skips the 1-minute
+ * idle wait) and marks it "manual" (s_manual_screensaver): while in this
+ * mode, SW1/SW2 step through animations sequentially, forward/backward,
+ * WITHOUT waking the device -- see handle_manual_scroll_input() and
+ * tiles_standby_owns_octave_buttons() (checked by octave_control.c so it
+ * doesn't also step the octave/transpose key underneath the same
+ * presses). Manually-entered screensaver also gets a longer runway
+ * before dropping to power-saving: TILES_STANDBY_MANUAL_POWER_SAVING_TIMEOUT_MS
+ * (20 minutes) instead of the normal 15, since the user is actively
+ * choosing to watch it. Holding circle further, to
+ * TILES_CIRCLE_SLEEP_HOLD_MS (10s), escalates straight to a new SLEEP
+ * state: everything blanked once and left alone (no pulsing circle, no
+ * animation loop at all) until real input wakes it -- a deliberate
+ * "power off" gesture, distinct from power-saving's still-breathing
+ * circle LED. Both thresholds are edge-latched per hold (see
+ * handle_circle_hold()'s *_fired flags) so a single long hold can't
+ * re-fire, and both are handled unconditionally every scan regardless of
+ * current state. A short circle press/release (under 6s) is deliberately
+ * a no-op here: circle is reserved as this product's future
+ * general-purpose "shift"/modifier button (the same "V1 doesn't build
+ * the framework yet" status already noted for SW1/SW2 in
+ * octave_control.h) for everything below these two long-press
+ * thresholds.
  *
  * Deliberately a lighting-only concept: touch/Hall/expression/MIDI keep
  * running completely unaware standby exists (see standby.c's header for
@@ -67,5 +96,24 @@ void tiles_standby_scan(void);
 bool tiles_standby_is_active(void);
 
 /* For diagnostics. True only for the deeper power-saving state (15
- * minutes of total inactivity past entering standby). */
+ * minutes of total inactivity past entering standby, or 20 if that
+ * standby was manually entered -- see tiles_standby_owns_octave_buttons()
+ * below). */
 bool tiles_standby_is_power_saving(void);
+
+/* For diagnostics. True only for SLEEP -- the true blank state entered
+ * by holding SW6 (circle) for 10 seconds: everything dark, no animation
+ * running at all, distinct from POWER_SAVING's still-pulsing circle
+ * button. */
+bool tiles_standby_is_sleeping(void);
+
+/* True only while a screensaver manually entered by holding SW6
+ * (circle) for 6 seconds is showing -- see standby.c's
+ * s_manual_screensaver and handle_circle_hold(). While true, SW1/SW2
+ * are repurposed here as animation-scroll controls instead of their
+ * normal octave_control.c function, and octave_control.c must skip its
+ * own SW1/SW2 handling entirely (checked at the top of
+ * tiles_octave_control_scan(), the same way it already skips it while
+ * tiles_game_mode_is_active()) so a scroll press doesn't *also*
+ * silently step the octave/transpose key underneath. */
+bool tiles_standby_owns_octave_buttons(void);

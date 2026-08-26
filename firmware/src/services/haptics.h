@@ -74,11 +74,19 @@
  * KICK_STAGGER_MIN_GAP_MS there for the "stagger motor starts" handling
  * and why it doesn't add latency to normal single-note play.
  *
- * Respects services/power.h's max_haptic_voices ceiling: a new kick is
- * silently dropped if the ceiling is already reached, rather than
- * stealing another pad's voice or blocking the actual MIDI note --
- * matches this codebase's "a failed/limited subsystem disables itself,
- * it doesn't block the rest" stance.
+ * Respects services/power.h's max_haptic_voices ceiling: a new kick past
+ * the ceiling steals the oldest still-active pad's haptic voice (FIFO,
+ * oldest first -- see haptics.c's voice_seq/s_next_voice_seq and
+ * steal_oldest_voice()) so a fresh strike always gets *some* haptic
+ * feedback rather than silently getting none -- real feedback:
+ * "additional notes pressed after the limit of haptic voices steal the
+ * first voices pressed so new notes always have priority." Stealing only
+ * ever touches the HAPTIC motor of the stolen pad (cuts it to 0 and
+ * frees its slot); that pad's MIDI note is completely unaffected and
+ * keeps sounding without haptic feedback for the rest of its hold --
+ * matches this codebase's "haptics never block MIDI" stance. If every
+ * active pad somehow has no voice to steal (shouldn't happen given the
+ * ceiling), the new kick is dropped rather than the check being skipped.
  *
  * Shares both PCA9685 chip instances with services/buttons.c (that file
  * owns their init/wake sequence) via tiles_buttons_pca9685_for_addr().
@@ -103,10 +111,10 @@ void tiles_haptics_init(void);
 void tiles_haptics_scan(void);
 
 /* Called by expression.c when a note-on commits, with the exact same
- * velocity value sent as MIDI velocity. Silently dropped (no haptic
- * feedback for this touch, MIDI note-on is unaffected) if
- * services/power.h's current max_haptic_voices ceiling is already
- * reached. */
+ * velocity value sent as MIDI velocity. If services/power.h's current
+ * max_haptic_voices ceiling is already reached, steals the oldest active
+ * pad's haptic voice (see the file header) rather than dropping this
+ * one; MIDI note-on for both pads is completely unaffected either way. */
 void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127);
 
 /* Called by expression.c whenever aftertouch changes while a note is

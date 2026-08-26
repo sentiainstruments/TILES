@@ -50,19 +50,24 @@
  * services/standby.h's idle scan while this owns the pad grid, the same
  * way it already does for services/game_mode.h.
  *
- * ---- Deferring to game mode -----------------------------------------
+ * ---- Deferring to game mode and manual screensaver scrolling ---------
  * services/game_mode.h's minigames (Snake, Brick Breaker, Tetris) also
- * use SW1/SW2 as their own left/right controls, and this module's scan
- * runs unconditionally every main-loop tick with no gate of its own --
- * so without an explicit check here, every in-game left/right press
- * would *also* silently step the octave or transpose key underneath the
- * game. tiles_game_mode_is_active() is checked at the top of
- * tiles_octave_control_scan(): while true, this module only keeps its
- * press-edge tracking current (so a still-held button doesn't read as a
- * fresh press the instant the game exits) and does nothing else --
- * button-LED writes are already a no-op in that state too, since
- * game_mode.c also claims buttons.c's standby-active flag (see
- * tiles_buttons_set_override_led()'s doc comment in buttons.h).
+ * use SW1/SW2 as their own left/right controls, and services/standby.h's
+ * manually-entered screensaver (hold SW6/circle for 6s) repurposes them
+ * as animation-scroll controls -- see
+ * tiles_standby_owns_octave_buttons(). This module's scan runs
+ * unconditionally every main-loop tick with no gate of its own, so
+ * without an explicit check here, every in-game or scroll press would
+ * *also* silently step the octave or transpose key underneath. Both
+ * tiles_game_mode_is_active() and tiles_standby_owns_octave_buttons()
+ * are checked at the top of tiles_octave_control_scan(): while either
+ * is true, this module only keeps its press-edge tracking current (so a
+ * still-held button doesn't read as a fresh press the instant control
+ * hands back) and does nothing else -- button-LED writes are already a
+ * no-op during game mode too, since game_mode.c also claims buttons.c's
+ * standby-active flag (see tiles_buttons_set_override_led()'s doc
+ * comment in buttons.h); during the manual screensaver, standby.c
+ * itself owns the same standby-active flag for the same reason.
  *
  * Claims SW1/SW2 permanently via services/buttons.h's per-button
  * override mechanism (tiles_buttons_set_override_active()) -- their

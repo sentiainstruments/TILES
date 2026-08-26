@@ -118,9 +118,16 @@ typedef struct {
     uint8_t sustain_target_aftertouch_0_127; /* latest aftertouch (key travel/pressure) value */
     float sustain_current_duty;    /* the slewed, actually-applied sustain duty -- see SUSTAIN_ATTACK_PER_MS/_RELEASE_PER_MS */
     uint32_t sustain_last_update_ms; /* for computing real-time-elapsed slew steps, not iteration-count-based ones */
+    uint32_t voice_seq; /* assigned when this pad becomes active -- see steal_oldest_voice() */
 } haptic_pad_state_t;
 
 static haptic_pad_state_t s_pads[TILES_NUM_PADS];
+
+/* Monotonically increasing -- whichever active pad has the smallest
+ * voice_seq became active longest ago, so it's the one
+ * steal_oldest_voice() takes from. Never reset mid-session; 32 bits is
+ * enormously more triggers than any real session will ever see. */
+static uint32_t s_next_voice_seq = 1u;
 
 /* The earliest time a not-yet-scheduled kick may actually start --
  * chains PENDING kicks KICK_STAGGER_MIN_GAP_MS apart even if several
@@ -214,6 +221,44 @@ static uint8_t active_voice_count(void) {
     return count;
 }
 
+/* Real feedback: "additional notes pressed after the limit of haptic
+ * voices steal the first voices pressed so new notes always have
+ * priority." Finds the active pad with the smallest voice_seq (the one
+ * that became active longest ago -- covers PENDING and SUSTAIN too, not
+ * just KICK) and force-stops just its haptic motor, freeing a slot for
+ * the new strike. Does NOT touch that pad's MIDI note -- stealing is a
+ * haptics-only concept, matching this module's existing "never blocks
+ * the MIDI note" stance; the stolen pad keeps sounding, it just loses
+ * its motor feedback early. Returns false if there's nothing to steal
+ * (only possible when max_haptic_voices is 0, e.g. power.c's FAULT
+ * mode -- in that case there is no voice to sacrifice, the new kick
+ * still can't be granted one). */
+static bool steal_oldest_voice(void) {
+    int8_t oldest_idx = -1;
+    uint32_t oldest_seq = 0;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        if (s_pads[i].phase == HAPTIC_PHASE_IDLE) {
+            continue;
+        }
+        if (oldest_idx < 0 || s_pads[i].voice_seq < oldest_seq) {
+            oldest_idx = (int8_t)i;
+            oldest_seq = s_pads[i].voice_seq;
+        }
+    }
+    if (oldest_idx < 0) {
+        return false;
+    }
+
+    uint8_t logical_pad = (uint8_t)(oldest_idx + 1);
+    printf("[haptics] stealing pad %u's voice for a new strike (voice ceiling)\n", logical_pad);
+    s_pads[oldest_idx].phase = HAPTIC_PHASE_IDLE;
+    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
+    if (cfg != NULL) {
+        set_motor_level(cfg, 0.0f);
+    }
+    return true;
+}
+
 void tiles_haptics_init(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_pads[i] = (haptic_pad_state_t){0};
@@ -252,27 +297,37 @@ void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
      * already-active pad (shouldn't happen given expression.c's own
      * state machine, but cheap to guard) never gets refused. A PENDING
      * (staggered, not yet started) pad already counts as active here.
-     * Real feedback: "haptics worked at some point... but they don't
-     * activate always" -- the prime suspect is power.c's
+     * At the ceiling, steal the oldest active voice rather than drop
+     * the new one -- real feedback: "additional notes pressed after the
+     * limit of haptic voices steal the first voices pressed so new
+     * notes always have priority." See steal_oldest_voice() for why
+     * this only affects the stolen pad's *haptic* feedback, never its
+     * MIDI note. Real feedback separately: "haptics worked at some
+     * point... but they don't activate always" -- the prime suspect for
+     * a drop that steal_oldest_voice() *can't* fix is power.c's
      * TILES_POWER_MODE_FAULT, whose max_haptic_voices is a hard 0 (see
-     * power.c's state_for_mode()), which silently drops *every* kick
-     * while active. That GP22-derived mode has never been exercised on
-     * real hardware (see power.c's own file header) and could plausibly
-     * be flickering into FAULT transiently. The printf below makes a
-     * drop visible in the serial log the next time this happens, so it
-     * can be correlated against the periodic "[power] mode=..." print
-     * in main.c instead of guessed at. */
+     * power.c's state_for_mode()), leaving nothing to steal from
+     * either. That GP22-derived mode has never been exercised on real
+     * hardware (see power.c's own file header) and could plausibly be
+     * flickering into FAULT transiently. The printf below makes that
+     * specific case visible in the serial log, correlatable against the
+     * periodic "[power] mode=..." print in main.c instead of guessed
+     * at. */
     if (s_pads[idx].phase == HAPTIC_PHASE_IDLE &&
         active_voice_count() >= tiles_power_get_state().max_haptic_voices) {
-        printf("[haptics] dropped pad %u kick -- voice ceiling (mode=%d max_voices=%u active=%u)\n", logical_pad,
-               (int)tiles_power_get_state().mode, tiles_power_get_state().max_haptic_voices, active_voice_count());
-        return;
+        if (!steal_oldest_voice()) {
+            printf("[haptics] dropped pad %u kick -- voice ceiling, nothing to steal (mode=%d max_voices=%u)\n",
+                   logical_pad, (int)tiles_power_get_state().mode, tiles_power_get_state().max_haptic_voices);
+            return;
+        }
     }
 
     const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
     if (cfg == NULL) {
         return;
     }
+
+    s_pads[idx].voice_seq = s_next_voice_seq++;
 
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
     uint32_t earliest = (s_next_kick_slot_ms > now_ms) ? s_next_kick_slot_ms : now_ms;

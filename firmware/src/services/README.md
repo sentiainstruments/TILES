@@ -209,15 +209,19 @@ not its code.
   showing. `tiles_octave_control_is_transpose_active()` lets `main.c`
   skip `standby.c`'s idle scan while this owns the pad grid, mirroring
   the existing `game_mode.c` gate.
-  **Defers to game mode:** this module's scan runs unconditionally every
-  tick with no gate of its own, and `game_mode.h`'s minigames (below)
-  reuse SW1/SW2 as their own left/right controls -- without a check
-  here, every in-game press would *also* silently fire an octave or
-  transpose step underneath the game. `tiles_game_mode_is_active()` is
-  checked at the top of the scan: while a game owns the buttons, this
-  module only keeps its press-edge tracking current and does nothing
-  else (button-LED writes were already a no-op in that state, see
-  `game_mode.h`'s entry below for why).
+  **Defers to game mode and manual screensaver scrolling:** this
+  module's scan runs unconditionally every tick with no gate of its own,
+  and both `game_mode.h`'s minigames (below) and `standby.h`'s
+  manually-entered screensaver (hold SW6/circle for 6s, see its entry
+  below) reuse SW1/SW2 as their own left/right controls -- without a
+  check here, every in-game or scroll press would *also* silently fire
+  an octave or transpose step underneath. `tiles_game_mode_is_active()`
+  and the new `tiles_standby_owns_octave_buttons()` are both checked at
+  the top of the scan: while either is true, this module only keeps its
+  press-edge tracking current and does nothing else (button-LED writes
+  were already a no-op during game mode, see `game_mode.h`'s entry below
+  for why; during manual screensaver, `standby.c` itself claims the same
+  standby-active flag for the same reason).
   **Not hardware-verified:** the combo-hold threshold, both flash
   durations, the cross's row/column placement, and the amber accent
   color are all first-pass judgment calls, not measurements.
@@ -459,6 +463,20 @@ not its code.
   back slightly.
   Shares both PCA9685 chips with `buttons.c` via
   `tiles_buttons_pca9685_for_addr()`.
+  **Voice stealing added**, replacing the old silent-drop behavior above
+  -- real feedback: "additional notes pressed after the limit of haptic
+  voices steal the first voices pressed so new notes always have
+  priority." Each pad's active haptic voice now carries a monotonic
+  `voice_seq` (from a single global counter); when `tiles_haptics_trigger_kick()`
+  hits the ceiling, `steal_oldest_voice()` scans all active pads for the
+  lowest `voice_seq` (oldest), cuts that pad's motor to 0, and frees its
+  slot for the new strike -- FIFO, oldest first. Stealing only ever
+  touches the stolen pad's HAPTIC motor; its MIDI note is completely
+  unaffected and keeps sounding with no haptic feedback for the rest of
+  its hold, matching this file's existing "haptics never blocks MIDI"
+  stance. The kick is only actually dropped (with the existing `printf`)
+  if literally no pad has an active voice to steal, which shouldn't
+  happen given the ceiling check that gates this path.
   **Not done:** every duty/timing constant (`KICK_DURATION_MS`,
   `KICK_OVERDRIVE_MS`, `KICK_GAP_MS`, `MIN_KICK_DUTY`,
   `MAX_SUSTAIN_DUTY`, `KICK_STAGGER_MIN_GAP_MS`, and the new
@@ -631,6 +649,57 @@ not its code.
   power-saving: everything dark except the circle button (SW6, the
   rightmost) pulsing gently to show how to wake it. Same wake conditions
   as standby.
+  **Circle button (SW6) long-press gestures added**, running
+  unconditionally every scan regardless of current state
+  (`handle_circle_hold()`) -- real feedback: "build into the circle
+  button some other features, holding for 10 sec send into power off
+  standby meaning no animations just sleep, but holding for 6 seconds
+  send into screensaver animations... also cycle through animations...
+  when circle is pressed for 6 seconds entering screensaver mode
+  serve as scroll through animations without waking the device."
+  - Holding 6s (`TILES_CIRCLE_SCREENSAVER_HOLD_MS`) manually forces
+    standby's screensaver to start right away (skipping the normal
+    1-minute idle wait) and marks it `s_manual_screensaver`. While that
+    flag is set, SW1/SW2 step `s_animation_index` sequentially
+    forward/backward (`handle_manual_scroll_input()`) instead of picking
+    randomly, and -- critically -- doing so does **not** count as
+    activity that wakes the device: `real_input_active()` now
+    conditionally excludes SW1/SW2 from the wake check while in this
+    mode. It also always excludes the circle button itself from that
+    check unconditionally, otherwise holding circle to reach either
+    threshold would immediately wake the device the instant it's
+    pressed, defeating both gestures before they could ever fire.
+    Manual screensaver also gets a longer runway before dropping to
+    power-saving -- `TILES_STANDBY_MANUAL_POWER_SAVING_TIMEOUT_MS` (20
+    minutes) instead of the normal 15 (`current_power_saving_timeout_ms()`
+    picks between the two) -- since a user who deliberately entered this
+    mode to browse animations is more likely still watching than idle.
+  - Holding 10s (`TILES_CIRCLE_SLEEP_HOLD_MS`) escalates straight to a
+    new fourth state, SLEEP: every pad/button/underglow zeroed once
+    (`enter_sleep()`, not per-frame -- there's no animation loop at all
+    in this state, unlike power-saving's still-pulsing circle LED) and
+    left alone until real input wakes it. A deliberate "power off"
+    gesture distinct from power-saving's "still breathing" state.
+  - Both thresholds are edge-latched per continuous hold
+    (`s_circle_screensaver_fired`/`s_circle_sleep_fired`, reset on
+    release) so one long hold can't re-fire either gesture repeatedly,
+    and reaching 10s doesn't also re-trigger the 6s screensaver
+    transition on the way past it.
+  - A short circle press/release (under 6s) is deliberately a no-op --
+    real feedback: "remember and set up circle as our general shift
+    button unless pressed for the intervals we said (6 or 10 seconds)."
+    Circle is reserved for a future general-purpose "shift"/modifier
+    role for everything below these two thresholds, the same "V1
+    doesn't build the framework yet" status `octave_control.h` already
+    documents for SW1/SW2 -- not implemented yet, just deliberately left
+    unclaimed here rather than wired to anything else.
+  - New accessors `tiles_standby_is_sleeping()` and
+    `tiles_standby_owns_octave_buttons()` (true only while
+    `s_manual_screensaver` is set): the latter is checked by
+    `octave_control.c` so its own SW1/SW2 handling goes inert during
+    manual scroll, the same deferral pattern it already uses for
+    `tiles_game_mode_is_active()` -- without it, every scroll press would
+    *also* silently step the octave/transpose key underneath.
   **Not done / not hardware-verified:** the button-column and
   underglow-anchor mappings in `board/board_layout.h` are based on the
   user's verbal description of the physical board, not a hardware doc
@@ -649,7 +718,11 @@ not its code.
   yet -- their AI/pathing/step timing, the shared pixel font (hand-designed, not
   measured against how legible it actually is at 4 pixels tall), brick
   breaker's/Tetris's/Pong's paddle-or-placement AI reaction, and bouncing
-  glow's periods/radius are all first attempts.
+  glow's periods/radius are all first attempts. The circle-button 6s/10s
+  hold gestures, SLEEP state, and manual animation-scroll mode above are
+  also all untested on real hardware -- both hold thresholds and the
+  20-minute manual power-saving timeout are unmeasured starting guesses,
+  same as every other timing constant in this file.
 - `boot_sequence.h`/`.c` — done for V1: a ~4-second, blocking power-on
   animation run once from `main.c`, before the main loop starts (nothing
   else needs to run concurrently -- USB stays alive via TinyUSB's own

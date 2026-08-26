@@ -1741,6 +1741,7 @@ typedef enum {
     TILES_STANDBY_STATE_AWAKE = 0,
     TILES_STANDBY_STATE_STANDBY,
     TILES_STANDBY_STATE_POWER_SAVING,
+    TILES_STANDBY_STATE_SLEEP,
 } standby_state_t;
 
 static standby_state_t s_state;
@@ -1749,6 +1750,46 @@ static uint32_t s_last_frame_ms;
 static uint32_t s_animation_switch_ms;
 static uint8_t s_animation_index;
 static uint8_t s_prev_animation_index; /* the one that played immediately before s_animation_index */
+
+/* True only while s_state == STANDBY *and* that STANDBY was entered via
+ * the manual 6s circle-hold gesture (handle_circle_hold() below), not
+ * the normal 60s auto-idle path. Changes two things while true: SW1/SW2
+ * become animation-scroll controls instead of a wake signal (see
+ * real_input_active()), and the STANDBY -> POWER_SAVING timeout extends
+ * to TILES_STANDBY_MANUAL_POWER_SAVING_TIMEOUT_MS (20 minutes) instead
+ * of the normal 15 -- both real feedback. Cleared on every way of
+ * leaving STANDBY (waking, dropping to POWER_SAVING, or escalating to
+ * SLEEP) so a later *normal* auto-idle STANDBY never inherits these. */
+static bool s_manual_screensaver;
+
+/* Circle (SW6)'s dedicated long-press handling -- real feedback:
+ * "holding for 10 sec send into power off standby... holding for 6
+ * seconds send into screensaver animations... remember and set up
+ * circle as our general shift button unless pressed for the intervals
+ * we said." A short press/release (below 6s) is deliberately a no-op
+ * here -- reserved for circle's future general-purpose "shift" role
+ * (same "meant to become a modifier, V1 doesn't build the framework
+ * yet" stance octave_control.h already takes for SW1/SW2), not
+ * something this module should claim a meaning for. */
+#define TILES_CIRCLE_SCREENSAVER_HOLD_MS 6000u
+#define TILES_CIRCLE_SLEEP_HOLD_MS 10000u
+static bool s_circle_was_held;
+static uint32_t s_circle_hold_start_ms;
+static bool s_circle_screensaver_fired;
+static bool s_circle_sleep_fired;
+
+/* Edge-tracking for handle_manual_scroll_input() below -- separate from
+ * octave_control.c's own SW1/SW2 edge state, since that module skips
+ * its own processing entirely while this mode owns the buttons (see
+ * tiles_standby_owns_octave_buttons()) and each needs its own
+ * independent "was this pressed last tick" memory. */
+static bool s_scroll_prev_minus;
+static bool s_scroll_prev_plus;
+
+/* Extended STANDBY -> POWER_SAVING timeout for a manually-entered
+ * screensaver -- real feedback: "animation timeout time changes to 20
+ * minutes when done through that path." */
+#define TILES_STANDBY_MANUAL_POWER_SAVING_TIMEOUT_MS 1200000u /* 20 * 60 * 1000 */
 
 /* Real feedback that touch doesn't reliably wake standby -- prints
  * which specific input caused a wake, so a debug session can see
@@ -1777,14 +1818,31 @@ static void print_wake_source(uint32_t now_ms) {
 /* Touch/button/pedal only -- deliberately NOT Hall (see
  * hall_depth_wake_triggered() below for why Hall is kept separate).
  * Used both to decide whether to enter standby and, once in it, as one
- * of the two ways to wake back up. */
+ * of the two ways to wake back up. Two buttons are conditionally
+ * excluded here, both real feedback: circle (SW6) always, since it now
+ * has its own dedicated long-press handling (handle_circle_hold())
+ * rather than a generic "any press wakes it" meaning -- without this
+ * exclusion, holding circle toward the 6s/10s thresholds would wake
+ * standby on the very first tick of the hold, before either threshold
+ * could ever fire; and SW1/SW2, but only while a manually-entered
+ * screensaver is showing (see s_manual_screensaver), since they're
+ * repurposed as animation-scroll controls there instead of a wake
+ * signal -- see handle_manual_scroll_input(). */
 static bool real_input_active(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         if (tiles_touch_is_touched(pad)) {
             return true;
         }
     }
+
+    bool scroll_mode = (s_state == TILES_STANDBY_STATE_STANDBY) && s_manual_screensaver;
     for (uint8_t button = 1u; button <= TILES_NUM_FUNCTION_BUTTONS; button++) {
+        if (button == TILES_CIRCLE_BUTTON_ID) {
+            continue;
+        }
+        if (scroll_mode && (button == 1u || button == 2u)) {
+            continue;
+        }
         if (tiles_button_is_pressed(button)) {
             return true;
         }
@@ -1873,25 +1931,128 @@ static void enter_standby(uint32_t now_ms) {
     tiles_buttons_set_standby_active(true);
 }
 
-/* Wakes to AWAKE from either STANDBY or POWER_SAVING -- the same
+/* Wakes to AWAKE from STANDBY, POWER_SAVING, or SLEEP -- the same
  * teardown either way (hand rendering back to touch-driven behavior),
- * so one function covers both. */
+ * so one function covers all three. Also clears s_manual_screensaver
+ * (a later *normal* auto-idle STANDBY should never inherit a manual
+ * session's behavior) and the circle hold-tracker (so a hold
+ * interrupted by some other real input starts fresh on the next tick
+ * rather than resuming a stale timer). */
 static void exit_standby(void) {
     s_state = TILES_STANDBY_STATE_AWAKE;
+    s_manual_screensaver = false;
+    s_circle_was_held = false;
     tiles_lighting_set_standby_active(false);
     tiles_buttons_set_standby_active(false);
 }
 
-/* Deeper dormant state after TILES_STANDBY_POWER_SAVING_TIMEOUT_MS of
- * total inactivity: animations stop, everything goes dark except the
- * circle button (SW6, the rightmost -- see TILES_CIRCLE_BUTTON_COL in
- * board_layout.h), which pulses gently to show how to wake it back up.
- * lighting/buttons standby-active is already true from enter_standby()
- * -- this only changes s_state, no need to re-claim the rendering
- * path. */
+/* Deeper dormant state after the current power-saving timeout (see
+ * current_power_saving_timeout_ms()) of total inactivity: animations
+ * stop, everything goes dark except the circle button (SW6, the
+ * rightmost -- see TILES_CIRCLE_BUTTON_COL in board_layout.h), which
+ * pulses gently to show how to wake it back up. lighting/buttons
+ * standby-active is already true from enter_standby() -- this only
+ * changes s_state, no need to re-claim the rendering path. */
 static void enter_power_saving(void) {
     s_state = TILES_STANDBY_STATE_POWER_SAVING;
+    s_manual_screensaver = false;
     s_last_frame_ms = 0u; /* forces an immediate first frame */
+}
+
+/* Real feedback: "holding for 10 sec send into power off standby
+ * meaning no animations just sleep." Distinct from POWER_SAVING (which
+ * still pulses the circle button) -- this is a true blank: everything
+ * dark, no animation loop running at all, nothing to render again until
+ * real input wakes it. Rendered once here rather than every frame,
+ * since nothing about a blank state changes over time. */
+static void enter_sleep(uint32_t now_ms) {
+    s_state = TILES_STANDBY_STATE_SLEEP;
+    s_manual_screensaver = false;
+    tiles_lighting_set_standby_active(true);
+    tiles_buttons_set_standby_active(true);
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+    }
+    for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
+        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+            tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), 0.0f, 0.0f, 0.0f);
+        }
+    }
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+    }
+    (void)now_ms;
+}
+
+/* Circle (SW6)'s dedicated long-press gesture -- see this file's
+ * s_manual_screensaver/TILES_CIRCLE_*_HOLD_MS comments above for the
+ * full reasoning. Runs unconditionally at the very top of
+ * tiles_standby_scan(), regardless of current state, so the gesture
+ * works whether the board is currently AWAKE, already in STANDBY, or
+ * in POWER_SAVING -- a continuous hold naturally passes through the 6s
+ * threshold (enters/escalates to a manual STANDBY) before the 10s one
+ * (escalates further to SLEEP), each firing exactly once per hold via
+ * its own *_fired latch. */
+static void handle_circle_hold(uint32_t now_ms) {
+    bool held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
+
+    if (held && !s_circle_was_held) {
+        s_circle_hold_start_ms = now_ms;
+        s_circle_screensaver_fired = false;
+        s_circle_sleep_fired = false;
+    }
+
+    if (held) {
+        uint32_t held_ms = now_ms - s_circle_hold_start_ms;
+        if (held_ms >= TILES_CIRCLE_SLEEP_HOLD_MS && !s_circle_sleep_fired) {
+            s_circle_sleep_fired = true;
+            s_last_activity_ms = now_ms;
+            enter_sleep(now_ms);
+        } else if (held_ms >= TILES_CIRCLE_SCREENSAVER_HOLD_MS && !s_circle_screensaver_fired) {
+            s_circle_screensaver_fired = true;
+            s_last_activity_ms = now_ms;
+            enter_standby(now_ms);
+            s_manual_screensaver = true;
+        }
+    }
+
+    s_circle_was_held = held;
+}
+
+/* SW1/SW2 as animation-scroll controls -- only called while
+ * s_manual_screensaver is true (see tiles_standby_scan()), and
+ * deliberately sequential (not pick_random_animation()'s weighted random
+ * pick), since "scroll" implies stepping predictably back and forth
+ * through the list, not landing somewhere new each press. Resets
+ * s_last_activity_ms so this manual session's own (extended) timeout
+ * keeps getting pushed back while actively browsing, without that
+ * activity ever counting as a wake -- see real_input_active()'s SW1/SW2
+ * exclusion for this same mode. */
+static void handle_manual_scroll_input(uint32_t now_ms) {
+    bool minus = tiles_button_is_pressed(1u); /* SW1 "-" */
+    bool plus = tiles_button_is_pressed(2u);  /* SW2 "+" */
+
+    if (minus && !s_scroll_prev_minus) {
+        s_prev_animation_index = s_animation_index;
+        s_animation_index = (uint8_t)((s_animation_index + NUM_ANIMATIONS - 1u) % NUM_ANIMATIONS);
+        s_animation_switch_ms = now_ms;
+        s_last_activity_ms = now_ms;
+        s_last_frame_ms = 0u; /* force an immediate redraw of the new animation */
+    }
+    if (plus && !s_scroll_prev_plus) {
+        s_prev_animation_index = s_animation_index;
+        s_animation_index = (uint8_t)((s_animation_index + 1u) % NUM_ANIMATIONS);
+        s_animation_switch_ms = now_ms;
+        s_last_activity_ms = now_ms;
+        s_last_frame_ms = 0u;
+    }
+
+    s_scroll_prev_minus = minus;
+    s_scroll_prev_plus = plus;
+}
+
+static uint32_t current_power_saving_timeout_ms(void) {
+    return s_manual_screensaver ? TILES_STANDBY_MANUAL_POWER_SAVING_TIMEOUT_MS : TILES_STANDBY_POWER_SAVING_TIMEOUT_MS;
 }
 
 #define POWER_SAVING_PULSE_PERIOD_MS 3000.0f
@@ -1931,11 +2092,27 @@ void tiles_standby_init(void) {
     s_animation_index = 0xFFu;
     s_prev_animation_index = 0xFFu;
     s_stars_inited = false;
+    s_manual_screensaver = false;
+    s_circle_was_held = false;
+    s_circle_screensaver_fired = false;
+    s_circle_sleep_fired = false;
+    s_scroll_prev_minus = false;
+    s_scroll_prev_plus = false;
     srand(now_ms);
 }
 
 void tiles_standby_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+
+    /* Runs regardless of current state -- see the function's own
+     * comment for why (the gesture needs to work from AWAKE, STANDBY,
+     * or POWER_SAVING alike). May change s_state out from under
+     * everything below on this same call. */
+    handle_circle_hold(now_ms);
+
+    if (s_state == TILES_STANDBY_STATE_STANDBY && s_manual_screensaver) {
+        handle_manual_scroll_input(now_ms);
+    }
 
     if (real_input_active()) {
         s_last_activity_ms = now_ms;
@@ -1950,6 +2127,13 @@ void tiles_standby_scan(void) {
         if (now_ms - s_last_activity_ms >= TILES_STANDBY_IDLE_TIMEOUT_MS) {
             enter_standby(now_ms);
         }
+        return;
+    }
+
+    if (s_state == TILES_STANDBY_STATE_SLEEP) {
+        /* Nothing to render -- enter_sleep() already blanked everything
+         * once and nothing about a blank state changes over time; just
+         * wait for real_input_active() above to wake it. */
         return;
     }
 
@@ -1973,12 +2157,17 @@ void tiles_standby_scan(void) {
     }
 
     /* STATE_STANDBY */
-    if (now_ms - s_last_activity_ms >= TILES_STANDBY_POWER_SAVING_TIMEOUT_MS) {
+    if (now_ms - s_last_activity_ms >= current_power_saving_timeout_ms()) {
         enter_power_saving();
         return;
     }
 
-    if (now_ms - s_animation_switch_ms >= TILES_STANDBY_ANIMATION_CYCLE_MS) {
+    /* Auto-cycling pauses while manually browsing (handle_manual_scroll_
+     * input() above already changes s_animation_index/s_animation_switch_ms
+     * directly on a scroll press) -- otherwise a deliberately-picked
+     * animation would get randomly replaced out from under the user a
+     * couple of minutes later. */
+    if (!s_manual_screensaver && now_ms - s_animation_switch_ms >= TILES_STANDBY_ANIMATION_CYCLE_MS) {
         /* Random, not sequential -- excludes both the current animation
          * and the one before it, so a switch never immediately repeats
          * itself and never bounces straight back to the animation two
@@ -2001,4 +2190,12 @@ bool tiles_standby_is_active(void) {
 
 bool tiles_standby_is_power_saving(void) {
     return s_state == TILES_STANDBY_STATE_POWER_SAVING;
+}
+
+bool tiles_standby_is_sleeping(void) {
+    return s_state == TILES_STANDBY_STATE_SLEEP;
+}
+
+bool tiles_standby_owns_octave_buttons(void) {
+    return s_state == TILES_STANDBY_STATE_STANDBY && s_manual_screensaver;
 }

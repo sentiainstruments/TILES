@@ -156,11 +156,19 @@ first on-hardware note-on test.
   animation or the one before it), instead of reflecting touch state,
   until any touch/button/pedal activity exits it. After 15 minutes of
   total inactivity it drops further into power-saving: everything dark
-  except the circle button pulsing gently. See `services/README.md` for
+  except the circle button pulsing gently. Holding the circle button
+  (SW6) for 6s now manually forces the screensaver on early and repurposes
+  SW1/SW2 as scroll-without-waking animation controls (a longer, 20-minute
+  power-saving timeout applies while in this manual mode); holding it
+  further, to 10s, escalates to a new SLEEP state -- everything blanked
+  once and left alone until real input wakes it, a deliberate "power off"
+  distinct from power-saving's still-pulsing circle LED. See
+  `services/README.md` for
   the button-column/underglow-anchor mapping assumptions this still
-  needs verified on real hardware, and for a real bug this rework fixed
+  needs verified on real hardware, for a real bug this rework fixed
   (standby pads were routing through the touch-driven idle-baseline
-  floor, so they never actually reached true black).
+  floor, so they never actually reached true black), and for the full
+  circle-button gesture writeup.
   `boot_sequence` done for V1: a ~4-second power-on animation (white
   "rain" flooding down through the pad grid, fade to black, a slow
   smoothstep-eased magenta pulse across pads + underglow) that also
@@ -184,8 +192,13 @@ first on-hardware note-on test.
   seated and aftertouch itself is calibrated -- see
   `services/README.md`. Staggers actual
   motor starts >= 15ms apart (no added latency for normal single-note
-  play) and enforces `power.c`'s voice ceiling -- see
-  `services/README.md` for why real active braking isn't physically
+  play) and enforces `power.c`'s voice ceiling by **stealing the oldest
+  active pad's haptic voice** (FIFO, oldest first) rather than dropping
+  the new strike -- real feedback: "additional notes pressed after the
+  limit of haptic voices steal the first voices pressed so new notes
+  always have priority." Stealing only cuts the stolen pad's motor; its
+  MIDI note keeps sounding unaffected -- see `services/README.md` for
+  why real active braking isn't physically
   possible on this board's motor drive circuit (single low-side NMOS,
   no H-bridge) and what the closest achievable substitutes are for both
   attack and stop. Real feedback: haptics don't always activate on
@@ -268,7 +281,13 @@ flashable `.uf2`.
   `POWER_SAVING_PULSE_PERIOD_MS`, `BOUNCE_ROW_PERIOD_MS`,
   `TETRIS_STEP_MS`, `FALLINGDOTS_STEP_MS`, etc.) is a first guess. `BUTTON_STANDBY_BRIGHTNESS_SCALE`
   (0.35) is likewise still an unmeasured guess at how much dimmer buttons need to be, not a measured
-  match to pad brightness.
+  match to pad brightness. The circle-button (SW6) 6s/10s long-press
+  gestures, the new SLEEP state, and manual scroll-through-animations
+  mode are all brand new and untested on real hardware -- both hold
+  thresholds and the 20-minute manual power-saving timeout are first
+  guesses, and whether excluding SW1/SW2 (and circle itself) from the
+  wake check while scrolling actually feels right in practice (versus,
+  say, accidentally exiting scroll mode) hasn't been observed yet.
 - `services/boot_sequence.c`: seen on real hardware twice now, reworked
   three times total -- direction/pacing, then buttons dropped entirely
   after residual glow was still visible with only the magenta phase
@@ -329,8 +348,13 @@ flashable `.uf2`.
   `services/README.md`'s `haptics.h` entry). The kick has since been
   boosted a lot (real feedback it was too soft) and SUSTAIN re-enabled
   as a velocity+pressure mix with its own attack/release feel -- neither
-  of those changes has been tried on real hardware at all yet. True
-  active braking isn't
+  of those changes has been tried on real hardware at all yet. Voice
+  stealing (a new kick past the ceiling now steals the oldest active
+  pad's haptic voice, FIFO oldest-first, instead of being dropped -- see
+  `services/README.md`'s `haptics.h` entry) is likewise brand new and
+  untested; whether stealing a still-held note's haptic feedback mid-hold
+  actually feels acceptable in practice, versus jarring, hasn't been
+  observed yet. True active braking isn't
   physically possible on this board (single low-side NMOS per motor, no
   H-bridge, no haptic driver IC) -- the GAP phase's hard cutoff is the
   closest achievable substitute for stopping quickly, and the overdrive
