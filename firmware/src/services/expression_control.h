@@ -46,18 +46,24 @@
  * circle-hold *_fired pattern; the alone-streak restarts if circle ever
  * joins mid-hold) instead LOCKS the sub-menu open (sticky): "after 3
  * seconds the toggle should happen." Once sticky, it stays visible after
- * square is released, until either the same 3-second alone-hold toggles
- * it back off, or a fresh press of SW1, SW2, SW3, or SW4 while it's
- * sticky-and-square-not-currently-held dismisses it immediately -- real
+ * square is released, until any of: the same 3-second alone-hold toggles
+ * it back off; a fresh press of SW1, SW2, SW3, or SW4 while it's
+ * sticky-and-square-not-currently-held dismisses it immediately; or a
+ * plain short click of EITHER square or circle dismisses it -- real
  * feedback: "any of the 4 function buttons should exit that menu it
- * shouldnt have to be untoggled." (Scoped to that passive-viewing case
- * specifically: while square is actively held, SW1/SW2 are busy doing
- * the haptics shift above, so a press there keeps adjusting rather than
- * exiting.) Reaching the 3-second threshold (or forming the circle+
- * square combo below) suppresses the short-click pitch-bend toggle on
- * that same press's eventual release, the same way services/standby.c's
- * old circle version suppressed its own short click once a long-press
- * gesture fired.
+ * shouldnt have to be untoggled... make sure we can exit from menu with
+ * single click of sentia or shift/power as well." (The SW1-4 dismiss is
+ * scoped to the passive-viewing case specifically: while square is
+ * actively held, SW1/SW2 are busy doing the haptics shift above, so a
+ * press there keeps adjusting rather than exiting. Square's own click
+ * takes priority over its normal pitch-bend toggle whenever the
+ * sub-menu is sticky, since dismissing it is the more likely intent in
+ * that context; circle's click has no competing action, so it always
+ * dismisses a sticky sub-menu, muted or not.) Reaching the 3-second
+ * threshold (or forming the circle+square combo below) suppresses the
+ * short-click pitch-bend toggle on that same press's eventual release,
+ * the same way services/standby.c's old circle version suppressed its
+ * own short click once a long-press gesture fired.
  *
  * Square's own LED (claimed permanently via services/buttons.h's
  * per-button override, same mechanism octave_control.c uses for SW1/SW2)

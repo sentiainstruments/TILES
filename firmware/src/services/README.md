@@ -303,7 +303,17 @@ not its code.
   `s_submenu_sticky` immediately. Scoped to that passive-viewing case
   specifically -- while square IS actively held, SW1/SW2 are busy
   running the haptics shift above, so a press there keeps adjusting
-  rather than exiting.
+  rather than exiting. A plain short click of either square or circle
+  dismisses a sticky sub-menu too -- real feedback: "make sure we can
+  exit from menu with single click of sentia or shift/power as well."
+  Square's own click checks `s_submenu_sticky` first and closes it
+  instead of running its normal pitch-bend toggle when it's set (the
+  more likely intent while the menu is up); circle has no competing
+  click action, so its click always closes a sticky sub-menu, muted or
+  not. Both are guarded by their own `s_*_press_had_long_action` flag
+  (mirroring the existing pitch-bend-suppression one) so the incidental
+  release right after a circle+square mute-combo hold doesn't also read
+  as a dismiss click.
   Every row shares one mapping function, `piecewise_column_value()`: a
   3-anchor piecewise-linear curve (column 1, column 4, column 6), column
   4 landing on exactly each parameter's previous fixed default (so a

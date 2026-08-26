@@ -136,6 +136,11 @@ static bool s_square_was_held;
  * to held) -- suppresses that press's eventual release from also being
  * read as a genuine short click. */
 static bool s_square_press_had_long_action;
+/* Same idea, circle's own press cycle -- suppresses an incidental circle
+ * release right after a circle+square mute combo from also being read
+ * as the plain click that dismisses a sticky sub-menu (see
+ * tiles_expression_control_scan()'s release checks). */
+static bool s_circle_press_had_long_action;
 static bool s_prev_minus_pressed;
 static bool s_prev_plus_pressed;
 
@@ -281,6 +286,7 @@ void tiles_expression_control_init(void) {
     s_circle_was_held = false;
     s_square_was_held = false;
     s_square_press_had_long_action = false;
+    s_circle_press_had_long_action = false;
     s_prev_minus_pressed = false;
     s_prev_plus_pressed = false;
     for (uint8_t i = 0; i < 4u; i++) {
@@ -469,6 +475,9 @@ void tiles_expression_control_scan(void) {
          * unless one of the blocks below sets this true first. */
         s_square_press_had_long_action = false;
     }
+    if (circle_held && !s_circle_was_held) {
+        s_circle_press_had_long_action = false;
+    }
 
     /* Mute: circle+square held EXPRESSION_MUTE_HOLD_MS -- independent of
      * the sub-menu below, see the file header. */
@@ -478,6 +487,7 @@ void tiles_expression_control_scan(void) {
     }
     if (combo_held) {
         s_square_press_had_long_action = true;
+        s_circle_press_had_long_action = true;
         if (!s_mute_fired && (now_ms - s_combo_hold_start_ms) >= EXPRESSION_MUTE_HOLD_MS) {
             s_mute_fired = true;
             toggle_mute();
@@ -505,11 +515,27 @@ void tiles_expression_control_scan(void) {
     }
     s_square_alone_was_held = square_alone_held;
 
-    if (!square_held && s_square_was_held && !s_square_press_had_long_action && !s_mute_active) {
-        /* Released without ever triggering a long-hold action, and mute
-         * isn't suppressing square's own click -- a genuine short
-         * click. */
-        tiles_expression_toggle_pitch_bend();
+    if (!square_held && s_square_was_held && !s_square_press_had_long_action) {
+        /* Released without ever triggering a long-hold action -- a
+         * genuine short click. While the sub-menu is sticky, that click
+         * closes it instead of toggling pitch bend -- real feedback:
+         * "make sure we can exit from menu with single click of
+         * sentia." Works even while muted (unlike the plain pitch-bend
+         * toggle below), since the sub-menu itself is available during
+         * mute and should stay dismissable regardless. */
+        if (s_submenu_sticky) {
+            s_submenu_sticky = false;
+        } else if (!s_mute_active) {
+            tiles_expression_toggle_pitch_bend();
+        }
+    }
+
+    if (!circle_held && s_circle_was_held && !s_circle_press_had_long_action && s_submenu_sticky) {
+        /* Circle has no competing short-click action of its own to
+         * protect, so a plain click always closes a sticky sub-menu,
+         * mute or not -- real feedback: "make sure we can exit from
+         * menu with single click of... shift/power as well." */
+        s_submenu_sticky = false;
     }
 
     /* Always polled/tracked (see poll_dismiss_button_edge()'s own
