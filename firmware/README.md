@@ -396,8 +396,19 @@ flashable `.uf2`.
   used to fire a note at floor velocity purely because touch had lasted
   60ms, with no check on whether the pad had moved at all. Both the
   normal commit path and that timeout now require measured depth to have
-  moved past this threshold since touch-down first; untested on real
-  hardware yet.
+  moved past this threshold since touch-down first. That first attempt
+  (threshold 15) still fired on a light touch on real hardware -- a
+  second bug, since fixed: the reference depth was read immediately at
+  touch-down from a possibly stale background-round-robin cached value,
+  compared against a fresh in-window reading once touch switched the pad
+  to `hall.c`'s fast every-call scan, so ordinary drift over that stale
+  gap could read as "movement." The reference is now taken from the
+  first sample actually captured at the fast rate instead, and the
+  threshold raised to 30 as a wider margin -- see
+  `services/README.md`'s `expression.h`/`.c` entry for the full history.
+  A `[expression]` note-on print now logs the actual measured
+  depth-delta/peak-accel on every commit so the next hardware session can
+  read real numbers instead of guessing this threshold again.
 - MPR121 touch thresholds started at Freescale's generic quickstart
   defaults (12/6), not tuned for this board's actual electrode/keycap/
   acrylic stack. The release side was since narrowed to 9 -- real

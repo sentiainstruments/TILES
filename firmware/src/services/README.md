@@ -374,13 +374,32 @@ not its code.
   clean samples in time") fired a note at floor velocity purely because
   60ms had elapsed since touch-down, with no check at all on whether the
   pad had actually moved -- a bare capacitive touch with zero press
-  reliably hit exactly that path. `MIN_STRIKE_DEPTH_DELTA` (a new field,
-  `touch_start_depth`, captures the Hall depth right at touch-down) now
-  gates both the normal "ready" commit and the timeout fallback: neither
-  can fire until measured depth has moved at least that far past where
-  it was when touch began. A touch that never presses just sits in
-  AWAITING_STRIKE until release cancels it with no note ever sent --
-  matching how a real key requires an actual press, not just contact.
+  reliably hit exactly that path. `MIN_STRIKE_DEPTH_DELTA` now gates both
+  the normal "ready" commit and the timeout fallback: neither can fire
+  until measured depth has moved at least that far past a reference
+  depth. A touch that never presses just sits in AWAITING_STRIKE until
+  release cancels it with no note ever sent -- matching how a real key
+  requires an actual press, not just contact.
+  **Second bug, found when the first attempt at this still fired on a
+  light touch on real hardware:** the reference depth was being read
+  immediately at touch-down from whatever `hall.c` had cached from its
+  slow background round-robin (an untouched pad isn't scanned every
+  call) -- but touch immediately switches that pad to `hall.c`'s
+  every-call priority scan, so comparing a fresh in-window reading
+  against a stale, possibly many-scans-old one could read as "movement"
+  from nothing more than ordinary drift over the stale gap, not an
+  actual press. Fixed via a new `has_touch_start_depth` flag:
+  `touch_start_depth` is now set from the *first fresh sample actually
+  taken at the new fast rate*, not a read taken before that rate even
+  starts -- both sides of the comparison are now taken within the same
+  strike-detection window. `MIN_STRIKE_DEPTH_DELTA` also raised 15 -> 30
+  as a wider safety margin alongside that fix, and a
+  `[expression] pad N note-on: ready/timed_out, depth_delta=... peak_accel=...`
+  print added at the exact commit point (temporary bring-up visibility,
+  same reasoning as `touch.c`/`standby.c`'s own prints) so the next
+  real-hardware session can read real depth-delta numbers for both light
+  touches and real presses instead of guessing this threshold a third
+  time.
   `DEPTH_TO_AFTERTOUCH_FULL_SCALE` is now real, not a placeholder: 900,
   derived from a serial-driven full-press capture session
   (`diagnostics/calibration.h`'s 'f' command) with all 24 magnets
@@ -405,13 +424,15 @@ not its code.
   since the capture session above only measured static full-press
   depth, not strike dynamics. `AFTERTOUCH_SMOOTHING_ALPHA` is also a
   first guess, not measured against how jittery a real held reading
-  actually is. `MIN_STRIKE_DEPTH_DELTA` (15 units) is likewise an
+  actually is. `MIN_STRIKE_DEPTH_DELTA` (30 units) is likewise an
   unmeasured guess at "clearly more than capacitive-only noise" -- the
   full-press capture session measured static full-press depth, not the
   noise floor of a pad that's touched but never pressed, so there's no
-  equivalent real data for this specific number yet; raise it if light
-  touches still sneak a note through, lower it if genuine soft presses
-  stop registering. Also drives `haptics.c` at the same three points it
+  equivalent real data for this specific number yet; the new
+  `[expression]` note-on print exists specifically to get that data next
+  session. Raise it if light touches still sneak a note through, lower
+  it if genuine soft presses stop registering. Also drives `haptics.c`
+  at the same three points it
   drives `midi_out.c` (note-on -> kick, note-off -> stop, aftertouch
   change -> sustain level) with the exact same velocity/aftertouch
   values, so haptic and MIDI output never disagree.

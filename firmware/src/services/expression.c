@@ -10,6 +10,8 @@
 
 #include "pico/time.h"
 
+#include <stdio.h>
+
 /* Need at least this many fresh Hall samples after touch-down before
  * trusting an acceleration estimate (2 velocity values need 3 depth
  * samples), and won't commit before this many ms even if 3 samples
@@ -38,12 +40,29 @@
  * measured travel first -- a touch that never presses just sits in
  * PAD_STATE_AWAITING_STRIKE until release cancels it with no note ever
  * sent, matching how a real key requires an actual press, not just
- * contact. Unmeasured -- a starting guess for "clearly more than
- * capacitive-only noise," a small fraction of the ~900-unit full-press
- * range the real calibration session measured (that session measured
- * full press, not the noise floor of an untouched-but-contacted pad, so
- * there's no equivalent real data for this specific number yet). */
-#define MIN_STRIKE_DEPTH_DELTA 15.0f
+ * contact.
+ *
+ * First attempt at this (15) still fired on a light touch on real
+ * hardware -- traced to a second, independent bug: the reference depth
+ * was being read immediately at touch-down, from whatever hall.c had
+ * cached from its slow background round-robin (an untouched pad isn't
+ * scanned every call), while the comparison reading came from the fast
+ * every-call priority scan touch switches this pad to. Comparing a
+ * stale, possibly many-scans-old reading against a fresh one could read
+ * as "movement" from nothing more than ordinary drift over that stale
+ * gap. Fixed below (see has_touch_start_depth) by using the first
+ * sample actually taken at the new fast rate as the reference instead,
+ * so both sides of the comparison are apples-to-apples. Raised to 30 at
+ * the same time as a wider safety margin while that fix is unverified
+ * on hardware. Still unmeasured -- a starting guess for "clearly more
+ * than capacitive-only noise," a small fraction of the ~900-unit
+ * full-press range the real calibration session measured (that session
+ * measured full press, not the noise floor of an untouched-but-contacted
+ * pad, so there's no equivalent real data for this specific number yet).
+ * `[expression] pad N committed...` below prints the actual measured
+ * delta on every note-on specifically so the next real-hardware session
+ * can read off real numbers instead of guessing a third time. */
+#define MIN_STRIKE_DEPTH_DELTA 30.0f
 
 /* V1 PLACEHOLDER, unmeasured: raw Hall LSB-per-ms^2 that maps to full
  * MIDI velocity (127). There's no calibrated mT/LSB relationship yet
@@ -95,11 +114,21 @@ typedef struct {
     pad_expr_state_t state;
     uint32_t touch_start_ms;
 
-    /* Hall depth at the moment touch began -- the reference
-     * MIN_STRIKE_DEPTH_DELTA below measures real travel against, so a
-     * pad that was already resting at some nonzero depth for whatever
-     * reason doesn't get an unfair head start toward "pressed". */
+    /* Reference depth MIN_STRIKE_DEPTH_DELTA below measures real travel
+     * against -- set from the FIRST fresh Hall sample gathered after
+     * touch begins (see the AWAITING_STRIKE branch below), not read
+     * immediately at touch-down. An untouched pad is only covered by
+     * hall.c's slow background round-robin, so whatever depth happens to
+     * be cached the instant touch starts can be stale by many scan
+     * cycles; touch immediately switches this pad to hall.c's
+     * every-call priority scan, so comparing a fresh in-window sample
+     * against that stale one could read as "movement" from nothing more
+     * than ordinary drift over the stale gap, not a real press. Using
+     * the first sample actually taken at the new fast rate as the
+     * reference means every comparison is apples-to-apples, both sides
+     * measured within the same strike-detection window. */
     float touch_start_depth;
+    bool has_touch_start_depth;
 
     /* Up to 3 most recent (time, depth) samples seen since touch began. */
     uint32_t t[3];
@@ -132,10 +161,10 @@ void tiles_expression_init(void) {
     }
 }
 
-static void begin_awaiting_strike(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
+static void begin_awaiting_strike(pad_expr_t *s, uint32_t now_ms) {
     s->state = PAD_STATE_AWAITING_STRIKE;
     s->touch_start_ms = now_ms;
-    s->touch_start_depth = (float)tiles_hall_get_depth(pad);
+    s->has_touch_start_depth = false;
     s->sample_count = 0;
     s->peak_accel = 0.0f;
     s->last_seen_sample_time_ms = 0;
@@ -198,7 +227,7 @@ void tiles_expression_scan(void) {
 
         if (s->state == PAD_STATE_IDLE) {
             if (touched) {
-                begin_awaiting_strike(s, pad, now_ms);
+                begin_awaiting_strike(s, now_ms);
             }
             continue;
         }
@@ -214,11 +243,20 @@ void tiles_expression_scan(void) {
             tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
             if (hs.valid && hs.sample_time_ms != s->last_seen_sample_time_ms) {
                 s->last_seen_sample_time_ms = hs.sample_time_ms;
-                update_strike_history(s, hs.sample_time_ms, (float)tiles_hall_get_depth(pad));
+                float depth = (float)tiles_hall_get_depth(pad);
+                if (!s->has_touch_start_depth) {
+                    /* First fresh sample since touch began -- see this
+                     * field's comment for why this, not a read taken
+                     * immediately at touch-down, is the right reference. */
+                    s->touch_start_depth = depth;
+                    s->has_touch_start_depth = true;
+                }
+                update_strike_history(s, hs.sample_time_ms, depth);
             }
 
-            float depth_delta = (float)tiles_hall_get_depth(pad) - s->touch_start_depth;
-            bool pressed = depth_delta >= MIN_STRIKE_DEPTH_DELTA;
+            float depth_delta = s->has_touch_start_depth ? (float)tiles_hall_get_depth(pad) - s->touch_start_depth
+                                                          : 0.0f;
+            bool pressed = s->has_touch_start_depth && depth_delta >= MIN_STRIKE_DEPTH_DELTA;
 
             uint32_t elapsed = now_ms - s->touch_start_ms;
             bool ready = pressed && (s->sample_count >= MIN_STRIKE_SAMPLES) && (elapsed >= MIN_STRIKE_WINDOW_MS);
@@ -227,6 +265,17 @@ void tiles_expression_scan(void) {
             if (ready || timed_out) {
                 s->active_note = tiles_note_map_get_note(pad);
                 uint8_t velocity = velocity_from_peak_accel(s->peak_accel);
+                /* Temporary bring-up visibility (real feedback: touch
+                 * alone was firing notes) -- prints exactly what
+                 * MIN_STRIKE_DEPTH_DELTA's decision was based on, so a
+                 * real-hardware session can read off actual depth-delta/
+                 * accel numbers for both light touches and real presses
+                 * instead of guessing the threshold again. Replace with a
+                 * real usb_vendor/ diagnostics stream once that exists,
+                 * same reasoning as touch.c/standby.c's own temporary
+                 * prints. */
+                printf("[expression] pad %u note-on: %s, depth_delta=%d peak_accel=%d velocity=%u\n", pad,
+                       timed_out ? "timed_out" : "ready", (int)depth_delta, (int)s->peak_accel, velocity);
                 tiles_midi_note_on(s->active_note, velocity);
                 /* Same velocity value driving both -- "mapped to the
                  * velocity curve by default" means the kick and the MIDI
