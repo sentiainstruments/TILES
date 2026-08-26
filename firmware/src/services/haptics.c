@@ -285,6 +285,17 @@ static void start_kick_now(uint8_t idx, const tiles_pad_config_t *cfg, uint8_t v
     s_pads[idx].sustain_current_duty = 0.0f;
     s_pads[idx].sustain_last_update_ms = now_ms;
     set_motor_level(cfg, MAX_KICK_DUTY);
+    /* Temporary bring-up visibility -- real feedback: "we lost the
+     * haptic preview a few prompts ago." Review of trigger_kick()'s
+     * voice-ceiling path, the shared PCA9685 wiring with buttons.c, and
+     * three separate debug captures (zero "[haptics] dropped/stealing"
+     * lines, power mode healthy the whole time) turned up no code-level
+     * cause -- this confirms the actual motor-drive call is reached at
+     * all, so the next test session can tell whether the trigger path is
+     * the problem or something downstream of it (wiring, the PCA9685
+     * write itself, a specific pad) is. */
+    printf("[haptics] pad %u kick started: velocity=%u duty=%.2f\n", (uint8_t)(idx + 1u), velocity_0_127,
+           (double)kick_duty_from_velocity(velocity_0_127));
 }
 
 void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {

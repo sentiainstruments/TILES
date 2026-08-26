@@ -352,7 +352,14 @@ flashable `.uf2`.
   `services/README.md`'s `haptics.h` entry) is likewise brand new and
   untested; whether stealing a still-held note's haptic feedback mid-hold
   actually feels acceptable in practice, versus jarring, hasn't been
-  observed yet. True active braking isn't
+  observed yet. Real feedback since reported haptic feedback missing
+  entirely ("we lost the haptic preview") -- reviewed the voice-ceiling
+  path and the PCA9685 wiring shared with `buttons.c` against three
+  clean debug captures (no dropped/stolen-voice lines, power mode
+  healthy throughout), ruling out both prime suspects without finding a
+  replacement one; a confirmation print at the actual motor-drive call
+  is now in place to localize this on the next test session instead of
+  guessing further. True active braking isn't
   physically possible on this board (single low-side NMOS per motor, no
   H-bridge, no haptic driver IC) -- the GAP phase's hard cutoff is the
   closest achievable substitute for stopping quickly, and the overdrive
@@ -412,7 +419,28 @@ flashable `.uf2`.
   controlled, labeled capture (the original ~140-touch session mixed
   light touches and presses without labeling which was which as they
   happened) -- the `[expression]` print stays in place to make that
-  follow-up easy if any of this still isn't right in practice.
+  follow-up easy if any of this still isn't right in practice. A fourth
+  round of feedback -- "hard fast press is not working properly, it
+  won't trigger note" -- pointed at a brief capacitive touch dropout at
+  the moment of a hard impact (the finger physically bouncing off the
+  sensing surface for a couple of ms), which this module used to treat
+  as a real release, restarting strike detection right at the strike's
+  own peak; a short touch-dropout grace period (`TOUCH_DROPOUT_GRACE_MS`,
+  12ms) now bridges that without meaningfully undoing the earlier
+  release-latency fix. The same round also rebuilt the velocity curve
+  entirely -- "velocity curve is bad, very light press is not giving low
+  velocity enough... closer to a piano or synth keybed... some flat full
+  velocity... to aid aftertouch" -- replacing the flat linear scale with
+  a power curve (`ACCEL_FULL_VELOCITY`, `VELOCITY_CURVE_EXPONENT`) that
+  suppresses light touches below where linear would put them and pins
+  to full velocity at a plateau below the hardest possible strike, so a
+  confident hit reliably maxes out. See `services/README.md`'s
+  `expression.h`/`.c` entry for the reasoning behind both. Separately, a
+  reported loss of haptic feedback couldn't be traced to a code bug
+  after reviewing the voice-ceiling/PCA9685-sharing path against three
+  clean debug captures -- a confirmation print was added at the actual
+  motor-drive call instead of guessing a fix; still open, see
+  `services/README.md`'s `haptics.h` entry.
 - MPR121 touch thresholds started at Freescale's generic quickstart
   defaults (12/6), not tuned for this board's actual electrode/keycap/
   acrylic stack. The release side was since narrowed to 9 -- real

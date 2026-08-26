@@ -468,6 +468,63 @@ not its code.
   fade-out while still holding a note could also ease below this and get
   cut early. Both new constants are first attempts, not tuned against
   either failure mode on real hardware yet.
+  **Touch-bounce tolerance, added after a fourth round of real
+  feedback:** "hard fast press is not working properly, it won't trigger
+  note." A hard, percussive impact is exactly the scenario most likely
+  to cause a brief real dropout in the MPR121's touched reading (a
+  finger physically bouncing slightly off the sensing surface at the
+  moment of impact) -- and this module treated any observed `!touched`
+  as a real release, restarting strike detection from scratch right at
+  (or after) the strike's true peak, so the freshly-restarted window
+  would only ever see the rebound heading back down, never a fresh rise
+  past threshold. `TOUCH_DROPOUT_GRACE_MS` (12ms) now bridges a brief
+  dropout by treating touch as still active for a short window after the
+  last raw `true` reading (`last_touched_ms`/`last_touched_valid`),
+  computed once at the top of the per-pad loop and used everywhere
+  downstream instead of the raw reading directly -- `touch.c`'s own
+  diagnostic prints are untouched and still reflect the true,
+  undebounced hardware state. Deliberately short, so it doesn't
+  meaningfully undo this session's separate MPR121 release-threshold fix
+  for snappy release (see `drivers/README.md`'s `mpr121.c` entry).
+  Unmeasured -- a first attempt, and this specific failure mode
+  (capacitive bounce on hard impact) is inferred from the symptom, not
+  directly observed in a capture.
+  **Velocity curve rebuilt**, same round of feedback: "velocity curve is
+  bad, very light press is not giving low velocity enough, we need a
+  better velocity curve that's closer to a piano or a synth keybed. Also
+  give some flat full velocity at the max velocity... to aid
+  aftertouch." A linear `peak_accel * scale` mapping can't satisfy both
+  "very light stays genuinely quiet" and "a confident hard hit reliably
+  maxes out" at once -- raising the scale to fix one end just drags the
+  other end along with it. Replaced with a power curve:
+  `ACCEL_TO_VELOCITY_SCALE` is gone, replaced by `ACCEL_FULL_VELOCITY`
+  (20, just below the real captured peak_accel range's high end of 23)
+  and `VELOCITY_CURVE_EXPONENT` (1.8, > 1 so it suppresses the low end
+  relative to linear -- real energy is now required to sound loud,
+  matching an acoustic action's feel, instead of a light touch reading
+  nearly as loud as a firm one). Past `ACCEL_FULL_VELOCITY`, velocity
+  pins at 127 -- a deliberate plateau *below* the mechanically hardest
+  possible strike, exactly per the ask: a confidently hard hit should
+  reliably read as full velocity without needing to find the single
+  hardest hit this hardware could ever register, and the remaining
+  travel past that point feeds aftertouch instead (already a wholly
+  separate signal off raw depth, not velocity, so the plateau costs
+  aftertouch nothing). Both new constants are first attempts at a feel,
+  not derived from a curve measured on real hardware.
+  **Haptic feedback reported lost** ("we lost the haptic preview a few
+  prompts ago") -- reviewed `tiles_haptics_trigger_kick()`'s voice-
+  ceiling/stealing path, the shared PCA9685 wiring between this module
+  and `buttons.c` (both chips, different channels -- see `haptics.h`'s
+  entry below), and all three debug captures from this session: zero
+  `[haptics] dropped/stealing` lines anywhere, and `[power]` consistently
+  read a healthy `USB_ONLY, max_haptic_voices=5` the whole time, ruling
+  out both the voice ceiling and `power.c`'s previously-suspected FAULT
+  mode as the cause. No code-level regression found via review. Added a
+  `[haptics] pad N kick started: velocity=... duty=...` print at the
+  actual motor-drive call (`start_kick_now()`, see `haptics.h`'s entry)
+  so the next test session can tell whether the trigger path itself is
+  the problem or something downstream of it (wiring, the PCA9685 write,
+  a specific pad) is -- still an open question, not yet resolved.
   **Not yet hardware-verified with these exact numbers:** the ~140-touch
   capture mixed light touches and real presses in one session without
   labeling which was which as they happened, so `MIN_STRIKE_DEPTH_DELTA`
@@ -499,11 +556,13 @@ not its code.
   `AFTERTOUCH_SMOOTHING_ALPHA` is a first guess, not measured against
   how jittery a real held reading actually is -- the full-press capture
   session that calibrated `DEPTH_TO_AFTERTOUCH_FULL_SCALE` measured
-  static depth, not held-reading noise. `ACCEL_TO_VELOCITY_SCALE` and
-  `MIN_STRIKE_DEPTH_DELTA` are real-data-informed now rather than blind
-  guesses -- see the strike-detection rebuild above for exactly what
-  data and why, and its own note on what a follow-up labeled capture
-  would still refine. Also drives `haptics.c` at the same three points it
+  static depth, not held-reading noise. `ACCEL_FULL_VELOCITY`,
+  `VELOCITY_CURVE_EXPONENT`, and `MIN_STRIKE_DEPTH_DELTA` are
+  real-data-informed now rather than blind guesses -- see the
+  strike-detection rebuild and velocity curve rebuild above for exactly
+  what data and why, and their own notes on what a follow-up labeled
+  capture (or, for the velocity curve, real playing) would still refine.
+  Also drives `haptics.c` at the same three points it
   drives `midi_out.c` (note-on -> kick, note-off -> stop, aftertouch
   change -> sustain level) with the exact same velocity/aftertouch
   values, so haptic and MIDI output never disagree.
@@ -592,6 +651,19 @@ not its code.
   stance. The kick is only actually dropped (with the existing `printf`)
   if literally no pad has an active voice to steal, which shouldn't
   happen given the ceiling check that gates this path.
+  **Diagnostic print added to `start_kick_now()`** -- real feedback: "we
+  lost the haptic preview a few prompts ago." Reviewed this file's voice-
+  ceiling/stealing path and the shared PCA9685 wiring with `buttons.c`
+  (see this file's own header on that sharing); three separate debug
+  captures from the same session showed zero `[haptics] dropped/
+  stealing` lines and a consistently healthy `[power] mode=USB_ONLY
+  max_haptic_voices=5`, ruling out both the voice ceiling and
+  `power.c`'s previously-suspected FAULT mode. No code-level cause found
+  via review. `[haptics] pad N kick started: velocity=... duty=...` now
+  prints at the actual motor-drive call, confirming the trigger path is
+  at least reached -- whether the problem is downstream of that (wiring,
+  the PCA9685 write itself, one specific pad) is still open, pending a
+  session that watches for this print while testing.
   **Not done:** every duty/timing constant (`KICK_DURATION_MS`,
   `KICK_OVERDRIVE_MS`, `KICK_GAP_MS`, `MIN_KICK_DUTY`,
   `MAX_SUSTAIN_DUTY`, `KICK_STAGGER_MIN_GAP_MS`, and the new

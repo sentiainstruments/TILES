@@ -10,6 +10,7 @@
 
 #include "pico/time.h"
 
+#include <math.h>
 #include <stdio.h>
 
 /* ============================================================================
@@ -55,6 +56,33 @@
  * screens out anything real depth-gating doesn't already catch, and
  * would only slow down a fast, hard strike's response for no benefit. */
 #define MIN_STRIKE_SAMPLES 3u
+
+/* Bridges a brief capacitive touch dropout -- real feedback: "hard fast
+ * press is not working properly, it won't trigger note." A hard,
+ * percussive impact is exactly the scenario most likely to cause a
+ * brief real dropout in the MPR121's touched reading (a finger
+ * physically bouncing slightly off the sensing surface at the moment of
+ * impact, momentarily breaking capacitive contact for a couple of ms
+ * before settling back down) -- and this module's state machine treats
+ * ANY observed `!touched` as a real release: mid-AWAITING_STRIKE, that
+ * either commits early (if already pressed) or cancels to IDLE (if not
+ * yet pressed); either way, a bounce arriving before MIN_STRIKE_DEPTH_
+ * DELTA is reached restarts strike detection from scratch right as (or
+ * after) the strike's true peak, so the freshly-restarted detection
+ * window only ever sees the rebound on its way back down, never a rise
+ * past threshold -- the note never fires at all. Rather than trust the
+ * raw hardware reading at every single scan tick, this module now
+ * treats touch as still active for a short window after the last RAW
+ * true reading, bridging exactly this kind of brief bounce without
+ * meaningfully delaying a genuine release (touch.c's own diagnostic
+ * prints still reflect the true, undebounced hardware state -- this
+ * tolerance is purely an expression-layer interpretation of it). Kept
+ * short deliberately: this session separately narrowed the MPR121
+ * release threshold specifically to make real release feel snappy (see
+ * drivers/README.md's mpr121.c entry), and this shouldn't meaningfully
+ * undo that. Unmeasured -- a first attempt at "long enough to bridge a
+ * real bounce, short enough not to be felt as release lag." */
+#define TOUCH_DROPOUT_GRACE_MS 12u
 
 /* Safety timeout: once a real press has actually been detected (see
  * MIN_STRIKE_DEPTH_DELTA below), commit with whatever accel data exists
@@ -120,23 +148,49 @@
  * meaningfully delay a genuinely fast intentional retrigger. */
 #define RETRIGGER_GRACE_MS 50u
 
-/* Real captured data, not a blind placeholder: the same ~140-touch
- * debug-console session referenced in this section's header comment
- * measured peak_accel spanning roughly 0-23 (raw Hall units per ms^2)
- * across real strikes, the vast majority under 18 -- at the old 0.05
- * scale, every single one of those floored to velocity 8, which is
- * exactly the "it's all the same velocity" bug reported. 4.5 maps that
- * observed range across most of MIDI's useful velocity span (23*4.5 ≈
- * 104, 18*4.5=81, 10*4.5=45) while leaving headroom for a genuinely
- * harder strike than anything in this particular capture to still climb
- * higher before clipping at 127. There's still no calibrated mT/LSB
- * relationship (see hall.h's "V1 scope"), so this is real-data-informed
- * rather than derived from first principles -- retune if strikes
- * clearly harder than this session's still cluster near one end. */
-#define ACCEL_TO_VELOCITY_SCALE 4.5f
+/* ---- Velocity curve --------------------------------------------------
+ * Real feedback on the first (linear) accel->velocity mapping: "velocity
+ * curve is bad, very light press is not giving low velocity enough. We
+ * need a better velocity curve that's closer to a piano or a synth
+ * keybed. Also give some flat full velocity at the max velocity, meaning
+ * there's some space that we count as full velocity before the highest
+ * full reading, to aid aftertouch."
+ *
+ * A straight linear scale (accel * constant) can't satisfy both "very
+ * light stays genuinely quiet" and "a confidently hard hit reliably
+ * maxes out" at once -- pushing the low end down by raising the scale
+ * just pushes the whole curve down with it, and vice versa. A real
+ * piano/synth action instead uses a *curved* response: a power curve
+ * with VELOCITY_CURVE_EXPONENT > 1 suppresses the low end relative to
+ * linear (a light touch reads noticeably quieter than a linear mapping
+ * would give it -- real energy is required to sound loud, matching how
+ * an acoustic action feels), then ramps up more steeply as accel
+ * approaches ACCEL_FULL_VELOCITY. Past that point velocity is pinned at
+ * 127 -- a deliberate flat plateau *below* the mechanically hardest hit
+ * this hardware could ever register, per the explicit ask: a confident
+ * hit should reliably read as full velocity without needing to find the
+ * single hardest possible strike, and everything past that plateau
+ * feeds aftertouch instead (services/expression.c's aftertouch is
+ * already a wholly separate signal off raw depth, not velocity, so this
+ * plateau doesn't cost aftertouch anything -- it just stops velocity
+ * from trying to also account for that same extra travel).
+ *
+ * ACCEL_FULL_VELOCITY (20) sits just below the real captured peak_accel
+ * range's high end (0-23, per the strike-detection rebuild above) --
+ * genuinely hard strikes in that capture already reliably crossed
+ * "most of the way there," so 20 should read as "hit it with real
+ * intent," not "the single hardest hit ever recorded." Both this and
+ * VELOCITY_CURVE_EXPONENT (1.8, chosen to noticeably suppress accel
+ * readings under ~8-10 the way the captured light-touch-adjacent hits
+ * did) are first attempts at a *feel*, not derived from a curve
+ * measured on real hardware -- there's no substitute for playing it. */
+#define ACCEL_FULL_VELOCITY 20.0f
+#define VELOCITY_CURVE_EXPONENT 1.8f
 
 /* Even a strike weak enough to barely clear MIN_STRIKE_DEPTH_DELTA
- * should produce an audible note, not near-silence. */
+ * should produce an audible note, not near-silence -- the curve above
+ * can push a very light qualifying strike's raw output below this, so
+ * it's still clamped up to a floor rather than left near-silent. */
 #define MIN_VELOCITY 8u
 
 /* Real calibration data, not a placeholder: a serial-driven capture
@@ -235,6 +289,16 @@ typedef struct {
      * otherwise. */
     uint8_t active_note;
     uint8_t last_sent_aftertouch; /* 0xFF = force the first send */
+
+    /* Bridges a brief capacitive touch dropout -- see
+     * TOUCH_DROPOUT_GRACE_MS's own comment for why this exists. Updated
+     * to the current time on every scan where the RAW touch reading is
+     * true; last_touched_valid guards the very first touch ever seen on
+     * this pad (before it's true, last_touched_ms is meaningless, not
+     * "a long time ago" -- an unguarded check right after boot would
+     * otherwise read as still-touched for the first few ms). */
+    uint32_t last_touched_ms;
+    bool last_touched_valid;
 } pad_expr_t;
 
 static pad_expr_t s_pads[TILES_NUM_PADS];
@@ -288,7 +352,18 @@ static void update_strike_history(pad_expr_t *s, uint32_t t_ms, float depth) {
 }
 
 static uint8_t velocity_from_peak_accel(float peak_accel) {
-    int vel = (int)(peak_accel * ACCEL_TO_VELOCITY_SCALE);
+    if (peak_accel <= 0.0f) {
+        return (uint8_t)MIN_VELOCITY;
+    }
+    if (peak_accel >= ACCEL_FULL_VELOCITY) {
+        return 127u;
+    }
+    /* Power curve, not linear -- see this section's own header comment.
+     * normalized in (0, 1), exponent > 1 suppresses the low end relative
+     * to a straight line. */
+    float normalized = peak_accel / ACCEL_FULL_VELOCITY;
+    float curved = powf(normalized, VELOCITY_CURVE_EXPONENT);
+    int vel = (int)(curved * 127.0f);
     if (vel < (int)MIN_VELOCITY) {
         vel = (int)MIN_VELOCITY;
     }
@@ -309,7 +384,16 @@ void tiles_expression_scan(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         uint8_t pad = (uint8_t)(i + 1u);
         pad_expr_t *s = &s_pads[i];
-        bool touched = tiles_touch_is_touched(pad);
+
+        bool raw_touched = tiles_touch_is_touched(pad);
+        if (raw_touched) {
+            s->last_touched_ms = now_ms;
+            s->last_touched_valid = true;
+        }
+        /* See TOUCH_DROPOUT_GRACE_MS's own comment -- bridges a brief
+         * real capacitive dropout so it doesn't read as a full release. */
+        bool touched =
+            raw_touched || (s->last_touched_valid && (now_ms - s->last_touched_ms) < TOUCH_DROPOUT_GRACE_MS);
 
         if (s->state == PAD_STATE_IDLE) {
             if (touched) {
