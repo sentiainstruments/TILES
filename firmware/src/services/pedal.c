@@ -70,14 +70,19 @@ void tiles_pedal_scan(void) {
     bool pressed = low_side_means_pressed() ? s_debounced_low : !s_debounced_low;
     if (pressed != s_last_sent_sustained) {
         s_last_sent_sustained = pressed;
-        tiles_midi_send_cc(MIDI_CC_SUSTAIN, pressed ? 127u : 0u);
+        /* Broadcast, not a single channel -- under MPE (see
+         * midi/midi_out.h) every currently-held note lives on its own
+         * Member Channel, and sustain needs to hold ALL of them, not
+         * just whichever channel happened to be "the" one before MPE
+         * existed. */
+        tiles_midi_send_cc_broadcast(MIDI_CC_SUSTAIN, pressed ? 127u : 0u);
     }
 
     if (s_expression_enabled) {
         uint8_t cc = (uint8_t)(((uint32_t)s_raw * 127u) / ADC_MAX);
         if (cc != s_last_sent_expression_cc) {
             s_last_sent_expression_cc = cc;
-            tiles_midi_send_cc(MIDI_CC_EXPRESSION, cc);
+            tiles_midi_send_cc_broadcast(MIDI_CC_EXPRESSION, cc);
         }
     }
 }

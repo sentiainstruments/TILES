@@ -230,12 +230,15 @@ first on-hardware note-on test.
   not built.
 - `midi/` — composite USB CDC+MIDI device done (see `midi/README.md`);
   note on/off with real velocity, poly aftertouch, CC (sustain/
-  expression), and pitch bend all wired up, single MIDI channel --
-  pitch bend is channel-wide by MIDI's own spec, a real limitation
-  without MPE that `services/expression.c` works around with a single
-  "owner pad" concept, see `services/README.md`. Not yet verified with
-  a real MIDI-receiving host. DIN MIDI and MPE channel allocation not
-  built.
+  expression), and pitch bend all wired up, real MPE (MIDI Polyphonic
+  Expression) -- one Member Channel per currently-held note, so pitch
+  bend and aftertouch are genuinely independent per note now, not the
+  single-channel/single-"owner"-pad workaround this used to be. Added
+  after real feedback: "individual per note pitch bend not just regular
+  all key pitch bend. like the roli seaboard." See `services/README.md`'s
+  `expression.h` entry for the per-pad channel allocator and
+  `midi/README.md` for the zone setup. Not yet verified with a real
+  MIDI-receiving host. DIN MIDI not built.
 - `usb_vendor/`, `profiles/`, `storage/` still empty module skeletons.
 
 Builds clean end-to-end against a real pico-sdk checkout (`cmake` +
@@ -488,12 +491,15 @@ flashable `.uf2`.
   principle real 3-axis Hall-effect joysticks use. Toggled via a genuine
   square-button ("sentia") short click (an earlier pass wired this to
   circle by mistake before real feedback corrected which physical button
-  "sentia" is -- see `services/expression_control.h`), with only one pad
-  ever "owning" the shared MIDI channel's bend at a time (this project
-  has no MPE yet, so pitch bend is unavoidably channel-wide -- see
-  `midi/README.md`). Not yet
-  hardware-verified at all -- see `services/README.md`'s `expression.h`
-  entry for the full physics reasoning.
+  "sentia" is -- see `services/expression_control.h`). Genuinely
+  per-note now via real MPE (one Member Channel per held note, see
+  `midi/README.md`) rather than a single-"owner"-pad workaround --
+  multiple pads can each bend independently at once. A vertical-pressure
+  compensation was also added after real feedback that bend leaned one
+  direction regardless of actual tilt -- see `services/README.md`'s
+  `expression.h` entry for the full physics reasoning on both. Not yet
+  hardware-verified at all, including the MPE implementation itself
+  against a real MPE-aware DAW/synth.
 - MPR121 touch thresholds started at Freescale's generic quickstart
   defaults (12/6), not tuned for this board's actual electrode/keycap/
   acrylic stack. The release side was since narrowed to 9 -- real
@@ -506,7 +512,10 @@ flashable `.uf2`.
   `services/lighting.c`, but this narrower release threshold hasn't
   itself been tried on real hardware yet, and full per-electrode
   sensitivity tuning is still open.
-- No MPE (per-note channel allocation) yet -- V1 MIDI is single
-  channel. Velocity and aftertouch are now real (Hall-derived), not
-  fixed, but unverified against actual playing since USB MIDI itself
-  hasn't been hardware-tested.
+- MPE (per-note channel allocation) is now built -- see `midi/README.md`
+  and `services/README.md`'s `expression.h` entry -- but completely
+  untested against a real MPE-aware DAW/synth, including whether the
+  zone-configuration RPN messages are even received/interpreted
+  correctly. Velocity and aftertouch are real (Hall-derived), not fixed,
+  but unverified against actual playing since USB MIDI itself hasn't
+  been hardware-tested.

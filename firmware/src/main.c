@@ -44,6 +44,7 @@
 #include "board/board_init.h"
 #include "diagnostics/calibration.h"
 #include "diagnostics/i2c_scan.h"
+#include "midi/midi_out.h"
 #include "midi/usb_device.h"
 #include "services/boot_sequence.h"
 #include "services/buttons.h"
@@ -209,6 +210,23 @@ int main(void) {
          * bytes never actually reach the host even if tud_midi_mounted()
          * happens to read true. */
         tud_task();
+
+        /* Sends the MPE zone configuration (see midi/midi_out.h) the
+         * FIRST iteration tud_midi_mounted() reads true, not once at
+         * cold boot -- calling this before the host has actually
+         * enumerated the device would be silently dropped by every send
+         * in midi_out.c's own tud_midi_mounted() gate, since USB
+         * enumeration only completes after several tud_task() calls
+         * above, not synchronously at startup. Re-fires if the device
+         * remounts (e.g. unplug/replug, or a host restart) since a fresh
+         * enumeration means the previous zone config may not have
+         * reached whatever's on the other end this time. */
+        static bool s_mpe_was_mounted = false;
+        bool mpe_mounted_now = tud_midi_mounted();
+        if (mpe_mounted_now && !s_mpe_was_mounted) {
+            tiles_midi_mpe_init();
+        }
+        s_mpe_was_mounted = mpe_mounted_now;
 
         /* Runs first: lighting's ceiling_level() and any future
          * haptics/CV consumer read tiles_power_get_state() during this

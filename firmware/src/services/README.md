@@ -1006,38 +1006,90 @@ not its code.
   entirely. Column 1 (0.10) and column 6 (0.055) are instead picked
   directly from the captured tilt range itself; see that file's own
   comment for the reasoning.
+  **Vertical-pressure compensation added alongside MPE** -- real
+  feedback: "the pitchbend seems to lean towards down bend not up bend
+  regardless of tilt... it should compensate for vertical pressure to
+  get the correct tilt as well." The direction-cosine theory this
+  feature is built on (this section's own physics writeup above) assumes
+  a PERFECTLY on-axis magnet; comparing the current cosine against a
+  FIXED baseline cosine (captured once, at note-on) still lets a real
+  assembly misalignment's contribution grow as `|B|` shrinks with a
+  harder press, biasing the result toward whichever direction that
+  misalignment happens to point -- regardless of actual tilt, which
+  matches "leans towards down bend... regardless of tilt" exactly.
+  `claim_pitch_bend_owner()`'s replacement, `init_pitch_bend_for_pad()`,
+  now captures baseline as raw X (`pitch_bend_baseline_x`, once settled
+  -- see `PITCH_BEND_SETTLE_MS` above) rather than a baseline cosine;
+  every tick, instead of comparing against that ONE fixed cosine, the
+  NOTE_ON loop re-derives what the baseline X would predict the cosine to
+  be AT THE CURRENT depth (`direction_cosine_from(pitch_bend_baseline_x,
+  magnitude)`, using THIS tick's magnitude). If X hasn't genuinely
+  changed (pure depth change, zero real tilt), the current cosine and
+  this depth-adjusted prediction are mathematically IDENTICAL by
+  construction, so the delta is exactly 0 regardless of press depth; a
+  REAL tilt, which genuinely moves X beyond baseline, still produces a
+  real nonzero delta. Needs no new calibration data -- it's the same
+  physics reasoning this feature already used, applied one step further,
+  not a data-fit correction. The `[expression] pitch bend sent` print
+  now also reports this tick's smoothed depth alongside the delta, so a
+  future capture can check whether the compensation actually decorrelated
+  bend from press depth rather than just eyeballing it. Because this
+  changes what signal the deadzone/sensitivity constants above are
+  actually filtering, those specific numbers are flagged (see the note
+  above `PITCH_BEND_CENTER`) as likely needing a fresh capture round
+  rather than assumed still-correct.
   Single hardware axis (X) used as "sideways" -- no hardware doc exists
   for which local Hall axis maps to which physical direction on a
   mounted pad, and MIDI pitch bend is inherently one-dimensional
   regardless, so Y is left unused rather than guessing how to blend two
   axes into one bend value; trivially swappable for Y once seen on real
   hardware.
-  **Real MIDI limitation, not a bug:** this project has no MPE (no
-  per-note channel allocation -- see `midi/README.md`), and Pitch Bend
-  Change is a channel-wide message with no per-note addressing in the
-  spec itself -- there's no way to bend one held note without also
-  bending every other note currently held on the same channel. Rather
-  than send confusing output with a chord held, this module tracks a
-  single "owner" pad (`s_pitch_bend_owner_pad`, 0 = none): only the most
-  recently struck pad drives the shared channel's bend, and bend is
-  explicitly reset to center (`PITCH_BEND_CENTER`, 8192) whenever
-  ownership changes or the owner releases, so a new or still-held note
-  never inherits a stale offset. Playing one pad at a time behaves
-  exactly as expected; bending while a chord is held is a known,
-  deliberate V1 simplification.
+  **Genuinely per-note now: MPE, not a single-owner workaround.** Real
+  feedback: "we need to make sure we have individual per note pitch bend
+  not just regular all key pitch bend. like the roli seaboard." Pitch
+  Bend Change is a channel-wide MIDI message with no per-note addressing
+  in the spec itself -- this used to mean bending one held note also bent
+  every other note on this project's single MIDI channel, worked around
+  with a single "owner pad" concept (only the most recently struck pad
+  drove the shared channel). `midi/midi_out.h` now implements real MPE
+  instead of routing around the limitation -- every currently-held note
+  gets its own MIDI channel (see that file's own entry for the full zone
+  setup), so there's no more sharing to arbitrate. This module's own
+  per-pad voice-management sits on top of that wire-protocol support:
+  `claim_mpe_channel()` claims a free Member Channel the instant a strike
+  commits (or steals the oldest-claimed one, forcibly ending that note
+  first, if all 15 are already in use -- `pad_expr_t.midi_channel` tracks
+  which channel each pad's currently-held note is on), and
+  `end_held_note()` -- the single shared function every normal note-off,
+  retrigger, AND the channel-stealing path all funnel through -- always
+  centers a channel's pitch bend before freeing its slot, so a reused
+  channel can never inherit a stale bend from whatever note used it
+  before. Every pitch-bend field that used to be single module-level
+  state (`s_pitch_bend_baseline_cosine`, `_smoothed_cosine`, `_last_sent`,
+  the settle/run-tracking fields) now lives directly on `pad_expr_t`,
+  one full independent copy per pad -- multiple pads can each bend
+  independently at the same time, exactly like a real Seaboard. Playing
+  a chord and bending only one note now works as expected, not a known
+  V1 simplification anymore.
   Toggled via a genuine square ("sentia", SW5) short click -- real
   feedback: "when you press sentia button once it turns on and off the
   pitch bend" (see `expression_control.h`'s entry below for the
   button-side gesture handling -- an earlier pass wired this to circle
   by mistake before real feedback corrected which physical button
   "sentia" actually is: "our shift and power button is circle. sentia is
-  square button"). `tiles_expression_toggle_pitch_bend()` immediately
-  resets to center if a note currently owns the bend when disabled,
-  rather than leaving it stuck. `tiles_expression_set_muted()`
-  (`expression_control.h`'s expression-mute combo) does the same thing
-  from the other direction -- see its own entry below. **Not yet
-  hardware-verified at all** -- neither the physics reasoning nor the
-  pitch-bend sensitivity has been tried on a real strike yet.
+  square button"). This is still a single global on/off PREFERENCE
+  (`s_pitch_bend_enabled`), separate from each note's own
+  `pitch_bend_active`, which latches whatever that preference was at the
+  exact moment that note fired -- toggling mid-hold doesn't retroactively
+  add or remove bend from an already-sounding note.
+  `tiles_expression_toggle_pitch_bend()` and `tiles_expression_set_muted()`
+  (`expression_control.h`'s expression-mute combo) both now walk every
+  pad (`center_and_deactivate_all_bending_pads()`) and center whichever
+  ones are actually mid-bend, rather than resetting one single piece of
+  shared state -- the direct consequence of bend no longer being
+  singular. **Not yet hardware-verified at all** -- neither the physics
+  reasoning nor the pitch-bend sensitivity has been tried on a real
+  strike yet.
   `s_depth_to_aftertouch_full_scale` is now real, not a placeholder: 900
   by default, derived from a serial-driven full-press capture session
   (`diagnostics/calibration.h`'s 'f' command) with all 24 magnets
@@ -1311,6 +1363,13 @@ not its code.
   eventually control once `usb_vendor/` exists. Real auto-sensing of
   polarity/disconnected-pedal state is still a later layer, see
   `docs/architecture/defaults-and-safeguards.md` "Pedal polarity".
+  Sends both CCs via `midi_out.h`'s `tiles_midi_send_cc_broadcast()`
+  now, not the single-channel `tiles_midi_send_cc()` -- since
+  `services/expression.c`'s MPE support means every held note can be on
+  a different Member Channel, there's no single "right" channel for a
+  sustain/expression message to target anymore; broadcasting to the Zone
+  Master Channel and all 15 Member Channels is what actually holds every
+  currently-sounding note.
 - `power.h`/`.c` — done for V1: derives the actual power mode
   (USB-only / external-only / both / fault) from GP22 (TPS2121 ST) +
   TinyUSB's mounted state, exactly matching the truth table in
