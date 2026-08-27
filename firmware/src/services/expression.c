@@ -569,8 +569,14 @@ typedef struct {
      * rounds did -- see pitch_bend_14bit_from_cosine_delta()'s own
      * comment for the full reasoning. */
     float pitch_bend_baseline_x;
-    float pitch_bend_smoothed_cosine;
+    /* Only used BEFORE baseline_settled, to arrive at a clean baseline_x
+     * capture (see PITCH_BEND_SETTLE_MS) -- not read again afterward. */
     float pitch_bend_smoothed_x;
+    /* EMA of the already depth-compensated delta (real feedback: "you
+     * broke mpe preassure... biased towards down it never goes up" --
+     * see the main scan loop's own comment on why this replaced
+     * smoothing the cosine itself). */
+    float pitch_bend_smoothed_delta;
     bool pitch_bend_baseline_settled;
     uint32_t pitch_bend_claim_ms;
     uint16_t pitch_bend_last_sent;
@@ -867,8 +873,9 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
     tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
     float x, magnitude;
     hall_x_and_magnitude(hs.x, hs.y, hs.z, &x, &magnitude);
+    (void)magnitude;
     s->pitch_bend_smoothed_x = x;
-    s->pitch_bend_smoothed_cosine = direction_cosine_from(x, magnitude);
+    s->pitch_bend_smoothed_delta = 0.0f;
     s->pitch_bend_baseline_settled = false;
     s->pitch_bend_claim_ms = now_ms;
     s->pitch_bend_last_sent = PITCH_BEND_CENTER;
@@ -1116,7 +1123,7 @@ void tiles_expression_scan(void) {
              * doesn't need a matching guard here: haptics.c's own mute
              * flag already makes it a no-op (see tiles_haptics_set_muted). */
             if (!s_expression_muted) {
-                tiles_midi_send_poly_aftertouch(s->midi_channel, s->active_note, at);
+                tiles_midi_send_channel_pressure(s->midi_channel, at);
             }
             tiles_haptics_set_sustain_level(pad, at);
         }
@@ -1130,20 +1137,19 @@ void tiles_expression_scan(void) {
             if (hs.valid) {
                 float x, magnitude;
                 hall_x_and_magnitude(hs.x, hs.y, hs.z, &x, &magnitude);
-                float cosine = direction_cosine_from(x, magnitude);
-                s->pitch_bend_smoothed_cosine += PITCH_BEND_SMOOTHING_ALPHA * (cosine - s->pitch_bend_smoothed_cosine);
-                s->pitch_bend_smoothed_x += PITCH_BEND_SMOOTHING_ALPHA * (x - s->pitch_bend_smoothed_x);
 
                 if (!s->pitch_bend_baseline_settled) {
                     /* See PITCH_BEND_SETTLE_MS's own comment -- stays
                      * centered (never even reaches the send-if-changed
-                     * check below) until the EMA above has had a few
+                     * check below) until the EMA below has had a few
                      * ticks to settle, then captures baseline X from that
                      * settled value rather than one raw instantaneous
                      * sample. */
+                    s->pitch_bend_smoothed_x += PITCH_BEND_SMOOTHING_ALPHA * (x - s->pitch_bend_smoothed_x);
                     if ((now_ms - s->pitch_bend_claim_ms) >= PITCH_BEND_SETTLE_MS) {
                         s->pitch_bend_baseline_x = s->pitch_bend_smoothed_x;
                         s->pitch_bend_baseline_settled = true;
+                        s->pitch_bend_smoothed_delta = 0.0f;
                     }
                 } else {
                     /* Vertical-pressure compensation -- real feedback:
@@ -1161,31 +1167,56 @@ void tiles_expression_scan(void) {
                      * happens to point, regardless of actual tilt.
                      * Fix: instead of comparing against a fixed baseline
                      * COSINE, re-derive what the baseline RAW X would
-                     * predict the cosine to be AT THE CURRENT depth,
-                     * every tick -- direction_cosine_from(baseline_x,
-                     * magnitude) with THIS tick's magnitude, not the
-                     * magnitude from whenever baseline_x was captured.
-                     * If X hasn't genuinely changed (pure depth change,
-                     * zero real tilt), current cosine and this
-                     * depth-adjusted prediction are mathematically
-                     * IDENTICAL by construction (both are baseline_x /
-                     * current_magnitude), so delta is exactly 0 --
-                     * regardless of how deep the press has gone. A REAL
-                     * tilt, which genuinely changes X beyond whatever
-                     * baseline_x was, still produces a real nonzero
-                     * delta. This needs no new calibration data -- it's
-                     * the same physics reasoning this feature is already
-                     * built on, applied one step further; see this
-                     * file's own note above PITCH_BEND_CENTER on why the
-                     * deadzone/sensitivity constants below may need a
-                     * fresh capture now that the underlying signal this
-                     * correction feeds into has changed. */
-                    float predicted_baseline_cosine_now = direction_cosine_from(s->pitch_bend_baseline_x, magnitude);
-                    /* Sign flipped here -- real feedback: "bend is
+                     * predict the cosine to be AT THE CURRENT depth --
+                     * direction_cosine_from(baseline_x, magnitude) with
+                     * THIS tick's magnitude, not the magnitude from
+                     * whenever baseline_x was captured. If X hasn't
+                     * genuinely changed (pure depth change, zero real
+                     * tilt), current cosine and this depth-adjusted
+                     * prediction are mathematically IDENTICAL by
+                     * construction (both are baseline_x /
+                     * current_magnitude), so the raw delta is exactly 0
+                     * -- regardless of how deep the press has gone. A
+                     * REAL tilt, which genuinely changes X beyond
+                     * whatever baseline_x was, still produces a real
+                     * nonzero delta.
+                     *
+                     * Both terms below use THIS SAME tick's `magnitude`
+                     * -- critically, neither is independently smoothed
+                     * before the subtraction. A first version of this
+                     * fix smoothed the "current" cosine (an EMA, lagging
+                     * by construction) but compared it against an
+                     * unsmoothed "predicted baseline" -- during any
+                     * depth change (essentially the entire strike-to-
+                     * hold ramp on every note), that lag mismatch alone
+                     * produces a nonzero, depth-correlated delta even
+                     * for zero real tilt, reintroducing exactly the bias
+                     * this compensation exists to remove. Real feedback
+                     * after that version: "pitch bend is so extreme...
+                     * biased towards down it never goes up" -- consistent
+                     * with a lag-driven artifact, since a struck-then-
+                     * held note's depth is deepening (not easing) for
+                     * most of its hold. Fixed by computing the raw,
+                     * already depth-compensated delta fresh every tick
+                     * (both terms same magnitude, so a pure depth change
+                     * cancels to 0 before any smoothing happens at all)
+                     * and smoothing THAT result instead -- smoothing is
+                     * still wanted for noise rejection (see
+                     * PITCH_BEND_SMOOTHING_ALPHA), just applied
+                     * downstream of the compensation instead of feeding
+                     * mismatched inputs into it.
+                     *
+                     * Sign flipped here (predicted - current, not
+                     * current - predicted) -- real feedback: "bend is
                      * flipped its bending in the opposite way than we
                      * need." pitch_bend_14bit_from_cosine_delta() itself
                      * is otherwise direction-agnostic. */
-                    float delta = predicted_baseline_cosine_now - s->pitch_bend_smoothed_cosine;
+                    float predicted_baseline_cosine_now = direction_cosine_from(s->pitch_bend_baseline_x, magnitude);
+                    float current_cosine_now = direction_cosine_from(x, magnitude);
+                    float raw_delta_this_tick = predicted_baseline_cosine_now - current_cosine_now;
+                    s->pitch_bend_smoothed_delta +=
+                        PITCH_BEND_SMOOTHING_ALPHA * (raw_delta_this_tick - s->pitch_bend_smoothed_delta);
+                    float delta = s->pitch_bend_smoothed_delta;
                     uint16_t bend = pitch_bend_14bit_from_cosine_delta(s, delta, now_ms);
                     if (bend != s->pitch_bend_last_sent) {
                         s->pitch_bend_last_sent = bend;

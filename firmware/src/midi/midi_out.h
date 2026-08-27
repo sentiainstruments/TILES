@@ -46,18 +46,28 @@
 #define TILES_MIDI_MPE_NUM_MEMBER_CHANNELS 15u /* MIDI channels 2-16 -- the full remaining range */
 
 /* This Lower Zone's declared per-Member-Channel pitch bend range, in
- * semitones, sent via RPN 0 as part of tiles_midi_mpe_init() below --
- * real feedback named the ROLI Seaboard directly, and 48 semitones is
- * both the MPE specification's own recommended default and what real
- * Seaboards ship with. This is purely a RECEIVER-side interpretation
- * setting -- it does not change what 14-bit wire value
- * tiles_midi_send_pitch_bend() computes/sends for a given tilt (that's
- * services/expression.c's own sensitivity tuning, an entirely separate
- * concern); it only tells an MPE-aware receiver how many semitones that
- * +/-8191 wire range should musically span. Unmeasured against what
- * this board's actual achievable tilt should translate to musically --
- * a receiver's own MPE zone setup can override it regardless. */
-#define TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES 48u
+ * semitones, sent via RPN 0 as part of tiles_midi_mpe_init() below. This
+ * is purely a RECEIVER-side interpretation setting -- it does not change
+ * what 14-bit wire value tiles_midi_send_pitch_bend() computes/sends for
+ * a given tilt (that's services/expression.c's own sensitivity tuning,
+ * an entirely separate concern); it only tells an MPE-aware receiver how
+ * many semitones that +/-8191 wire range should musically span.
+ *
+ * History: 48 (the MPE specification's own recommended default, and what
+ * a real ROLI Seaboard ships with) -- real feedback after trying it:
+ * "the pitch bend is so extreme the glide in equator is too extreme."
+ * 48 semitones is 4 full octaves of swing at full-scale wire value, which
+ * services/expression.c's own sensitivity tuning reaches on any
+ * comfortable deliberate tilt (see s_pitch_bend_max_cosine_deviation's
+ * own comment) -- musically that's a dramatic swoop, not the subtler
+ * per-note "glide" a Seaboard is normally played with. Lowered to 12 (one
+ * octave full-scale) as a more reasonable middle ground between the
+ * legacy single-channel MIDI default (2, far too tight for an expressive
+ * per-note glide) and the MPE spec's own wide default -- a musical/design
+ * choice, not something a hardware capture could measure; worth further
+ * tuning against real feedback like every other constant in this
+ * pipeline. */
+#define TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES 12u
 
 /* Sends this Lower Zone's required setup on the Zone Master Channel:
  * the MPE Configuration Message (RPN 6, "MCM" -- declares
@@ -76,13 +86,17 @@ void tiles_midi_mpe_init(void);
 void tiles_midi_note_on(uint8_t channel, uint8_t note, uint8_t velocity);
 void tiles_midi_note_off(uint8_t channel, uint8_t note);
 
-/* Polyphonic Key Pressure / aftertouch (0xA0 | channel, note, pressure)
- * on a specific Member Channel -- redundant with the channel already
- * identifying which note under MPE (only one note is ever active per
- * Member Channel at a time), but Poly Aftertouch's own note field costs
- * nothing extra to keep sending and needs no protocol-level change from
- * the pre-MPE single-channel version. */
-void tiles_midi_send_poly_aftertouch(uint8_t channel, uint8_t note, uint8_t pressure);
+/* Channel Pressure (0xD0 | channel, pressure) on a specific Member
+ * Channel -- this, not Poly Key Pressure, is MPE's actual Z-dimension
+ * message. Real feedback after the first MPE flash: "you broke mpe
+ * preassure." Root cause: this used to send Poly Key Pressure (0xA0),
+ * which is valid MIDI but isn't what an MPE-aware receiver listens for --
+ * MPE's three per-note dimensions are Pitch Bend (X), CC74 (Y), and
+ * Channel Pressure (Z) specifically, because under MPE a channel IS a
+ * note, so channel-wide pressure is already per-note pressure with no
+ * note field needed. Channel Pressure is a 2-data-byte message (no note
+ * number), unlike every other message in this file. */
+void tiles_midi_send_channel_pressure(uint8_t channel, uint8_t pressure);
 
 /* Sends a Control Change message (0xB0 | channel, controller, value) on
  * one specific channel. */

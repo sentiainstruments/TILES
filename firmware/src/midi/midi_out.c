@@ -4,6 +4,14 @@
 
 #define TILES_MIDI_CABLE_NUM 0u
 
+static void send2(uint8_t status, uint8_t data1) {
+    if (!tud_midi_mounted()) {
+        return;
+    }
+    uint8_t msg[2] = {status, data1};
+    tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg));
+}
+
 static void send3(uint8_t status, uint8_t data1, uint8_t data2) {
     if (!tud_midi_mounted()) {
         return;
@@ -20,8 +28,8 @@ void tiles_midi_note_off(uint8_t channel, uint8_t note) {
     send3((uint8_t)(0x80u | channel), note, 0u);
 }
 
-void tiles_midi_send_poly_aftertouch(uint8_t channel, uint8_t note, uint8_t pressure) {
-    send3((uint8_t)(0xA0u | channel), note, pressure);
+void tiles_midi_send_channel_pressure(uint8_t channel, uint8_t pressure) {
+    send2((uint8_t)(0xD0u | channel), pressure);
 }
 
 void tiles_midi_send_cc(uint8_t channel, uint8_t controller, uint8_t value) {

@@ -42,7 +42,7 @@ deterministic voice-steal policy) are done — see Status below.
   need to make sure we have individual per note pitch bend not just
   regular all key pitch bend. like the roli seaboard." Every function
   here (`tiles_midi_note_on/off(channel, ...)`,
-  `tiles_midi_send_poly_aftertouch(channel, ...)`,
+  `tiles_midi_send_channel_pressure(channel, ...)`,
   `tiles_midi_send_pitch_bend(channel, ...)`,
   `tiles_midi_send_cc(channel, ...)`) takes an explicit channel -- this
   file is only the wire-protocol layer, it doesn't decide which channel
@@ -54,22 +54,33 @@ deterministic voice-steal policy) are done — see Status below.
   -- forcibly ending THAT note cleanly first -- if all 15 are already in
   use (a real possibility on a 24-pad board, mirrors
   `services/haptics.c`'s own voice-stealing policy almost exactly).
-  Pitch bend and poly aftertouch are now genuinely independent per note,
+  Pitch bend and pressure are now genuinely independent per note,
   each on its own channel -- no more single-"owner"-pad workaround; see
   `services/expression.c`'s "Pitch bend from sideways motion" section for
   the fuller history of what that workaround used to be and why MPE
   removes the need for it entirely.
+  Real feedback after the first MPE flash: "you broke mpe preassure." This
+  used to send Poly Key Pressure (0xA0, note-addressed) for the per-note
+  pressure dimension; MPE's actual convention is Channel Pressure (0xD0,
+  no note field needed, a 2-data-byte message unlike everything else in
+  this file) since a Member Channel already is one note. Fixed by
+  switching to `tiles_midi_send_channel_pressure()`.
   `tiles_midi_send_cc_broadcast(controller, value)` exists alongside the
   single-channel `tiles_midi_send_cc()` specifically for
   `services/pedal.c`'s sustain/expression CCs -- under MPE there's no
   single "right" channel for a pedal message that needs to reach every
   currently-sounding note, so it's sent to the Zone Master Channel and
   all 15 Member Channels at once.
-  Declares a 48-semitone Member Channel pitch bend range via RPN 0 (the
-  MPE specification's own recommended default, and what a real ROLI
-  Seaboard ships with) -- purely a receiver-side interpretation setting,
-  independent of `services/expression.c`'s own sensitivity tuning for
-  how much raw wire value a given tilt produces.
+  Declares a 12-semitone (one octave) Member Channel pitch bend range via
+  RPN 0 -- purely a receiver-side interpretation setting, independent of
+  `services/expression.c`'s own sensitivity tuning for how much raw wire
+  value a given tilt produces. History: 48 (the MPE spec's own
+  recommended default, what a real ROLI Seaboard ships with) -- real
+  feedback: "the pitch bend is so extreme the glide in equator is too
+  extreme." 48 semitones is 4 octaves of swing at full-scale wire value,
+  which a comfortable deliberate tilt reaches; lowered to 12 as a more
+  reasonable middle ground for an expressive per-note glide (see
+  `midi_out.h`'s own comment).
   **Not hardware-verified at all** -- the whole MPE implementation
   (zone-config RPN messages, per-note channel allocation, channel
   stealing) has not been tried against a real MPE-aware DAW/synth yet.
