@@ -622,6 +622,22 @@ static pad_expr_t s_pads[TILES_NUM_PADS];
  * the moment that specific note fired. */
 static bool s_pitch_bend_enabled;
 
+/* Temporary bring-up visibility for a real calibration capture -- real
+ * feedback: "the value of the 2 axis changes with pressure so we need to
+ * compensate for that... your math is so off." The current compensation
+ * (direction_cosine_from(), a ratio against magnitude) assumes X and Y
+ * scale PROPORTIONALLY with the field magnitude under a pure depth
+ * change with zero real tilt; real hardware evidently doesn't hold to
+ * that closely enough. Fixing this properly needs an actual measured
+ * X(depth)/Y(depth) relationship from this hardware, not another guessed
+ * ratio -- this print exists to capture that: raw x, y, z, and depth
+ * together, throttled globally (not per pad) so a single-pad capture
+ * (press straight down repeatedly, no deliberate tilt at all, across the
+ * full depth range) stays readable rather than flooding across whichever
+ * other pads also happen to be held. */
+static uint32_t s_hall_calibration_print_ms;
+#define HALL_CALIBRATION_PRINT_INTERVAL_MS 40u
+
 /* MPE Member Channel allocator -- one slot per Member Channel
  * (TILES_MIDI_MPE_NUM_MEMBER_CHANNELS of them), mirroring
  * services/haptics.c's own voice-stealing policy almost exactly
@@ -1161,6 +1177,12 @@ void tiles_expression_scan(void) {
             if (hs.valid) {
                 float x, y, magnitude;
                 hall_xy_and_magnitude(hs.x, hs.y, hs.z, &x, &y, &magnitude);
+
+                if ((now_ms - s_hall_calibration_print_ms) >= HALL_CALIBRATION_PRINT_INTERVAL_MS) {
+                    s_hall_calibration_print_ms = now_ms;
+                    printf("[hall-cal] pad %u x=%d y=%d z=%d depth=%.0f magnitude=%.1f\n", pad, (int)hs.x, (int)hs.y,
+                           (int)hs.z, (double)s->smoothed_depth, (double)magnitude);
+                }
 
                 if (!s->pitch_bend_baseline_settled) {
                     /* See PITCH_BEND_SETTLE_MS's own comment -- stays
