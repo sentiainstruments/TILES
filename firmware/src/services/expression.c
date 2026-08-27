@@ -324,8 +324,25 @@ static uint16_t s_depth_to_aftertouch_full_scale = 900u;
  * sub-menu (row 2, pitch bend sensitivity) can adjust it live via
  * tiles_expression_set_pitch_bend_sensitivity() below -- a SMALLER value
  * here means MORE sensitive (less real motion needed to reach full
- * bend). Defaults to exactly this same 0.15 starting value. */
-static float s_pitch_bend_max_cosine_deviation = 0.15f;
+ * bend).
+ *
+ * Recalibrated from TWO real captures, cross-referenced against each
+ * other -- real feedback after the deadzone-only recalibration below:
+ * "not pitch bending consistently... requires some extreme bend for it
+ * to happen." A second capture, this time of a real DELIBERATE sideways
+ * tilt (comfortable, not extreme force) held on a struck pad: 634 sent
+ * deltas, min 0.0323, median 0.0526, p75 0.0573, p90 0.0626, p95 0.0656,
+ * max 0.0851. Compared directly against the at-rest capture
+ * (PITCH_BEND_DEADZONE_COSINE_DELTA's own comment): the OLD default here
+ * (0.15) was more than double the highest deliberate-tilt sample ever
+ * observed -- a real deliberate push on this hardware simply never gets
+ * anywhere close to it, which is exactly "requires extreme bend." Reset
+ * to 0.065 -- comfortably above the deadzone (0.04, see below) so the
+ * bulk of a real tilt (median 0.0526 up through p90 0.0626) covers
+ * roughly half to full swing, while the single strongest sample (0.0851)
+ * simply clips at full scale, same as pushing harder than needed on any
+ * other control. */
+static float s_pitch_bend_max_cosine_deviation = 0.065f;
 
 /* Small deltas this close to baseline are treated as exactly centered
  * (no bend at all) rather than passed through -- applied as a "soft
@@ -343,13 +360,21 @@ static float s_pitch_bend_max_cosine_deviation = 0.15f;
  * speculated: pressing straight down really does move this ratio
  * substantially on real hardware (the on-axis-magnet assumption in this
  * file's own physics section doesn't fully hold for this board's real
- * assembly), not just quantization noise -- the previous 0.02 sat right
- * at the MEDIAN of that distribution, so over half of an ordinary press
- * read as some amount of bend. Raised to 0.045 -- comfortably past p90,
- * short of the single 0.0945 outlier (likely a strike-impact transient,
- * not steady-state) -- to actually cover the bulk of a real press
- * instead of guessing a value that sounded reasonable. */
-#define PITCH_BEND_DEADZONE_COSINE_DELTA 0.045f
+ * assembly), not just quantization noise.
+ *
+ * Recalibrated a second time, cross-referenced against a matching
+ * DELIBERATE-tilt capture (s_pitch_bend_max_cosine_deviation's own
+ * comment) -- real feedback that the first recalibration (0.045) was
+ * "not pitch bending consistently," i.e. rejecting some genuine tilt
+ * along with the noise. Comparing what fraction of EACH distribution a
+ * given threshold rejects (not just each one's own percentiles in
+ * isolation) found a much cleaner separation point than either capture
+ * suggested alone: at 0.04, 94% of at-rest samples are rejected while
+ * only 0.6% of real deliberate-tilt samples are lost; the previous 0.045
+ * only gained 3 more points of rest-noise rejection (97%) at the cost of
+ * losing 5.6% of real tilt signal -- a bad trade once both sides of the
+ * tradeoff were actually visible together. Lowered to 0.04 accordingly. */
+#define PITCH_BEND_DEADZONE_COSINE_DELTA 0.04f
 
 /* How long AFTER claiming ownership before the baseline cosine is
  * actually captured, letting PITCH_BEND_SMOOTHING_ALPHA's EMA settle

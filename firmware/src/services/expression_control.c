@@ -197,28 +197,31 @@ static void apply_row_haptics(uint8_t column) {
 }
 
 /* Row 2 -- expression.c's pitch bend sensitivity (max cosine deviation).
- * SMALLER is MORE sensitive (less real motion needed for full bend), so
- * column 1 gets the LARGEST value (0.30, least sensitive) and column 6
- * the SMALLEST (0.075, most sensitive); column 4 is exactly 0.15, the
- * feature's current default. History: 0.15 -> 0.30 -> 0.20, each paired
- * with an ever-more-elaborate downstream compensation stack, back down
- * to 0.15 (with these anchors rescaled to match, same 2x/0.5x-of-default
- * spread throughout) after real feedback that the whole stack was
- * "jittery at rest AND requires too much tilt... might break the keys"
- * -- see expression.c's own s_pitch_bend_max_cosine_deviation comment
- * for the fuller reasoning on resetting to a simpler pipeline instead of
- * continuing to add compensating layers, and its PITCH_BEND_DEADZONE_
- * COSINE_DELTA comment for the real captured-data recalibration
- * (0.02 -> 0.045) that followed once "regular press still is jittery"
- * showed the fixed-value reset alone hadn't been enough. Column 6's
- * 0.075 only leaves 0.03 of usable range above that deadzone -- real,
- * but narrow; worth revisiting if the most sensitive column specifically
- * turns out too coarse in practice. Unmeasured -- same caveat as
- * expression.c's own pitch-bend-sensitivity history: no captured
- * real-hardware data yet for how far this should actually
- * range. */
+ * SMALLER is MORE sensitive (less real motion needed for full bend).
+ * History: 0.15 -> 0.30 -> 0.20 -> 0.15 -> 0.065, each of the first four
+ * a guess (the last a reasoned reset away from an ever-more-elaborate
+ * downstream compensation stack); see expression.c's own
+ * s_pitch_bend_max_cosine_deviation comment for that history and for the
+ * 0.065 default's real justification: cross-referencing a captured
+ * at-rest session against a captured DELIBERATE-tilt session found the
+ * feature's own physical maximum (a real deliberate tilt on this
+ * hardware essentially never exceeds ~0.085) was less than a third of
+ * the 0.30 this row's column 4 used to sit at.
+ *
+ * These anchors are DELIBERATELY NOT the usual symmetric 2x/0.5x-of-
+ * default spread every other row uses -- with the deadzone
+ * (`PITCH_BEND_DEADZONE_COSINE_DELTA`, 0.04, itself now real-data-
+ * calibrated) this close to the default, a naive 0.5x-of-default column
+ * 6 (0.0325) would land BELOW the deadzone entirely, making the "most
+ * sensitive" column less sensitive than doing nothing. Column 1 (0.10,
+ * least sensitive -- a firmer, more deliberate threshold for a player
+ * who wants fewer accidental bends) and column 6 (0.055, most sensitive,
+ * still comfortably 0.015 above the deadzone) are instead picked
+ * directly from the captured deliberate-tilt range itself (median
+ * 0.0526, p90 0.0626) rather than derived by a fixed ratio from column
+ * 4. */
 static void apply_row_pitch_bend(uint8_t column) {
-    float value = piecewise_column_value(column, 0.30f, 0.15f, 0.075f);
+    float value = piecewise_column_value(column, 0.10f, 0.065f, 0.055f);
     tiles_expression_set_pitch_bend_sensitivity(value);
 }
 

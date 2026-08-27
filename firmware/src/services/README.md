@@ -972,6 +972,40 @@ not its code.
   (practically always at least a couple hundred ms) still easily outlasts
   this filter's longer settling time; a continuous quick wobble on top of
   it doesn't. Unmeasured -- not yet re-verified on real hardware.
+  **Sensitivity and deadzone recalibrated a second time, this time
+  cross-referencing TWO real captures against each other** -- real
+  feedback after playing on the recalibrated-deadzone build: "not pitch
+  bending consistently... requires some extreme bend for it to happen."
+  A second debug-console capture, this time of a real DELIBERATE sideways
+  tilt (comfortable force, not extreme) held on a struck pad: 634 sent
+  deltas, min 0.0323, median 0.0526, p75 0.0573, p90 0.0626, p95 0.0656,
+  max 0.0851. Two findings from comparing this directly against the
+  at-rest capture instead of tuning each threshold from its own
+  percentiles in isolation:
+  - `s_pitch_bend_max_cosine_deviation`'s old default (0.15, itself
+    already reduced once from 0.30/0.20 in earlier rounds) was still more
+    than double the single highest deliberate-tilt sample ever observed
+    (0.0851) -- a real deliberate push on this hardware simply never gets
+    close to it, directly explaining "requires extreme bend." Reset to
+    0.065, so the bulk of a real tilt (median through p90) covers roughly
+    half to full swing and the strongest sample clips at the top (same as
+    pushing harder than needed on any control).
+  - `PITCH_BEND_DEADZONE_COSINE_DELTA` (0.045 from the first
+    recalibration) was checked against what fraction of EACH capture it
+    actually rejects, not just its own percentile rank in the at-rest
+    data: at 0.04, 94% of at-rest samples are rejected while only 0.6% of
+    real deliberate-tilt samples are lost; the extra 3 points of
+    rest-noise rejection 0.045 bought (97%) cost 5.6% of real tilt signal
+    -- a bad trade once both sides were visible together, directly
+    explaining "not pitch bending consistently" (some genuine tilt was
+    being swallowed by the deadzone). Lowered to 0.04.
+  `expression_control.h`'s sub-menu row-2 anchors were rescaled to match,
+  but NOT with the usual symmetric 2x/0.5x-of-default spread every other
+  row uses -- with the deadzone this close to the new default, that
+  spread's column 6 (0.0325) would have landed BELOW the deadzone
+  entirely. Column 1 (0.10) and column 6 (0.055) are instead picked
+  directly from the captured tilt range itself; see that file's own
+  comment for the reasoning.
   Single hardware axis (X) used as "sideways" -- no hardware doc exists
   for which local Hall axis maps to which physical direction on a
   mounted pad, and MIDI pitch bend is inherently one-dimensional
