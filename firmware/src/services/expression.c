@@ -392,15 +392,27 @@ static float s_pitch_bend_max_cosine_deviation = 0.15f;
  * perceptible lag to a real tilt." */
 #define PITCH_BEND_ARM_MS 15u
 
-/* EMA smoothing on the cosine signal itself. Lowered from an initial
- * 0.35 (the same starting value AFTERTOUCH_SMOOTHING_ALPHA above still
- * uses) specifically for the same "very jittery" real feedback the
- * deadzone above addresses -- a smaller alpha weighs each new raw sample
- * less heavily against the running average, trading a little
- * responsiveness for meaningfully more noise rejection on a continuous,
- * held signal (unlike velocity's one-shot transient measurement, which
- * smoothing would only blunt, not clean up). */
-#define PITCH_BEND_SMOOTHING_ALPHA 0.15f
+/* EMA smoothing on the cosine signal itself. History: 0.35 -> 0.15 for
+ * "very jittery" real feedback on the AT-REST case, which the deadzone
+ * above (now recalibrated from real data) directly targets -- but real
+ * feedback after that recalibration found the deadzone alone wasn't
+ * enough: "not jittery on press anymore but jittery when pitch bend is
+ * triggered." That's a DIFFERENT case the deadzone can't help with --
+ * the deadzone only zeroes OUT small deltas near center, it does nothing
+ * to smooth the noise riding on top of a delta that's already past it.
+ * The same ongoing press-depth-correlated wobble the deadzone capture
+ * measured at rest (median 0.0257, p90 0.0373 -- see that constant's own
+ * comment) doesn't disappear once a real tilt is added on top of it; it
+ * keeps contributing the same absolute jitter, which is proportionally
+ * MORE noticeable at low-to-moderate bend amounts since nothing here
+ * scales it down. Lowered further, 0.15 -> 0.08, to reject more of that
+ * ongoing wobble on the engaged signal specifically -- a real,
+ * deliberately held tilt (at least a couple hundred ms in practice)
+ * still easily outlasts this filter's now-longer settling time; a
+ * continuous quick wobble on top of it doesn't. Unmeasured -- a first
+ * attempt at "smooths the wobble, doesn't read as mushy/laggy on a real
+ * bend," not measured against real playing. */
+#define PITCH_BEND_SMOOTHING_ALPHA 0.08f
 
 typedef enum {
     PAD_STATE_IDLE = 0,

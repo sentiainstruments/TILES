@@ -957,6 +957,21 @@ not its code.
   0.075) with only 0.03 of real usable range above the new deadzone --
   narrow but still real; may need its own revisit if that column
   specifically still reads too coarse.
+  **`PITCH_BEND_SMOOTHING_ALPHA` lowered further (0.15 -> 0.08) for a
+  DIFFERENT complaint the deadzone recalibration couldn't fix** -- real
+  feedback: "not jittery on press anymore but jittery when pitch bend is
+  triggered." The deadzone only zeroes out small deltas near center; it
+  does nothing to smooth the SAME ongoing press-depth-correlated wobble
+  the capture above measured once a real tilt has pushed past it -- that
+  wobble doesn't disappear when bending, it just becomes a smaller
+  fraction of a larger signal, and at low-to-moderate bend amounts it's
+  still clearly audible as jitter riding on top of the real gesture.
+  More aggressive smoothing on the live signal is the right tool for
+  that specifically (unlike the deadzone, which is the right tool for
+  "is this even real tilt at all"). A real, deliberately held tilt
+  (practically always at least a couple hundred ms) still easily outlasts
+  this filter's longer settling time; a continuous quick wobble on top of
+  it doesn't. Unmeasured -- not yet re-verified on real hardware.
   Single hardware axis (X) used as "sideways" -- no hardware doc exists
   for which local Hall axis maps to which physical direction on a
   mounted pad, and MIDI pitch bend is inherently one-dimensional
