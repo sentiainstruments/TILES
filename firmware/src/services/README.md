@@ -1038,12 +1038,52 @@ not its code.
   actually filtering, those specific numbers are flagged (see the note
   above `PITCH_BEND_CENTER`) as likely needing a fresh capture round
   rather than assumed still-correct.
-  Single hardware axis (X) used as "sideways" -- no hardware doc exists
-  for which local Hall axis maps to which physical direction on a
-  mounted pad, and MIDI pitch bend is inherently one-dimensional
-  regardless, so Y is left unused rather than guessing how to blend two
-  axes into one bend value; trivially swappable for Y once seen on real
-  hardware.
+  Originally a single hardware axis (X) used as "sideways" -- no hardware
+  doc exists for which local Hall axis maps to which physical direction on
+  a mounted pad, and MIDI pitch bend is inherently one-dimensional
+  regardless, so Y was left unused rather than guessing how to blend two
+  axes into one bend value.
+  **Real regression after the MPE flash above, found and fixed:** "you
+  broke mpe preassure, and the pitch bend is so extreme the glide in
+  equator is too extreme and biased towards down it never goes up." Two
+  separate bugs. Pressure: this was sending Poly Key Pressure (0xA0,
+  note-addressed); MPE's actual per-note pressure convention is Channel
+  Pressure (0xD0, no note field, since a Member Channel already is one
+  note) -- see `midi/midi_out.h`'s `tiles_midi_send_channel_pressure()`.
+  Bend: the vertical-pressure compensation above was comparing an
+  unsmoothed "predicted baseline" cosine against a SMOOTHED (lagging)
+  "current" cosine -- during any depth change (most of a note's hold),
+  that lag mismatch alone produced a nonzero, depth-correlated delta even
+  for zero real tilt, reintroducing exactly the bias the compensation
+  exists to remove. Fixed by computing the raw, already-compensated delta
+  fresh every tick (both terms the same tick's magnitude, so a pure depth
+  change cancels to 0 before any smoothing happens) and smoothing THAT
+  result instead of an intermediate, mismatched term. Also lowered the
+  declared MPE pitch bend range (RPN 0) from 48 semitones (4 octaves, the
+  MPE spec default) to 12 (1 octave) -- a comfortable tilt reaches full
+  wire-value swing, and 4 octaves of glide read as extreme rather than
+  expressive.
+  **Y joined X, real feedback:** "incorporate the 2 axis tilt onto the
+  pitch bend to provide a more strong reading of tilt... more sable
+  reeds... make vibratos." A real physical tilt genuinely deflects the
+  field in both X and Y to some degree (a dipole's off-axis response isn't
+  confined to one hardware axis just because the intended gesture is), so
+  X-only was discarding real, correlated signal -- and small/rapid
+  wiggles (vibrato specifically) are exactly the amplitude range where a
+  single axis's own noise floor matters most. `hall_x_and_magnitude()`
+  became `hall_xy_and_magnitude()`; `pad_expr_t` gained
+  `pitch_bend_baseline_y`/`pitch_bend_smoothed_y` alongside the existing X
+  fields, settled the same way. The NOTE_ON loop now computes a
+  same-magnitude-compensated `delta_y` exactly like `delta_x`, combines
+  them as `sqrt(delta_x^2 + delta_y^2)` for MAGNITUDE (strictly >= either
+  axis alone, so a tilt/wiggle landing partly on Y now adds to the
+  reading instead of being lost) while keeping SIGN anchored to `delta_x`
+  alone -- deliberately not a true 2D bend direction, which would need a
+  real 2D bend axis with no established precedent here; this is the
+  minimal change that makes an ordinary X-tilt wiggle read as a stronger,
+  more reliable signal without redefining what "positive bend" means or
+  disturbing the already-tuned left/right feel the deadzone/sensitivity
+  constants were calibrated against.
   **Genuinely per-note now: MPE, not a single-owner workaround.** Real
   feedback: "we need to make sure we have individual per note pitch bend
   not just regular all key pitch bend. like the roli seaboard." Pitch

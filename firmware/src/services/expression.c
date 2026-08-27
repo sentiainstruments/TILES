@@ -268,19 +268,39 @@ static uint16_t s_depth_to_aftertouch_full_scale = 900u;
  * that shared distance-dependence out, leaving (to first order) just
  * the angle. This is the same principle real 3-axis Hall-effect
  * joysticks use to derive tilt independent of plunger depth. See
- * hall_x_and_magnitude()/direction_cosine_from() below for the actual
+ * hall_xy_and_magnitude()/direction_cosine_from() below for the actual
  * computation, and PITCH_BEND_SETTLE_MS/the vertical-pressure
  * compensation further below for how the baseline this compares against
  * is captured and corrected -- real hardware showed the theory above
  * doesn't hold PERFECTLY in practice.
  *
- * Single hardware axis (X) chosen as "sideways" -- this project has no
- * hardware documentation on which local Hall axis corresponds to which
- * physical direction on a mounted pad, and MIDI pitch bend is
- * inherently one-dimensional (a single 14-bit value) regardless, so Y
- * is left unused for now rather than guessing how to blend two axes
- * into one bend value. Trivially swappable for Y once seen on real
- * hardware if X turns out to be the wrong physical axis.
+ * Both in-plane axes (X and Y) now feed the bend, not X alone -- real
+ * feedback: "incorporate the 2 axis tilt onto the pitch bend to provide
+ * a more strong reading of tilt... more sable reeds... make vibratos."
+ * Originally X alone: this project has no hardware documentation on
+ * which local Hall axis corresponds to which physical direction on a
+ * mounted pad, so X was picked as "sideways" somewhat arbitrarily, and Y
+ * was left unused entirely since MIDI pitch bend is inherently
+ * one-dimensional (a single 14-bit value) and blending two axes into one
+ * needed an actual design, not a guess. Two things argued for revisiting
+ * that: any real physical tilt genuinely deflects the field in BOTH X
+ * and Y to some degree (a magnetic dipole's off-axis response isn't
+ * confined to one hardware axis just because the intended playing
+ * gesture is), so X-only was discarding real, correlated signal, not
+ * just noise -- and a vibrato specifically needs SMALL, RAPID wiggles to
+ * register reliably, exactly the amplitude range where a single axis's
+ * own noise floor matters most. See hall_xy_and_magnitude()/
+ * direction_cosine_from() below for the combined computation: MAGNITUDE
+ * comes from both axes' compensated deviation (sqrt(dx^2 + dy^2), a
+ * strictly stronger/less noisy reading of "how far off center" than X
+ * alone, regardless of exactly which direction a real tilt or wiggle
+ * leans in), while SIGN/polarity stays anchored to X alone, preserving
+ * the already-tuned left/right bend-direction feel this file's deadzone
+ * and sensitivity constants were calibrated against. This deliberately
+ * does NOT attempt true 2D vibrato (bend direction tied to whichever way
+ * the finger actually wiggles) -- that needs a real 2D bend axis with no
+ * established precedent here yet; this is the minimal change that makes
+ * an ordinary X-tilt wiggle read as a stronger, more reliable signal.
  *
  * Genuinely per-note now, not a workaround: real feedback: "we need to
  * make sure we have individual per note pitch bend not just regular all
@@ -562,16 +582,18 @@ typedef struct {
      * retroactively add or remove bend from an already-sounding note,
      * matching the original single-owner version's behavior. */
     bool pitch_bend_active;
-    /* Raw X, settled -- see PITCH_BEND_SETTLE_MS's own comment. This is
-     * what the vertical-pressure compensation re-derives an expected
-     * baseline cosine from at the CURRENT depth every tick, rather than
-     * comparing against one fixed baseline cosine the way earlier
-     * rounds did -- see pitch_bend_14bit_from_cosine_delta()'s own
-     * comment for the full reasoning. */
+    /* Raw X and Y, settled -- see PITCH_BEND_SETTLE_MS's own comment.
+     * These are what the vertical-pressure compensation re-derives an
+     * expected baseline cosine from at the CURRENT depth every tick,
+     * rather than comparing against one fixed baseline cosine the way
+     * earlier rounds did -- see the main scan loop's own comment for the
+     * full reasoning, including why Y joined X here. */
     float pitch_bend_baseline_x;
-    /* Only used BEFORE baseline_settled, to arrive at a clean baseline_x
+    float pitch_bend_baseline_y;
+    /* Only used BEFORE baseline_settled, to arrive at a clean baseline
      * capture (see PITCH_BEND_SETTLE_MS) -- not read again afterward. */
     float pitch_bend_smoothed_x;
+    float pitch_bend_smoothed_y;
     /* EMA of the already depth-compensated delta (real feedback: "you
      * broke mpe preassure... biased towards down it never goes up" --
      * see the main scan loop's own comment on why this replaced
@@ -642,19 +664,20 @@ void tiles_expression_init(void) {
     s_expression_muted = false;
 }
 
-/* Splits a raw Hall sample into its X component and total field
- * magnitude |B| = sqrt(x^2+y^2+z^2) -- kept as two separate outputs
- * (rather than only returning the direction cosine, as an earlier
- * version of this function did) because the vertical-pressure
- * compensation in pitch_bend_14bit_from_cosine_delta()'s caller needs
- * BOTH the current magnitude and this pad's settled baseline X to
- * re-derive an expected baseline cosine at the CURRENT depth -- see that
- * function's own comment for why. */
-static void hall_x_and_magnitude(int16_t x, int16_t y, int16_t z, float *x_out, float *magnitude_out) {
+/* Splits a raw Hall sample into its X and Y components and total field
+ * magnitude |B| = sqrt(x^2+y^2+z^2) -- kept as separate outputs (rather
+ * than only returning a direction cosine, as an earlier X-only version of
+ * this function did) because the vertical-pressure compensation in this
+ * file's main scan loop needs BOTH the current magnitude and this pad's
+ * settled baseline X/Y to re-derive an expected baseline cosine at the
+ * CURRENT depth, for each axis -- see that loop's own comment for why,
+ * and for why Y joined X here at all. */
+static void hall_xy_and_magnitude(int16_t x, int16_t y, int16_t z, float *x_out, float *y_out, float *magnitude_out) {
     float fx = (float)x;
     float fy = (float)y;
     float fz = (float)z;
     *x_out = fx;
+    *y_out = fy;
     *magnitude_out = sqrtf(fx * fx + fy * fy + fz * fz);
 }
 
@@ -871,10 +894,11 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
         return;
     }
     tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
-    float x, magnitude;
-    hall_x_and_magnitude(hs.x, hs.y, hs.z, &x, &magnitude);
+    float x, y, magnitude;
+    hall_xy_and_magnitude(hs.x, hs.y, hs.z, &x, &y, &magnitude);
     (void)magnitude;
     s->pitch_bend_smoothed_x = x;
+    s->pitch_bend_smoothed_y = y;
     s->pitch_bend_smoothed_delta = 0.0f;
     s->pitch_bend_baseline_settled = false;
     s->pitch_bend_claim_ms = now_ms;
@@ -1135,19 +1159,21 @@ void tiles_expression_scan(void) {
         if (s->pitch_bend_active) {
             tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
             if (hs.valid) {
-                float x, magnitude;
-                hall_x_and_magnitude(hs.x, hs.y, hs.z, &x, &magnitude);
+                float x, y, magnitude;
+                hall_xy_and_magnitude(hs.x, hs.y, hs.z, &x, &y, &magnitude);
 
                 if (!s->pitch_bend_baseline_settled) {
                     /* See PITCH_BEND_SETTLE_MS's own comment -- stays
                      * centered (never even reaches the send-if-changed
-                     * check below) until the EMA below has had a few
-                     * ticks to settle, then captures baseline X from that
-                     * settled value rather than one raw instantaneous
-                     * sample. */
+                     * check below) until the EMAs below have had a few
+                     * ticks to settle, then captures baseline X/Y from
+                     * those settled values rather than one raw
+                     * instantaneous sample. */
                     s->pitch_bend_smoothed_x += PITCH_BEND_SMOOTHING_ALPHA * (x - s->pitch_bend_smoothed_x);
+                    s->pitch_bend_smoothed_y += PITCH_BEND_SMOOTHING_ALPHA * (y - s->pitch_bend_smoothed_y);
                     if ((now_ms - s->pitch_bend_claim_ms) >= PITCH_BEND_SETTLE_MS) {
                         s->pitch_bend_baseline_x = s->pitch_bend_smoothed_x;
+                        s->pitch_bend_baseline_y = s->pitch_bend_smoothed_y;
                         s->pitch_bend_baseline_settled = true;
                         s->pitch_bend_smoothed_delta = 0.0f;
                     }
@@ -1210,10 +1236,38 @@ void tiles_expression_scan(void) {
                      * current - predicted) -- real feedback: "bend is
                      * flipped its bending in the opposite way than we
                      * need." pitch_bend_14bit_from_cosine_delta() itself
-                     * is otherwise direction-agnostic. */
-                    float predicted_baseline_cosine_now = direction_cosine_from(s->pitch_bend_baseline_x, magnitude);
-                    float current_cosine_now = direction_cosine_from(x, magnitude);
-                    float raw_delta_this_tick = predicted_baseline_cosine_now - current_cosine_now;
+                     * is otherwise direction-agnostic.
+                     *
+                     * Two axes combined here, not X alone -- real
+                     * feedback: "incorporate the 2 axis tilt onto the
+                     * pitch bend to provide a more strong reading of
+                     * tilt... more sable reeds... make vibratos." Y gets
+                     * the exact same same-magnitude compensation treatment
+                     * as X above (delta_y cancels to 0 for a pure depth
+                     * change, for the identical reason delta_x does).
+                     * MAGNITUDE combines both axes (sqrt(dx^2 + dy^2)) --
+                     * strictly >= either axis alone, so a real tilt or
+                     * wiggle that happens to land partly on Y (which the
+                     * old X-only signal simply discarded) now adds to the
+                     * reading instead of being lost, giving small/rapid
+                     * motion -- a vibrato wiggle, specifically -- a
+                     * stronger, more reliable signal to clear the
+                     * deadzone with. SIGN stays anchored to delta_x alone,
+                     * deliberately not a true 2D bend direction -- this
+                     * preserves the already-tuned left/right bend feel
+                     * the deadzone/sensitivity constants below were
+                     * calibrated against, rather than redefining what
+                     * "positive bend" means. */
+                    float predicted_baseline_cosine_x = direction_cosine_from(s->pitch_bend_baseline_x, magnitude);
+                    float current_cosine_x = direction_cosine_from(x, magnitude);
+                    float delta_x = predicted_baseline_cosine_x - current_cosine_x;
+
+                    float predicted_baseline_cosine_y = direction_cosine_from(s->pitch_bend_baseline_y, magnitude);
+                    float current_cosine_y = direction_cosine_from(y, magnitude);
+                    float delta_y = predicted_baseline_cosine_y - current_cosine_y;
+
+                    float combined_magnitude = sqrtf(delta_x * delta_x + delta_y * delta_y);
+                    float raw_delta_this_tick = (delta_x >= 0.0f) ? combined_magnitude : -combined_magnitude;
                     s->pitch_bend_smoothed_delta +=
                         PITCH_BEND_SMOOTHING_ALPHA * (raw_delta_this_tick - s->pitch_bend_smoothed_delta);
                     float delta = s->pitch_bend_smoothed_delta;

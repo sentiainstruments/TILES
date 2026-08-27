@@ -778,11 +778,6 @@ static bb_phase_t s_bb_phase;
 static uint32_t s_bb_last_step_ms;
 static uint32_t s_bb_round_end_ms;
 static bool s_bb_inited;
-/* See bb_step()'s own comment -- counts steps so column movement can be
- * throttled to every other one, breaking a real reachability bug (real
- * feedback: "brickbraker is having a hard time hitting all function
- * button leds, i suspect its because of the alignement"). */
-static uint8_t s_bb_step_count;
 
 static void bb_new_round(uint32_t now_ms) {
     for (uint8_t i = 0; i < BB_NUM_COLS; i++) {
@@ -795,40 +790,51 @@ static void bb_new_round(uint32_t now_ms) {
     s_bb_ball_dcol = ((rand() % 2) == 0) ? -1 : 1;
     s_bb_phase = BB_PHASE_PLAYING;
     s_bb_last_step_ms = now_ms;
-    s_bb_step_count = 0u;
 }
 
 /* Real feedback: "brickbraker is having a hard time hitting all function
  * button leds, i suspect its because of the alignement" -- correctly
  * diagnosed as an alignment issue, though not a rendering one. Every step
- * moved row by exactly +/-1 AND col by exactly +/-1 in lockstep (a wall
- * bounce flips dcol's SIGN but a step still always changes col by 1
- * either way), which makes (row + col) mod 2 an exact invariant of the
- * ball's entire trajectory -- it never changes, no matter how many
- * bounces happen, since both terms always move by the same odd amount
- * each step. bb_new_round() above always starts the ball at row 3, col
- * 3 (paddle_center), an EVEN sum, so the ball could only ever reach row
- * 1 (the brick wall) on the 3 columns sharing that same parity (odd
- * columns, since 1 + odd = even) -- the other 3 bricks were
- * mathematically unreachable every single round, not just unlucky.
- * Fixed by throttling column movement to every OTHER step (row still
- * advances every step) -- once row and col no longer move in forced
- * lockstep, the parity invariant no longer holds, so wall/paddle bounces
- * (which land at times unsynchronized with the column's now-slower
- * cadence) let the ball reach every column over a long enough run. Also
- * reads as a slightly shallower, more natural bounce angle than the old
- * strict 45-degree diagonal. */
+ * moves row by exactly +/-1 AND col by exactly +/-1; a wall bounce only
+ * flips dcol's SIGN, never its magnitude, so col still changes by
+ * exactly 1 every step regardless. That makes (row + col) mod 2 an exact
+ * invariant of the ball's entire trajectory: it can never change, no
+ * matter how many bounces happen, since both terms always move by the
+ * same odd amount each step. bb_new_round() above always starts the ball
+ * at row 3, col 3 (paddle_center), an EVEN sum, so the ball could only
+ * ever reach row 1 (the brick wall) on the 3 columns sharing that same
+ * parity -- the other 3 bricks were mathematically unreachable every
+ * single round, not just unlucky.
+ *
+ * First fix attempt throttled column movement to every OTHER step,
+ * hoping to decouple it from row's fixed cadence -- real feedback after
+ * flashing it: "now moves weird and still cant reach 3 of the 5
+ * lights." Both complaints were real: the row:col speed became a fixed
+ * 2:1 ratio (visibly "weird," not a normal diagonal bounce), AND it
+ * didn't actually fix reachability -- row's own bounce-to-bounce period
+ * is ALWAYS an even number of ticks (a fixed function of BB_PADDLE_ROW,
+ * independent of column state entirely), so jumping column by a fixed
+ * 4 ticks' worth every row-bounce cycle just walks a FIXED STRIDE around
+ * the column's own reflecting orbit -- still landing on only every other
+ * reachable column forever, the identical structural bug wearing a
+ * different set of numbers.
+ *
+ * Real fix: column advances every step again (restores the normal
+ * diagonal look), but each time the ball bounces off the top wall OR the
+ * paddle, dcol ALSO gets a coin-flip chance to reverse -- seeded from
+ * rand(), same as this round's own initial dcol pick above. Row's own
+ * bounce timing is still perfectly periodic, but the column's direction
+ * at each of those bounces is now a genuine random variable instead of a
+ * deterministic function of the previous bounce -- there is no longer
+ * ANY fixed relationship between row-bounce phase and column position
+ * for a parity/stride argument to lock onto, so the column at each
+ * bounce does an unbiased reflecting random walk across all 6 columns
+ * rather than a deterministic cycle through a fixed subset. */
 static void bb_step(uint32_t now_ms) {
-    s_bb_step_count++;
-    bool advance_col = (s_bb_step_count % 2u) == 0u;
-
-    int8_t new_col = s_bb_ball_col;
-    if (advance_col) {
+    int8_t new_col = (int8_t)(s_bb_ball_col + s_bb_ball_dcol);
+    if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
+        s_bb_ball_dcol = (int8_t)(-s_bb_ball_dcol);
         new_col = (int8_t)(s_bb_ball_col + s_bb_ball_dcol);
-        if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
-            s_bb_ball_dcol = (int8_t)(-s_bb_ball_dcol);
-            new_col = (int8_t)(s_bb_ball_col + s_bb_ball_dcol);
-        }
     }
     int8_t new_row = (int8_t)(s_bb_ball_row + s_bb_ball_drow);
 
@@ -839,6 +845,9 @@ static void bb_step(uint32_t now_ms) {
         s_bb_brick_alive[col_index] = false;
         s_bb_ball_drow = 1;
         new_row = 1;
+        if ((rand() % 2) == 0) {
+            s_bb_ball_dcol = (int8_t)(-s_bb_ball_dcol);
+        }
 
         bool all_dead = true;
         for (uint8_t i = 0; i < BB_NUM_COLS; i++) {
@@ -857,6 +866,9 @@ static void bb_step(uint32_t now_ms) {
         if (new_col >= paddle_min && new_col <= paddle_max) {
             s_bb_ball_drow = -1;
             new_row = (int8_t)BB_PADDLE_ROW;
+            if ((rand() % 2) == 0) {
+                s_bb_ball_dcol = (int8_t)(-s_bb_ball_dcol);
+            }
         } else {
             /* Missed -- lost. Ball is left just past the paddle row, off
              * the renderable 0-4 range, so it naturally disappears from

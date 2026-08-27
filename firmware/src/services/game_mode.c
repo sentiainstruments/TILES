@@ -272,11 +272,6 @@ static int8_t s_gb_paddle_center; /* 2-5 */
 static uint32_t s_gb_last_step_ms;
 static bool s_gb_prev_left;
 static bool s_gb_prev_right;
-/* See gb_step()'s own comment -- throttles column movement to every
- * other step to fix a real ball-reachability bug (real feedback:
- * "brickbraker is having a hard time hitting all function button leds, i
- * suspect its because of the alignement"). */
-static uint8_t s_gb_step_count;
 
 static void gb_start(uint32_t now_ms) {
     for (uint8_t i = 0; i < GB_NUM_COLS; i++) {
@@ -290,7 +285,6 @@ static void gb_start(uint32_t now_ms) {
     s_gb_last_step_ms = now_ms;
     s_gb_prev_left = false;
     s_gb_prev_right = false;
-    s_gb_step_count = 0u;
 }
 
 static void gb_handle_input(void) {
@@ -324,22 +318,29 @@ static void gb_handle_input(void) {
  * row 3, col 3 (paddle_center), an EVEN sum, so the ball could only ever
  * reach row 1 (the brick wall) on the 3 columns sharing that same parity
  * -- the other 3 bricks were mathematically unreachable every single
- * round, not just unlucky. Fixed the same way as standby.c's autonomous
- * version (bb_step()): throttle column movement to every OTHER step (row
- * still advances every step), which breaks the forced lockstep and lets
- * wall/paddle bounces -- now unsynchronized with the column's slower
- * cadence -- reach every column over a long enough run. */
+ * round, not just unlucky.
+ *
+ * First fix attempt throttled column movement to every OTHER step -- real
+ * feedback after flashing it: "now moves weird and still cant reach 3 of
+ * the 5 lights." It didn't actually fix reachability: row's own
+ * bounce-to-bounce period is ALWAYS an even number of ticks (a fixed
+ * function of GB_PADDLE_ROW, independent of column state), so jumping
+ * column by a fixed 4 ticks' worth every row-bounce cycle just walks a
+ * fixed stride around the column's own reflecting orbit -- landing on
+ * only every other reachable column forever, same bug, different
+ * numbers -- while also visibly breaking the normal diagonal motion.
+ * Real fix, matching standby.c's autonomous version (bb_step()): column
+ * advances every step again, but each bounce off the top wall or the
+ * paddle now also gets a coin-flip chance to reverse dcol. Row's bounce
+ * timing is still perfectly periodic, but column's direction at each
+ * bounce is now a genuine random variable instead of a deterministic
+ * function of the previous bounce, so there's no fixed relationship left
+ * for a parity/stride argument to lock onto. */
 static void gb_step(uint32_t now_ms) {
-    s_gb_step_count++;
-    bool advance_col = (s_gb_step_count % 2u) == 0u;
-
-    int8_t new_col = s_gb_ball_col;
-    if (advance_col) {
+    int8_t new_col = (int8_t)(s_gb_ball_col + s_gb_ball_dcol);
+    if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
+        s_gb_ball_dcol = (int8_t)(-s_gb_ball_dcol);
         new_col = (int8_t)(s_gb_ball_col + s_gb_ball_dcol);
-        if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
-            s_gb_ball_dcol = (int8_t)(-s_gb_ball_dcol);
-            new_col = (int8_t)(s_gb_ball_col + s_gb_ball_dcol);
-        }
     }
     int8_t new_row = (int8_t)(s_gb_ball_row + s_gb_ball_drow);
 
@@ -348,6 +349,9 @@ static void gb_step(uint32_t now_ms) {
         s_gb_brick_alive[col_index] = false;
         s_gb_ball_drow = 1;
         new_row = 1;
+        if ((rand() % 2) == 0) {
+            s_gb_ball_dcol = (int8_t)(-s_gb_ball_dcol);
+        }
 
         bool all_dead = true;
         for (uint8_t i = 0; i < GB_NUM_COLS; i++) {
@@ -365,6 +369,9 @@ static void gb_step(uint32_t now_ms) {
         if (new_col >= paddle_min && new_col <= paddle_max) {
             s_gb_ball_drow = -1;
             new_row = (int8_t)GB_PADDLE_ROW;
+            if ((rand() % 2) == 0) {
+                s_gb_ball_dcol = (int8_t)(-s_gb_ball_dcol);
+            }
         } else {
             gm_start_round_end(now_ms, false);
         }
