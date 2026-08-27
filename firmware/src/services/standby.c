@@ -23,9 +23,9 @@
 #define TILES_STANDBY_IDLE_TIMEOUT_MS 60000u
 #define TILES_STANDBY_ANIMATION_CYCLE_MS 120000u
 
-/* After 15 minutes of TOTAL inactivity (same s_last_activity_ms clock
- * that gates entering standby in the first place -- not 15 minutes of
- * animation specifically, 15 minutes since the last real touch/button/
+/* After 20 minutes of TOTAL inactivity (same s_last_activity_ms clock
+ * that gates entering standby in the first place -- not 20 minutes of
+ * animation specifically, 20 minutes since the last real touch/button/
  * pedal event), standby's animations stop and the board drops to deep
  * sleep: everything dark except the circle button pulsing slowly, the
  * one indicator that it's in this state. See enter_deep_sleep() below.
@@ -34,9 +34,12 @@
  * "the sleep mode after 10 secs is the same as the timeout of the
  * animations, not two separate things... rename that to deep sleep."
  * An earlier version had a second, distinct all-the-way-blank state for
- * the 10s hold; this collapses the two into one. Explicit demo-mode
- * default, like the other timings here. */
-#define TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS 900000u /* 15 * 60 * 1000 */
+ * the 10s hold; this collapses the two into one.
+ * Real feedback: "make screensaver 30 min if triggered manually, 20 if
+ * auto" -- was 15/20, raised to 20/30 (see
+ * TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS further below for the
+ * manual half). */
+#define TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS 1200000u /* 20 * 60 * 1000 */
 
 /* ~25fps. Unmeasured against real I2C bus load (every pad write is a
  * mux-select-enable-disable dance, see lighting.c) -- if 24 pads + 6
@@ -512,9 +515,10 @@ static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_
 
 /* ---- Animation 6: graphic equalizer --------------------------------------
  * Each column is a fake VU/EQ bar lit bottom-up -- rows 3-4 (the bottom
- * two) blue, row 2 yellow, row 1 (top) red, like a classic hardware
+ * two) white, row 2 yellow, row 1 (top) red, like a classic hardware
  * graphic equalizer. Red is now *only* ever the top row's own color,
- * not a separate marker -- see the rework note below.
+ * not a separate marker -- see the rework note below. Rows 3-4 were
+ * originally blue; real feedback: "make the blue white in vu meter."
  *
  * Reworked three times from real feedback. First pass slowed everything
  * down and added a long, low-biased "phrase" envelope so columns spent
@@ -545,10 +549,20 @@ static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_
  * deterministic golden-angle key already used for velocity variance)
  * jump straight to 1.0 instead of the smooth 0.55-1.0 curve, so row 1
  * genuinely flashes red every so often instead of practically never.
- * Function buttons are fully off; underglow is a simple constant blue
- * accent (see eq_underglow below) rather than tracking the bars --
- * doesn't correspond to any one column, so there's nothing meaningful
- * for it to track. */
+ * Function buttons are fully off; underglow is a simple constant white
+ * accent (see eq_underglow below, also originally blue -- same feedback
+ * as the bars above) rather than tracking the bars -- doesn't correspond
+ * to any one column, so there's nothing meaningful for it to track.
+ *
+ * Fifth pass (current), more real feedback: "make sure some peaks do
+ * redline every once in a while" -- the guaranteed-1.0-velocity mechanism
+ * from the fourth pass above was already in place but still essentially
+ * never visibly fired, for a DIFFERENT reason than the fourth pass fixed:
+ * the envelope only reaches exactly 1.0 for a single infinitesimal
+ * instant (the moment the attack ramp ends), and this whole animation is
+ * only ever sampled once per ~40ms render frame -- see eq_bar_level()'s
+ * own comment on the fix (EQ_PEAK_HOLD_FRACTION, a brief plateau at the
+ * peak instead of an instantaneous one). */
 
 #define EQ_NUM_COLS 6u
 #define EQ_LIT_LEVEL 0.85f
@@ -566,6 +580,13 @@ static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_
  * a short ramp (rather than the old instant-attack pop) reads as less
  * of a flash and more like a meter reacting. */
 #define EQ_ATTACK_FRACTION 0.18f
+/* Fraction of a hit's window the envelope holds flat at its peak (1.0)
+ * right after the attack ramp, before decay begins -- see eq_bar_level()'s
+ * own comment on why an instantaneous peak was never actually visible.
+ * 10% of even the busiest column's hit window is still tens of ms of
+ * real time, comfortably wider than one TILES_STANDBY_FRAME_INTERVAL_MS
+ * frame. */
+#define EQ_PEAK_HOLD_FRACTION 0.10f
 /* Fraction of hits (by velocity_key below) that redline -- jump straight
  * to full velocity (1.0) instead of the smooth 0.55-0.95 curve, so row 1
  * (red) genuinely lights up every so often. Deliberately rare: a real VU
@@ -602,11 +623,30 @@ static float eq_bar_level(uint8_t col, uint32_t now_ms) {
         return 0.0f;
     }
 
+    /* The rise above reaches exactly 1.0 at a single instant (phase ==
+     * EQ_ATTACK_FRACTION) before decay starts falling away from it again
+     * -- with this whole thing rendered at TILES_STANDBY_FRAME_INTERVAL_MS
+     * (~40ms) intervals, that instant is almost never the one a frame
+     * actually samples, so even a genuine EQ_REDLINE_FRACTION hit
+     * (velocity_key below forcing velocity to exactly 1.0) essentially
+     * never produced a RENDERED level of exactly 1.0 -- row 1's threshold
+     * (anim_equalizer() below, row_threshold == 1.0 for row 1) needs
+     * nothing less. Real feedback: "make sure some peaks do redline
+     * every once in a while" -- the redline mechanism was already in
+     * place but this sampling gap meant it essentially never visibly
+     * fired. Fixed with a brief plateau (EQ_PEAK_HOLD_FRACTION) held at
+     * the full envelope value between the attack ramp and the decay,
+     * long enough in real ms (even for the busiest column's shortest hit
+     * window) that a ~40ms-interval render reliably lands inside it at
+     * least once per hit rather than needing to catch one exact instant. */
     float envelope;
     if (phase < EQ_ATTACK_FRACTION) {
         envelope = phase / EQ_ATTACK_FRACTION; /* linear rise to the peak */
+    } else if (phase < EQ_ATTACK_FRACTION + EQ_PEAK_HOLD_FRACTION) {
+        envelope = 1.0f; /* brief plateau at the peak -- see comment above */
     } else {
-        float decay_phase = (phase - EQ_ATTACK_FRACTION) / (1.0f - EQ_ATTACK_FRACTION);
+        float decay_phase =
+            (phase - EQ_ATTACK_FRACTION - EQ_PEAK_HOLD_FRACTION) / (1.0f - EQ_ATTACK_FRACTION - EQ_PEAK_HOLD_FRACTION);
         envelope = powf(1.0f - decay_phase, s_eq_col_decay_exp[i]);
     }
 
@@ -637,8 +677,10 @@ static tiles_standby_color_t eq_row_color(uint8_t row) {
         tiles_standby_color_t yellow = {1.0f, 1.0f, 0.0f};
         return yellow;
     }
-    tiles_standby_color_t blue = {0.0f, 0.0f, 1.0f}; /* rows 3, 4 */
-    return blue;
+    /* Rows 3, 4 -- was blue; real feedback: "make the blue white in vu
+     * meter." */
+    tiles_standby_color_t white_bar = {1.0f, 1.0f, 1.0f};
+    return white_bar;
 }
 
 static tiles_standby_color_t anim_equalizer(uint8_t row, uint8_t col, uint32_t now_ms) {
@@ -659,8 +701,9 @@ static tiles_standby_color_t anim_equalizer(uint8_t row, uint8_t col, uint32_t n
 static tiles_standby_color_t eq_underglow(uint8_t pixel_index, uint32_t now_ms) {
     (void)pixel_index;
     (void)now_ms;
-    tiles_standby_color_t c = {0.0f, 0.0f, EQ_UNDERGLOW_LEVEL};
-    return c;
+    /* Was a blue accent; real feedback: "make the blue white in vu
+     * meter." */
+    return white(EQ_UNDERGLOW_LEVEL);
 }
 
 /* ---- Animation 7: circular underglow wave -------------------------------
@@ -702,7 +745,14 @@ static tiles_standby_color_t circle_underglow(uint8_t pixel_index, uint32_t now_
  * and purple for a few seconds, then a fresh round starts (bricks
  * restored, ball and paddle reset). Ball and paddle are different
  * colors so they read as distinct objects even mid-bounce, when they
- * briefly overlap. */
+ * briefly overlap.
+ *
+ * See bb_step()'s own comment for a real reachability bug fix: the ball's
+ * row/col used to always move in forced 1-for-1 lockstep, which made 3 of
+ * the 6 bricks mathematically unreachable every round -- real feedback:
+ * "brickbraker is having a hard time hitting all function button leds, i
+ * suspect its because of the alignement." services/game_mode.c's
+ * player-controlled version had the exact same bug, fixed the same way. */
 
 #define BB_NUM_COLS 6u
 #define BB_PADDLE_ROW 4u
@@ -728,6 +778,11 @@ static bb_phase_t s_bb_phase;
 static uint32_t s_bb_last_step_ms;
 static uint32_t s_bb_round_end_ms;
 static bool s_bb_inited;
+/* See bb_step()'s own comment -- counts steps so column movement can be
+ * throttled to every other one, breaking a real reachability bug (real
+ * feedback: "brickbraker is having a hard time hitting all function
+ * button leds, i suspect its because of the alignement"). */
+static uint8_t s_bb_step_count;
 
 static void bb_new_round(uint32_t now_ms) {
     for (uint8_t i = 0; i < BB_NUM_COLS; i++) {
@@ -740,13 +795,40 @@ static void bb_new_round(uint32_t now_ms) {
     s_bb_ball_dcol = ((rand() % 2) == 0) ? -1 : 1;
     s_bb_phase = BB_PHASE_PLAYING;
     s_bb_last_step_ms = now_ms;
+    s_bb_step_count = 0u;
 }
 
+/* Real feedback: "brickbraker is having a hard time hitting all function
+ * button leds, i suspect its because of the alignement" -- correctly
+ * diagnosed as an alignment issue, though not a rendering one. Every step
+ * moved row by exactly +/-1 AND col by exactly +/-1 in lockstep (a wall
+ * bounce flips dcol's SIGN but a step still always changes col by 1
+ * either way), which makes (row + col) mod 2 an exact invariant of the
+ * ball's entire trajectory -- it never changes, no matter how many
+ * bounces happen, since both terms always move by the same odd amount
+ * each step. bb_new_round() above always starts the ball at row 3, col
+ * 3 (paddle_center), an EVEN sum, so the ball could only ever reach row
+ * 1 (the brick wall) on the 3 columns sharing that same parity (odd
+ * columns, since 1 + odd = even) -- the other 3 bricks were
+ * mathematically unreachable every single round, not just unlucky.
+ * Fixed by throttling column movement to every OTHER step (row still
+ * advances every step) -- once row and col no longer move in forced
+ * lockstep, the parity invariant no longer holds, so wall/paddle bounces
+ * (which land at times unsynchronized with the column's now-slower
+ * cadence) let the ball reach every column over a long enough run. Also
+ * reads as a slightly shallower, more natural bounce angle than the old
+ * strict 45-degree diagonal. */
 static void bb_step(uint32_t now_ms) {
-    int8_t new_col = (int8_t)(s_bb_ball_col + s_bb_ball_dcol);
-    if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
-        s_bb_ball_dcol = (int8_t)(-s_bb_ball_dcol);
+    s_bb_step_count++;
+    bool advance_col = (s_bb_step_count % 2u) == 0u;
+
+    int8_t new_col = s_bb_ball_col;
+    if (advance_col) {
         new_col = (int8_t)(s_bb_ball_col + s_bb_ball_dcol);
+        if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
+            s_bb_ball_dcol = (int8_t)(-s_bb_ball_dcol);
+            new_col = (int8_t)(s_bb_ball_col + s_bb_ball_dcol);
+        }
     }
     int8_t new_row = (int8_t)(s_bb_ball_row + s_bb_ball_drow);
 
@@ -1847,8 +1929,8 @@ static uint8_t s_prev_animation_index; /* the one that played immediately before
  * the normal 60s auto-idle path. Changes two things while true: SW1/SW2
  * become animation-scroll controls instead of a wake signal (see
  * real_input_active()), and the STANDBY -> DEEP_SLEEP timeout extends
- * to TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS (20 minutes) instead
- * of the normal 15 -- both real feedback. Cleared on every way of
+ * to TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS (30 minutes) instead
+ * of the normal 20 -- both real feedback. Cleared on every way of
  * leaving STANDBY (waking, dropping to DEEP_SLEEP, or the 10s hold
  * escalating straight there) so a later *normal* auto-idle STANDBY never
  * inherits these. */
@@ -1877,7 +1959,10 @@ static bool s_scroll_prev_plus;
 /* Extended STANDBY -> DEEP_SLEEP timeout for a manually-entered
  * screensaver -- real feedback: "animation timeout time changes to 20
  * minutes when done through that path." */
-#define TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS 1200000u /* 20 * 60 * 1000 */
+/* Real feedback: "make screensaver 30 min if triggered manually, 20 if
+ * auto" -- was 20, raised to 30 (see TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS
+ * above for the auto half of the same change). */
+#define TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS 1800000u /* 30 * 60 * 1000 */
 
 /* Real feedback that touch doesn't reliably wake standby -- prints
  * which specific input caused a wake, so a debug session can see
@@ -2088,6 +2173,24 @@ static void handle_circle_hold(uint32_t now_ms) {
             s_last_activity_ms = now_ms;
             enter_standby(now_ms);
             s_manual_screensaver = true;
+        }
+    } else if (s_circle_was_held && !s_circle_screensaver_fired) {
+        /* Falling edge of a hold that never reached either long-press
+         * threshold -- an ordinary short tap. Real feedback: "circle...
+         * not waking the instrument up from sleep." real_input_active()
+         * below deliberately excludes circle from its generic wake check
+         * (a hold building toward the 6s/10s thresholds must not wake
+         * standby on its very first tick, before either can fire), but
+         * that exclusion also silently swallowed the far more common
+         * case of a plain short tap doing nothing at all while asleep,
+         * unlike every other button. Only reachable here once release
+         * has already confirmed the hold was short -- can't wake on
+         * press, since a press might still turn into one of the two long
+         * holds above. */
+        if (s_state != TILES_STANDBY_STATE_AWAKE) {
+            s_last_activity_ms = now_ms;
+            printf("[standby] waking: button %u (t=%u ms)\n", (unsigned)TILES_CIRCLE_BUTTON_ID, now_ms);
+            exit_standby();
         }
     }
 

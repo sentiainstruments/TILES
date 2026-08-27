@@ -16,7 +16,7 @@
  * animation is running -- see TILES_STANDBY_HALL_WAKE_DEPTH in
  * standby.c.
  *
- * After TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS (15 minutes) of TOTAL
+ * After TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS (20 minutes) of TOTAL
  * inactivity, standby's animations stop and the board drops to deep
  * sleep: everything dark except the circle function button pulsing
  * slowly, the one indicator that it's in this state rather than fully
@@ -33,7 +33,7 @@
  * doesn't also step the octave/transpose key underneath the same
  * presses). Manually-entered screensaver also gets a longer runway
  * before dropping to deep sleep: TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS
- * (20 minutes) instead of the normal 15, since the user is actively
+ * (30 minutes) instead of the normal 20, since the user is actively
  * choosing to watch it. Holding circle further, to
  * TILES_CIRCLE_DEEP_SLEEP_HOLD_MS (10s), escalates straight into deep
  * sleep -- the *exact same* state the normal inactivity timeout above
@@ -45,6 +45,14 @@
  * Both thresholds are edge-latched per hold (see handle_circle_hold()'s
  * *_fired flags) so a single long hold can't re-fire, and both are
  * handled unconditionally every scan regardless of current state.
+ * A hold released before EITHER threshold fires -- an ordinary short
+ * tap -- wakes the board from STANDBY/DEEP_SLEEP exactly like any other
+ * button, on release: real feedback "circle... not waking the instrument
+ * up from sleep." Circle is deliberately excluded from real_input_
+ * active()'s own generic wake check (needed so a hold building toward
+ * 6s/10s doesn't wake standby on its very first tick, before either
+ * threshold can fire), so handle_circle_hold() itself is what has to
+ * recognize the released-early case instead.
  *
  * Circle is also this board's general-purpose "shift"/power button --
  * real feedback: "our shift and power button is circle" -- reserved for
@@ -99,8 +107,8 @@ void tiles_standby_scan(void);
 bool tiles_standby_is_active(void);
 
 /* For diagnostics. True for deep sleep -- the single dormant state
- * reached either by 15 minutes of total inactivity past entering
- * standby (20 if that standby was manually entered, see
+ * reached either by 20 minutes of total inactivity past entering
+ * standby (30 if that standby was manually entered, see
  * tiles_standby_owns_octave_buttons() below), or directly by holding
  * SW6 (circle) for 10 seconds. Everything dark except the circle button
  * pulsing slowly. */

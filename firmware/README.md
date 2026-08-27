@@ -156,12 +156,14 @@ first on-hardware note-on test.
   font), weighted so plain ambient ones show up roughly twice as often as
   the game demos and never immediately repeating the current animation or
   the one before it, instead of reflecting touch state, until any
-  touch/button/pedal activity exits it. After 15 minutes of total
+  touch/button/pedal activity exits it (a short circle or square tap also
+  wakes it, same as any other button -- both used to be swallowed while
+  asleep, see `services/README.md` for the fix). After 20 minutes of total
   inactivity it drops further into deep sleep: everything dark except the
   circle button pulsing slowly, the one indicator it's in this state.
   Holding the circle button (SW6) for 6s manually forces the screensaver
   on early and repurposes SW1/SW2 as scroll-without-waking animation
-  controls (a longer, 20-minute deep-sleep timeout applies while in this
+  controls (a longer, 30-minute deep-sleep timeout applies while in this
   manual mode); holding it further, to 10s, escalates straight into that
   *same* deep sleep state directly -- not a separate blank state, per
   real feedback that the two should be one and the same thing. Circle is

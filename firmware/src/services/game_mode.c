@@ -272,6 +272,11 @@ static int8_t s_gb_paddle_center; /* 2-5 */
 static uint32_t s_gb_last_step_ms;
 static bool s_gb_prev_left;
 static bool s_gb_prev_right;
+/* See gb_step()'s own comment -- throttles column movement to every
+ * other step to fix a real ball-reachability bug (real feedback:
+ * "brickbraker is having a hard time hitting all function button leds, i
+ * suspect its because of the alignement"). */
+static uint8_t s_gb_step_count;
 
 static void gb_start(uint32_t now_ms) {
     for (uint8_t i = 0; i < GB_NUM_COLS; i++) {
@@ -285,6 +290,7 @@ static void gb_start(uint32_t now_ms) {
     s_gb_last_step_ms = now_ms;
     s_gb_prev_left = false;
     s_gb_prev_right = false;
+    s_gb_step_count = 0u;
 }
 
 static void gb_handle_input(void) {
@@ -308,11 +314,32 @@ static void gb_handle_input(void) {
     s_gb_prev_right = right;
 }
 
+/* Real feedback: "brickbraker is having a hard time hitting all function
+ * button leds, i suspect its because of the alignement" -- correctly
+ * diagnosed as an alignment issue, though not a rendering one. Every step
+ * used to move row by exactly +/-1 AND col by exactly +/-1 in lockstep (a
+ * wall bounce flips dcol's SIGN but a step still always changes col by 1
+ * either way), which makes (row + col) mod 2 an exact invariant of the
+ * ball's entire trajectory. gb_start() above always starts the ball at
+ * row 3, col 3 (paddle_center), an EVEN sum, so the ball could only ever
+ * reach row 1 (the brick wall) on the 3 columns sharing that same parity
+ * -- the other 3 bricks were mathematically unreachable every single
+ * round, not just unlucky. Fixed the same way as standby.c's autonomous
+ * version (bb_step()): throttle column movement to every OTHER step (row
+ * still advances every step), which breaks the forced lockstep and lets
+ * wall/paddle bounces -- now unsynchronized with the column's slower
+ * cadence -- reach every column over a long enough run. */
 static void gb_step(uint32_t now_ms) {
-    int8_t new_col = (int8_t)(s_gb_ball_col + s_gb_ball_dcol);
-    if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
-        s_gb_ball_dcol = (int8_t)(-s_gb_ball_dcol);
+    s_gb_step_count++;
+    bool advance_col = (s_gb_step_count % 2u) == 0u;
+
+    int8_t new_col = s_gb_ball_col;
+    if (advance_col) {
         new_col = (int8_t)(s_gb_ball_col + s_gb_ball_dcol);
+        if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
+            s_gb_ball_dcol = (int8_t)(-s_gb_ball_dcol);
+            new_col = (int8_t)(s_gb_ball_col + s_gb_ball_dcol);
+        }
     }
     int8_t new_row = (int8_t)(s_gb_ball_row + s_gb_ball_drow);
 

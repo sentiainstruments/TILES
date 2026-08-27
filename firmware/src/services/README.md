@@ -10,7 +10,7 @@ octave shift), the SW1/SW2 octave-shift button controller, SW5/square
 circle+square expression sub-menu + mute, real player-controlled
 minigames (snake, brick breaker), touch+Hall expression fusion
 (velocity/aftertouch/pitch bend), power source state, standby idle
-animations (plus a deep sleep state after 15 minutes), a power-on boot
+animations (plus a deep sleep state after 20 minutes), a power-on boot
 animation, and per-pad haptic feedback -- see Status below. Still
 planned: per-pad Hall calibration, X/Y tilt -> pitch/timbre, storage
 glue.
@@ -1614,6 +1614,65 @@ not its code.
   mode above are also all untested on real hardware -- both hold
   thresholds and the 20-minute manual deep sleep timeout are unmeasured
   starting guesses, same as every other timing constant in this file.
+  **Two real wake-from-sleep bugs found and fixed after hardware
+  testing.** Real feedback: "circle and square buttons are not waking the
+  instrument up from sleep." Circle: `real_input_active()` deliberately
+  excludes circle from its generic wake check (needed so a hold building
+  toward the 6s/10s thresholds above doesn't wake standby on its very
+  first tick), but that exclusion also silently swallowed the ordinary
+  case of a short tap doing nothing at all while asleep. Fixed in
+  `handle_circle_hold()`: a hold released before either threshold fires
+  now wakes the board on release, same as any other button. Square: the
+  actual bug lived in `expression_control.c` -- its sub-menu opens the
+  instant square is held alone, which claims the pad grid via
+  `tiles_expression_control_owns_pad_grid()`; `main.c` gates
+  `tiles_standby_scan()` (the only place that actually wakes the board)
+  on that same check, so a square press while asleep opened the sub-menu
+  instead of ever reaching standby's wake logic. Fixed by having
+  `tiles_expression_control_scan()` skip all of its own square/circle
+  handling while `tiles_standby_is_active()`/`tiles_standby_is_deep_sleep()`
+  is true, so standby's own `real_input_active()` (which already treats
+  square as a normal wake input) sees and acts on the press instead.
+  **Screensaver timeouts changed**, real feedback: "make screensaver 30
+  min if triggered manually, 20 if auto" --
+  `TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS` 15 -> 20 minutes,
+  `TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS` 20 -> 30 minutes.
+  **Animation 6 (graphic equalizer/VU meter) reworked again**, real
+  feedback: "make the blue white in vu meter" (rows 3-4's bar color and
+  the underglow accent, both previously blue, are now white) and "make
+  sure some peaks do redline every once in a while" -- the
+  guaranteed-1.0-velocity redline mechanism from the animation's own
+  fourth pass (see above) was already in place but still essentially
+  never visibly fired, for a reason distinct from what that pass fixed:
+  the envelope only reaches exactly 1.0 for a single infinitesimal
+  instant, and the whole animation renders at only ~40ms intervals, so
+  that instant was almost never actually sampled. Fixed with
+  `EQ_PEAK_HOLD_FRACTION`, a brief plateau held at the peak instead of an
+  instantaneous one, long enough in real ms that a ~40ms-interval render
+  reliably catches it.
+  **Brick breaker (animation 8) ball-reachability bug found and fixed**,
+  real feedback: "brickbraker is having a hard time hitting all function
+  button leds, i suspect its because of the alignement" -- correctly
+  diagnosed as an alignment issue, though not a rendering one. The ball's
+  row and column used to always move by exactly +/-1 in forced lockstep
+  every step (a wall bounce flips `dcol`'s sign but a step always still
+  changes col by 1 either way), which makes `(row + col) mod 2` an exact
+  invariant of the ball's entire trajectory -- it never changes, no
+  matter how many bounces happen. Since `bb_new_round()` always starts
+  the ball at an even `row + col` sum, the ball could only ever reach the
+  brick wall (row 1) on the 3 columns sharing that same parity -- the
+  other 3 bricks were mathematically unreachable every single round, not
+  just unlucky. Fixed by throttling column movement to every OTHER step
+  (row still advances every step, see `bb_step()`'s own comment) -- once
+  row and col no longer move in forced lockstep, the parity invariant no
+  longer holds, so wall/paddle bounces (now unsynchronized with the
+  column's slower cadence) let the ball reach every column over a long
+  enough run; also reads as a slightly shallower, more natural bounce
+  angle than the old strict 45-degree diagonal.
+  `services/game_mode.c`'s player-controlled brick breaker (`gb_step()`)
+  had the exact same bug (identical physics, duplicated per this file's
+  own precedent for autonomous/interactive pairs) and got the identical
+  fix.
 - `boot_sequence.h`/`.c` — done for V1: a ~4-second, blocking power-on
   animation run once from `main.c`, before the main loop starts (nothing
   else needs to run concurrently -- USB stays alive via TinyUSB's own

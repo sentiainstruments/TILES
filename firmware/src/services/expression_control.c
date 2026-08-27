@@ -7,6 +7,7 @@
 #include "game_mode.h"
 #include "haptics.h"
 #include "lighting.h"
+#include "standby.h"
 #include "touch.h"
 
 #include "pico/time.h"
@@ -462,6 +463,32 @@ static void render_square_led(bool square_held, bool combo_held, uint32_t now_ms
 void tiles_expression_control_scan(void) {
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
     bool square_held = tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
+
+    /* Real feedback: "circle and square buttons are not waking the
+     * instrument up from sleep." Root cause for square specifically: the
+     * sub-menu below opens the INSTANT square is held alone (no hold
+     * delay), which claims the pad grid via tiles_expression_control_
+     * owns_pad_grid() -- main.c gates tiles_standby_scan() (the ONLY
+     * place that actually wakes the board out of STANDBY/DEEP_SLEEP) on
+     * that same "does something else own the grid" check, so a square
+     * press while asleep opened the sub-menu instead of ever reaching
+     * standby's own wake logic at all. While standby is asleep, skip all
+     * of this module's own square/circle handling entirely and let
+     * standby.c's real_input_active() (which already treats square as a
+     * normal wake input, unlike circle -- see standby.c's own comment)
+     * see and act on the press instead. Circle's own short-tap wake fix
+     * lives in standby.c's handle_circle_hold() -- this module's circle
+     * mute-combo tracking below only ever matters once already awake.
+     * Edge-tracking state is still kept current here (same as the
+     * game-mode-active branch below), so a button still held the instant
+     * control hands back doesn't misread as a brand-new press/combo. */
+    if (tiles_standby_is_active() || tiles_standby_is_deep_sleep()) {
+        s_square_was_held = square_held;
+        s_circle_was_held = circle_held;
+        s_combo_was_held = circle_held && square_held;
+        s_square_alone_was_held = square_held && !circle_held;
+        return;
+    }
 
     if (tiles_game_mode_is_active()) {
         /* Pong claims SW5 (square)/SW6 (circle) as live paddle controls
