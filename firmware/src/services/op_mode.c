@@ -14,6 +14,9 @@
 #include "standby.h"
 #include "touch.h"
 
+#include "pico/time.h"
+
+#include <math.h>
 #include <stdio.h>
 
 typedef enum {
@@ -62,6 +65,32 @@ typedef enum {
  * levels use. */
 #define OP_DIAMOND_LED_MENU_LEVEL 1.0f
 #define OP_DIAMOND_LED_MODE_ACTIVE_LEVEL 0.6f
+/* Same idea, triangle's own LED, lit while its per-mode sub-menu (e.g.
+ * melodic's scale picker) is showing. */
+#define OP_TRIANGLE_LED_SUBMENU_LEVEL 1.0f
+
+/* Real feedback: "lets standardize the pulsing and brightness and
+ * behaviour for menues, meaning select color or active color is always
+ * white bright pulsing in menues, respective less bright but still
+ * readable bright for non selected and available and of for
+ * unaveilabe." The shared shape (not a shared function -- redefined per
+ * file, same precedent as SENTIA_MAGENTA_R/G/B/etc.) with
+ * services/expression_control.c's own sub-menu, the other menu this
+ * standard applies to. */
+#define OP_MENU_SELECTED_PULSE_PERIOD_MS 900.0f
+#define OP_MENU_SELECTED_PULSE_MIN 0.5f
+#define OP_MENU_SELECTED_PULSE_MAX 1.0f
+#define OP_MODE_PI 3.14159265358979323846f
+/* The scale picker's own "available but not selected" level -- Sentia
+ * magenta (this file's OP_MENU_MELODIC_* above), at a readable-but-
+ * secondary brightness, distinct from the pulsing white selection. */
+#define OP_SCALE_AVAILABLE_LEVEL 0.35f
+
+static float menu_selected_pulse_level(uint32_t now_ms) {
+    float phase = (float)now_ms / OP_MENU_SELECTED_PULSE_PERIOD_MS;
+    float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
+    return OP_MENU_SELECTED_PULSE_MIN + (OP_MENU_SELECTED_PULSE_MAX - OP_MENU_SELECTED_PULSE_MIN) * raw;
+}
 
 static tiles_op_mode_t s_active_mode;
 static bool s_menu_visible;
@@ -78,6 +107,18 @@ static bool s_diamond_was_held;
 static bool s_diamond_press_had_conflict;
 
 static bool s_menu_prev_pad_touched[TILES_NUM_PADS];
+
+/* ---- Per-mode sub-menu (SW3/triangle) ---------------------------------
+ * Real feedback: "the triangle is sub menues per each mode so that
+ * button toggles its onw menue in each mode. for melodic it toggles
+ * different scale modes." Only melodic's sub-menu (the scale picker) is
+ * built -- other modes don't have one yet, same "selectable but not
+ * implemented" spirit as chord/arp themselves; handle_triangle_click()
+ * below is the extension point once they do. */
+static bool s_scale_menu_visible;
+static bool s_triangle_was_held;
+static bool s_triangle_press_had_conflict; /* see s_diamond_press_had_conflict's own comment -- same reasoning, watches diamond instead of triangle */
+static bool s_scale_menu_prev_pad_touched[TILES_NUM_PADS];
 
 /* ---- Sequencer state ------------------------------------------------- */
 
@@ -227,6 +268,9 @@ static void render_sequencer(void) {
 
 static void menu_enter(void) {
     s_menu_visible = true;
+    /* The mode-picker takes priority over a still-open per-mode
+     * sub-menu -- can't sensibly show both at once. */
+    s_scale_menu_visible = false;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_menu_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
     }
@@ -284,9 +328,80 @@ static void render_menu(void) {
     }
 }
 
+/* ---- Melodic mode's sub-menu: the scale picker -------------------------
+ * "Ableton Push style": one pad per scale, the whole 24-pad grid, no
+ * row/column structure -- see note_map.h's TILES_NOTE_MAP_NUM_SCALE_GRID_
+ * SLOTS and the 18 named scales + 6 reserved slots that exactly fill it.
+ * Follows the standardized menu language above: selected = white bright
+ * pulsing, available-but-unselected = Sentia magenta at a readable-but-
+ * secondary level, a reserved/undefined slot = fully off and not
+ * selectable at all (tapping one is a no-op, see handle_scale_menu_taps()
+ * below). */
+static void render_scale_menu(uint32_t now_ms) {
+    float pulse = menu_selected_pulse_level(now_ms);
+    tiles_scale_mode_t current = tiles_note_map_get_scale();
+
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        tiles_scale_mode_t slot_scale = tiles_note_map_scale_for_grid_slot(pad);
+        if (!tiles_note_map_scale_is_defined(slot_scale)) {
+            tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
+        } else if (slot_scale == current) {
+            tiles_lighting_set_standby_pad_rgb(pad, pulse, pulse, pulse);
+        } else {
+            tiles_lighting_set_standby_pad_rgb(pad, OP_MENU_MELODIC_R * OP_SCALE_AVAILABLE_LEVEL,
+                                                OP_MENU_MELODIC_G * OP_SCALE_AVAILABLE_LEVEL,
+                                                OP_MENU_MELODIC_B * OP_SCALE_AVAILABLE_LEVEL);
+        }
+    }
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        float level = (col == TILES_TRIANGLE_BUTTON_COL) ? OP_TRIANGLE_LED_SUBMENU_LEVEL : 0.0f;
+        tiles_buttons_set_standby_led(board_button_for_col(col), level);
+    }
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+    }
+}
+
+static void handle_scale_menu_taps(void) {
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        bool touched = tiles_touch_is_touched(pad);
+        if (touched && !s_scale_menu_prev_pad_touched[pad - 1u]) {
+            tiles_scale_mode_t slot_scale = tiles_note_map_scale_for_grid_slot(pad);
+            if (tiles_note_map_scale_is_defined(slot_scale)) {
+                tiles_note_map_set_scale(slot_scale);
+                printf("[op_mode] scale -> %d\n", (int)slot_scale);
+            }
+            /* An undefined (reserved custom) slot is simply not
+             * selectable -- "unavailable" per the standardized menu
+             * language, not a smaller version of a real choice. */
+        }
+        s_scale_menu_prev_pad_touched[pad - 1u] = touched;
+    }
+}
+
+static void scale_menu_enter(void) {
+    s_scale_menu_visible = true;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_scale_menu_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+    }
+    tiles_lighting_set_standby_active(true);
+    tiles_buttons_set_standby_active(true);
+}
+
+static void scale_menu_exit(void) {
+    s_scale_menu_visible = false;
+    tiles_lighting_set_standby_active(false);
+    tiles_buttons_set_standby_active(false);
+}
+
 static void set_active_mode(tiles_op_mode_t mode) {
     if (s_active_mode == OP_MODE_SEQUENCER && mode != OP_MODE_SEQUENCER) {
         seq_end_current_note();
+    }
+    if (mode != OP_MODE_MELODIC) {
+        /* Melodic's own sub-menu can't stay open once melodic isn't the
+         * active mode anymore. */
+        s_scale_menu_visible = false;
     }
     s_active_mode = mode;
     if (mode == OP_MODE_SEQUENCER) {
@@ -353,11 +468,43 @@ static void handle_diamond_click(void) {
     s_diamond_was_held = held;
 }
 
+/* Same shape as handle_diamond_click() above, one level down: toggles
+ * whichever per-mode sub-menu (if any) the CURRENT mode has. Only
+ * melodic has one right now. Guarded against the mode-picker also being
+ * open (a sub-menu click while picking a top-level mode would be
+ * ambiguous/unwanted) the same way the mode-picker itself is guarded
+ * against other_feature_owns_input(). */
+static void handle_triangle_click(void) {
+    bool held = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
+
+    if (held && !s_triangle_was_held) {
+        s_triangle_press_had_conflict = false;
+    }
+    if (held && tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID)) {
+        s_triangle_press_had_conflict = true;
+    }
+
+    if (!held && s_triangle_was_held) {
+        if (!s_triangle_press_had_conflict && !s_menu_visible && s_active_mode == OP_MODE_MELODIC) {
+            if (s_scale_menu_visible) {
+                scale_menu_exit();
+            } else {
+                scale_menu_enter();
+            }
+        }
+    }
+
+    s_triangle_was_held = held;
+}
+
 void tiles_op_mode_init(void) {
     s_active_mode = OP_MODE_MELODIC;
     s_menu_visible = false;
     s_diamond_was_held = false;
     s_diamond_press_had_conflict = false;
+    s_scale_menu_visible = false;
+    s_triangle_was_held = false;
+    s_triangle_press_had_conflict = false;
     for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
         s_seq_step_armed[i] = false;
     }
@@ -376,14 +523,23 @@ void tiles_op_mode_scan(void) {
          * services/game_mode.c already use for their own equivalent
          * guards. */
         s_diamond_was_held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
+        s_triangle_was_held = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
         return;
     }
 
     handle_diamond_click();
+    handle_triangle_click();
 
     if (s_menu_visible) {
         handle_menu_taps();
         render_menu();
+        return;
+    }
+
+    if (s_scale_menu_visible) {
+        uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+        handle_scale_menu_taps();
+        render_scale_menu(now_ms);
         return;
     }
 
@@ -395,5 +551,5 @@ void tiles_op_mode_scan(void) {
 }
 
 bool tiles_op_mode_owns_pad_grid(void) {
-    return s_menu_visible || s_active_mode == OP_MODE_SEQUENCER;
+    return s_menu_visible || s_scale_menu_visible || s_active_mode == OP_MODE_SEQUENCER;
 }

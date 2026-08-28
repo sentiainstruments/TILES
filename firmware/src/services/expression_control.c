@@ -13,6 +13,7 @@
 
 #include "pico/time.h"
 
+#include <math.h>
 #include <stdio.h>
 
 /* Square's own LED levels -- same reasoning octave_control.c's
@@ -80,10 +81,33 @@
  * Also doubles as row 1's "off" indicator's dim phase (see
  * OFF_INDICATOR_BLINK_PERIOD_MS below) so that blink reads as "dipping
  * to the same baseline every other pad sits at," not a jump to a
- * different, unrelated darkness. Unmeasured -- a first guess at "very
- * dim but still visibly lit," not calibrated against real LED
- * brightness/diffusion. */
-#define SUBMENU_UNSELECTED_LEVEL 0.06f
+ * different, unrelated darkness. Raised from 0.06, real feedback: "less
+ * bright but still readable bright for non-selected and available" (see
+ * SUBMENU_SELECTED_PULSE_MIN/_MAX below for the other half of that same
+ * standardization pass) -- 0.06 was dim enough to undercut "readable."
+ * Still unmeasured -- a revised first guess, not calibrated against real
+ * LED brightness/diffusion. */
+#define SUBMENU_UNSELECTED_LEVEL 0.35f
+
+/* Real feedback: "lets standardize the pulsing and brightness and
+ * behaviour for menues, meaning select color or active color is always
+ * white bright pulsing in menues." Supersedes this file's own earlier
+ * "make the selected level of everything sentia magenta color" request
+ * above -- SENTIA_MAGENTA_R/G/B stays what UNSELECTED-but-available pads
+ * show now, not the selection itself. Shared shape (not a shared
+ * function -- redefined per file, same precedent as SENTIA_MAGENTA_R/G/B
+ * itself) with services/op_mode.c's scale-picker menu, the other menu
+ * this standard applies to. */
+#define SUBMENU_SELECTED_PULSE_PERIOD_MS 900.0f
+#define SUBMENU_SELECTED_PULSE_MIN 0.5f
+#define SUBMENU_SELECTED_PULSE_MAX 1.0f
+#define EXPRESSION_CONTROL_PI 3.14159265358979323846f
+
+static float submenu_selected_pulse_level(uint32_t now_ms) {
+    float phase = (float)now_ms / SUBMENU_SELECTED_PULSE_PERIOD_MS;
+    float raw = 0.5f + 0.5f * sinf(2.0f * EXPRESSION_CONTROL_PI * phase);
+    return SUBMENU_SELECTED_PULSE_MIN + (SUBMENU_SELECTED_PULSE_MAX - SUBMENU_SELECTED_PULSE_MIN) * raw;
+}
 
 /* The "this row's selected level is OFF" indicator -- real feedback,
  * after row 1's column 1 was tried on real hardware as merely "weak"
@@ -395,6 +419,7 @@ static bool poll_dismiss_button_edge(void) {
 
 static void render_submenu(uint32_t now_ms) {
     bool blink_on = ((now_ms / OFF_INDICATOR_BLINK_PERIOD_MS) % 2u) == 0u;
+    float pulse = submenu_selected_pulse_level(now_ms);
 
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         submenu_row_t row_enum = (submenu_row_t)(row - 1u);
@@ -402,10 +427,23 @@ static void render_submenu(uint32_t now_ms) {
         bool off = row_column_is_off(row_enum, selected_col);
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             uint8_t pad = board_pad_for_row_col(row, col);
-            bool bright = (col == selected_col) && (!off || blink_on);
-            float level = bright ? 1.0f : SUBMENU_UNSELECTED_LEVEL;
-            tiles_lighting_set_standby_pad_rgb(pad, SENTIA_MAGENTA_R * level, SENTIA_MAGENTA_G * level,
-                                                SENTIA_MAGENTA_B * level);
+            bool selected = (col == selected_col);
+            if (selected && (!off || blink_on)) {
+                /* Selected/active -- white, bright, pulsing. Real
+                 * feedback: "select color or active color is always
+                 * white bright pulsing in menues." */
+                tiles_lighting_set_standby_pad_rgb(pad, pulse, pulse, pulse);
+            } else {
+                /* Both plain unselected columns AND the "off" indicator's
+                 * dim blink phase land here, at the same dim magenta
+                 * baseline -- unchanged behavior from before this pass,
+                 * see OFF_INDICATOR_BLINK_PERIOD_MS's own comment on why
+                 * that blink dips to this shared baseline rather than
+                 * true black. */
+                tiles_lighting_set_standby_pad_rgb(pad, SENTIA_MAGENTA_R * SUBMENU_UNSELECTED_LEVEL,
+                                                    SENTIA_MAGENTA_G * SUBMENU_UNSELECTED_LEVEL,
+                                                    SENTIA_MAGENTA_B * SUBMENU_UNSELECTED_LEVEL);
+            }
         }
     }
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {

@@ -33,18 +33,80 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Real feedback: "for melodic it toggles different scale modes... lets
+ * do in an ableton push style for the lighting... ionian, dorian,
+ * phrigian, lydian, mixo, aeolian, locrian, bluse major and minor,
+ * arabian, dim, combination dim, pentatonic major and minor, egyptian,
+ * whole tone, japanese miyakobushi, raga todi, the remaining ones are
+ * spaces for costume scales." Exactly 18 named scales + 6 reserved
+ * "custom" placeholders = 24 -- fills services/op_mode.h's melodic-mode
+ * scale-picker grid (one pad per scale) exactly; see
+ * TILES_NOTE_MAP_NUM_SCALE_GRID_SLOTS below. Chromatic (the pre-existing
+ * boot default) is deliberately NOT one of the 24 grid slots -- the
+ * named list above already fills all 24 exactly, and chromatic stays
+ * reachable as whatever the board boots into before a scale is ever
+ * picked from the new menu, same as it always has been.
+ *
+ * Each non-chromatic scale has fewer than 12 notes per octave, so a
+ * pad's position-derived "degree" (0-23) indexes into the scale's own
+ * interval table in note_map.c, with octave-doubling every N degrees
+ * (N = that scale's note count) rather than the fixed 1-pad-per-semitone
+ * folding chromatic uses -- see note_map.c's scale_table()/
+ * tiles_note_map_get_note() for the actual math, and the legacy
+ * prototype's scaleInterval() in docs/reference/legacy-prototype-v1/ for
+ * the shape it's modeled on (not its code). The 6 CUSTOM_* values are
+ * real, valid enum values (so the grid has something to reference for
+ * those slots) but have no interval table yet -- see
+ * tiles_note_map_scale_is_defined() below; selecting one from the menu
+ * is a UI no-op (services/op_mode.h treats undefined slots as
+ * unselectable, matching "unavailable" in the standardized menu
+ * language), and tiles_note_map_get_note() would fall back to chromatic
+ * internally if one somehow got selected anyway, rather than producing
+ * garbage. */
 typedef enum {
     TILES_SCALE_CHROMATIC = 0,
-    /* TILES_SCALE_MAJOR, TILES_SCALE_MINOR, etc. go here later -- each
-     * needs an interval table in note_map.c and a case in
-     * tiles_note_map_get_note(). Non-chromatic scales have fewer than
-     * 12 notes per octave, so a pad's position-derived "degree" would
-     * index into the scale's own interval table (with octave-doubling
-     * every N degrees) rather than mapping 1 pad = 1 semitone the way
-     * chromatic does -- see the legacy prototype's scaleInterval() in
-     * docs/reference/legacy-prototype-v1/ for the shape of that math,
-     * not its code. */
+    TILES_SCALE_IONIAN,
+    TILES_SCALE_DORIAN,
+    TILES_SCALE_PHRYGIAN,
+    TILES_SCALE_LYDIAN,
+    TILES_SCALE_MIXOLYDIAN,
+    TILES_SCALE_AEOLIAN,
+    TILES_SCALE_LOCRIAN,
+    TILES_SCALE_BLUES_MAJOR,
+    TILES_SCALE_BLUES_MINOR,
+    TILES_SCALE_ARABIAN,
+    TILES_SCALE_DIMINISHED,
+    TILES_SCALE_COMBINATION_DIMINISHED,
+    TILES_SCALE_PENTATONIC_MAJOR,
+    TILES_SCALE_PENTATONIC_MINOR,
+    TILES_SCALE_EGYPTIAN,
+    TILES_SCALE_WHOLE_TONE,
+    TILES_SCALE_JAPANESE_MIYAKOBUSHI,
+    TILES_SCALE_RAGA_TODI,
+    TILES_SCALE_CUSTOM_1,
+    TILES_SCALE_CUSTOM_2,
+    TILES_SCALE_CUSTOM_3,
+    TILES_SCALE_CUSTOM_4,
+    TILES_SCALE_CUSTOM_5,
+    TILES_SCALE_CUSTOM_6,
+    TILES_NUM_SCALE_VALUES, /* sentinel -- 1 (chromatic) + 24 (grid) = 25 */
 } tiles_scale_mode_t;
+
+/* The scale-picker grid is exactly this many pads -- matches
+ * TILES_NUM_PADS (board/board_pins.h) 1:1, one scale per pad. */
+#define TILES_NOTE_MAP_NUM_SCALE_GRID_SLOTS 24u
+
+/* The scale assigned to grid slot 1-24 (services/op_mode.h's melodic
+ * scale-picker, one pad per slot, in the same order real feedback listed
+ * them: ionian..raga todi filling slots 1-18, CUSTOM_1-6 filling
+ * 19-24). Returns TILES_SCALE_CHROMATIC (never actually placed on the
+ * grid) for an out-of-range slot. */
+tiles_scale_mode_t tiles_note_map_scale_for_grid_slot(uint8_t slot_1_to_24);
+
+/* True if `scale` has a real interval table (every named scale above);
+ * false for the 6 CUSTOM_* placeholders, which are valid enum values
+ * with nothing behind them yet. */
+bool tiles_note_map_scale_is_defined(tiles_scale_mode_t scale);
 
 /* MIDI note for the lowest pad (pad 19, bottom-left) under the
  * chromatic scale. C3 in the common convention where MIDI 60 = C4/
@@ -93,12 +155,16 @@ uint8_t tiles_note_map_get_note(uint8_t logical_pad);
 
 /* True if this pad is currently the key's tonic (root) note -- driven by
  * services/lighting.c's idle pad coloring (real feedback: "root should
- * be blue"). Purely positional: always exactly 2 pads out of 24 (one per
- * octave repeat across the chromatic grid's 2-octave span), regardless
- * of the current key offset -- transposing the whole grid changes WHICH
- * note the root pads play, never WHICH pads they are, since every pad
- * shifts by the same amount together. Returns false for an
- * out-of-range pad. */
+ * be blue"). Purely positional: independent of the current key offset --
+ * transposing the whole grid changes WHICH note the root pads play,
+ * never WHICH pads they are, since every pad shifts by the same amount
+ * together. Count of root pads now DOES depend on the current scale
+ * (added alongside the scale-picker above): exactly 2 for chromatic (one
+ * per octave repeat across the grid's 2-octave span) and every other
+ * 12-degrees-per-octave case, but a shorter scale repeats more often
+ * across the same 24-pad span -- e.g. pentatonic (5 notes/octave) has 5
+ * root pads (degree 0, 5, 10, 15, 20), whole tone (6) has 4, diminished
+ * (8) has 3. Returns false for an out-of-range pad. */
 bool tiles_note_map_is_root_pad(uint8_t logical_pad);
 
 /* True if this pad's CURRENTLY MAPPED note (tiles_note_map_get_note())

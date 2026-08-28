@@ -61,6 +61,13 @@ static inline uint8_t board_button_for_col(uint8_t col) {
 #define TILES_DIAMOND_BUTTON_ID 4u
 #define TILES_DIAMOND_BUTTON_COL 4u
 
+/* SW3 (triangle), three left of circle -- each operation mode's own
+ * sub-menu (services/op_mode.h): a single click toggles that mode's
+ * sub-menu (melodic's is the scale picker; other modes don't have one
+ * yet). */
+#define TILES_TRIANGLE_BUTTON_ID 3u
+#define TILES_TRIANGLE_BUTTON_COL 3u
+
 #define TILES_NUM_UNDERGLOW_ANCHORS 4u
 
 static const tiles_grid_point_t g_tiles_underglow_anchor[TILES_NUM_UNDERGLOW_ANCHORS] = {

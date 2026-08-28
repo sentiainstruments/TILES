@@ -211,6 +211,30 @@ not its code.
   pulled out of `tiles_note_map_get_note()` into its own small helper so
   `is_root_pad()` could reuse the exact same row/col-to-degree math
   rather than duplicating it.
+  **18 real scales added**, real feedback: "for melodic it toggles
+  different scale modes... ionian, dorian, phrigian, lydian, mixo,
+  aeolian, locrian, bluse major and minor, arabian, dim, combination
+  dim, pentatonic major and minor, egyptian, whole tone, japanese
+  miyakobushi, raga todi, the remaining ones are spaces for costume
+  scales." Exactly 18 named + 6 reserved `CUSTOM_*` placeholders = 24,
+  filling `services/op_mode.h`'s new melodic-mode scale-picker grid (one
+  pad per scale) exactly. `tiles_note_map_get_note()`/`is_root_pad()`
+  generalized from the old chromatic-only `degree % 12` math to a real
+  per-scale interval table + octave-fold (`degree / table.count`,
+  `degree % table.count`) that works for any table length 5-12 -- root
+  pad count now genuinely varies by scale (verified: pentatonic major 5,
+  whole tone 4, diminished 3, vs chromatic's fixed 2) rather than being
+  hardcoded to the chromatic case. Interval tables are standard,
+  documented definitions (not invented) -- see note_map.c's own comments
+  for each. `TILES_SCALE_CHROMATIC` stays the boot default and is
+  deliberately NOT one of the 24 grid slots (the named list already
+  fills all 24 exactly); the 6 `CUSTOM_*` values are real enum values
+  with no table yet -- selecting one is a UI no-op in
+  `services/op_mode.c`, and `tiles_note_map_get_note()` falls back to
+  chromatic internally if one somehow got selected anyway.
+  `firmware/test/test_note_map.c` still passes unmodified (chromatic's
+  table is `{0..11}`, count 12 -- the new generic fold reduces to the
+  exact old formula for that specific case, verified no regression).
 - `octave_control.h`/`.c` — done for V1: the default function of SW1
   ("-") and SW2 ("+") is octave shift down/up, one octave per press
   (fires on release, not the press itself -- see this entry's own
@@ -1888,9 +1912,60 @@ not its code.
   `expression_control.c`'s scan guard, `octave_control.c`'s combo guard,
   `expression.c`'s new-strike suppression, and `main.c`'s standby-scan
   gate) rather than inventing a parallel mechanism.
+  **SW3/triangle: each mode's own sub-menu**, real feedback: "the
+  triangle is sub menues per each mode so that button toggles its onw
+  menue in each mode. for melodic it toggles different scale modes."
+  Same click-to-toggle shape as diamond's own mode-picker
+  (`handle_triangle_click()` mirrors `handle_diamond_click()`, including
+  its own SW4-conflict guard for the identical game_mode.h 4-button-combo
+  reason), but one level down -- only melodic's sub-menu (the scale
+  picker) is built; other modes don't have one yet, the same
+  selectable-but-not-implemented spirit as chord/arp themselves. The
+  scale picker is "Ableton Push style" per real feedback: one pad = one
+  scale across the whole 24-pad grid (no row/column structure, unlike the
+  mode-picker), pulled from `note_map.h`'s new 18-scale table (see that
+  file's own entry above) -- tapping a defined slot calls
+  `tiles_note_map_set_scale()` directly and stays open (not a one-shot
+  pick-and-close like the mode-picker) so different scales can be tried
+  while watching/hearing the difference; closes only via triangle again.
+  **Menu visual language standardized**, real feedback: "lets
+  standardize the pulsing and brightness and behaviour for menues,
+  meaning select color or active color is always white bright pulsing in
+  menues, respective less bright but still readable bright for non
+  selected and available and of for unaveilabe." Three states everywhere
+  this applies: selected/active = white, full brightness, pulsing
+  (`menu_selected_pulse_level()`); available-but-unselected = a readable
+  mid brightness in whatever color that menu uses (Sentia magenta here);
+  unavailable = fully off and not selectable. Retrofitted into
+  `expression_control.c`'s existing sub-menu too (`submenu_selected_
+  pulse_level()`, the identical shape redefined per file same as
+  `SENTIA_MAGENTA_R/G/B` already is) -- its selected column used to be
+  static full-brightness magenta (an EARLIER real-feedback request, "make
+  the selected level of everything sentia magenta color," now
+  superseded) and its unselected level was raised 0.06 -> 0.35 to
+  actually read as "readable" under the new language. The mode-picker
+  itself deliberately keeps its own per-row mode-identity colors
+  (magenta/green/red/blue, "mode selector color" is a separate, earlier
+  real-feedback request) rather than being retrofitted to white-selected
+  -- it has no persistent "currently selected, browsing" state for that
+  language to apply to (tapping a row activates and closes immediately).
+  **Also found while fixing "still dim in all modes and games":** real
+  feedback after the earlier `TILES_LIGHTING_IDLE_BASELINE_PERCENT`
+  raise. That constant only affects plain melodic idle -- every
+  `tiles_lighting_set_standby_pad_rgb()` caller (this file's own menus,
+  `game_mode.c`, `standby.c`) goes through `pad_channel_level()` instead,
+  which scales by `ceiling_level()`: a real, documented power-budget
+  safety cap (`docs/architecture/defaults-and-safeguards.md` -- full
+  white across 24 pads + underglow is ~448mA against a 500mA USB-only
+  budget), 37% on USB-only power specifically. Confirmed as the actual
+  root cause of the persistent dimness; left unchanged per explicit
+  direction ("leave USB-only ceiling alone, just note it") rather than
+  silently loosening a documented safety margin -- external power gives
+  75%.
   **Not hardware-verified at all** -- none of the above (the click
   gesture, the menu, sequencer playback/rendering, the channel
-  reservation) has been tried on real hardware yet, including against a
-  real external MIDI clock source.
+  reservation, the scale picker, the standardized menu language) has been
+  tried on real hardware yet, including against a real external MIDI
+  clock source.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
