@@ -3,8 +3,10 @@
 #include "board_layout.h"
 #include "board_pins.h"
 #include "buttons.h"
+#include "haptics.h"
 #include "hall.h"
 #include "lighting.h"
+#include "op_mode.h"
 #include "pedal.h"
 #include "pixel_font.h"
 #include "touch.h"
@@ -23,6 +25,20 @@
  * against how it actually feels to watch. */
 #define TILES_STANDBY_IDLE_TIMEOUT_MS 60000u
 #define TILES_STANDBY_ANIMATION_CYCLE_MS 120000u
+
+/* Real feedback: "sleep screensaver should be set to 20 minute in
+ * sequencer mode since its a more stratic thing so 20 minutes and then
+ * screensaver and 10 later sleep." Sequencer mode can legitimately run
+ * unattended for a while (a pattern looping on its own) in a way plain
+ * melodic idle isn't expected to -- TILES_STANDBY_IDLE_TIMEOUT_MS's 1
+ * minute would be far too eager to blank the board while a sequence is
+ * simply playing with no hands on it. Checked via
+ * tiles_op_mode_is_sequencer_active() (services/op_mode.h) wherever the
+ * plain idle timeout above is used -- see enter_standby()'s own call
+ * site and current_deep_sleep_timeout_ms() below for the matching "+10
+ * more minutes" deep-sleep half. */
+#define TILES_STANDBY_SEQUENCER_IDLE_TIMEOUT_MS 1200000u        /* 20 * 60 * 1000 */
+#define TILES_STANDBY_SEQUENCER_DEEP_SLEEP_TIMEOUT_MS 1800000u /* 30 * 60 * 1000 -- 20 (idle) + 10 (extra) */
 
 /* After 20 minutes of TOTAL inactivity (same s_last_activity_ms clock
  * that gates entering standby in the first place -- not 20 minutes of
@@ -2131,6 +2147,13 @@ static void exit_standby(void) {
     s_circle_was_held = false;
     tiles_lighting_set_standby_active(false);
     tiles_buttons_set_standby_active(false);
+    /* Harmless no-op if deep sleep's own silence was never engaged (e.g.
+     * waking from plain STANDBY, which never touches this) -- see
+     * enter_deep_sleep()'s own call and haptics.h's tiles_haptics_set_
+     * sleep_silenced() for why this is a separate flag from the user's
+     * own expression-mute, safe to always clear here regardless of how
+     * we got to AWAKE. */
+    tiles_haptics_set_sleep_silenced(false);
 }
 
 /* Deep sleep: the single dormant state reached either by
@@ -2155,6 +2178,11 @@ static void enter_deep_sleep(void) {
     tiles_lighting_set_standby_active(true);
     tiles_buttons_set_standby_active(true);
     s_last_frame_ms = 0u; /* forces an immediate first frame */
+    /* Real feedback: "in sleep mode haptics should be off." Regular
+     * STANDBY/screensaver deliberately leaves haptics running normally
+     * (this file's own "lighting-only concept" header) -- only this
+     * deeper, meant-to-be-fully-dormant state silences them. */
+    tiles_haptics_set_sleep_silenced(true);
 }
 
 /* Circle (SW6)'s dedicated long-press gesture -- see this file's
@@ -2244,7 +2272,17 @@ static void handle_manual_scroll_input(uint32_t now_ms) {
 }
 
 static uint32_t current_deep_sleep_timeout_ms(void) {
-    return s_manual_screensaver ? TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS : TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS;
+    if (s_manual_screensaver) {
+        /* A deliberate user action takes priority over the sequencer-mode
+         * default below, even though both currently happen to be 30
+         * minutes -- that's a coincidence of the two numbers, not a
+         * dependency between them. */
+        return TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS;
+    }
+    if (tiles_op_mode_is_sequencer_active()) {
+        return TILES_STANDBY_SEQUENCER_DEEP_SLEEP_TIMEOUT_MS;
+    }
+    return TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS;
 }
 
 #define DEEP_SLEEP_PULSE_PERIOD_MS 3000.0f
@@ -2331,7 +2369,9 @@ void tiles_standby_scan(void) {
     }
 
     if (s_state == TILES_STANDBY_STATE_AWAKE) {
-        if (now_ms - s_last_activity_ms >= TILES_STANDBY_IDLE_TIMEOUT_MS) {
+        uint32_t idle_timeout =
+            tiles_op_mode_is_sequencer_active() ? TILES_STANDBY_SEQUENCER_IDLE_TIMEOUT_MS : TILES_STANDBY_IDLE_TIMEOUT_MS;
+        if (now_ms - s_last_activity_ms >= idle_timeout) {
             enter_standby(now_ms);
         }
         return;

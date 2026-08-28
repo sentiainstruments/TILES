@@ -1569,6 +1569,45 @@ not its code.
   have gotten to close to max draw in usb mode" -- see `power.c`'s own
   entry for the fuller budget accounting that led to lowering
   `max_haptic_voices` 5 -> 3 on USB-only power.
+  **Root cause found for "some pads get haptics stuck idk why."** Two
+  separate real bugs, both stemming from `trigger_kick()`'s own SUSTAIN
+  phase never decaying to true zero on its own (`sustain_target_duty()`
+  always has a nonzero floor from the strike's own velocity term) --
+  matching a *held musical note*'s real behavior, but wrong for anything
+  that isn't one:
+  1. Every "momentary UI touch acknowledgment" in `op_mode.c` (the
+     mode-picker's touch-click, the scale-picker's touch-click AND its
+     periodic "still selected" pulse, the new pattern-picker's
+     touch-click, the new pitch-assign commit click) was calling
+     `trigger_kick()` -- correct strength, wrong lifecycle. Nothing ever
+     called `tiles_haptics_stop()` for these pads (menus suppress
+     `expression.c`'s own release-driven stop logic entirely while they
+     own the grid), so every pad ever touched while browsing a menu was
+     left buzzing at a low floor level indefinitely. Fixed in `op_mode.c`
+     by switching all of these to `tiles_haptics_trigger_touch_pulse()`
+     instead -- a fixed-strength, self-terminating pulse that needs no
+     matching stop call at all, exactly the right primitive for a
+     momentary acknowledgment (this file's own header already described
+     it as exactly that). `trigger_kick()`'s full KICK->SUSTAIN lifecycle
+     stays reserved for what actually needs it: `expression.c`'s real
+     note strikes, and `op_mode.c`'s own sequencer playback (correctly
+     paired with an explicit stop already).
+  2. `op_mode.c`'s sequencer playback itself: entering standby/deep sleep
+     (or game mode, the expression sub-menu, or transpose mode) while a
+     sequencer note happened to be sounding stopped `tiles_op_mode_scan()`
+     from running at all -- the only thing that would eventually call
+     `tiles_haptics_stop()` for that pad. Fixed in `op_mode.c` by ending
+     the current note the instant control is lost, not waiting for
+     playback to naturally reach it again.
+  **New `tiles_haptics_set_sleep_silenced()`**, real feedback: "in sleep
+  mode haptics should be off." A flag SEPARATE from `tiles_haptics_set_
+  muted()` (the user's own deliberate expression-mute combo) -- haptics
+  are silenced whenever EITHER is set, but `standby.c` waking from deep
+  sleep must never silently clear a mute the user set on purpose before
+  falling asleep, which reusing one flag for both would do. Only deep
+  sleep uses this; regular standby/screensaver deliberately leaves
+  haptics running exactly as normal, matching this file's own
+  "lighting-only concept" precedent for standby in general.
 - `pedal.h`/`.c` — done: sustain (MIDI CC64) on by default, debounced
   with hysteresis, polarity defaults to the usual normally-open
   footswitch convention and is switchable at runtime
@@ -1957,6 +1996,31 @@ not its code.
   call `gsim_new_game()` (Simon Says) already had from the fix above --
   every game now independently guarantees a fresh hardware-entropy seed
   the instant it starts, not just at boot.
+  **Longer idle/deep-sleep timeout while sequencer mode is active**, real
+  feedback: "sleep screensaver should be set to 20 minute in sequencer
+  mode since its a more stratic thing so 20 minutes and then screensaver
+  and 10 later sleep." Sequencer mode can legitimately run unattended for
+  a while (a pattern looping on its own with no hands on the board), a
+  real difference from plain melodic idle that the existing 1-minute
+  timeout wasn't accounting for. Both the AWAKE->STANDBY check and
+  `current_deep_sleep_timeout_ms()` now call the new `services/op_mode.h`
+  accessor `tiles_op_mode_is_sequencer_active()` and use
+  `TILES_STANDBY_SEQUENCER_IDLE_TIMEOUT_MS` (20 min) /
+  `TILES_STANDBY_SEQUENCER_DEEP_SLEEP_TIMEOUT_MS` (30 min = 20 + the "10
+  later" from real feedback) instead of the normal 1-minute/20-minute
+  pair whenever true -- computed fresh every check, not cached, so
+  switching modes while idle (impossible mid-STANDBY since op_mode.c
+  itself stops running then, but not before) always uses the CURRENT
+  mode's own timeout. A manually-forced screensaver (holding circle)
+  still takes priority over both if somehow active at the same time --
+  the two currently share the same 30-minute deep-sleep number, but
+  that's coincidence, not a dependency between them.
+  **Deep sleep now silences haptics** -- real feedback: "in sleep mode
+  haptics should be off." See `haptics.c`'s own entry for the new
+  `tiles_haptics_set_sleep_silenced()` this file calls from
+  `enter_deep_sleep()`/`exit_standby()`; regular STANDBY/screensaver is
+  deliberately untouched, keeping this file's existing "lighting-only
+  concept" precedent for the lighter state.
 - `boot_sequence.h`/`.c` — done for V1: a ~4-second, blocking power-on
   animation run once from `main.c`, before the main loop starts (nothing
   else needs to run concurrently -- USB stays alive via TinyUSB's own
@@ -2073,6 +2137,36 @@ not its code.
   uses -- the DAW's own Start/Stop bytes are the only valid transport
   control whenever a real clock is present. Setting `true` does NOT set
   `start_edge` (Continue-style resume, not a reset to step zero).
+  **Tap tempo now auto-starts even after a manual stop**, real feedback:
+  "tap tempo should autostart sequence when 4 taps detercted even if
+  stropped." The FIRST pass only auto-started on this BOOT's first-ever
+  tempo establishment (`s_tap_tempo_established`, a lifetime flag) --
+  re-tapping a fresh 4-tap sequence after a manual stop only updated the
+  tempo number, silently leaving the transport stopped. Fixed with a new,
+  SESSION-scoped `s_session_hit_minimum` flag (reset alongside
+  `s_tap_count` on both the existing session-timeout path and the new
+  inconsistency-reset below) -- every fresh session's first time reaching
+  the 4-tap minimum now auto-starts, guarded on `!s_running` so re-tapping
+  WHILE already playing (refining the tempo live) never yanks the
+  transport, matching real Ableton-style tap-tempo behavior.
+  **Tap-tempo now resets on inconsistent tapping**, real feedback: "it
+  stops capturing tempo if taps very inconsistent similar to ableton lives
+  tap tempo." Before appending each new tap, its interval from the
+  previous one is checked against the running average of this session's
+  OWN intervals so far (`TAP_TEMPO_CONSISTENCY_TOLERANCE`, 30%) -- a tap
+  that strays further than that reads as a different tempo attempt, not
+  noise to blend in, and resets the session to start fresh from just that
+  tap (same non-disruptive shape the existing session-timeout reset
+  already uses: doesn't touch whatever tempo/playback was already
+  established). Needs `#include <math.h>` for `fabsf()`.
+  **New `tiles_midi_clock_is_running()`** -- a pure read of `s_running`
+  that, unlike `tiles_midi_clock_get_state()`, does NOT consume
+  `start_edge`, so it's safe to call anytime. `op_mode.c`'s own transport
+  handler uses it to tell "stop while already stopped" (rewind) apart
+  from "stop while playing" (pause), and "play while already playing"
+  (restart from the top) apart from "play while stopped" (resume) -- real
+  feedback: "play position of head should reset when stop click twice and
+  if playing and play again it starts from the top again."
 - `op_mode.h`/`.c` — done for V1: operation modes (melodic/chord/
   sequencer/arpeggiator), SW4 ("diamond")'s function -- real feedback:
   "its time to implement the operation modes. we have standard melodic,
@@ -2368,12 +2462,52 @@ not its code.
     state. Steps at or beyond the active pattern's current length still
     render off regardless, matching the existing "unavailable are off"
     rule for a pattern shortened below 24 steps.
-  **Not hardware-verified at all** -- none of the above (the click
-  gesture, the menu, sequencer playback/rendering, the channel
-  reservation, the scale picker, the standardized menu language, the
-  press-to-select haptics, the tap-tempo gesture and shared beat flash,
-  or this round's multi-pattern bank/pitch-assignment/transport-length/
-  quantized-start/always-lit-cursor redesign) has been tried on real
-  hardware yet, including against a real external MIDI clock source.
+  **First real-hardware pass on the redesign above found four real
+  issues, all fixed this round:**
+  1. Pitch assignment was momentary (had to keep the originally-held step
+     physically touched the whole time you picked a note) -- real
+     feedback: "it should be a toggle to set pitch of sequencer note. not
+     a momentary thing." `handle_pitch_assign_taps()` no longer cancels
+     on releasing the held step; it stays open until a fresh touch on ANY
+     pad commits, with triangle now serving as the explicit cancel-with-
+     no-change escape hatch (`handle_triangle_click()`'s new branch).
+  2. Diamond's LED glowed continuously the ENTIRE time any non-melodic
+     mode was active, not just while the mode picker was actually open --
+     real feedback: "the led for modes should light up on menu on not
+     alwayus." `OP_DIAMOND_LED_MODE_ACTIVE_LEVEL` removed entirely;
+     diamond now only ever lights via `render_menu()`'s own write while
+     the picker is genuinely showing.
+  3. "-"/"+" had no transport-state feedback at all (dark whenever not
+     being physically pressed) -- real feedback: "the led for start and
+     top shoukld light up as toggles respectively." New
+     `OP_TRANSPORT_LED_LEVEL`, lit on exactly one of the two reflecting
+     current `clock.running`, written in all three sequencer-mode render
+     functions (normal view, pattern picker, pitch assign).
+  4. Stop/start had no rewind/retrigger semantics -- real feedback: "play
+     position of head should reset when stop click twice and if playing
+     and play again it starts from the top again."
+     `handle_transport_and_length()` now checks `tiles_midi_clock_is_
+     running()` (new, see `midi_clock.c`'s own entry) at release time: a
+     solo "-" while ALREADY stopped rewinds to step 0 instead of
+     no-opping; a solo "+" while ALREADY playing re-arms
+     `s_seq_pending_start` (a quantized retrigger, not an immediate jump)
+     instead of no-opping. Fixed a real gap found while implementing this:
+     "+"'s original resume path never actually set `s_seq_pending_start`
+     at all, meaning resuming from a manual stop would fast-forward
+     through however many pulses had silently accumulated while stopped
+     (`pulse_count` keeps advancing regardless of `running`, see
+     `midi_clock.h`'s own header) instead of quantizing cleanly -- now
+     fixed alongside the new rewind/retrigger logic.
+  Also found and fixed in this same pass: two real "stuck haptics" bugs
+  (see `haptics.c`'s own entry for the full diagnosis) and deep sleep now
+  silencing haptics, plus `standby.c` giving sequencer mode its own
+  longer idle/deep-sleep timeout (see that file's own entry) --
+  sequencer's real feedback this round covered lighting/transport
+  interaction issues specifically; the haptics and standby-timing fixes
+  address separate reports from the same testing pass.
+  **Not hardware-verified beyond the four fixes above** -- the underlying
+  multi-pattern bank, per-step pitch storage, and quantized-start math
+  itself weren't independently re-verified this round, only the specific
+  symptoms real feedback called out.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

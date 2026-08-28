@@ -169,3 +169,16 @@ bool tiles_midi_clock_tap_tempo_established(void);
  * started once (that path already sets start_edge itself, see
  * tiles_midi_clock_register_tap() above). */
 void tiles_midi_clock_set_running(bool running);
+
+/* True if the transport is currently running, from either real external
+ * clock bytes or the internal tap-tempo generator. Unlike
+ * tiles_midi_clock_get_state(), this does NOT consume start_edge -- safe
+ * to call anytime, as many times as needed per scan, same as
+ * tiles_midi_clock_external_active()/_tap_tempo_established() above.
+ * services/op_mode.h uses this to tell "stop while already stopped"
+ * (rewind) apart from "stop while playing" (pause), and "play while
+ * already playing" (restart from the top) apart from "play while
+ * stopped" (resume) -- real feedback: "play position of head should
+ * reset when stop click twice and if playing and play again it starts
+ * from the top again." */
+bool tiles_midi_clock_is_running(void);

@@ -161,3 +161,11 @@ void tiles_op_mode_scan(void);
  * still unimplemented stubs that pass touch straight through to normal
  * melodic play -- see this file's own header). */
 bool tiles_op_mode_owns_pad_grid(void);
+
+/* True whenever sequencer mode is the currently active mode, regardless
+ * of which sequencer sub-view (pattern picker, pitch assign, normal step
+ * view) is showing. Used by services/standby.h to give sequencer mode a
+ * longer idle timeout before screensaver/deep sleep than plain melodic
+ * idle gets -- real feedback: "sleep screensaver should be set to 20
+ * minute in sequencer mode since its a more stratic thing." */
+bool tiles_op_mode_is_sequencer_active(void);

@@ -4,6 +4,8 @@
 
 #include "tusb.h"
 
+#include <math.h>
+
 /* MIDI System Real-Time status bytes -- single-byte messages, no data
  * bytes ever follow. See this file's header for why a plain byte scan
  * (no running-status tracking) is sufficient and correct for finding
@@ -34,6 +36,15 @@
  * comment). Deliberately generous -- a real tap-tempo gesture at a slow
  * tempo could have over a second between taps. */
 #define TAP_TEMPO_SESSION_TIMEOUT_MS 2000u
+/* Real feedback: "it stops capturing tempo if taps very inconsistent
+ * similar to ableton lives tap tempo." A tap whose interval from the
+ * previous one strays this far (as a fraction) from the running average
+ * of this session's OWN intervals so far reads as a different tempo
+ * attempt, not noise to blend in -- generous enough for ordinary human
+ * timing looseness, tight enough to actually catch a genuinely different
+ * tap rate. Unmeasured, a first attempt like every other timing constant
+ * in this file. */
+#define TAP_TEMPO_CONSISTENCY_TOLERANCE 0.30f
 
 static uint32_t s_pulse_count;
 static bool s_running;
@@ -47,6 +58,15 @@ static uint32_t s_tap_timestamps[TAP_TEMPO_MAX_HISTORY];
 static uint8_t s_tap_count; /* taps in the CURRENT session, caps at TAP_TEMPO_MAX_HISTORY (oldest drops off) */
 static uint32_t s_last_tap_ms;
 static bool s_tap_tempo_established;
+/* True once THIS session (since the last session-timeout/inconsistency
+ * reset) has reached TAP_TEMPO_MIN_TAPS -- distinct from
+ * s_tap_tempo_established (which, once true, never resets for the rest
+ * of the boot). Real feedback: "tap tempo should autostart sequence when
+ * 4 taps detected even if stopped" -- see this flag's own use in
+ * tiles_midi_clock_register_tap() below for why a per-lifetime flag
+ * wasn't enough: it only auto-started on the very first tempo ever
+ * established, not on every fresh 4-tap sequence after a manual stop. */
+static bool s_session_hit_minimum;
 static float s_tap_interval_ms; /* averaged ms per quarter-note tap, valid only once established */
 static uint32_t s_next_virtual_pulse_due_ms;
 
@@ -60,8 +80,13 @@ void tiles_midi_clock_init(void) {
     s_tap_count = 0u;
     s_last_tap_ms = 0u;
     s_tap_tempo_established = false;
+    s_session_hit_minimum = false;
     s_tap_interval_ms = 0.0f;
     s_next_virtual_pulse_due_ms = 0u;
+}
+
+bool tiles_midi_clock_is_running(void) {
+    return s_running;
 }
 
 bool tiles_midi_clock_external_active(uint32_t now_ms) {
@@ -88,6 +113,31 @@ void tiles_midi_clock_register_tap(uint32_t now_ms) {
          * rather than the clock hiccuping just because the player paused
          * to think. */
         s_tap_count = 0u;
+        s_session_hit_minimum = false;
+    }
+
+    /* Real feedback: "it stops capturing tempo if taps very inconsistent
+     * similar to ableton lives tap tempo." Checked BEFORE appending this
+     * tap, against the average of this session's intervals SO FAR --
+     * needs at least 2 taps already in the session (1 interval) to have
+     * anything to compare against. A wildly different tap starts a fresh
+     * session from just this tap, exactly like the timeout path above,
+     * rather than corrupting the average by blending two different
+     * tempos together. */
+    if (s_tap_count >= 2u) {
+        uint32_t latest_interval = now_ms - s_last_tap_ms;
+        float sum_ms = 0.0f;
+        for (uint8_t i = 1; i < s_tap_count; i++) {
+            sum_ms += (float)(s_tap_timestamps[i] - s_tap_timestamps[i - 1u]);
+        }
+        float avg_interval = sum_ms / (float)(s_tap_count - 1u);
+        if (avg_interval > 0.0f) {
+            float deviation = fabsf((float)latest_interval - avg_interval) / avg_interval;
+            if (deviation > TAP_TEMPO_CONSISTENCY_TOLERANCE) {
+                s_tap_count = 0u;
+                s_session_hit_minimum = false;
+            }
+        }
     }
 
     if (s_tap_count < TAP_TEMPO_MAX_HISTORY) {
@@ -122,7 +172,17 @@ void tiles_midi_clock_register_tap(uint32_t now_ms) {
         s_tap_interval_ms = 1.0f;
     }
 
-    bool first_establishment = !s_tap_tempo_established;
+    /* Real feedback: "tap tempo should autostart sequence when 4 taps
+     * detected even if stopped" -- s_session_hit_minimum (this SESSION's
+     * first time reaching the minimum), not s_tap_tempo_established
+     * (this BOOT's first time ever), is what should trigger an autostart:
+     * re-tapping a tempo after a manual stop is a fresh 4-tap sequence
+     * that should also resume playback, not just silently update the
+     * number. Guarded on !s_running so re-tapping WHILE already playing
+     * (refining the tempo live, Ableton-style) never yanks the transport
+     * -- matches real DAW tap-tempo behavior. */
+    bool session_just_reached_minimum = !s_session_hit_minimum;
+    s_session_hit_minimum = true;
     s_tap_tempo_established = true;
 
     /* Resync the internal generator's phase to THIS tap -- the next
@@ -132,7 +192,7 @@ void tiles_midi_clock_register_tap(uint32_t now_ms) {
     float virtual_pulse_interval_ms = s_tap_interval_ms / 24.0f; /* 24 clocks/quarter note, per the MIDI spec */
     s_next_virtual_pulse_due_ms = now_ms + (uint32_t)(virtual_pulse_interval_ms + 0.5f);
 
-    if (first_establishment) {
+    if (session_just_reached_minimum && !s_running) {
         /* Same contract a real 0xFA Start already gives every consumer --
          * services/op_mode.h's sequencer reset-to-step-0 logic needs no
          * changes at all to also support this. */

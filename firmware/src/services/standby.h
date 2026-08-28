@@ -21,7 +21,19 @@
  * sleep: everything dark except the circle function button pulsing
  * slowly, the one indicator that it's in this state rather than fully
  * off. Same wake conditions as standby (any touch/button/pedal activity,
- * or Hall depth once that's re-enabled).
+ * or Hall depth once that's re-enabled). Haptics are hard-silenced for
+ * the duration (services/haptics.h's tiles_haptics_set_sleep_silenced())
+ * -- real feedback: "in sleep mode haptics should be off." Regular
+ * standby above is untouched by this -- only deep sleep silences.
+ *
+ * Sequencer mode gets its OWN, longer pair of timeouts --
+ * TILES_STANDBY_SEQUENCER_IDLE_TIMEOUT_MS (20 minutes) before standby,
+ * TILES_STANDBY_SEQUENCER_DEEP_SLEEP_TIMEOUT_MS (30 minutes total) before
+ * deep sleep -- via services/op_mode.h's tiles_op_mode_is_sequencer_
+ * active(), since a sequence can legitimately run unattended in a way
+ * plain melodic idle isn't expected to. Real feedback: "sleep screensaver
+ * should be set to 20 minute in sequencer mode since its a more stratic
+ * thing so 20 minutes and then screensaver and 10 later sleep."
  *
  * ---- Circle button (SW6) long-press gestures --------------------------
  * Holding circle for TILES_CIRCLE_SCREENSAVER_HOLD_MS (4s) manually

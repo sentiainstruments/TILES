@@ -187,6 +187,19 @@ float tiles_haptics_get_intensity(void);
  * mute" section for the full reasoning. */
 void tiles_haptics_set_muted(bool muted);
 
+/* Called by services/standby.h on entering/leaving deep sleep -- real
+ * feedback: "in sleep mode haptics should be off." A SEPARATE flag from
+ * tiles_haptics_set_muted() above, not a reuse of it: that one is the
+ * user's own deliberate expression-mute toggle (circle+square 3s hold),
+ * and standby.c waking from deep sleep must never silently clear a mute
+ * the user set on purpose before falling asleep. Haptics are silenced
+ * whenever EITHER flag is set (see haptics.c's own
+ * haptics_should_be_silent()). Only deep sleep uses this -- regular
+ * standby/screensaver deliberately leaves haptics (and all of touch/Hall/
+ * MIDI) running exactly as normal, matching this file's existing
+ * "standby is a lighting-only concept" precedent. */
+void tiles_haptics_set_sleep_silenced(bool silenced);
+
 /* Real feedback: "pulling power plug killed haptics tho. power managment
  * is not ready yet." A brief glitch on the PCA9685s' own rail during an
  * actual power-source switch can silently reset those chips' internal

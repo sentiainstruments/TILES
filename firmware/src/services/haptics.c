@@ -204,6 +204,14 @@ float tiles_haptics_get_intensity(void) {
  * that will never actually reach the motor -- muting hard-stops
  * immediately instead. */
 static bool s_haptic_muted;
+/* Separate from s_haptic_muted -- see this flag's own tiles_haptics_set_
+ * sleep_silenced() header comment in haptics.h for why deep sleep can't
+ * just reuse the user's own mute flag. */
+static bool s_haptic_sleep_silenced;
+
+static bool haptics_should_be_silent(void) {
+    return s_haptic_muted || s_haptic_sleep_silenced;
+}
 
 void tiles_haptics_set_muted(bool muted) {
     s_haptic_muted = muted;
@@ -218,6 +226,15 @@ void tiles_haptics_set_muted(bool muted) {
         }
     }
     printf("[haptics] muted=%d\n", (int)s_haptic_muted);
+}
+
+void tiles_haptics_set_sleep_silenced(bool silenced) {
+    s_haptic_sleep_silenced = silenced;
+    if (silenced) {
+        for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+            tiles_haptics_stop(pad);
+        }
+    }
 }
 
 /* Mirrors services/buttons.c's set_button_led_level(), parameterized on
@@ -353,6 +370,7 @@ void tiles_haptics_init(void) {
     }
     s_next_kick_slot_ms = 0u;
     s_haptic_muted = false;
+    s_haptic_sleep_silenced = false;
 }
 
 /* Actually begins driving the motor: the overdrive spike (see
@@ -387,7 +405,7 @@ static void start_kick_now(uint8_t idx, const tiles_pad_config_t *cfg, uint8_t v
 }
 
 void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
-    if (s_haptic_muted) {
+    if (haptics_should_be_silent()) {
         return;
     }
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
@@ -458,7 +476,7 @@ void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
  * real feedback for a touch acknowledgment -- the pulse is a nicety, a
  * real strike's own feedback always takes priority. */
 void tiles_haptics_trigger_touch_pulse(uint8_t logical_pad) {
-    if (s_haptic_muted) {
+    if (haptics_should_be_silent()) {
         return;
     }
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
@@ -489,7 +507,7 @@ void tiles_haptics_trigger_touch_pulse(uint8_t logical_pad) {
 }
 
 void tiles_haptics_set_sustain_level(uint8_t logical_pad, uint8_t aftertouch_0_127) {
-    if (s_haptic_muted) {
+    if (haptics_should_be_silent()) {
         return;
     }
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
