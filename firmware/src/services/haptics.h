@@ -186,3 +186,23 @@ float tiles_haptics_get_intensity(void);
  * haptic feedback stops. See expression_control.h's own "expression
  * mute" section for the full reasoning. */
 void tiles_haptics_set_muted(bool muted);
+
+/* Real feedback: "pulling power plug killed haptics tho. power managment
+ * is not ready yet." A brief glitch on the PCA9685s' own rail during an
+ * actual power-source switch can silently reset those chips' internal
+ * config/PWM state without resetting the RP2350 -- this file's own
+ * s_pads[] tracking stays completely correct and unaware anything
+ * happened, but the actual motor hardware may have reverted to
+ * power-on-default (off). KICK/GAP/TOUCH_PULSE are short-lived enough
+ * (tens of ms) to self-resolve on their own, but a long-held SUSTAIN
+ * specifically only rewrites its motor when the slewed duty actually
+ * CHANGES (tiles_haptics_scan()'s own "skip once settled" optimization)
+ * -- meaning a steady-held chord's haptic could go silent and stay
+ * silent even after services/buttons.h's tiles_buttons_resync_pca9685()
+ * has already fixed the chips' own configuration. Force-rewrites every
+ * currently non-idle pad's motor to whatever level this file's own state
+ * already says it should be, regardless of whether that value has
+ * "changed." Call from a services/power.h change-callback registered
+ * once in main.c, immediately AFTER tiles_buttons_resync_pca9685() (the
+ * chips must be reconfigured first). */
+void tiles_haptics_resync_hardware(void);

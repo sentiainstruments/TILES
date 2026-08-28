@@ -43,11 +43,13 @@
  * readability distinction real feedback asked for.
  * Raised from 6, real feedback: "make root note led also brighter" (part
  * of a broader "make all led brighter its hard to see" -- see
- * TILES_LIGHTING_IDLE_BASELINE_PERCENT above). Kept below that constant's
- * new value so root stays visibly dimmer than a natural key at rest, per
- * the same real feedback that made it dimmer in the first place -- just
- * a less extreme gap now that both are brighter in absolute terms. */
-#define TILES_LIGHTING_ROOT_BASELINE_PERCENT 15u
+ * TILES_LIGHTING_IDLE_BASELINE_PERCENT above), then raised again, real
+ * feedback: "root note as well slightly brighter." Kept below that
+ * constant's own value so root stays visibly dimmer than a natural key
+ * at rest, per the same real feedback that made it dimmer in the first
+ * place -- just a less extreme gap now that both are brighter in
+ * absolute terms. */
+#define TILES_LIGHTING_ROOT_BASELINE_PERCENT 20u
 
 /* Underglow's own fixed brightness, out of 255 -- deliberately NOT
  * scaled by the active brightness ceiling/the power state. It used to be

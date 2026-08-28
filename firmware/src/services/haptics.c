@@ -519,6 +519,39 @@ void tiles_haptics_stop(uint8_t logical_pad) {
     }
 }
 
+void tiles_haptics_resync_hardware(void) {
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        haptic_pad_state_t *s = &s_pads[i];
+        if (s->phase == HAPTIC_PHASE_IDLE || s->phase == HAPTIC_PHASE_PENDING) {
+            /* Nothing driving the motor yet either way -- PENDING hasn't
+             * started, its scheduled start will write a fresh level. */
+            continue;
+        }
+        const tiles_pad_config_t *cfg = board_pad_config((uint8_t)(i + 1u));
+        if (cfg == NULL) {
+            continue;
+        }
+        float level;
+        switch (s->phase) {
+        case HAPTIC_PHASE_TOUCH_PULSE:
+            level = TOUCH_PULSE_DUTY;
+            break;
+        case HAPTIC_PHASE_KICK:
+            level = s->kick_overdrive_active ? MAX_KICK_DUTY : kick_duty_from_velocity(s->kick_velocity_0_127);
+            break;
+        case HAPTIC_PHASE_GAP:
+            level = 0.0f;
+            break;
+        case HAPTIC_PHASE_SUSTAIN:
+        default:
+            level = s->sustain_current_duty;
+            break;
+        }
+        set_motor_level(cfg, level);
+    }
+    printf("[haptics] resynced hardware after a power-mode change\n");
+}
+
 void tiles_haptics_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 

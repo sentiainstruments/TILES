@@ -85,3 +85,26 @@ void tiles_buttons_set_override_led(uint8_t button_id, float level_0_to_1);
  * Callers must not call tiles_pca9685_init() on the result -- see the
  * file header above. */
 tiles_pca9685_t *tiles_buttons_pca9685_for_addr(uint8_t addr);
+
+/* ---- Power-transition recovery (main.c) ---------------------------------
+ *
+ * Real feedback: "pulling power plug killed haptics tho. power managment
+ * is not ready yet." Both PCA9685 chips (button LEDs + all 24 haptic
+ * motors) live on a rail that the actual power-source switch physically
+ * disturbs -- a brief glitch there can silently reset the chips' own
+ * internal MODE1/MODE2 configuration and per-channel PWM state without
+ * necessarily resetting the RP2350 itself, leaving firmware's own state
+ * (which pad is in which haptic phase, which button is pressed) fully
+ * intact and unaware anything went wrong, while the actual hardware
+ * silently reverted to power-on defaults (outputs off/unconfigured).
+ * Re-runs tiles_pca9685_init() for both chips (the exact same
+ * configuration tiles_buttons_init() writes at boot) and then repaints
+ * every button LED currently in the default "follows press" mode --
+ * standby/override-governed LEDs don't need explicit repainting here,
+ * they're redrawn continuously by their own owning module every frame
+ * regardless, so the very next frame after this call already self-heals
+ * them. Call from a services/power.h change-callback registered once in
+ * main.c, immediately followed by services/haptics.h's own
+ * tiles_haptics_resync_hardware() -- chips must be reconfigured before
+ * either subsystem repaints its state on top. */
+void tiles_buttons_resync_pca9685(void);

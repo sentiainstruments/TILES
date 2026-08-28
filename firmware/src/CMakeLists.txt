@@ -52,6 +52,7 @@ target_link_libraries(sentia_tiles_firmware
     hardware_adc
     tinyusb_device
     pico_unique_id
+    pico_rand
     m
 )
 

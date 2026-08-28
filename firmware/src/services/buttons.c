@@ -126,6 +126,20 @@ static void refresh_all_button_leds(void) {
     }
 }
 
+void tiles_buttons_resync_pca9685(void) {
+    /* Deliberately ignores the return value -- same as tiles_buttons_init(),
+     * a failed I2C re-init here has nothing better to fall back to, and
+     * printing/handling it isn't this recovery path's job (the original
+     * init failure, if any, was already reported at boot). */
+    (void)tiles_pca9685_init(&s_pca1, i2c1, TILES_I2C1_ADDR_HAPTIC_PCA9685_1);
+    (void)tiles_pca9685_init(&s_pca2, i2c1, TILES_I2C1_ADDR_HAPTIC_PCA9685_2);
+    /* tiles_pca9685_init() just forced every channel back to "full off"
+     * (lit, for these active-low button LEDs) -- restore the default
+     * "follows press" ones immediately; override/standby-governed LEDs
+     * self-heal on their own owning module's next redraw. */
+    refresh_all_button_leds();
+}
+
 bool tiles_buttons_init(void) {
     bool ok = tiles_pca9685_init(&s_pca1, i2c1, TILES_I2C1_ADDR_HAPTIC_PCA9685_1);
     ok = tiles_pca9685_init(&s_pca2, i2c1, TILES_I2C1_ADDR_HAPTIC_PCA9685_2) && ok;

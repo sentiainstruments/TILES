@@ -67,6 +67,26 @@
 #include "services/standby.h"
 #include "services/touch.h"
 
+/* See the registration call site (tiles_power_register_callback()
+ * below) for the full reasoning -- fires on every debounced power-mode
+ * change, re-asserting known-good hardware state on both PCA9685 chips
+ * (shared by button LEDs and all 24 haptic motors) in case the actual
+ * source-switch transient silently reset them without resetting this
+ * MCU. Re-asserts board_pca9685_enable_outputs() (the OE gate) first as
+ * cheap insurance -- that's a plain GPIO the MCU itself holds, so a
+ * chip-only glitch shouldn't have touched it, but it costs nothing to
+ * reassert -- then the two subsystems' own resync functions, chips
+ * first. `new_state` is unused: both resync functions re-derive
+ * whatever they need live rather than trusting a value handed in at
+ * callback-registration time. */
+static void tiles_power_recover_haptics_and_buttons(tiles_power_state_t new_state) {
+    (void)new_state;
+    board_pca9685_enable_outputs();
+    tiles_buttons_resync_pca9685();
+    tiles_haptics_resync_hardware();
+    printf("[power] recovered haptics/buttons hardware after a power-mode change\n");
+}
+
 int main(void) {
     /* Must run before stdio_init_all(): with tinyusb_device linked
      * explicitly (see CMakeLists.txt), pico_stdio_usb expects us to have
@@ -176,6 +196,25 @@ int main(void) {
      * placed here because services/expression.c is what actually drives
      * it. */
     tiles_haptics_init();
+
+    /* Real feedback: "pulling power plug killed haptics tho. power
+     * managment is not ready yet." A real power-source switch physically
+     * disturbs the rail both PCA9685 chips (button LEDs + all 24 haptic
+     * motors) live on -- a brief glitch there can silently reset their
+     * own internal config/PWM state without resetting the RP2350 itself,
+     * leaving this firmware's own tracked state (which pad is mid-
+     * SUSTAIN, which button is held) completely correct and unaware
+     * anything happened, while the actual motor/LED hardware silently
+     * reverted to power-on defaults. Re-asserts the known-good hardware
+     * state on every debounced power-mode change (services/power.h),
+     * not just once at boot -- see services/buttons.h's
+     * tiles_buttons_resync_pca9685() and services/haptics.h's
+     * tiles_haptics_resync_hardware() for what each half actually does
+     * and why the order (chips reconfigured first, then each subsystem
+     * repaints its own state on top) matters. Registered after both
+     * buttons_init() and haptics_init() above, since this can fire
+     * (in principle) the moment the debounce window closes. */
+    tiles_power_register_callback(tiles_power_recover_haptics_and_buttons);
 
     /* Touch + Hall fusion: strike velocity + aftertouch, and (via
      * haptics above) a velocity-mapped kick + aftertouch-mapped sustain.

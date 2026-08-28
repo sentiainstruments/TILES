@@ -82,7 +82,11 @@ not its code.
   calibrated against real LED brightness/diffusion.
   Unmeasured -- root's brighter percentage and the natural/sharp
   distinction reading clearly at actual LED brightness/diffusion are
-  both first attempts.
+  both first attempts. Raised again, 15 -> 20, real feedback: "root note
+  as well slightly brighter" -- still kept below
+  `TILES_LIGHTING_IDLE_BASELINE_PERCENT` (25) so root stays visibly
+  dimmer than a natural key at rest, same reasoning as every earlier
+  round of this same constant.
   **Ceiling made dynamic/load-aware, then reverted -- a real dead end,
   worth keeping the history of.** Real feedback: "could we push the led
   celing a bit more safely?" First attempt: `pad_dynamic_scale()` summed
@@ -158,6 +162,18 @@ not its code.
   (lit by default, dark when they should show "solid") while standby's
   own button dimming mostly didn't visibly show it -- standby's
   luminance values are rarely exactly 0.0 or 1.0.
+  **New `tiles_buttons_resync_pca9685()`** -- real feedback: "pulling
+  power plug killed haptics tho. power managment is not ready yet." Half
+  of the fix (see `haptics.c`'s own entry for the other half): re-runs
+  `tiles_pca9685_init()` for both chips (recovering from a possible
+  rail-glitch-induced config reset during an actual power-source switch,
+  without resetting this file's own button debounce/override state) then
+  `refresh_all_button_leds()` (already existed) to repaint every button
+  currently in the default "follows press" mode -- standby/override-
+  governed LEDs don't need explicit repainting, they're redrawn
+  continuously by their own owning module every frame regardless. Called
+  from a `main.c` power-change callback, chips-first, before
+  `haptics.c`'s own resync repaints motor state on top.
 - `touch.h`/`.c` — done: reads both MPR121 controllers, derives each
   pad's touched state from its board-map touch route, pushes that into
   `lighting.c`'s per-pad brightness (touched = full ceiling, untouched
@@ -752,6 +768,15 @@ not its code.
   loops back to a fresh playback after a brief pause. Not
   hardware-verified -- none of the timing constants, the palette, or the
   press-depth threshold's real-hardware feel have been tried yet.
+  **Real RNG-quality bug found and fixed**, real feedback: "is simon says
+  generating unique patterns every time? it should do that." It wasn't
+  reliably -- see `standby.c`'s own entry for the deeper fix (this
+  firmware's one shared `rand()`/`srand()` stream used to seed from
+  boot-time milliseconds, which could land nearly identical across boots
+  given how deterministic this board's boot sequence timing is).
+  `gsim_new_game()` now ALSO reseeds with fresh `get_rand_32()` hardware
+  entropy right as each game starts, on top of that fix -- extra
+  insurance specifically for this feature.
 - `expression.h`/`.c` — done for V1: touch+Hall fusion. Touch remains
   the authoritative note on/off *timing* gate (more reliable to detect
   than inferring press/release from Hall depth alone); Hall gates
@@ -1517,6 +1542,33 @@ not its code.
   hardware (kicks fired and felt like clicks, matching the
   KICK->GAP->silence design that was live then), but not reliably --
   see the intermittent dropout note above, still open.
+  **Real bug found and fixed: "pulling power plug killed haptics tho."**
+  Diagnosed as a likely rail glitch on the two PCA9685 chips (shared by
+  button LEDs and all 24 motors) during an actual power-source switch --
+  this file's own `s_pads[]` phase tracking stays completely correct and
+  unaware anything happened, while the chips' own internal MODE1/MODE2
+  config and per-channel PWM state may have silently reverted to
+  power-on defaults without the RP2350 itself resetting. New
+  `tiles_haptics_resync_hardware()`: force-rewrites every currently
+  non-idle pad's motor to whatever level this file's own state already
+  says it should be, regardless of whether that value has "changed" --
+  necessary specifically for a long-held SUSTAIN, since
+  `tiles_haptics_scan()`'s own "skip once settled" optimization means a
+  steady-held chord's motor would otherwise stay silently silent forever
+  even after the chips' configuration is restored. Called from a new
+  `main.c` power-change callback (`services/power.h`'s
+  `tiles_power_register_callback()`, previously registered by no
+  consumer despite being built for exactly this), immediately after
+  `services/buttons.h`'s `tiles_buttons_resync_pca9685()` re-configures
+  the chips themselves -- see that file's own entry for its half.
+  **Voice stealing confirmed already correct** -- real feedback asked
+  "are we implementing haptic voice stealing after the haptic voice
+  limit?" Yes, already built (`steal_oldest_voice()`, unchanged by this
+  pass) -- a new kick past `max_haptic_voices` steals the oldest active
+  voice rather than being dropped. Separately, real feedback: "we might
+  have gotten to close to max draw in usb mode" -- see `power.c`'s own
+  entry for the fuller budget accounting that led to lowering
+  `max_haptic_voices` 5 -> 3 on USB-only power.
 - `pedal.h`/`.c` — done: sustain (MIDI CC64) on by default, debounced
   with hysteresis, polarity defaults to the usual normally-open
   footswitch convention and is switchable at runtime
@@ -1566,6 +1618,28 @@ not its code.
   up the new limits immediately -- confirms both the GP22/mounted-state
   derivation and the live-read wiring actually work end to end, not just
   reasoned through against the truth table.
+  **Real hot-swap bug found and fixed** -- real feedback: "pulling power
+  plug killed haptics tho." See `haptics.c`'s and `buttons.c`'s own
+  entries for the fix itself (a power-change-triggered PCA9685
+  reconfigure + hardware resync); this file's own role was just already
+  exposing the trigger (`tiles_power_register_callback()`) that nothing
+  had actually used yet.
+  **`max_haptic_voices` lowered 5 -> 3 on USB-only**, real feedback: "we
+  might have gotten to close to max draw in usb mode." A fuller current
+  budget (see `lighting.c`'s own "Pad brightness ceiling" section for
+  the LED half of this same accounting pass) puts ~220mA of estimated
+  MCU/sensor/IC/button-LED overhead against the 500mA USB-only total,
+  and motor current itself is genuinely unmeasured -- a rough typical-
+  small-ERM estimate (~80-100mA running each) means 5 simultaneous
+  voices alone could be 400-500mA, potentially the entire budget before
+  anything else is counted. 3 voices at that same estimate leaves real
+  margin instead of assuming the rest away. Still a conservative
+  estimate, not a precise number -- the hardware handoff's own "Five
+  voices is an allocation ceiling; a current governor must still reduce
+  duty or concurrent starts" already anticipated needing exactly this
+  kind of further tightening. External power's 12-voice ceiling is
+  unchanged -- the same accounting leaves ~1.8A of margin there even
+  under the same pessimistic haptics assumption.
   **Not done:** `USB_DEMO_VALIDATED_1P5A` (a manual-only override, never
   auto-selected -- belongs to a future `profiles/` module, not this
   one), and any real current measurement (every budget here is a
@@ -1845,6 +1919,23 @@ not its code.
   had the exact same bug (identical physics, duplicated per this file's
   own precedent for autonomous/interactive pairs) and got the identical
   fix.
+  **`tiles_standby_init()`'s RNG seed fixed** -- real feedback: "is simon
+  says generating unique patterns every time? it should do that." The
+  ONE `srand()` call this whole firmware's `rand()` calls all share
+  (every standby animation's own randomness, snake/tetris/brick-
+  breaker's piece/food/ball placement, `game_mode.c`'s Simon Says pattern
+  generation) used to seed from `now_ms` -- boot-time milliseconds at
+  this specific, fairly deterministic point in the boot sequence (right
+  after `boot_sequence.c`'s own fixed ~4-second blocking animation) --
+  close enough to identical across boots that the "random" stream itself
+  could end up nearly repeating run to run. Now seeds from
+  `get_rand_32()` (`pico_rand`, newly linked in `CMakeLists.txt`), which
+  draws on real hardware entropy (ROSC ring-oscillator jitter or the
+  RP2350's own hardware TRNG, RAM contents, a bus performance counter --
+  see `pico/rand.h`'s own header for the full source list) -- genuinely
+  different every boot rather than a predictable function of boot
+  timing. Not yet confirmed on real hardware whether this actually
+  produces visibly different sequences across power cycles.
 - `boot_sequence.h`/`.c` — done for V1: a ~4-second, blocking power-on
   animation run once from `main.c`, before the main loop starts (nothing
   else needs to run concurrently -- USB stays alive via TinyUSB's own
@@ -2064,6 +2155,15 @@ not its code.
   never "struck"). The mode-picker doesn't get this pulsing step -- 
   picking a mode still closes the menu immediately, so there's no
   persistent "selected, still browsing" state for it to apply to.
+  **Scale picker now closes on selection too**, real feedback: "when we
+  select a menu item the menu should close not it doesnt stick around
+  until disabeled." Reverses this file's own earlier deliberate choice
+  to leave it open for trying different scales -- real feedback settled
+  that the other way; matches the mode-picker's own close-on-select
+  behavior now, one consistent rule for both menus. Re-opening (a fresh
+  triangle click) still shows whatever's now selected pulsing, unchanged.
+  Also, `OP_SCALE_AVAILABLE_LEVEL` raised 0.35 -> 0.5, real feedback: "we
+  could have idle led in scale mode more bright not as dim."
   **Not hardware-verified at all** -- none of the above (the click
   gesture, the menu, sequencer playback/rendering, the channel
   reservation, the scale picker, the standardized menu language, the

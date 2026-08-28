@@ -9,6 +9,7 @@
 #include "pixel_font.h"
 #include "touch.h"
 
+#include "pico/rand.h"
 #include "pico/time.h"
 
 #include <math.h>
@@ -2289,7 +2290,22 @@ void tiles_standby_init(void) {
     s_circle_deep_sleep_fired = false;
     s_scroll_prev_minus = false;
     s_scroll_prev_plus = false;
-    srand(now_ms);
+    /* Seeds the ONE global rand()/srand() stream every rand()-consuming
+     * feature in this firmware shares (snake/tetris/brick-breaker/Simon
+     * Says pattern generation, every standby animation's own randomness,
+     * etc.) -- real feedback: "is simon says generating unique patterns
+     * every time? it should do that." It wasn't reliably: this used to
+     * seed from now_ms, boot time in milliseconds at this specific,
+     * fairly deterministic point in the boot sequence (right after
+     * services/boot_sequence.c's own fixed ~4-second blocking animation)
+     * -- close enough to identical across boots that the "random" stream
+     * itself could end up nearly identical run to run. get_rand_32()
+     * (pico_rand, linked in CMakeLists.txt) draws on real hardware
+     * entropy (ROSC ring-oscillator jitter or the RP2350's own hardware
+     * TRNG, RAM contents, a bus performance counter -- see pico/rand.h's
+     * own header for the full list), genuinely different every boot
+     * rather than a predictable function of boot timing. */
+    srand((unsigned int)get_rand_32());
 }
 
 void tiles_standby_scan(void) {

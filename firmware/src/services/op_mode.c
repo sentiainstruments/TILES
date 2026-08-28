@@ -84,8 +84,10 @@ typedef enum {
 #define OP_MODE_PI 3.14159265358979323846f
 /* The scale picker's own "available but not selected" level -- Sentia
  * magenta (this file's OP_MENU_MELODIC_* above), at a readable-but-
- * secondary brightness, distinct from the pulsing white selection. */
-#define OP_SCALE_AVAILABLE_LEVEL 0.35f
+ * secondary brightness, distinct from the pulsing white selection.
+ * Raised from 0.35, real feedback: "we could have idle led in scale mode
+ * more bright not as dim." */
+#define OP_SCALE_AVAILABLE_LEVEL 0.5f
 
 static float menu_selected_pulse_level(uint32_t now_ms) {
     float phase = (float)now_ms / OP_MENU_SELECTED_PULSE_PERIOD_MS;
@@ -401,15 +403,22 @@ static void render_scale_menu(uint32_t now_ms) {
     }
 }
 
+static void scale_menu_exit(void);
+
 /* Real feedback: "when you touch but not click in menu make a strong
  * haptic click be felt, push pad to at least mroe than 50% to sleect."
  * A fresh capacitive touch alone only fires the click (an
  * acknowledgment, "you're touching this") -- selection itself only
  * commits once Hall depth crosses OP_MENU_SELECT_DEPTH_THRESHOLD while
- * still touched. Calling tiles_note_map_set_scale() again with the same
- * already-selected value every scan the pad stays pressed past that
- * threshold is harmless (idempotent), so no extra edge-tracking is
- * needed for the select action itself, only for the click. */
+ * still touched.
+ * Selecting now closes the menu immediately -- real feedback: "when we
+ * select a menu item the menu should close not it doesnt stick around
+ * until disabeled." An earlier version deliberately left it open (so
+ * different scales could be tried while watching/hearing the
+ * difference); real feedback reversed that call -- matches the
+ * mode-picker's own close-on-select behavior now, one consistent rule
+ * for both menus in this file. Re-opening (a fresh triangle click) shows
+ * whatever's now selected pulsing, same as before. */
 static void handle_scale_menu_taps(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         bool touched = tiles_touch_is_touched(pad);
@@ -423,6 +432,8 @@ static void handle_scale_menu_taps(void) {
                     printf("[op_mode] scale -> %d\n", (int)slot_scale);
                 }
                 tiles_note_map_set_scale(slot_scale);
+                scale_menu_exit();
+                return; /* grid ownership just changed under this loop -- stop iterating it */
             }
             /* An undefined (reserved custom) slot is simply not
              * selectable -- "unavailable" per the standardized menu

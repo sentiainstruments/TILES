@@ -78,7 +78,22 @@ static tiles_power_state_t state_for_mode(tiles_power_mode_t mode) {
     case TILES_POWER_MODE_USB_ONLY:
         s.usb_operating_budget_ma = 500u;
         s.main_5v_budget_ma = 500u;
-        s.max_haptic_voices = 5u;
+        /* Lowered 5 -> 3, real feedback: "we might have gotten to close
+         * to max draw in usb mode." Motor current is genuinely
+         * unmeasured (see services/lighting.c's own fuller budget
+         * breakdown), but a rough typical-small-ERM-motor estimate
+         * (~80-100mA running each) puts 5 simultaneous voices alone at
+         * 400-500mA -- potentially the ENTIRE USB budget before the
+         * ~220mA of estimated MCU/sensor/IC/button-LED overhead or any
+         * LED brightness is even counted. 3 voices at that same estimate
+         * (~240-300mA) leaves real margin for that overhead instead of
+         * assuming it away. Still a conservative estimate pending real
+         * motor-current measurement, not a precise number -- the
+         * hardware handoff doc's own "Five voices is an allocation
+         * ceiling; a current governor must still reduce duty or
+         * concurrent starts" already anticipated needing exactly this
+         * kind of further tightening. */
+        s.max_haptic_voices = 3u;
         s.led_brightness_ceiling_percent = 37u;
         s.cv_gate_permitted = false;
         break;

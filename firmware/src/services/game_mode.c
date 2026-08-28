@@ -10,6 +10,7 @@
 #include "op_mode.h"
 #include "touch.h"
 
+#include "pico/rand.h"
 #include "pico/time.h"
 
 #include <math.h>
@@ -1030,6 +1031,16 @@ static uint8_t s_gsim_feedback_pad;    /* 0 = no active confirmation flash */
 static uint32_t s_gsim_feedback_start_ms;
 
 static void gsim_new_game(uint32_t now_ms) {
+    /* Real feedback: "is simon says generating unique patterns every
+     * time? it should do that." Reseeds the shared rand()/srand() stream
+     * (see standby.c's own tiles_standby_init() for the deeper fix --
+     * this firmware's ONE seed used to be boot-time-based and could end
+     * up nearly identical across boots) with fresh hardware entropy
+     * right as each new game starts, on top of that fix -- extra
+     * insurance specifically for this feature, directly matching the
+     * question asked, regardless of anything else that happened to
+     * consume rand() calls earlier in the session. */
+    srand((unsigned int)get_rand_32());
     s_gsim_length = 1u;
     s_gsim_pattern_pad[0] = (uint8_t)(1u + (uint8_t)(rand() % TILES_NUM_PADS));
     s_gsim_pattern_color[0] = (uint8_t)(rand() % GSIM_NUM_COLORS);
