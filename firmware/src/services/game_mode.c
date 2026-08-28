@@ -5,6 +5,7 @@
 #include "buttons.h"
 #include "expression_control.h"
 #include "lighting.h"
+#include "op_mode.h"
 #include "touch.h"
 
 #include "pico/time.h"
@@ -1055,16 +1056,19 @@ static void gm_handle_menu_selection(void) {
 }
 
 static bool gm_combo_held(void) {
-    if (tiles_expression_control_owns_pad_grid()) {
+    if (tiles_expression_control_owns_pad_grid() || tiles_op_mode_owns_pad_grid()) {
         /* services/expression_control.h's sub-menu (circle+square held)
-         * already owns the pad grid -- SW5 (square)/SW6 (circle) are
-         * two of this combo's four buttons, so without this guard a
-         * player deep in an already-open sub-menu who also happens to
-         * be resting on SW3/SW4 could accidentally toggle game mode on
+         * or services/op_mode.h's mode-select menu/sequencer already owns
+         * the pad grid -- SW4 (diamond) alone is op_mode.h's own click
+         * trigger, and SW5 (square)/SW6 (circle) are two of THIS combo's
+         * four buttons, so without this guard a player deep in an
+         * already-open sub-menu/sequencer who also happens to be resting
+         * on the other buttons could accidentally toggle game mode on
          * underneath it. Never true while a game is already active (see
-         * expression_control.c's own tiles_game_mode_is_active() guard,
-         * which keeps the two features mutually exclusive), so this only
-         * ever blocks a fresh entry, never the OFF toggle. */
+         * expression_control.c's/op_mode.c's own tiles_game_mode_is_
+         * active() guards, which keep all three features mutually
+         * exclusive), so this only ever blocks a fresh entry, never the
+         * OFF toggle. */
         return false;
     }
     return tiles_button_is_pressed(3u) && tiles_button_is_pressed(4u) && tiles_button_is_pressed(5u) &&

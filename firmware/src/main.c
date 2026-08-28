@@ -25,8 +25,13 @@
  * services/expression_control.h), player-controlled minigames toggled
  * by holding SW3-SW6 (real snake + brick breaker, distinct from
  * standby's autonomous versions of the same -- see services/game_mode.h),
- * and a serial-driven Hall calibration capture tool (rest/full-press/
- * max-press snapshots -- see diagnostics/calibration.h). Not yet built:
+ * a serial-driven Hall calibration capture tool (rest/full-press/
+ * max-press snapshots -- see diagnostics/calibration.h), operation modes
+ * (melodic/chord/sequencer/arpeggiator) toggled by a single SW4/diamond
+ * click -- sequencer mode fully built (24 pads = 24 steps, played back
+ * from a real external MIDI clock, see services/midi_clock.h and
+ * services/op_mode.h), chord/arp modes selectable but not yet
+ * implemented. Not yet built:
  * MPE, DIN, CV/gate, the usb_vendor diagnostics interface, a real
  * per-pad Hall calibration curve (this is capture only, no curve is
  * derived or applied yet) -- added module by module per the bring-up
@@ -54,7 +59,9 @@
 #include "services/hall.h"
 #include "services/haptics.h"
 #include "services/lighting.h"
+#include "services/midi_clock.h"
 #include "services/octave_control.h"
+#include "services/op_mode.h"
 #include "services/pedal.h"
 #include "services/power.h"
 #include "services/standby.h"
@@ -185,6 +192,16 @@ int main(void) {
      * above, whose rendering path it shares. See services/game_mode.h. */
     tiles_game_mode_init();
 
+    /* MIDI clock RX (USB MIDI IN) -- the timing source op_mode.h's
+     * sequencer mode runs from. See services/midi_clock.h. */
+    tiles_midi_clock_init();
+
+    /* Operation modes (melodic/chord/sequencer/arp), SW4/diamond single
+     * click -- needs lighting/buttons/touch already initialized, same as
+     * standby/game_mode above, whose rendering path it shares. See
+     * services/op_mode.h. */
+    tiles_op_mode_init();
+
     uint32_t last_scan_ms = to_ms_since_boot(get_absolute_time());
 
     while (true) {
@@ -228,6 +245,13 @@ int main(void) {
         }
         s_mpe_was_mounted = mpe_mounted_now;
 
+        /* Drains USB MIDI IN for Start/Continue/Stop/Clock bytes --
+         * needs tud_task() above already run this iteration so the RX
+         * FIFO is current, and must run before tiles_op_mode_scan()
+         * below so this tick's fresh clock state is what sequencer mode
+         * sees. See services/midi_clock.h. */
+        tiles_midi_clock_scan();
+
         /* Runs first: lighting's ceiling_level() and any future
          * haptics/CV consumer read tiles_power_get_state() during this
          * same iteration, so the debounced state should already be
@@ -251,17 +275,23 @@ int main(void) {
          * so this iteration's entry-gesture/in-game-control/menu-
          * selection input is fresh. See services/game_mode.h. */
         tiles_game_mode_scan();
+        /* Must run after tiles_buttons_scan()/tiles_touch_scan()
+         * (diamond click + menu/step taps) and tiles_midi_clock_scan()
+         * (fresh clock state for sequencer playback) above. See
+         * services/op_mode.h. */
+        tiles_op_mode_scan();
         /* Must run after the scans above so this iteration's activity
          * check sees fresh state -- see services/standby.h. Skipped
          * entirely while game mode, octave_control.c's transpose mode,
-         * or expression_control.c's sub-menu owns the rendering path, so
-         * standby's own idle timer can't fire mid-game/mid-transpose/
-         * mid-sub-menu and fight any of them over the same pads/buttons/
-         * underglow -- see services/game_mode.h's,
-         * services/octave_control.h's, and services/expression_control.h's
-         * file headers for the full reasoning. */
+         * expression_control.c's sub-menu, or op_mode.c's menu/sequencer
+         * owns the rendering path, so standby's own idle timer can't fire
+         * mid-game/mid-transpose/mid-sub-menu/mid-sequencer and fight any
+         * of them over the same pads/buttons/underglow -- see
+         * services/game_mode.h's, services/octave_control.h's,
+         * services/expression_control.h's, and services/op_mode.h's file
+         * headers for the full reasoning. */
         if (!tiles_game_mode_is_active() && !tiles_octave_control_is_transpose_active() &&
-            !tiles_expression_control_owns_pad_grid()) {
+            !tiles_expression_control_owns_pad_grid() && !tiles_op_mode_owns_pad_grid()) {
             tiles_standby_scan();
         }
         tiles_lighting_service();

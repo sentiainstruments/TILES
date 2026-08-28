@@ -1784,5 +1784,113 @@ not its code.
   width constants have been seen on real hardware yet -- this rework is
   itself unverified, only reasoned through against the *previous*
   version's real feedback.
+- `midi_clock.h`/`.c` — done for V1: MIDI clock RECEIVE (System
+  Real-Time bytes only -- 0xF8 Clock, 0xFA Start, 0xFB Continue, 0xFC
+  Stop), the timing source `op_mode.h`'s sequencer mode plays back from.
+  Real feedback: "we pull midi clock from midi or usb from software or
+  hardware and thats how the clock works" -- deliberately no internal
+  free-running fallback tempo; the sequencer doesn't advance at all
+  until a real external clock starts sending, exactly like a hardware
+  sequencer chained off a DAW/master clock. USB MIDI IN only for now
+  (`tud_midi_stream_read()` -- the composite device's descriptor already
+  had a full IN+OUT endpoint pair, `midi/usb_descriptors.c`'s
+  `TUD_MIDI_DESCRIPTOR` call, so no descriptor change was needed, just
+  actually calling the read side for the first time); DIN MIDI IN isn't
+  built yet (see `midi/README.md`), but would feed this same byte parser
+  once it exists. Deliberately narrow scope: only the 4 real-time bytes
+  above are parsed, everything else read from the stream (notes, CC,
+  sysex, etc.) is silently discarded -- real-time bytes are always
+  complete single-byte messages that can legally appear anywhere in a
+  MIDI stream, so no running-status tracking is needed to find them
+  safely. `tiles_midi_clock_get_state()` returns a monotonic pulse count
+  (incremented by 0xF8 regardless of transport state, matching how a
+  real master keeps clocking continuously) plus the current running flag
+  and a one-shot start_edge (Start resets position; Continue resumes
+  without one) -- `op_mode.c` diffs the pulse count against its own last
+  reading rather than this file pushing per-pulse callbacks, robust to
+  more than one pulse landing between main-loop iterations. **Not
+  hardware-verified** -- untested against any real MIDI clock source
+  (DAW, hardware sequencer, or otherwise) yet.
+- `op_mode.h`/`.c` — done for V1: operation modes (melodic/chord/
+  sequencer/arpeggiator), SW4 ("diamond")'s function -- real feedback:
+  "its time to implement the operation modes. we have standard melodic,
+  chord trigger mode..., sequencer mode..., arpeggiator mode.... we
+  trigger those with the rombus diamond button." A single click (not a
+  hold -- real feedback explicitly compared this to `game_mode.h`'s own
+  menu but as a simpler one-button click, since SW4 alone has no
+  normal-play collision the way holding all 4 game-mode buttons would)
+  toggles between melodic (no menu) -> the mode-select menu -> back to
+  melodic, or exits any active non-melodic mode straight back to
+  melodic. The menu itself is 4 rows (one per mode, not `game_mode.h`'s
+  single row of 4 touch-targets) -- real feedback: "we have those 4
+  modes for now each on its own row because we might add alternative
+  modes derived from each to each corresponding column" -- reusing
+  `expression_control.c`'s row/column sub-menu shape rather than
+  `game_mode.c`'s menu layout. Row ("mode selector") colors, real
+  feedback's own phrase: melodic = Sentia magenta, chord = green,
+  sequencer = red, arp = blue.
+  **Chord and arp are selectable but not yet implemented** -- real
+  feedback named chord explicitly ("not implemented yet"); arp's actual
+  trigger logic (pattern, rate, note order from currently-held notes)
+  wasn't specified in enough detail to build without guessing blind, the
+  same measure-before-building discipline this codebase has followed
+  throughout. Both stay selectable from the menu and glow the diamond
+  LED to confirm something other than melodic is picked, but neither
+  claims the pad grid (`tiles_op_mode_owns_pad_grid()` returns false for
+  them) -- touching pads keeps playing completely normal melodic notes
+  underneath until each mode's real logic exists, a deliberate, honest
+  stub rather than a guess dressed up as a feature.
+  **Sequencer mode, fully built:** all 24 pads = 24 steps, real
+  feedback: "lets build sequencermode with the full 24 keys as a
+  standard 24 step." Step order is row-major top-left to bottom-right
+  (pad 1 = step 0 ... pad 24 = step 23, `board_pad_for_row_col()`'s own
+  numbering, no remapping). Tapping a pad while sequencer mode owns the
+  grid toggles whether that step is armed (plays its own
+  `note_map.c`-mapped pitch when the playhead reaches it); armed steps
+  persist across leaving and re-entering sequencer mode (only cleared at
+  boot), so checking something in melodic mode and coming back doesn't
+  wipe the pattern. Playback is driven entirely by `midi_clock.h`'s real
+  external clock: `OP_SEQ_CLOCKS_PER_STEP` (6) is the standard "1 step =
+  1 sixteenth note" convention (24 MIDI-spec clocks/quarter note / 4).
+  Start resets the playhead to step 0 and plays it immediately; Continue
+  resumes from wherever it already was; Stop silences whatever's
+  sounding and freezes the playhead. Notes fire on a single reserved MPE
+  Member Channel (the last of the 15 -- v1 only ever sounds one
+  sequencer note at a time, so one dedicated channel is enough rather
+  than reaching into `expression.c`'s own private per-touch allocator,
+  which is built around strike/touch lifecycle events sequencer playback
+  doesn't have; a lingering touch-note already on that exact channel at
+  the instant sequencer mode starts is a narrow, accepted edge case, not
+  a structural conflict, since sequencer mode already suppresses new
+  touch strikes while it owns the grid) at a fixed velocity (100 -- no
+  strike/touch event exists to derive one from) and a full-length gate
+  (note-off exactly when the playhead leaves that step, no separate
+  gate-length concept yet). Haptics: "the happtics activate on each
+  active step" -- `tiles_haptics_trigger_kick()`/`_stop()` fire in
+  lockstep with the MIDI note.
+  Step colors, real feedback: "in sequencer steps that are not playing
+  are slightly dim red. steps thats on is white bright and steps that
+  are unavailable are off." Three states: armed + not the current
+  playhead step = dim red; armed + IS the current step while its note is
+  actually sounding = bright white; never armed ("unavailable") = fully
+  off ALWAYS, including at the instant the playhead passes over it -- no
+  playhead flash on an empty step, per the literal "unavailable are off"
+  with no stated exception.
+  **Mutual exclusion, and a collision found while auditing for more like
+  it:** real feedback asked to "look for other colisions" after the
+  circle+square/game-mode-combo fix above -- this module's own SW4 click
+  needed the identical guard (`game_mode.h`'s entry combo is
+  SW3+SW4+SW5+SW6, so SW4 alone during that combo's imperfectly-
+  simultaneous press/release could misread as a plain diamond click; see
+  `s_diamond_press_had_conflict` in `op_mode.c`). `tiles_op_mode_owns_
+  pad_grid()` was wired into every existing mutual-exclusion point this
+  codebase already had (`game_mode.c`'s `gm_combo_held()`,
+  `expression_control.c`'s scan guard, `octave_control.c`'s combo guard,
+  `expression.c`'s new-strike suppression, and `main.c`'s standby-scan
+  gate) rather than inventing a parallel mechanism.
+  **Not hardware-verified at all** -- none of the above (the click
+  gesture, the menu, sequencer playback/rendering, the channel
+  reservation) has been tried on real hardware yet, including against a
+  real external MIDI clock source.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

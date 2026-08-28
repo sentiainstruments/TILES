@@ -55,6 +55,12 @@ static inline uint8_t board_button_for_col(uint8_t col) {
 #define TILES_SQUARE_BUTTON_ID 5u
 #define TILES_SQUARE_BUTTON_COL 5u
 
+/* SW4 (diamond), two left of circle -- operation-mode select
+ * (services/op_mode.h): a single click toggles the mode-picker menu (or
+ * exits back to melodic play). */
+#define TILES_DIAMOND_BUTTON_ID 4u
+#define TILES_DIAMOND_BUTTON_COL 4u
+
 #define TILES_NUM_UNDERGLOW_ANCHORS 4u
 
 static const tiles_grid_point_t g_tiles_underglow_anchor[TILES_NUM_UNDERGLOW_ANCHORS] = {

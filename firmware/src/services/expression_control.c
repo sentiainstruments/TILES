@@ -7,6 +7,7 @@
 #include "game_mode.h"
 #include "haptics.h"
 #include "lighting.h"
+#include "op_mode.h"
 #include "standby.h"
 #include "touch.h"
 
@@ -503,6 +504,20 @@ void tiles_expression_control_scan(void) {
          * here -- game_mode.c's own gm_combo_held() refuses to enter
          * while it is -- so it's deliberately left untouched rather than
          * force-cleared. */
+        s_square_was_held = square_held;
+        s_circle_was_held = circle_held;
+        s_combo_was_held = circle_held && square_held;
+        s_square_alone_was_held = square_held && !circle_held;
+        return;
+    }
+
+    if (tiles_op_mode_owns_pad_grid()) {
+        /* services/op_mode.h's mode-select menu or sequencer mode owns
+         * the pad grid -- same mutual-exclusion reasoning as the
+         * game-mode branch just above. Sequencer mode's own MPE Member
+         * Channel reservation is independent of anything square/circle
+         * would otherwise do here, so there's no additional interaction
+         * to worry about beyond just not fighting over the grid/LEDs. */
         s_square_was_held = square_held;
         s_circle_was_held = circle_held;
         s_combo_was_held = circle_held && square_held;
