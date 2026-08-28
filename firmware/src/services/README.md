@@ -46,7 +46,8 @@ not its code.
   always still collapses straight to plain white at `pad_level_for_press()`
   regardless of note role, unchanged. A natural (white) key keeps exactly
   the previous idle-white behavior at `idle_baseline_level()`
-  (`TILES_LIGHTING_IDLE_BASELINE_PERCENT`, 10%); a sharp (black) key
+  (`TILES_LIGHTING_IDLE_BASELINE_PERCENT`, 25% -- raised from 10%, real
+  feedback: "make all led brighter its hard to see"); a sharp (black) key
   goes to TRUE black -- a deliberate, narrow exception to this file's
   usual "pads never go fully dark" floor, scoped specifically to this
   readability distinction. Root checked first: a root pad can itself be
@@ -65,13 +66,17 @@ not its code.
   brand color `expression_control.c`'s sub-menu and `boot_sequence.c`'s
   final pulse already use) instead of plain blue, at
   `root_baseline_level()` (`TILES_LIGHTING_ROOT_BASELINE_PERCENT`, now
-  6% of ceiling) -- deliberately LOWER than the natural-key baseline's
-  10%, a reversal of this feature's first pass (which had root brighter,
-  reasoning that a single-channel color reads dimmer than three-channel
-  white at the same level and wanted a clear landmark). Real feedback
-  called for the opposite: a subtler root indicator, dimmer than the
-  surrounding naturals rather than a bright highlight. Unmeasured -- a
-  first attempt at "visibly dimmer, not so dim it disappears," not
+  15% of ceiling, raised from 6% -- real feedback: "make root note led
+  also brighter," part of the same "make all led brighter" pass as the
+  natural-key baseline above) -- deliberately kept LOWER than the
+  natural-key baseline's 25%, a reversal of this feature's first pass
+  (which had root brighter, reasoning that a single-channel color reads
+  dimmer than three-channel white at the same level and wanted a clear
+  landmark). Real feedback called for the opposite: a subtler root
+  indicator, dimmer than the surrounding naturals rather than a bright
+  highlight -- still true after this brightness pass, just a less
+  extreme gap now that both are brighter in absolute terms. Unmeasured --
+  a first attempt at "visibly dimmer, not so dim it disappears," not
   calibrated against real LED brightness/diffusion.
   Unmeasured -- root's brighter percentage and the natural/sharp
   distinction reading clearly at actual LED brightness/diffusion are
@@ -353,7 +358,7 @@ not its code.
   by `octave_control.c` (see its entry above) so a shift press -- or a
   press meant only to dismiss a sticky sub-menu, see below -- doesn't
   *also* silently step the octave/transpose key.
-  **Square alone, momentary preview + 3-second sticky lock: the
+  **Square alone, momentary preview + 2-second sticky lock: the
   expression sub-menu.** Real feedback, after the button-identity
   correction: "it should be when you hold shift and sentia the pads
   become sliders one for each of the four rows... row one is haptics,
@@ -362,10 +367,12 @@ not its code.
   tried on real hardware: "lets change [that] to hold square for 3
   seconds alone to toggle that menu," followed by a second hardware pass:
   "momentary press should open menu as well but after 3 seconds the
-  toggle should happen." The sub-menu is now visible from the instant
-  square is held alone (`s_submenu_visible`, `set_submenu_visible()`) --
-  a momentary preview that disappears again on release below
-  `EXPRESSION_SUBMENU_TOGGLE_HOLD_MS` (3000ms). Reaching that threshold
+  toggle should happen," then later "hold sentia for 2 sec not 3." The
+  sub-menu is now visible from the instant square is held alone
+  (`s_submenu_visible`, `set_submenu_visible()`) -- a momentary preview
+  that disappears again on release below
+  `EXPRESSION_SUBMENU_TOGGLE_HOLD_MS` (2000ms, lowered from 3000).
+  Reaching that threshold
   while still held alone (edge-latched via `s_submenu_toggle_fired`, same
   `*_fired` shape `standby.h`'s own circle-hold uses; the alone-streak
   restarts if circle ever joins mid-hold) flips `s_submenu_sticky`
@@ -493,6 +500,24 @@ not its code.
   (`gm_combo_held()`) refuses to fire while this module's sub-menu
   already owns the pad grid, so the two mutually-exclusive features can
   never both claim the board at once -- see `game_mode.h`'s entry below.
+  **Real bug found and fixed after hardware testing:** "we have an issue
+  when going into game mode the sentia and circle combo is getting
+  triggered by the 4 button combo." `tiles_game_mode_is_active()` above
+  only guards AFTER game mode has actually toggled on; the real gap was
+  on the way IN (or back out) -- `gm_combo_held()`'s entry gesture is
+  SW3+SW4+square+circle, and since square+circle are two of those four
+  buttons, this module saw the exact same circle+square state a
+  deliberate two-button gesture would produce for however long fingers
+  take to land or lift all four (never perfectly simultaneous), reading
+  it as a fresh short combo/press/release of its own mute or sub-menu
+  gestures. Fixed by skipping this module's handling entirely whenever
+  SW3 AND SW4 are ALSO currently held -- that specific four-button state
+  is `game_mode.c`'s reserved combination and never a legitimate use of
+  circle/square alone or together on their own.
+  **Timing lowered, real feedback:** "hold sentia for 2 sec not 3" --
+  `EXPRESSION_SUBMENU_TOGGLE_HOLD_MS` 3000 -> 2000 (see that constant's
+  own comment for why `EXPRESSION_MUTE_HOLD_MS`, a different gesture,
+  deliberately stayed at 3000).
   **Not yet hardware-verified at all** -- none of the above (the
   button-identity correction, the momentary/sticky sub-menu and its
   column-to-value mapping, the dismiss-button shortcut, the dim/off
@@ -1677,6 +1702,10 @@ not its code.
   min if triggered manually, 20 if auto" --
   `TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS` 15 -> 20 minutes,
   `TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS` 20 -> 30 minutes.
+  **Circle hold thresholds also lowered**, real feedback: "hold sleep
+  4sec not 6 and hold 8 for deep sleep" --
+  `TILES_CIRCLE_SCREENSAVER_HOLD_MS` 6000 -> 4000,
+  `TILES_CIRCLE_DEEP_SLEEP_HOLD_MS` 10000 -> 8000.
   **Animation 6 (graphic equalizer/VU meter) reworked again**, real
   feedback: "make the blue white in vu meter" (rows 3-4's bar color and
   the underglow accent, both previously blue, are now white) and "make

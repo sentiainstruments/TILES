@@ -161,10 +161,10 @@ first on-hardware note-on test.
   asleep, see `services/README.md` for the fix). After 20 minutes of total
   inactivity it drops further into deep sleep: everything dark except the
   circle button pulsing slowly, the one indicator it's in this state.
-  Holding the circle button (SW6) for 6s manually forces the screensaver
+  Holding the circle button (SW6) for 4s manually forces the screensaver
   on early and repurposes SW1/SW2 as scroll-without-waking animation
   controls (a longer, 30-minute deep-sleep timeout applies while in this
-  manual mode); holding it further, to 10s, escalates straight into that
+  manual mode); holding it further, to 8s, escalates straight into that
   *same* deep sleep state directly -- not a separate blank state, per
   real feedback that the two should be one and the same thing. Circle is
   this board's shift/power button and stays scoped to exactly these two
@@ -307,7 +307,7 @@ flashable `.uf2`.
   `DEEP_SLEEP_PULSE_PERIOD_MS`, `BOUNCE_ROW_PERIOD_MS`,
   `TETRIS_STEP_MS`, `FALLINGDOTS_STEP_MS`, etc.) is a first guess. `BUTTON_STANDBY_BRIGHTNESS_SCALE`
   (0.35) is likewise still an unmeasured guess at how much dimmer buttons need to be, not a measured
-  match to pad brightness. The circle-button (SW6) 6s/10s long-press
+  match to pad brightness. The circle-button (SW6) 4s/8s long-press
   gestures, the deep sleep consolidation, and manual scroll-through-animations
   mode are all brand new and untested on real hardware -- both hold
   thresholds and the 20-minute manual deep-sleep timeout are first
@@ -321,7 +321,7 @@ flashable `.uf2`.
   LEVEL`'s "close to full brightness, not by a lot" is a first guess. The
   expression sub-menu itself (4 rows of pad sliders for haptics/
   pitch-bend/aftertouch sensitivity, one reserved row; visible from the
-  instant square is held alone, locking open sticky at 3 seconds,
+  instant square is held alone, locking open sticky at 2 seconds,
   dismissible early via any of SW1-4) and the separate circle+square
   3-second-hold expression mute (which the sub-menu now overrides on any
   real in-menu change, but not merely by being opened) are equally

@@ -24,7 +24,7 @@
  * or Hall depth once that's re-enabled).
  *
  * ---- Circle button (SW6) long-press gestures --------------------------
- * Holding circle for TILES_CIRCLE_SCREENSAVER_HOLD_MS (6s) manually
+ * Holding circle for TILES_CIRCLE_SCREENSAVER_HOLD_MS (4s) manually
  * forces standby's screensaver to start immediately (skips the 1-minute
  * idle wait) and marks it "manual" (s_manual_screensaver): while in this
  * mode, SW1/SW2 step through animations sequentially, forward/backward,
@@ -35,13 +35,15 @@
  * before dropping to deep sleep: TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS
  * (30 minutes) instead of the normal 20, since the user is actively
  * choosing to watch it. Holding circle further, to
- * TILES_CIRCLE_DEEP_SLEEP_HOLD_MS (10s), escalates straight into deep
+ * TILES_CIRCLE_DEEP_SLEEP_HOLD_MS (8s), escalates straight into deep
  * sleep -- the *exact same* state the normal inactivity timeout above
  * reaches, not a separate one; real feedback: "the sleep mode after 10
  * secs is the same as the timeout of the animations, not two separate
  * things... both behave as sleep with a single circle light indicator
  * pulsing slowly... rename that to deep sleep." (An earlier version had
- * the 10s hold jump to a second, fully-blank state instead -- removed.)
+ * the 10s hold jump to a second, fully-blank state instead -- removed;
+ * both thresholds were later shortened again, real feedback: "hold sleep
+ * 4sec not 6 and hold 8 for deep sleep," 6s/10s -> 4s/8s.)
  * Both thresholds are edge-latched per hold (see handle_circle_hold()'s
  * *_fired flags) so a single long hold can't re-fire, and both are
  * handled unconditionally every scan regardless of current state.
@@ -50,7 +52,7 @@
  * button, on release: real feedback "circle... not waking the instrument
  * up from sleep." Circle is deliberately excluded from real_input_
  * active()'s own generic wake check (needed so a hold building toward
- * 6s/10s doesn't wake standby on its very first tick, before either
+ * 4s/8s doesn't wake standby on its very first tick, before either
  * threshold can fire), so handle_circle_hold() itself is what has to
  * recognize the released-early case instead.
  *

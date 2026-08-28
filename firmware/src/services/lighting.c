@@ -8,7 +8,12 @@
 #include "sk6805.h"
 #include "tca9554.h"
 
-#define TILES_LIGHTING_IDLE_BASELINE_PERCENT 10u
+/* Real feedback: "make all led brighter its hard to see" -- raised from
+ * 10. Still a fraction of ceiling_level() (itself a power-derived safety
+ * cap from tiles_power_get_state(), untouched by this change), so this
+ * only spends more of whatever headroom that ceiling already allows on
+ * the resting/idle state, not a change to the underlying power budget. */
+#define TILES_LIGHTING_IDLE_BASELINE_PERCENT 25u
 
 /* Idle (untouched) chromatic-play pad coloring by note role -- real
  * feedback: "root should be blue and black keys shouldnt have led this
@@ -33,8 +38,14 @@
  * idle pad in this file, which is deliberately never allowed to go
  * fully dark (see tiles_lighting_set_pad_press()'s header); this is a
  * narrow, deliberate exception specifically for the natural/sharp
- * readability distinction real feedback asked for. */
-#define TILES_LIGHTING_ROOT_BASELINE_PERCENT 6u
+ * readability distinction real feedback asked for.
+ * Raised from 6, real feedback: "make root note led also brighter" (part
+ * of a broader "make all led brighter its hard to see" -- see
+ * TILES_LIGHTING_IDLE_BASELINE_PERCENT above). Kept below that constant's
+ * new value so root stays visibly dimmer than a natural key at rest, per
+ * the same real feedback that made it dimmer in the first place -- just
+ * a less extreme gap now that both are brighter in absolute terms. */
+#define TILES_LIGHTING_ROOT_BASELINE_PERCENT 15u
 
 /* Underglow's own fixed brightness, out of 255 -- deliberately NOT
  * scaled by ceiling_level()/the power state. It used to be a percentage

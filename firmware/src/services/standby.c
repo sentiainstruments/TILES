@@ -1937,13 +1937,13 @@ static uint8_t s_animation_index;
 static uint8_t s_prev_animation_index; /* the one that played immediately before s_animation_index */
 
 /* True only while s_state == STANDBY *and* that STANDBY was entered via
- * the manual 6s circle-hold gesture (handle_circle_hold() below), not
+ * the manual 4s circle-hold gesture (handle_circle_hold() below), not
  * the normal 60s auto-idle path. Changes two things while true: SW1/SW2
  * become animation-scroll controls instead of a wake signal (see
  * real_input_active()), and the STANDBY -> DEEP_SLEEP timeout extends
  * to TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS (30 minutes) instead
  * of the normal 20 -- both real feedback. Cleared on every way of
- * leaving STANDBY (waking, dropping to DEEP_SLEEP, or the 10s hold
+ * leaving STANDBY (waking, dropping to DEEP_SLEEP, or the 8s hold
  * escalating straight there) so a later *normal* auto-idle STANDBY never
  * inherits these. */
 static bool s_manual_screensaver;
@@ -1952,9 +1952,10 @@ static bool s_manual_screensaver;
  * "holding for 10 sec send into power off standby... holding for 6
  * seconds send into screensaver animations... remember and set up
  * circle as our general shift button unless pressed for the intervals
- * we said." */
-#define TILES_CIRCLE_SCREENSAVER_HOLD_MS 6000u
-#define TILES_CIRCLE_DEEP_SLEEP_HOLD_MS 10000u
+ * we said," then later "hold sleep 4sec not 6 and hold 8 for deep
+ * sleep" (6000 -> 4000, 10000 -> 8000). */
+#define TILES_CIRCLE_SCREENSAVER_HOLD_MS 4000u
+#define TILES_CIRCLE_DEEP_SLEEP_HOLD_MS 8000u
 static bool s_circle_was_held;
 static uint32_t s_circle_hold_start_ms;
 static bool s_circle_screensaver_fired;
@@ -2007,7 +2008,7 @@ static void print_wake_source(uint32_t now_ms) {
  * excluded here, both real feedback: circle (SW6) always, since it now
  * has its own dedicated long-press handling (handle_circle_hold())
  * rather than a generic "any press wakes it" meaning -- without this
- * exclusion, holding circle toward the 6s/10s thresholds would wake
+ * exclusion, holding circle toward the 4s/8s thresholds would wake
  * standby on the very first tick of the hold, before either threshold
  * could ever fire; and SW1/SW2, but only while a manually-entered
  * screensaver is showing (see s_manual_screensaver), since they're
@@ -2134,7 +2135,7 @@ static void exit_standby(void) {
 /* Deep sleep: the single dormant state reached either by
  * current_deep_sleep_timeout_ms() of total inactivity from STANDBY, OR
  * directly by holding circle (SW6) for TILES_CIRCLE_DEEP_SLEEP_HOLD_MS
- * (10s) -- real feedback: "the sleep mode after 10 secs is the same as
+ * (8s) -- real feedback: "the sleep mode after 10 secs is the same as
  * the timeout of the animations, not two separate things... both behave
  * as sleep with a single circle light indicator pulsing slowly." An
  * earlier version had the 10s hold jump to a second, fully-blank state
@@ -2145,7 +2146,7 @@ static void exit_standby(void) {
  * is in deep sleep rather than fully off. Explicitly (re)asserts the
  * lighting/buttons standby-active claim rather than assuming
  * enter_standby() already made it -- true whenever this is reached via
- * the normal STANDBY timeout path, but the 10s circle hold can in
+ * the normal STANDBY timeout path, but the 8s circle hold can in
  * principle land here without ever having passed through STANDBY. */
 static void enter_deep_sleep(void) {
     s_state = TILES_STANDBY_STATE_DEEP_SLEEP;
@@ -2161,7 +2162,7 @@ static void enter_deep_sleep(void) {
  * tiles_standby_scan(), regardless of current state, so the gesture
  * works whether the board is currently AWAKE, already in STANDBY, or
  * already in DEEP_SLEEP -- a continuous hold naturally passes through
- * the 6s threshold (enters/escalates to a manual STANDBY) before the 10s
+ * the 4s threshold (enters/escalates to a manual STANDBY) before the 8s
  * one (escalates further to DEEP_SLEEP -- the exact same state the
  * normal inactivity timeout below reaches, not a separate one), each
  * firing exactly once per hold via its own *_fired latch. */
@@ -2191,7 +2192,7 @@ static void handle_circle_hold(uint32_t now_ms) {
          * threshold -- an ordinary short tap. Real feedback: "circle...
          * not waking the instrument up from sleep." real_input_active()
          * below deliberately excludes circle from its generic wake check
-         * (a hold building toward the 6s/10s thresholds must not wake
+         * (a hold building toward the 4s/8s thresholds must not wake
          * standby on its very first tick, before either can fire), but
          * that exclusion also silently swallowed the far more common
          * case of a plain short tap doing nothing at all while asleep,

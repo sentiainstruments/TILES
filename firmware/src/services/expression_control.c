@@ -39,15 +39,17 @@
 /* How long square must be held ALONE (circle NOT also held) before the
  * sub-menu's momentary preview LOCKS open (sticky) -- real feedback:
  * "momentary press should open menu as well but after 3 seconds the
- * toggle should happen." The sub-menu itself is already visible from the
- * instant square is held (see tiles_expression_control_scan()); this
- * threshold only governs whether it disappears again on release (below
- * 3s) or stays visible after release until toggled off the same way
- * (at/above 3s). Same edge-latch shape as EXPRESSION_MUTE_HOLD_MS above
- * (s_submenu_toggle_fired), but tracked against its own independent
- * hold-start timestamp since it's a different gesture on a different
- * button combination. */
-#define EXPRESSION_SUBMENU_TOGGLE_HOLD_MS 3000u
+ * toggle should happen," then later "hold sentia for 2 sec not 3" (3000
+ * -> 2000). The sub-menu itself is already visible from the instant
+ * square is held (see tiles_expression_control_scan()); this threshold
+ * only governs whether it disappears again on release (below the
+ * threshold) or stays visible after release until toggled off the same
+ * way (at/above it). Same edge-latch shape as EXPRESSION_MUTE_HOLD_MS
+ * above (s_submenu_toggle_fired), but tracked against its own
+ * independent hold-start timestamp since it's a different gesture on a
+ * different button combination -- deliberately NOT changed together with
+ * that one; only "sentia" (square alone) was asked for. */
+#define EXPRESSION_SUBMENU_TOGGLE_HOLD_MS 2000u
 
 /* Mute's LED pattern on square -- "a blinking light with a two blink
  * pattern and rest at medium brightness." Two brief on/off blinks, then
@@ -501,6 +503,35 @@ void tiles_expression_control_scan(void) {
          * here -- game_mode.c's own gm_combo_held() refuses to enter
          * while it is -- so it's deliberately left untouched rather than
          * force-cleared. */
+        s_square_was_held = square_held;
+        s_circle_was_held = circle_held;
+        s_combo_was_held = circle_held && square_held;
+        s_square_alone_was_held = square_held && !circle_held;
+        return;
+    }
+
+    /* Real feedback: "we have an issue when going into game mode the
+     * sentia and circle combo is getting triggered by the 4 button
+     * combo." game_mode.c's own entry gesture is SW3+SW4+square+circle
+     * held together (see its gm_combo_held()) -- since square and circle
+     * are two of those four buttons, this module sees exactly the same
+     * circle+square state a deliberate two-button mute/sub-menu gesture
+     * would produce for as long as all four are going down or coming back
+     * up. tiles_game_mode_is_active() above only guards AFTER game mode
+     * has actually toggled on (its own hold threshold is shorter than
+     * EXPRESSION_MUTE_HOLD_MS/EXPRESSION_SUBMENU_TOGGLE_HOLD_MS, so that
+     * alone mostly avoids a false trigger) -- the real gap is that human
+     * fingers don't press or release four buttons in perfect unison, so a
+     * brief window where only circle+square (or just one of them) are
+     * down, on the way in or out of that four-button press, can register
+     * as a fresh short combo/press/release of THIS module's own gestures.
+     * Since SW3+SW4+square+circle held together is game_mode.c's
+     * reserved combination and never a legitimate use of circle/square
+     * alone or together on their own, skip this module's handling
+     * entirely whenever SW3 AND SW4 are ALSO currently held -- covers
+     * both the entry ramp-up and (for symmetry, though game_mode_is_
+     * active() already covers most of it) the exit ramp-down. */
+    if (tiles_button_is_pressed(3u) && tiles_button_is_pressed(4u)) {
         s_square_was_held = square_held;
         s_circle_was_held = circle_held;
         s_combo_was_held = circle_held && square_held;
