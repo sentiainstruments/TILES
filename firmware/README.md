@@ -146,9 +146,10 @@ first on-hardware note-on test.
   `power` done for V1: derives USB-only/external-only/both/fault from
   GP22 + TinyUSB's mounted state (debounced), exposing both a live
   accessor and a change-callback so haptics/CV-gate can plug in once
-  they exist -- currently wired into `lighting.c`'s brightness ceiling
-  and `haptics.c`'s voice ceiling, not yet hardware-tested against a
-  real source-switch transition.
+  they exist -- wired into `lighting.c`'s brightness ceiling and
+  `haptics.c`'s voice ceiling, and a real hot-swap (external power
+  plugged in mid-session) has been confirmed working on hardware --
+  real feedback: "transition worked."
   `standby` done for a demo V1: after 1 minute idle, pads + buttons +
   underglow run one of 13 rotating ambient animations (see
   `services/README.md` for the full list, including Snake/Tetris/Pong
@@ -273,11 +274,12 @@ flashable `.uf2`.
   once against real hardware for "too dim" feedback on USB power, but
   neither the USB-only nor the external-power ceiling has been measured
   against an actual current budget.
-- `services/power.c`'s GP22-derived mode has only been reasoned through
-  against the documented truth table, not exercised on real hardware
-  yet -- no test has actually unplugged USB, plugged in external 12V,
-  or forced the FAULT combination to confirm the debounce and the
-  resulting mode/ceiling actually behave as designed.
+- `services/power.c`'s GP22-derived mode: a real hot-swap (plugging in
+  external 12V mid-session) has been confirmed working on hardware --
+  real feedback: "transition worked" -- the debounce and the resulting
+  mode/ceiling change do behave as designed. Not yet tested: unplugging
+  external power back down to USB-only, or forcing the FAULT
+  combination.
 - `services/standby.c`: on real hardware, entering standby works and
   buttons/pedal reliably wake it, but MPR121 touch alone does NOT
   reliably wake it while the animation is running -- root cause

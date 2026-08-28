@@ -1558,13 +1558,18 @@ not its code.
   own. Budgets/ceilings per mode are transcribed from the hardware
   handoff's named-profile table (USB_DEMO_SAFE / FULL_DEMO_EXTERNAL),
   not invented here.
+  **Live source-switch transition confirmed on real hardware** -- real
+  feedback: "transition worked." Plugging in external power mid-session
+  hot-switches the mode within the 50ms debounce window with no reboot/
+  power-cycle needed, and every live consumer (`lighting.c`'s brightness
+  ceiling first and foremost, since that's the visibly obvious one) picks
+  up the new limits immediately -- confirms both the GP22/mounted-state
+  derivation and the live-read wiring actually work end to end, not just
+  reasoned through against the truth table.
   **Not done:** `USB_DEMO_VALIDATED_1P5A` (a manual-only override, never
   auto-selected -- belongs to a future `profiles/` module, not this
-  one), any real current measurement (every budget here is a governance
-  ceiling, not a live current reading), and this hasn't been
-  hardware-tested against an actual USB unplug/external-power-plug
-  transition yet -- only reasoned through against the documented truth
-  table and confirmed to build/pass host tests.
+  one), and any real current measurement (every budget here is a
+  governance ceiling, not a live current reading).
 - `standby.h`/`.c` — done for a demo V1: after 60s (1 minute -- an
   explicit demo-mode default, expected to change once this isn't just a
   demo) with no touch/button/pedal activity, the pad grid + 6 function
