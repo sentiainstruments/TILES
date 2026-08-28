@@ -7,12 +7,19 @@
  * (tiles_lighting_set_pad_press) so those services can call it once
  * they exist, without lighting.c changing.
  *
- * Pad brightness is clamped to services/power.h's live
+ * Pad brightness is bounded by services/power.h's live
  * led_brightness_ceiling_percent (35-40% on USB-only, 70-80% once
  * external power is confirmed present, per the truth table there) --
- * see lighting.c's ceiling_level(). A future profiles/ module can
- * still override this; don't bypass tiles_power_get_state() to raise
- * pad brightness some other way.
+ * but as a real mA BUDGET derived from that percentage, not a blanket
+ * per-pad multiplier: lighting.c's pad_dynamic_scale() sums every pad's
+ * CURRENT desired brightness into a projected current draw and only
+ * scales down if that would exceed the budget, so a few bright pads with
+ * the rest at idle can run far brighter than the flat percentage alone
+ * would allow, while the true worst case (everything lit) still respects
+ * the same documented safety number -- real feedback: "could we push the
+ * led celing a bit more safely?" A future profiles/ module can still
+ * override the underlying percentage; don't bypass
+ * tiles_power_get_state() to raise pad brightness some other way.
  *
  * Underglow is always on at its own fixed, high brightness (see
  * lighting.c's TILES_LIGHTING_UNDERGLOW_LEVEL) and deliberately does

@@ -9,16 +9,18 @@
 #include "tca9554.h"
 
 /* Real feedback: "make all led brighter its hard to see" -- raised from
- * 10. Still a fraction of ceiling_level() (itself a power-derived safety
- * cap from tiles_power_get_state(), untouched by this change), so this
- * only spends more of whatever headroom that ceiling already allows on
- * the resting/idle state, not a change to the underlying power budget. */
+ * 10. Still a fraction of the active brightness ceiling (a power-derived
+ * safety cap from tiles_power_get_state(), untouched by this change --
+ * see this file's "Dynamic, load-aware pad brightness ceiling" section
+ * further below for how that ceiling is now computed), so this only
+ * spends more of whatever headroom that ceiling already allows on the
+ * resting/idle state, not a change to the underlying power budget. */
 #define TILES_LIGHTING_IDLE_BASELINE_PERCENT 25u
 
 /* Idle (untouched) chromatic-play pad coloring by note role -- real
  * feedback: "root should be blue and black keys shouldnt have led this
  * in rest non pressed moment... push should be regular white illumination"
- * (unchanged, see pad_level_for_press() below, still used whenever a pad
+ * (unchanged, see pad_desired_rgb() below, still used whenever a pad
  * IS touched, root or not), then, after a first hardware pass: "make the
  * blue sentia purple for root notes but dim it a bit more than standard
  * non pressed pads." Root now uses Sentia Instruments' own brand
@@ -48,9 +50,9 @@
 #define TILES_LIGHTING_ROOT_BASELINE_PERCENT 15u
 
 /* Underglow's own fixed brightness, out of 255 -- deliberately NOT
- * scaled by ceiling_level()/the power state. It used to be a percentage
- * of the active ceiling (65% of ceiling_level()), which meant it rode
- * down with the USB-only ceiling (37%) to ~24% of full and read as
+ * scaled by the active brightness ceiling/the power state. It used to be
+ * a percentage of the active ceiling (65%), which meant it rode down
+ * with the USB-only ceiling (37%) to ~24% of full and read as
  * "basically not glowing" on real hardware. Only 4 LEDs are on this
  * chain vs 24 on the pad grid -- even at full raw brightness the
  * current draw is a small fraction of the ~448mA full-grid estimate in
@@ -58,10 +60,58 @@
  * budget reason to hold it down the way the 24-pad grid needs to be.
  * It's a fixed ambient halo, not a per-pad state indicator, so running
  * it bright doesn't compete with touch/press feedback the way raising
- * every pad's baseline would. */
+ * every pad's baseline would. Its contribution IS still counted against
+ * the dynamic pad budget below, though -- see underglow_fixed_ma(). */
 #define TILES_LIGHTING_UNDERGLOW_LEVEL 230u
 
 #define TILES_LIGHTING_NUM_UNDERGLOW_PIXELS 4u
+
+/* ---- Dynamic, load-aware pad brightness ceiling -------------------------
+ * Real feedback: "could we push the led celing a bit more safely?" The
+ * old ceiling (led_brightness_ceiling_percent from power.c, e.g. 37% on
+ * USB-only) was a single flat multiplier applied to every pad regardless
+ * of how many others are lit at the same time -- correct for the
+ * absolute worst case (all 24 pads + underglow at full white) but far
+ * more conservative than necessary for the much more common case of a
+ * few notes held while the rest of the grid sits at a low idle baseline.
+ * "More safely" means computing the SAME documented current budget from
+ * the REAL current load every frame instead of assuming worst-case
+ * always -- individual active pads can run much brighter when few pads
+ * are lit, while the true worst case still lands at (if anything,
+ * slightly more conservative than) today's flat number, since this is
+ * the first time underglow's own real contribution is actually
+ * subtracted from the shared budget rather than ignored.
+ *
+ * The physical numbers are exactly the ones already in
+ * docs/architecture/defaults-and-safeguards.md, just used dynamically
+ * instead of as a single static clamp -- nothing here raises the actual
+ * current-draw safety envelope power.c already established:
+ *   - ~448mA at 100% duty across all 24 pad LEDs + 4 underglow pixels
+ *     (3 channels each = 84 channels total) -- so ~5.33mA per channel
+ *     at full duty, a derived rate, not a new measurement.
+ *   - The existing led_brightness_ceiling_percent (power.c) is now read
+ *     as "what fraction of that 448mA worst-case total we're willing to
+ *     spend on LEDs right now" (166mA on USB-only, 336mA external) --
+ *     the SAME percentage, just enforced as a real mA budget against
+ *     actual projected load instead of a blanket per-pad multiplier.
+ *   - Underglow's own (fixed, unscaled) contribution is computed once
+ *     and subtracted first, leaving the real remaining budget for the
+ *     24-pad grid specifically -- previously not accounted for at all.
+ * Still engineering estimates, not hardware-mandated -- see this
+ * project's own "revisit once real 5V input current is measured" note,
+ * same caveat that already applied to the flat percentage this replaces. */
+#define TILES_LIGHTING_TOTAL_MA_AT_FULL 448.0f
+#define TILES_LIGHTING_TOTAL_CHANNELS_AT_FULL 84.0f /* (24 pads + 4 underglow) * 3 channels */
+#define TILES_LIGHTING_MA_PER_CHANNEL_AT_FULL (TILES_LIGHTING_TOTAL_MA_AT_FULL / TILES_LIGHTING_TOTAL_CHANNELS_AT_FULL)
+
+/* Small headroom margin even when real load is very light -- never
+ * actually spend 100% of the computed budget, standard practice against
+ * an estimate this file's own comments already call unmeasured. */
+#define TILES_LIGHTING_DYNAMIC_SCALE_CEIL 0.95f
+/* Sanity floor -- guards the pathological all-pads-lit case (see this
+ * section's header) from reading as "basically off" even though the
+ * budget math alone would already land well above true black there. */
+#define TILES_LIGHTING_DYNAMIC_SCALE_FLOOR 0.15f
 
 typedef struct {
     float r;
@@ -78,23 +128,6 @@ static tiles_rgb01_t s_underglow_rgb[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
 static uint8_t s_service_cursor;
 static bool s_initialized;
 static bool s_standby_active;
-
-/* Live read (not cached) so a power-state change -- e.g. external 12V
- * gets plugged in mid-session -- is reflected the very next time any
- * pad is written, with no extra wiring here. tiles_power_get_state()
- * is a cheap struct copy, safe to call this often. */
-static uint8_t ceiling_level(void) {
-    uint8_t ceiling_percent = tiles_power_get_state().led_brightness_ceiling_percent;
-    return (uint8_t)((255u * ceiling_percent) / 100u);
-}
-
-static uint8_t idle_baseline_level(void) {
-    return (uint8_t)(((uint32_t)ceiling_level() * TILES_LIGHTING_IDLE_BASELINE_PERCENT) / 100u);
-}
-
-static uint8_t root_baseline_level(void) {
-    return (uint8_t)(((uint32_t)ceiling_level() * TILES_LIGHTING_ROOT_BASELINE_PERCENT) / 100u);
-}
 
 static float clamp01(float v) {
     if (v < 0.0f) {
@@ -117,23 +150,103 @@ static uint8_t underglow_channel_level(float channel_0_to_1) {
     return (uint8_t)((float)TILES_LIGHTING_UNDERGLOW_LEVEL * clamp01(channel_0_to_1));
 }
 
-/* Ceiling-scaled, no baseline floor -- the standby-animation equivalent
- * of pad_level_for_press() below, used per RGB channel instead of a
- * single baseline-floored white level. */
-static uint8_t pad_channel_level(float channel_0_to_1) {
-    return (uint8_t)((float)ceiling_level() * clamp01(channel_0_to_1));
+/* Underglow's constant contribution to the shared LED current budget --
+ * see this file's "Dynamic, load-aware pad brightness ceiling" section.
+ * A fixed number (underglow's brightness never varies), computed once
+ * per call rather than cached since it's four multiplies and this isn't
+ * a hot path. */
+static float underglow_fixed_ma(void) {
+    float channel_fraction = (float)TILES_LIGHTING_UNDERGLOW_LEVEL / 255.0f;
+    float channels = (float)TILES_LIGHTING_NUM_UNDERGLOW_PIXELS * 3.0f;
+    return channels * channel_fraction * TILES_LIGHTING_MA_PER_CHANNEL_AT_FULL;
 }
 
-/* Baseline-floored: 0.0 maps to idle_baseline_level(), not true black --
- * this is normal (non-standby) touch-driven operation's "pads never go
- * fully dark in V1" requirement (see tiles_lighting_set_pad_press's
- * header). Standby animations use pad_channel_level() above instead,
- * deliberately without this floor. */
-static uint8_t pad_level_for_press(float press_0_to_1) {
-    press_0_to_1 = clamp01(press_0_to_1);
-    uint8_t baseline = idle_baseline_level();
-    uint8_t ceiling = ceiling_level();
-    return (uint8_t)(baseline + (float)(ceiling - baseline) * press_0_to_1);
+/* What a pad's r/g/b would want (0.0-1.0 each) at a full 100% ceiling --
+ * i.e. BEFORE any budget-driven scaling, using the fixed baseline
+ * PERCENT constants directly rather than any ceiling-derived value (that
+ * would be circular: the dynamic ceiling itself is computed FROM this
+ * function's total across all 24 pads, see pad_dynamic_scale() below).
+ * Replicates write_pad()'s own standby/press/idle-root/idle-natural/
+ * idle-sharp branching -- kept as the single source of truth for "what
+ * does this pad look like" so the budget estimate and the actual render
+ * can never drift apart from each other. */
+static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
+    if (s_standby_active) {
+        return s_pad_standby_rgb[pad_index];
+    }
+    if (s_pad_press[pad_index] > 0.0f) {
+        /* Baseline-floored: 0.0 maps to the idle baseline fraction, not
+         * true black -- this is normal (non-standby) touch-driven
+         * operation's "pads never go fully dark in V1" requirement (see
+         * tiles_lighting_set_pad_press's header). */
+        float baseline = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;
+        float level = baseline + (1.0f - baseline) * clamp01(s_pad_press[pad_index]);
+        return (tiles_rgb01_t){level, level, level};
+    }
+    /* Idle (untouched), normal chromatic play: color by note role -- real
+     * feedback: "root should be blue [later: purple] and black keys
+     * shouldnt have led this in rest non pressed moment." Root checked
+     * first since a root pad can itself be a sharp/black key depending on
+     * the current key offset (see tiles_note_map_is_root_pad()'s own
+     * comment) -- root's color always wins over that. */
+    uint8_t logical_pad = (uint8_t)(pad_index + 1u);
+    if (tiles_note_map_is_root_pad(logical_pad)) {
+        /* Sentia Instruments Magenta (#FF00FF) -- R and B channels only,
+         * G stays 0 -- see TILES_LIGHTING_ROOT_BASELINE_PERCENT's own
+         * comment for the color and brightness reasoning. */
+        float level = (float)TILES_LIGHTING_ROOT_BASELINE_PERCENT / 100.0f;
+        return (tiles_rgb01_t){level, 0.0f, level};
+    }
+    if (tiles_note_map_is_natural_pad(logical_pad)) {
+        float level = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;
+        return (tiles_rgb01_t){level, level, level};
+    }
+    /* Sharp/black key, idle -- true black, deliberately bypassing this
+     * file's usual "pads never go fully dark" floor (see
+     * TILES_LIGHTING_ROOT_BASELINE_PERCENT's own comment for why this
+     * specific exception exists). */
+    return (tiles_rgb01_t){0.0f, 0.0f, 0.0f};
+}
+
+/* The dynamic replacement for the old flat ceiling_level() -- see this
+ * file's "Dynamic, load-aware pad brightness ceiling" section for the
+ * full reasoning. Sums every pad's CURRENT desired brightness (at an
+ * assumed 100% ceiling, via pad_desired_rgb() above) to get a real
+ * projected mA figure, and only scales down if that would exceed the
+ * budget power.c's led_brightness_ceiling_percent already establishes
+ * for the current power mode -- so a handful of bright pads with the
+ * rest at idle can run far brighter than the old flat percentage, while
+ * the true worst case (everything lit) still lands at (if anything, more
+ * conservative than) that same documented number. Live, not cached --
+ * recomputed fresh from current pad state every call, cheap enough (24
+ * pads * a few float ops) that this isn't a concern even called once per
+ * pad write. */
+static float pad_dynamic_scale(void) {
+    float total_channel_fraction = 0.0f;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        tiles_rgb01_t desired = pad_desired_rgb(i);
+        total_channel_fraction += desired.r + desired.g + desired.b;
+    }
+    float desired_ma = total_channel_fraction * TILES_LIGHTING_MA_PER_CHANNEL_AT_FULL;
+
+    uint8_t ceiling_percent = tiles_power_get_state().led_brightness_ceiling_percent;
+    float led_budget_ma = ((float)ceiling_percent / 100.0f) * TILES_LIGHTING_TOTAL_MA_AT_FULL;
+    float pad_budget_ma = led_budget_ma - underglow_fixed_ma();
+    if (pad_budget_ma < 0.0f) {
+        pad_budget_ma = 0.0f;
+    }
+
+    float scale = TILES_LIGHTING_DYNAMIC_SCALE_CEIL;
+    if (desired_ma > 0.0f && pad_budget_ma < desired_ma) {
+        scale = pad_budget_ma / desired_ma;
+        if (scale > TILES_LIGHTING_DYNAMIC_SCALE_CEIL) {
+            scale = TILES_LIGHTING_DYNAMIC_SCALE_CEIL;
+        }
+        if (scale < TILES_LIGHTING_DYNAMIC_SCALE_FLOOR) {
+            scale = TILES_LIGHTING_DYNAMIC_SCALE_FLOOR;
+        }
+    }
+    return scale;
 }
 
 static void write_pad(uint8_t pad_index /* 0-23 */) {
@@ -142,42 +255,12 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
         return;
     }
 
-    uint32_t pixel;
-    if (s_standby_active) {
-        const tiles_rgb01_t *c = &s_pad_standby_rgb[pad_index];
-        pixel = tiles_sk6805_pack_rgb(pad_channel_level(c->r), pad_channel_level(c->g),
-                                       pad_channel_level(c->b));
-    } else if (s_pad_press[pad_index] > 0.0f) {
-        uint8_t level = pad_level_for_press(s_pad_press[pad_index]);
-        pixel = tiles_sk6805_pack_rgb(level, level, level);
-    } else {
-        /* Idle (untouched), normal chromatic play: color by note role --
-         * real feedback: "root should be blue [later: purple] and black
-         * keys shouldnt have led this in rest non pressed moment." A
-         * touch (above) always overrides this with plain white
-         * regardless of note role -- "when pressed the regular white
-         * illumination is fine." Root checked first since a root pad can
-         * itself be a sharp/black key depending on the current key
-         * offset (see tiles_note_map_is_root_pad()'s own comment) --
-         * root's color always wins over that. */
-        uint8_t logical_pad = (uint8_t)(pad_index + 1u);
-        if (tiles_note_map_is_root_pad(logical_pad)) {
-            uint8_t root_level = root_baseline_level();
-            /* Sentia Instruments Magenta (#FF00FF) -- R and B channels
-             * only, G stays 0 -- see TILES_LIGHTING_ROOT_BASELINE_PERCENT's
-             * own comment for the color and brightness reasoning. */
-            pixel = tiles_sk6805_pack_rgb(root_level, 0u, root_level);
-        } else if (tiles_note_map_is_natural_pad(logical_pad)) {
-            uint8_t baseline = idle_baseline_level();
-            pixel = tiles_sk6805_pack_rgb(baseline, baseline, baseline);
-        } else {
-            /* Sharp/black key, idle -- true black, deliberately bypassing
-             * this file's usual "pads never go fully dark" floor (see
-             * TILES_LIGHTING_ROOT_BASELINE_PERCENT's own comment for why
-             * this specific exception exists). */
-            pixel = tiles_sk6805_pack_rgb(0u, 0u, 0u);
-        }
-    }
+    tiles_rgb01_t desired = pad_desired_rgb(pad_index);
+    float scale = pad_dynamic_scale();
+    uint8_t r = (uint8_t)(255.0f * clamp01(desired.r * scale));
+    uint8_t g = (uint8_t)(255.0f * clamp01(desired.g * scale));
+    uint8_t b = (uint8_t)(255.0f * clamp01(desired.b * scale));
+    uint32_t pixel = tiles_sk6805_pack_rgb(r, g, b);
 
     tiles_tca9554_disable_all_muxes(&s_led_mux);
     tiles_tca9554_set_select(&s_led_mux, cfg->led.mux_channel);

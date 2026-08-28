@@ -4,6 +4,8 @@
 #include "board_pins.h"
 #include "buttons.h"
 #include "expression_control.h"
+#include "hall.h"
+#include "haptics.h"
 #include "lighting.h"
 #include "op_mode.h"
 #include "touch.h"
@@ -27,6 +29,7 @@ typedef enum {
     GM_STATE_PLAYING_BRICK,
     GM_STATE_PLAYING_TETRIS,
     GM_STATE_PLAYING_PONG,
+    GM_STATE_PLAYING_SIMON,
     GM_STATE_ROUND_END,
 } gm_state_t;
 
@@ -43,6 +46,7 @@ static bool s_gm_prev_pad1_touched;
 static bool s_gm_prev_pad2_touched;
 static bool s_gm_prev_pad3_touched;
 static bool s_gm_prev_pad4_touched;
+static bool s_gm_prev_pad5_touched;
 
 /* ---- Interactive snake ---------------------------------------------------
  * Player-controlled version of standby.c's autonomous snake -- separate
@@ -953,6 +957,231 @@ static void render_pong(uint32_t now_ms) {
     }
 }
 
+/* ---- Simon Says ------------------------------------------------------------
+ * Real feedback: "lets implement another mini game, simon says, so a
+ * haptic and led patern appears on the pads and the user has to follow,
+ * start with a simple one pad at a time but it gets exponentially longer
+ * like the real simon says." Real Simon Says itself grows by exactly one
+ * step per round (linear, not exponential) -- "the real simon says" is
+ * the actual behavioral anchor here, so that's what this implements;
+ * "exponentially" is read as colloquial ("gets longer and longer fast
+ * enough to feel hard"), not literal doubling.
+ *
+ * Any of the 24 pads can appear in the pattern (repeats allowed across
+ * different steps, same as real Simon Says -- a longer sequence isn't
+ * bounded by pad count), each step ALSO gets its own color from a small
+ * fixed palette (real feedback: "the sewqurnce has different colors
+ * flashing"), assigned independently of which pad it lands on -- pure
+ * visual variety, not a code for anything.
+ *
+ * "for this mini game touch pads are disabeled but push pads are used
+ * for pattern receation" -- unlike every other game/menu in this
+ * codebase (all touch-driven), GSIM_PRESS_DEPTH below reads real Hall
+ * depth during the player's input phase, the same "an actual push, not
+ * a light touch" threshold expression.c's own MIN_STRIKE_DEPTH_DELTA
+ * uses for real note strikes. "the haptics play a big part... giving
+ * you the vibraions paired with light to indicate the correct light" --
+ * every playback step fires both together; "when player plays the
+ * colors do come back when pressed" -- a correct press re-flashes that
+ * exact pad's own pattern color as confirmation. */
+
+#define GSIM_MAX_LENGTH 32u
+#define GSIM_NUM_COLORS 6u
+#define GSIM_ROUND_START_DELAY_MS 700u /* pause before playback, breathing room between rounds */
+#define GSIM_PLAYBACK_STEP_MS 550u     /* total time budget per pattern step, on + gap */
+#define GSIM_PLAYBACK_FLASH_MS 380u    /* how much of that step is actually lit */
+#define GSIM_PLAYBACK_VELOCITY 110u    /* firm -- this IS the thing the player must remember */
+#define GSIM_FEEDBACK_VELOCITY 90u
+#define GSIM_FEEDBACK_FLASH_MS 220u /* correct-press confirmation flash length */
+/* Mirrors expression.c's MIN_STRIKE_DEPTH_DELTA (300) -- "an actual
+ * push," the same real-hardware-calibrated threshold real note strikes
+ * use, not a guessed new number. */
+#define GSIM_PRESS_DEPTH 300.0f
+
+typedef struct {
+    float r, g, b;
+} gsim_color_t;
+
+static const gsim_color_t GSIM_PALETTE[GSIM_NUM_COLORS] = {
+    {1.0f, 0.0f, 0.0f},  /* red */
+    {0.0f, 1.0f, 0.0f},  /* green */
+    {0.1f, 0.3f, 1.0f},  /* blue */
+    {1.0f, 0.85f, 0.0f}, /* yellow */
+    {1.0f, 0.0f, 1.0f},  /* magenta */
+    {0.0f, 1.0f, 1.0f},  /* cyan */
+};
+
+typedef enum {
+    GSIM_PHASE_ROUND_START = 0,
+    GSIM_PHASE_PLAYBACK,
+    GSIM_PHASE_INPUT,
+} gsim_phase_t;
+
+static uint8_t s_gsim_pattern_pad[GSIM_MAX_LENGTH];   /* 1-24 */
+static uint8_t s_gsim_pattern_color[GSIM_MAX_LENGTH]; /* index into GSIM_PALETTE */
+static uint8_t s_gsim_length;                         /* steps active this round */
+static gsim_phase_t s_gsim_phase;
+static uint32_t s_gsim_phase_start_ms;
+static uint8_t s_gsim_playback_step;      /* which step PLAYBACK is currently showing */
+static uint8_t s_gsim_last_haptic_step;   /* which step's haptic already fired -- 0xFF = none yet this round */
+static uint8_t s_gsim_input_index;        /* how many correct steps reproduced so far this round */
+static bool s_gsim_prev_pressed[TILES_NUM_PADS];
+static uint8_t s_gsim_feedback_pad;    /* 0 = no active confirmation flash */
+static uint32_t s_gsim_feedback_start_ms;
+
+static void gsim_new_game(uint32_t now_ms) {
+    s_gsim_length = 1u;
+    s_gsim_pattern_pad[0] = (uint8_t)(1u + (uint8_t)(rand() % TILES_NUM_PADS));
+    s_gsim_pattern_color[0] = (uint8_t)(rand() % GSIM_NUM_COLORS);
+    s_gsim_phase = GSIM_PHASE_ROUND_START;
+    s_gsim_phase_start_ms = now_ms;
+    s_gsim_feedback_pad = 0u;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_gsim_prev_pressed[i] = false;
+    }
+}
+
+static void gsim_extend_pattern(void) {
+    if (s_gsim_length >= GSIM_MAX_LENGTH) {
+        return; /* practical ceiling reached -- keep replaying the max-length pattern rather than overflow */
+    }
+    s_gsim_pattern_pad[s_gsim_length] = (uint8_t)(1u + (uint8_t)(rand() % TILES_NUM_PADS));
+    s_gsim_pattern_color[s_gsim_length] = (uint8_t)(rand() % GSIM_NUM_COLORS);
+    s_gsim_length++;
+}
+
+static void gsim_begin_round_start(uint32_t now_ms) {
+    s_gsim_phase = GSIM_PHASE_ROUND_START;
+    s_gsim_phase_start_ms = now_ms;
+}
+
+static void gsim_begin_playback(uint32_t now_ms) {
+    s_gsim_phase = GSIM_PHASE_PLAYBACK;
+    s_gsim_phase_start_ms = now_ms;
+    s_gsim_playback_step = 0u;
+    s_gsim_last_haptic_step = 0xFFu;
+}
+
+static void gsim_begin_input(uint32_t now_ms) {
+    s_gsim_phase = GSIM_PHASE_INPUT;
+    s_gsim_phase_start_ms = now_ms;
+    s_gsim_input_index = 0u;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        /* Seed to whatever's currently pressed rather than false -- a
+         * pad already held down the instant input begins must not read
+         * as a fresh press edge. */
+        s_gsim_prev_pressed[i] = (float)tiles_hall_get_depth((uint8_t)(i + 1u)) > GSIM_PRESS_DEPTH;
+    }
+}
+
+static void gsim_update(uint32_t now_ms) {
+    switch (s_gsim_phase) {
+    case GSIM_PHASE_ROUND_START:
+        if (now_ms - s_gsim_phase_start_ms >= GSIM_ROUND_START_DELAY_MS) {
+            gsim_begin_playback(now_ms);
+        }
+        break;
+    case GSIM_PHASE_PLAYBACK: {
+        uint32_t elapsed = now_ms - s_gsim_phase_start_ms;
+        uint32_t step = elapsed / GSIM_PLAYBACK_STEP_MS;
+        if (step >= s_gsim_length) {
+            gsim_begin_input(now_ms);
+            break;
+        }
+        s_gsim_playback_step = (uint8_t)step;
+        if (s_gsim_playback_step != s_gsim_last_haptic_step) {
+            /* Real feedback: "the haptics play a big part on this one
+             * giving you the vibraions paired with light to inditcate
+             * the correct light" -- fires once per step, exactly when
+             * that step's flash window begins. */
+            s_gsim_last_haptic_step = s_gsim_playback_step;
+            tiles_haptics_trigger_kick(s_gsim_pattern_pad[s_gsim_playback_step], GSIM_PLAYBACK_VELOCITY);
+        }
+        break;
+    }
+    case GSIM_PHASE_INPUT:
+        /* Advanced by gsim_handle_input() below, not here -- reading
+         * Hall depth is an input concern, kept with the other games'
+         * own gX_handle_input() functions for the same reason. */
+        break;
+    }
+}
+
+/* Real feedback: "touch pads are disabeled but push pads are used for
+ * pattern receation" -- reads tiles_hall_get_depth() directly, never
+ * tiles_touch_is_touched(), for the entire input phase. */
+static void gsim_handle_input(uint32_t now_ms) {
+    if (s_gsim_phase != GSIM_PHASE_INPUT) {
+        return;
+    }
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        bool pressed = (float)tiles_hall_get_depth(pad) > GSIM_PRESS_DEPTH;
+        bool edge = pressed && !s_gsim_prev_pressed[pad - 1u];
+        s_gsim_prev_pressed[pad - 1u] = pressed;
+        if (!edge) {
+            continue;
+        }
+
+        uint8_t expected_pad = s_gsim_pattern_pad[s_gsim_input_index];
+        if (pad != expected_pad) {
+            /* Wrong pad -- real feedback: "when game is lost it should
+             * flash red" (Tetris's own precedent, same treatment here). */
+            gm_start_round_end(now_ms, true);
+            return;
+        }
+
+        /* Correct -- "when player plays the colors do come back when
+         * pressed": re-flash this exact pad's own pattern color as
+         * confirmation, plus a haptic echo. */
+        s_gsim_feedback_pad = pad;
+        s_gsim_feedback_start_ms = now_ms;
+        tiles_haptics_trigger_kick(pad, GSIM_FEEDBACK_VELOCITY);
+
+        s_gsim_input_index++;
+        if (s_gsim_input_index >= s_gsim_length) {
+            /* Full pattern reproduced correctly -- next round, staying
+             * in Simon Says (NOT gm_start_round_end(), which always
+             * returns to the menu; only a wrong press does that). */
+            gsim_extend_pattern();
+            gsim_begin_round_start(now_ms);
+        }
+        return; /* one input pad per scan is enough -- avoids double-counting a simultaneous multi-pad brush */
+    }
+}
+
+static void render_simon(uint32_t now_ms) {
+    for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
+        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+            tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), 0.0f, 0.0f, 0.0f);
+        }
+    }
+
+    if (s_gsim_phase == GSIM_PHASE_PLAYBACK) {
+        uint32_t elapsed = now_ms - s_gsim_phase_start_ms;
+        uint32_t within_step = elapsed - (uint32_t)s_gsim_playback_step * GSIM_PLAYBACK_STEP_MS;
+        if (within_step < GSIM_PLAYBACK_FLASH_MS) {
+            const gsim_color_t *c = &GSIM_PALETTE[s_gsim_pattern_color[s_gsim_playback_step]];
+            tiles_lighting_set_standby_pad_rgb(s_gsim_pattern_pad[s_gsim_playback_step], c->r, c->g, c->b);
+        }
+    } else if (s_gsim_phase == GSIM_PHASE_INPUT && s_gsim_feedback_pad != 0u &&
+               (now_ms - s_gsim_feedback_start_ms) < GSIM_FEEDBACK_FLASH_MS) {
+        /* Confirmation flash for the most recently correctly-pressed pad
+         * -- uses whichever step it just confirmed, i.e. the step BEFORE
+         * s_gsim_input_index (already advanced past it by the time this
+         * renders). */
+        uint8_t confirmed_step = (uint8_t)(s_gsim_input_index - 1u);
+        const gsim_color_t *c = &GSIM_PALETTE[s_gsim_pattern_color[confirmed_step]];
+        tiles_lighting_set_standby_pad_rgb(s_gsim_feedback_pad, c->r, c->g, c->b);
+    }
+
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+    }
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+    }
+}
+
 /* ---- Menu + round-end + top-level state machine --------------------------- */
 
 static void render_menu(uint32_t now_ms) {
@@ -971,6 +1200,8 @@ static void render_menu(uint32_t now_ms) {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 1.0f, 1.0f); /* tetris = cyan */
             } else if (row == 1u && col == 4u) {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 1.0f); /* pong = blue, matches its ball */
+            } else if (row == 1u && col == 5u) {
+                tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f); /* simon says = white, its own pattern is the multi-color one */
             } else {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
             }
@@ -1033,11 +1264,17 @@ static void gm_start_pong(uint32_t now_ms) {
     gp_start(now_ms);
 }
 
+static void gm_start_simon(uint32_t now_ms) {
+    s_gm_state = GM_STATE_PLAYING_SIMON;
+    gsim_new_game(now_ms);
+}
+
 static void gm_handle_menu_selection(void) {
     bool pad1 = tiles_touch_is_touched(1u);
     bool pad2 = tiles_touch_is_touched(2u);
     bool pad3 = tiles_touch_is_touched(3u);
     bool pad4 = tiles_touch_is_touched(4u);
+    bool pad5 = tiles_touch_is_touched(5u);
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
     if (pad1 && !s_gm_prev_pad1_touched) {
@@ -1048,11 +1285,14 @@ static void gm_handle_menu_selection(void) {
         gm_start_tetris(now_ms);
     } else if (pad4 && !s_gm_prev_pad4_touched) {
         gm_start_pong(now_ms);
+    } else if (pad5 && !s_gm_prev_pad5_touched) {
+        gm_start_simon(now_ms);
     }
     s_gm_prev_pad1_touched = pad1;
     s_gm_prev_pad2_touched = pad2;
     s_gm_prev_pad3_touched = pad3;
     s_gm_prev_pad4_touched = pad4;
+    s_gm_prev_pad5_touched = pad5;
 }
 
 static bool gm_combo_held(void) {
@@ -1110,6 +1350,7 @@ void tiles_game_mode_init(void) {
     s_gm_prev_pad2_touched = false;
     s_gm_prev_pad3_touched = false;
     s_gm_prev_pad4_touched = false;
+    s_gm_prev_pad5_touched = false;
 }
 
 void tiles_game_mode_scan(void) {
@@ -1146,6 +1387,9 @@ void tiles_game_mode_scan(void) {
             gp_handle_input();
             gp_update(now_ms);
         }
+    } else if (s_gm_state == GM_STATE_PLAYING_SIMON) {
+        gsim_handle_input(now_ms);
+        gsim_update(now_ms);
     } else if (s_gm_state == GM_STATE_ROUND_END) {
         if (now_ms - s_gm_round_end_ms >= GM_ROUND_END_FLASH_MS) {
             gm_enter_menu();
@@ -1163,6 +1407,8 @@ void tiles_game_mode_scan(void) {
             render_tetris(now_ms);
         } else if (s_gm_state == GM_STATE_PLAYING_PONG) {
             render_pong(now_ms);
+        } else if (s_gm_state == GM_STATE_PLAYING_SIMON) {
+            render_simon(now_ms);
         } else if (s_gm_state == GM_STATE_ROUND_END) {
             render_round_end(now_ms);
         }

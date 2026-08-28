@@ -81,6 +81,34 @@ not its code.
   Unmeasured -- root's brighter percentage and the natural/sharp
   distinction reading clearly at actual LED brightness/diffusion are
   both first attempts.
+  **Ceiling made dynamic/load-aware**, real feedback: "could we push the
+  led celing a bit more safely?" The old ceiling_level() was a single
+  flat multiplier applied to every pad regardless of how many others were
+  lit -- correct for the worst case (all 24 pads + underglow at full
+  white) but far more conservative than necessary for the much more
+  common case of a few notes held while the rest of the grid sits at a
+  low idle baseline. `pad_dynamic_scale()` now sums every pad's CURRENT
+  desired brightness (`pad_desired_rgb()`, the same standby/press/idle-
+  root/natural/sharp branching write_pad() always had, pulled out so the
+  budget estimate and the actual render can never drift apart) into a
+  real projected mA figure (`TILES_LIGHTING_MA_PER_CHANNEL_AT_FULL`,
+  derived from the SAME documented 448mA-at-full-grid estimate, not a new
+  number) and only scales down if that would exceed the budget
+  `led_brightness_ceiling_percent` (power.c) already establishes for the
+  current power mode -- so a couple of pressed pads can run close to full
+  brightness when the rest of the grid is idle, while the true worst case
+  (everything lit at once) still respects the same documented safety
+  number, now for the first time actually accounting for underglow's own
+  fixed draw (`underglow_fixed_ma()`) cutting into that shared budget,
+  which the old flat percentage never did. Nothing here raises the actual
+  current-draw safety envelope power.c already established -- same
+  numbers, allocated dynamically instead of worst-case-always. Floored/
+  capped (`TILES_LIGHTING_DYNAMIC_SCALE_FLOOR/_CEIL`, 15%/95%) so it never
+  reads as fully dark under pathological load or tries to spend literally
+  100% of the computed budget. Still engineering estimates, not
+  hardware-mandated -- same "revisit once real 5V input current is
+  measured" caveat that already applied to the flat percentage this
+  replaces.
   **Not done:** standby animations (needs its own design pass — see the
   defaults doc), Hall-driven (as opposed to touch-driven) brightness.
 - `buttons.h`/`.c` — done for V1: reads all 6 function buttons
@@ -678,6 +706,37 @@ not its code.
   (the "square"-vs-whatever-the-user-meant guess above), and the
   round-end/line-clear/point flash timings are all first attempts, none
   seen on real hardware yet.
+  **A 5th minigame, Simon Says, added at menu pad 5** -- real feedback:
+  "lets implement another mini game, simon says, so a haptic and led
+  patern appears on the pads and the user has to follow, start with a
+  simple one pad at a time but it gets exponentially longer like the real
+  simon says." Grows by exactly one step per round (linear) -- real Simon
+  Says itself grows linearly, not exponentially, and "the real simon
+  says" is the actual behavioral anchor in that sentence; "exponentially"
+  is read as colloquial ("gets long enough to feel hard fast"), not
+  literal doubling. Any of the 24 pads can appear (repeats allowed, same
+  as real Simon Says), each step also gets an independently-random color
+  from a 6-color palette (real feedback: "the sewqurnce has different
+  colors flashing") -- pure visual variety, not encoding anything.
+  Deliberately the one game in this file that reads `tiles_hall_get_depth()`
+  instead of `tiles_touch_is_touched()` for its actual gameplay input --
+  real feedback: "for this mini game touch pads are disabeled but push
+  pads are used for pattern receation" -- using the same real-hardware
+  `MIN_STRIKE_DEPTH_DELTA`-style threshold (`GSIM_PRESS_DEPTH`, 300)
+  expression.c's own real note strikes are calibrated against, not a new
+  guess. Playback fires both an LED flash AND a `tiles_haptics_trigger_kick()`
+  pulse together per step -- real feedback: "the haptics play a big part
+  on this one giving you the vibraions paired with light to inditcate the
+  correct light." A correct reproduction re-flashes that exact pad's own
+  pattern color (real feedback: "when player plays the colors do come
+  back when pressed") plus a lighter haptic echo; a wrong pad calls the
+  same shared `gm_start_round_end(now_ms, true)` plain-red flash Tetris's
+  own "when game is lost it should flash red" precedent uses, then
+  returns to the menu like every other game's round end -- completing a
+  full pattern instead stays IN Simon Says, extends the pattern, and
+  loops back to a fresh playback after a brief pause. Not
+  hardware-verified -- none of the timing constants, the palette, or the
+  press-depth threshold's real-hardware feel have been tried yet.
 - `expression.h`/`.c` — done for V1: touch+Hall fusion. Touch remains
   the authoritative note on/off *timing* gate (more reliable to detect
   than inferring press/release from Hall depth alone); Hall gates
@@ -1962,10 +2021,31 @@ not its code.
   direction ("leave USB-only ceiling alone, just note it") rather than
   silently loosening a documented safety margin -- external power gives
   75%.
+  **Menu selection now press-confirmed, not touch-confirmed**, real
+  feedback: "when you touch but not click in menu make a strong haptic
+  click be felt, push pad to at least mroe than 50% to sleect and
+  selected pad give a constant haptic pulsing pattern to indicate its the
+  active one." Applies to both selection-style menus here (the
+  mode-picker and the scale-picker) -- sequencer mode's step-arm taps are
+  a different interaction (toggle on/off, not "pick one") and
+  deliberately untouched. A fresh capacitive touch alone now only fires a
+  firm `tiles_haptics_trigger_kick()` acknowledgment
+  (`OP_MENU_TOUCH_CLICK_VELOCITY`); the actual selection only commits
+  once `tiles_hall_get_depth()` crosses `OP_MENU_SELECT_DEPTH_THRESHOLD`
+  (450, half of the ~900 full-scale reference expression.c's own
+  aftertouch already uses) while still touched. The scale picker's
+  currently-selected pad now also re-fires a haptic kick every
+  `OP_MENU_SELECTED_PULSE_PERIOD_MS`, synced to the same period as its
+  visual white pulse -- a real felt "pattern," not
+  `tiles_haptics_set_sustain_level()` (which needs an already-active
+  voice from a kick to mean anything, not a fit for a menu pad that was
+  never "struck"). The mode-picker doesn't get this pulsing step -- 
+  picking a mode still closes the menu immediately, so there's no
+  persistent "selected, still browsing" state for it to apply to.
   **Not hardware-verified at all** -- none of the above (the click
   gesture, the menu, sequencer playback/rendering, the channel
-  reservation, the scale picker, the standardized menu language) has been
-  tried on real hardware yet, including against a real external MIDI
-  clock source.
+  reservation, the scale picker, the standardized menu language, the
+  press-to-select haptics) has been tried on real hardware yet, including
+  against a real external MIDI clock source.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

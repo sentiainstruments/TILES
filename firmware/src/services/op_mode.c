@@ -5,6 +5,7 @@
 #include "buttons.h"
 #include "expression_control.h"
 #include "game_mode.h"
+#include "hall.h"
 #include "haptics.h"
 #include "lighting.h"
 #include "midi_clock.h"
@@ -91,6 +92,29 @@ static float menu_selected_pulse_level(uint32_t now_ms) {
     float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
     return OP_MENU_SELECTED_PULSE_MIN + (OP_MENU_SELECTED_PULSE_MAX - OP_MENU_SELECTED_PULSE_MIN) * raw;
 }
+
+/* Real feedback: "when you touch but not click in menu make a strong
+ * haptic click be felt, push pad to at least mroe than 50% to sleect and
+ * selected pad give a constant haptic pulsing pattern to indicate its
+ * the active one." Applies to both selection-style menus this file has
+ * (the mode-picker and the scale-picker) -- sequencer mode's own step
+ * taps are a different interaction (toggle on/off, not "pick one") and
+ * deliberately unchanged.
+ * 900 (tiles_hall_get_depth()'s own rough full-scale range on this
+ * hardware -- see expression.c's s_depth_to_aftertouch_full_scale,
+ * 900, the same reference point) * 0.5 = "more than half pressed." */
+#define OP_MENU_SELECT_DEPTH_THRESHOLD 450.0f
+/* Fires once on every fresh touch, not proportional to anything -- a
+ * flat, firm acknowledgment ("you're touching something"), distinct
+ * from the softer tiles_haptics_trigger_touch_pulse() normal play uses,
+ * matching "strong" in the real feedback above. */
+#define OP_MENU_TOUCH_CLICK_VELOCITY 110u
+/* The active-selection pulse's own haptic strength -- lighter than the
+ * touch click above, it repeats continuously (see
+ * OP_MENU_SELECTED_PULSE_PERIOD_MS) rather than firing once, so a
+ * click-equivalent strength every cycle would read as nagging rather
+ * than a gentle "this is still the one" heartbeat. */
+#define OP_MENU_SELECTED_HAPTIC_VELOCITY 70u
 
 static tiles_op_mode_t s_active_mode;
 static bool s_menu_visible;
@@ -337,9 +361,19 @@ static void render_menu(void) {
  * secondary level, a reserved/undefined slot = fully off and not
  * selectable at all (tapping one is a no-op, see handle_scale_menu_taps()
  * below). */
+/* Real feedback: "selected pad give a constant haptic pulsing pattern to
+ * indicate its the active one." Fires tiles_haptics_trigger_kick() on
+ * the currently-selected pad every OP_MENU_SELECTED_PULSE_PERIOD_MS,
+ * synced to the same period the visual pulse uses -- a repeating pulse,
+ * not a continuous buzz (tiles_haptics_set_sustain_level() needs an
+ * already-active voice from trigger_kick() to mean anything, so a real
+ * periodic re-kick is what actually produces a felt "pattern" here). */
+static uint32_t s_scale_menu_haptic_pulse_ms;
+
 static void render_scale_menu(uint32_t now_ms) {
     float pulse = menu_selected_pulse_level(now_ms);
     tiles_scale_mode_t current = tiles_note_map_get_scale();
+    uint8_t selected_pad = 0u;
 
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         tiles_scale_mode_t slot_scale = tiles_note_map_scale_for_grid_slot(pad);
@@ -347,11 +381,16 @@ static void render_scale_menu(uint32_t now_ms) {
             tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
         } else if (slot_scale == current) {
             tiles_lighting_set_standby_pad_rgb(pad, pulse, pulse, pulse);
+            selected_pad = pad;
         } else {
             tiles_lighting_set_standby_pad_rgb(pad, OP_MENU_MELODIC_R * OP_SCALE_AVAILABLE_LEVEL,
                                                 OP_MENU_MELODIC_G * OP_SCALE_AVAILABLE_LEVEL,
                                                 OP_MENU_MELODIC_B * OP_SCALE_AVAILABLE_LEVEL);
         }
+    }
+    if (selected_pad != 0u && (now_ms - s_scale_menu_haptic_pulse_ms) >= (uint32_t)OP_MENU_SELECTED_PULSE_PERIOD_MS) {
+        s_scale_menu_haptic_pulse_ms = now_ms;
+        tiles_haptics_trigger_kick(selected_pad, OP_MENU_SELECTED_HAPTIC_VELOCITY);
     }
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         float level = (col == TILES_TRIANGLE_BUTTON_COL) ? OP_TRIANGLE_LED_SUBMENU_LEVEL : 0.0f;
@@ -362,14 +401,28 @@ static void render_scale_menu(uint32_t now_ms) {
     }
 }
 
+/* Real feedback: "when you touch but not click in menu make a strong
+ * haptic click be felt, push pad to at least mroe than 50% to sleect."
+ * A fresh capacitive touch alone only fires the click (an
+ * acknowledgment, "you're touching this") -- selection itself only
+ * commits once Hall depth crosses OP_MENU_SELECT_DEPTH_THRESHOLD while
+ * still touched. Calling tiles_note_map_set_scale() again with the same
+ * already-selected value every scan the pad stays pressed past that
+ * threshold is harmless (idempotent), so no extra edge-tracking is
+ * needed for the select action itself, only for the click. */
 static void handle_scale_menu_taps(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         bool touched = tiles_touch_is_touched(pad);
         if (touched && !s_scale_menu_prev_pad_touched[pad - 1u]) {
+            tiles_haptics_trigger_kick(pad, OP_MENU_TOUCH_CLICK_VELOCITY);
+        }
+        if (touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD) {
             tiles_scale_mode_t slot_scale = tiles_note_map_scale_for_grid_slot(pad);
             if (tiles_note_map_scale_is_defined(slot_scale)) {
+                if (slot_scale != tiles_note_map_get_scale()) {
+                    printf("[op_mode] scale -> %d\n", (int)slot_scale);
+                }
                 tiles_note_map_set_scale(slot_scale);
-                printf("[op_mode] scale -> %d\n", (int)slot_scale);
             }
             /* An undefined (reserved custom) slot is simply not
              * selectable -- "unavailable" per the standardized menu
@@ -381,6 +434,7 @@ static void handle_scale_menu_taps(void) {
 
 static void scale_menu_enter(void) {
     s_scale_menu_visible = true;
+    s_scale_menu_haptic_pulse_ms = to_ms_since_boot(get_absolute_time());
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_scale_menu_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
     }
@@ -416,12 +470,22 @@ static void set_active_mode(tiles_op_mode_t mode) {
     printf("[op_mode] active mode -> %d\n", (int)mode);
 }
 
+/* Same touch-clicks/press-past-50%-selects shape as
+ * handle_scale_menu_taps() above -- see that function's own comment and
+ * OP_MENU_SELECT_DEPTH_THRESHOLD's. Picking a mode still closes the menu
+ * immediately (no persistent "selected, still browsing" state here the
+ * way the scale picker has -- a mode activates and takes over the grid
+ * the instant it's confirmed), so there's no pulsing-haptic step for
+ * this menu specifically. */
 static void handle_menu_taps(void) {
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             uint8_t pad = board_pad_for_row_col(row, col);
             bool touched = tiles_touch_is_touched(pad);
             if (touched && !s_menu_prev_pad_touched[pad - 1u]) {
+                tiles_haptics_trigger_kick(pad, OP_MENU_TOUCH_CLICK_VELOCITY);
+            }
+            if (touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD) {
                 tiles_op_mode_t mode = OP_MODE_MELODIC;
                 if (row == OP_ROW_CHORD) {
                     mode = OP_MODE_CHORD;
@@ -432,6 +496,7 @@ static void handle_menu_taps(void) {
                 }
                 menu_exit();
                 set_active_mode(mode);
+                return; /* grid ownership/state just changed under this loop -- stop iterating it */
             }
             s_menu_prev_pad_touched[pad - 1u] = touched;
         }
