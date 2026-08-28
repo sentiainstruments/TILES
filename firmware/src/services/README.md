@@ -1640,6 +1640,13 @@ not its code.
   kind of further tightening. External power's 12-voice ceiling is
   unchanged -- the same accounting leaves ~1.8A of margin there even
   under the same pessimistic haptics assumption.
+  **Then raised back 3 -> 4**, real feedback: "do 4 voices not 3." Same
+  estimate re-run at 4 voices (~320-400mA) instead of 3: still real
+  margin against the 500mA USB-only budget once the ~220mA overhead above
+  is counted, just not quite as conservative as 3 was -- a middle point
+  between the original uncapped 5 and the first, more cautious cut.
+  Motor current measurement is still the actual highest-priority unknown
+  here, not this specific number.
   **Not done:** `USB_DEMO_VALIDATED_1P5A` (a manual-only override, never
   auto-selected -- belongs to a future `profiles/` module, not this
   one), and any real current measurement (every budget here is a
@@ -1936,6 +1943,20 @@ not its code.
   different every boot rather than a predictable function of boot
   timing. Not yet confirmed on real hardware whether this actually
   produces visibly different sequences across power cycles.
+  **Extended past Simon Says to every player-controlled game**, real
+  feedback: "check the seed for all games." The global boot-time reseed
+  above fixes the shared stream's starting point, but a game started
+  hours into a session was still drawing from wherever that one stream
+  had wandered to, not a fresh reseed of its own -- fine in principle
+  (the stream itself is no longer predictable once the boot fix lands),
+  but real feedback asked for every game to check its own seed
+  specifically, not just trust the global one transitively.
+  `game_mode.c`'s `gs_start()` (snake), `gb_start()` (brick breaker),
+  `gt_start()` (tetris), and `gp_start()` (pong) now each call
+  `srand((unsigned int)get_rand_32())` right at the top, the identical
+  call `gsim_new_game()` (Simon Says) already had from the fix above --
+  every game now independently guarantees a fresh hardware-entropy seed
+  the instant it starts, not just at boot.
 - `boot_sequence.h`/`.c` — done for V1: a ~4-second, blocking power-on
   animation run once from `main.c`, before the main loop starts (nothing
   else needs to run concurrently -- USB stays alive via TinyUSB's own
@@ -2005,6 +2026,44 @@ not its code.
   more than one pulse landing between main-loop iterations. **Not
   hardware-verified** -- untested against any real MIDI clock source
   (DAW, hardware sequencer, or otherwise) yet.
+  **Master tap tempo added, a second pulse source feeding the same
+  counter.** Real feedback: "lets make the midi clock work in a way where
+  we can do master tap tempo on the instrument with shift round button
+  when not derecting midi clock from a daw. the tapp tempo is only active
+  in sequencer and arp mode and requiere 4 taps to calcualte minimum."
+  This file no longer has "deliberately no internal free-running fallback
+  tempo" as an absolute -- that reasoning still holds for a pure
+  free-running default, but a player-initiated tap-tempo master clock is
+  a different feature entirely, and real feedback explicitly asked for
+  it. `tiles_midi_clock_register_tap()` takes a timestamp per qualifying
+  circle-button press edge (`op_mode.c` owns deciding "qualifying":
+  sequencer/arp mode active, no real external clock detected, not part of
+  `game_mode.c`'s reserved 4-button combo -- see that file's own entry
+  below) and accumulates them; once `TAP_TEMPO_MIN_TAPS` (4) taps land
+  within `TAP_TEMPO_SESSION_TIMEOUT_MS` (2000ms) of each other, the
+  averaged interval (up to the last 8 taps, oldest dropped) becomes an
+  internal virtual-pulse generator running at the same 24-clocks/quarter-
+  note resolution real bytes use, feeding the exact same `pulse_count`
+  field real 0xF8 bytes do -- `tiles_midi_clock_scan()` only advances it
+  while `tiles_midi_clock_external_active()` is false, so a real clock
+  reappearing always wins immediately with no explicit hand-off code
+  needed. The first time a tempo is established each session, `running`/
+  `start_edge` fire exactly like a real 0xFA Start would, so `op_mode.c`'s
+  sequencer reset-to-step-0 logic needed no changes at all to also work
+  from a tap-tempo start. Every tap after the first re-syncs the
+  generator's phase to that exact moment (the beat visibly snaps to your
+  tapping, not just the tempo), and a gap longer than the session timeout
+  starts a fresh 4-tap accumulation without ever interrupting whatever
+  tempo/playback was already running -- pausing to think doesn't stop the
+  clock. New `source_is_tap_tempo` field on the state struct is
+  diagnostic only; `op_mode.c`'s own consumption of `pulse_count`/
+  `running`/`start_edge` is identical either way, by design.
+  "and then flash that light as the tempo even when midi sync flash the
+  tempo there" -- see `op_mode.c`'s own entry below for the shared
+  beat-flash this file makes possible for both sources at once, just by
+  both landing in the same counter. **Not hardware-verified** -- the tap
+  math, the 4-tap minimum, and the phase-resync-per-tap behavior are all
+  first attempts, not felt on real hardware yet.
 - `op_mode.h`/`.c` — done for V1: operation modes (melodic/chord/
   sequencer/arpeggiator), SW4 ("diamond")'s function -- real feedback:
   "its time to implement the operation modes. we have standard melodic,
@@ -2164,10 +2223,50 @@ not its code.
   triangle click) still shows whatever's now selected pulsing, unchanged.
   Also, `OP_SCALE_AVAILABLE_LEVEL` raised 0.35 -> 0.5, real feedback: "we
   could have idle led in scale mode more bright not as dim."
+  **Circle (SW6, "shift"): master tap tempo + shared beat flash**, real
+  feedback (see `midi_clock.c`'s own entry above for that file's half):
+  "lets make the midi clock work in a way where we can do master tap
+  tempo on the instrument with shift round button when not derecting midi
+  clock from a daw. the tapp tempo is only active in sequencer and arp
+  mode and requiere 4 taps to calcualte minimum. and then flash that
+  light as the tempo even when midi sync flash the tempo there."
+  `handle_circle_tap()` registers a tap
+  (`tiles_midi_clock_register_tap()`) on circle's own press edge (not
+  release -- accurate tap timing needs the press instant itself) only
+  while `s_active_mode` is SEQUENCER or ARP, `tiles_midi_clock_external_
+  active()` is false, and triangle/diamond/square aren't ALSO currently
+  held -- the same "skip while `game_mode.c`'s reserved 4-button combo is
+  forming" guard this file's diamond/triangle click handlers already use,
+  adapted to a press-edge check since this gesture (unlike a click) has
+  to fire on press, before a release-based conflict flag would exist yet.
+  `compute_beat_flash_level()` reads `pulse_count / 24` (one quarter note)
+  each scan, and whenever that beat index changes, flashes circle's LED
+  at full brightness for `OP_BEAT_FLASH_DURATION_MS` (100ms) -- driven
+  purely from the shared clock state `midi_clock.c` exposes, so it flashes
+  identically whether the beat is coming from tap tempo or a real external
+  clock, exactly as asked. `tiles_midi_clock_get_state()` is now fetched
+  exactly ONCE per scan (it clears `start_edge` as a side effect) and
+  threaded as a parameter into both this beat-flash computation and
+  `seq_advance_clock()` -- a real risk found while wiring this in: reading
+  it twice per scan could silently drop a genuine start_edge on the second
+  read. Sequencer mode writes the flash directly in `render_sequencer()`
+  (which already claims the whole grid); arp mode -- still a stub with no
+  grid claim -- drives it through `buttons.c`'s per-button LED override
+  instead, claimed only while arp mode is actually active
+  (`tiles_buttons_set_override_active(TILES_CIRCLE_BUTTON_ID, ...)` in
+  `set_active_mode()`) and released the instant arp mode is left. Scoped
+  rather than claimed permanently like diamond's own override
+  specifically because circle already has a real, pre-existing default
+  (`buttons.c`'s "LED follows press," circle's own visual feedback for
+  `standby.c`'s screensaver/deep-sleep hold gesture) that a permanent
+  claim would silently break outside sequencer/arp mode -- releasing the
+  override immediately re-asserts that default per `buttons.h`'s own
+  documented contract.
   **Not hardware-verified at all** -- none of the above (the click
   gesture, the menu, sequencer playback/rendering, the channel
   reservation, the scale picker, the standardized menu language, the
-  press-to-select haptics) has been tried on real hardware yet, including
-  against a real external MIDI clock source.
+  press-to-select haptics, the tap-tempo gesture and shared beat flash)
+  has been tried on real hardware yet, including against a real external
+  MIDI clock source.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

@@ -99,6 +99,11 @@ static void gs_place_food(void) {
 }
 
 static void gs_start(uint32_t now_ms) {
+    /* Real feedback: "check the seed for all games" -- see
+     * gsim_new_game()'s own comment (and standby.c's deeper fix) for why
+     * this matters; every player-started game now reseeds with fresh
+     * hardware entropy right as it begins, not just Simon Says. */
+    srand((unsigned int)get_rand_32());
     /* 2, not 3 -- real feedback that 3 felt cramped starting out given
      * how little space this board actually has (5x6 cells total). */
     s_gs_length = 2u;
@@ -280,6 +285,9 @@ static bool s_gb_prev_left;
 static bool s_gb_prev_right;
 
 static void gb_start(uint32_t now_ms) {
+    /* Real feedback: "check the seed for all games" -- see
+     * gs_start()'s own comment. */
+    srand((unsigned int)get_rand_32());
     for (uint8_t i = 0; i < GB_NUM_COLS; i++) {
         s_gb_brick_alive[i] = true;
     }
@@ -615,6 +623,9 @@ static void gt_lock(uint32_t now_ms) {
 }
 
 static void gt_start(uint32_t now_ms) {
+    /* Real feedback: "check the seed for all games" -- see
+     * gs_start()'s own comment. */
+    srand((unsigned int)get_rand_32());
     for (uint8_t r = 0; r < GT_ROWS; r++) {
         for (uint8_t c = 0; c < GT_COLS; c++) {
             s_gt_board[r][c] = 0u;
@@ -803,6 +814,9 @@ static void gp_serve(uint32_t now_ms) {
 }
 
 static void gp_start(uint32_t now_ms) {
+    /* Real feedback: "check the seed for all games" -- see
+     * gs_start()'s own comment. */
+    srand((unsigned int)get_rand_32());
     s_gp_left_paddle_top = 2;
     s_gp_right_paddle_top = 2;
     s_gp_left_score = 0u;

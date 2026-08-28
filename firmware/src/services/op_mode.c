@@ -118,6 +118,28 @@ static float menu_selected_pulse_level(uint32_t now_ms) {
  * than a gentle "this is still the one" heartbeat. */
 #define OP_MENU_SELECTED_HAPTIC_VELOCITY 70u
 
+/* ---- Master tap tempo (SW6/circle) + beat flash -------------------------
+ * Real feedback: "lets make the midi clock work in a way where we can do
+ * master tap tempo on the instrument with shit round button when not
+ * derecting midi clock from a daw. the tapp tempo is only active in
+ * sequencer and arp mode and requiere 4 taps to calcualte minimum. and
+ * then flash that light as the tempo even when midi sync flash the tempo
+ * there." Circle is this board's established "shift" button
+ * (services/standby.h's own file header); a qualifying press-edge (see
+ * handle_circle_tap() below) feeds services/midi_clock.h's tap-tempo API
+ * directly -- that file owns the actual averaging/generation, this one
+ * only owns deciding WHEN a press counts and rendering the beat flash.
+ * The flash itself is driven purely by tiles_midi_clock_get_state()'s
+ * shared pulse_count, so it shows the beat identically whether that
+ * count is currently coming from real external clock bytes or the
+ * internal tap-tempo generator -- no special-casing needed, matching the
+ * "flash the tempo there [too]" half of the ask. */
+#define OP_BEAT_FLASH_DURATION_MS 100u
+#define OP_BEAT_FLASH_LEVEL 1.0f
+/* 24 clock pulses per quarter note, fixed by the MIDI spec -- one beat
+ * flash per quarter note, not per individual clock pulse. */
+#define OP_CLOCK_PULSES_PER_BEAT 24u
+
 static tiles_op_mode_t s_active_mode;
 static bool s_menu_visible;
 
@@ -145,6 +167,20 @@ static bool s_scale_menu_visible;
 static bool s_triangle_was_held;
 static bool s_triangle_press_had_conflict; /* see s_diamond_press_had_conflict's own comment -- same reasoning, watches diamond instead of triangle */
 static bool s_scale_menu_prev_pad_touched[TILES_NUM_PADS];
+
+/* Tap-tempo press tracking -- see this file's own "Master tap tempo"
+ * section above. No conflict flag like diamond/triangle's own: a tap
+ * must register on the PRESS edge (not release) for accurate timing, so
+ * handle_circle_tap() checks the other three combo buttons' CURRENT
+ * state at the moment of the press instead of latching a flag to check
+ * on release. */
+static bool s_circle_was_held;
+/* Beat-flash rendering state -- shared across whichever mode is
+ * currently showing it (render_sequencer() directly, or the diamond-
+ * style button override for arp mode), computed once per scan in
+ * tiles_op_mode_scan() so both paths see the identical flash timing. */
+static uint32_t s_last_beat_index = 0xFFFFFFFFu;
+static uint32_t s_beat_flash_start_ms;
 
 /* ---- Sequencer state ------------------------------------------------- */
 
@@ -241,9 +277,13 @@ static void seq_handle_step_taps(void) {
     }
 }
 
-static void seq_advance_clock(void) {
-    tiles_midi_clock_state_t clock = tiles_midi_clock_get_state();
-
+/* Takes the clock snapshot as a parameter rather than calling
+ * tiles_midi_clock_get_state() itself -- that function consumes
+ * (clears) start_edge as a side effect, and tiles_op_mode_scan() also
+ * needs the same snapshot for the beat flash (see this file's own
+ * "Master tap tempo" section) -- fetching it twice in one scan would
+ * silently drop a real start_edge on whichever call ran second. */
+static void seq_advance_clock(tiles_midi_clock_state_t clock) {
     if (clock.start_edge) {
         seq_reset(clock.pulse_count);
         return;
@@ -267,7 +307,7 @@ static void seq_advance_clock(void) {
     seq_enter_step(new_step);
 }
 
-static void render_sequencer(void) {
+static void render_sequencer(float beat_flash_level) {
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             uint8_t pad = board_pad_for_row_col(row, col);
@@ -282,7 +322,13 @@ static void render_sequencer(void) {
         }
     }
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        float level = (col == TILES_DIAMOND_BUTTON_COL) ? OP_DIAMOND_LED_MODE_ACTIVE_LEVEL : 0.0f;
+        float level = 0.0f;
+        if (col == TILES_DIAMOND_BUTTON_COL) {
+            level = OP_DIAMOND_LED_MODE_ACTIVE_LEVEL;
+        } else if (col == TILES_CIRCLE_BUTTON_COL) {
+            /* Real feedback: "flash that light as the tempo." */
+            level = beat_flash_level;
+        }
         tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
@@ -463,6 +509,18 @@ static void set_active_mode(tiles_op_mode_t mode) {
     if (s_active_mode == OP_MODE_SEQUENCER && mode != OP_MODE_SEQUENCER) {
         seq_end_current_note();
     }
+    if (s_active_mode == OP_MODE_ARP && mode != OP_MODE_ARP) {
+        /* Releases circle's beat-flash override -- see this file's own
+         * "Master tap tempo" section for why this is claimed/released
+         * around arp mode specifically rather than permanently like
+         * diamond's own override: circle has a real pre-existing "LED
+         * follows press" default (services/standby.h's screensaver/
+         * deep-sleep hold gesture's own visual feedback) that claiming
+         * it permanently would silently break outside sequencer/arp
+         * mode. Releasing immediately re-asserts that default per
+         * buttons.h's own documented contract. */
+        tiles_buttons_set_override_active(TILES_CIRCLE_BUTTON_ID, false);
+    }
     if (mode != OP_MODE_MELODIC) {
         /* Melodic's own sub-menu can't stay open once melodic isn't the
          * active mode anymore. */
@@ -476,6 +534,9 @@ static void set_active_mode(tiles_op_mode_t mode) {
     } else {
         tiles_lighting_set_standby_active(false);
         tiles_buttons_set_standby_active(false);
+    }
+    if (mode == OP_MODE_ARP) {
+        tiles_buttons_set_override_active(TILES_CIRCLE_BUTTON_ID, true);
     }
     tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, mode == OP_MODE_MELODIC ? 0.0f : OP_DIAMOND_LED_MODE_ACTIVE_LEVEL);
     printf("[op_mode] active mode -> %d\n", (int)mode);
@@ -573,6 +634,56 @@ static void handle_triangle_click(void) {
     s_triangle_was_held = held;
 }
 
+/* Real feedback: "master tap tempo on the instrument with shit round
+ * button when not derecting midi clock from a daw. the tapp tempo is
+ * only active in sequencer and arp mode." Registers on the PRESS edge
+ * (not release, unlike diamond/triangle's click handlers) -- accurate
+ * tap timing needs the moment of contact, not release. Qualifies a press
+ * as a genuine tap only if: sequencer or arp mode is the active mode,
+ * no real external clock is currently detected (services/midi_clock.h's
+ * own tiles_midi_clock_register_tap() also defensively re-checks this),
+ * and none of game_mode.h's other three reserved combo buttons (SW3
+ * triangle/SW4 diamond/SW5 square) are ALSO currently held -- the same
+ * "not part of the 4-button combo" heuristic diamond/triangle's own
+ * click handlers use, just checked at press-time instead of release-time
+ * since a tap can't wait for release. */
+static void handle_circle_tap(uint32_t now_ms) {
+    bool held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
+
+    if (held && !s_circle_was_held) {
+        bool mode_ok = (s_active_mode == OP_MODE_SEQUENCER || s_active_mode == OP_MODE_ARP);
+        bool combo_conflict = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
+                               tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
+                               tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
+        if (mode_ok && !combo_conflict && !tiles_midi_clock_external_active(now_ms)) {
+            tiles_midi_clock_register_tap(now_ms);
+        }
+    }
+
+    s_circle_was_held = held;
+}
+
+/* Real feedback: "flash that light as the tempo even when midi sync
+ * flash the tempo there." Fires once per quarter note (24 clock pulses,
+ * the MIDI spec's own resolution), regardless of whether pulse_count is
+ * currently advancing from real external clock bytes or the internal
+ * tap-tempo generator -- see services/midi_clock.h's own file header for
+ * why that distinction doesn't need to leak into this function at all. */
+static float compute_beat_flash_level(uint32_t now_ms, tiles_midi_clock_state_t clock) {
+    if (!clock.running) {
+        return 0.0f;
+    }
+    uint32_t beat_index = clock.pulse_count / OP_CLOCK_PULSES_PER_BEAT;
+    if (beat_index != s_last_beat_index) {
+        s_last_beat_index = beat_index;
+        s_beat_flash_start_ms = now_ms;
+    }
+    if ((now_ms - s_beat_flash_start_ms) < OP_BEAT_FLASH_DURATION_MS) {
+        return OP_BEAT_FLASH_LEVEL;
+    }
+    return 0.0f;
+}
+
 void tiles_op_mode_init(void) {
     s_active_mode = OP_MODE_MELODIC;
     s_menu_visible = false;
@@ -587,11 +698,20 @@ void tiles_op_mode_init(void) {
     s_seq_current_step = 0u;
     s_seq_note_sounding = false;
     s_seq_step_started_at_pulse = 0u;
+    s_circle_was_held = false;
+    s_last_beat_index = 0xFFFFFFFFu;
+    s_beat_flash_start_ms = 0u;
     tiles_buttons_set_override_active(TILES_DIAMOND_BUTTON_ID, true);
     tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, 0.0f);
+    /* Circle's own override is claimed/released around arp mode
+     * specifically, not here at boot -- see set_active_mode()'s own
+     * comment for why a permanent claim (like diamond's) would break
+     * circle's pre-existing "LED follows press" default. */
 }
 
 void tiles_op_mode_scan(void) {
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+
     if (other_feature_owns_input()) {
         /* Keep edge-tracking current so a button/touch already active the
          * instant control hands back doesn't misread as a fresh
@@ -600,11 +720,20 @@ void tiles_op_mode_scan(void) {
          * guards. */
         s_diamond_was_held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
         s_triangle_was_held = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
+        s_circle_was_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
         return;
     }
 
     handle_diamond_click();
     handle_triangle_click();
+    handle_circle_tap(now_ms);
+
+    /* Fetched exactly once per scan -- tiles_midi_clock_get_state()
+     * consumes start_edge as a side effect (see midi_clock.h's own
+     * comment), and both the sequencer's own clock-advance below and the
+     * beat-flash computation need to see the SAME snapshot. */
+    tiles_midi_clock_state_t clock = tiles_midi_clock_get_state();
+    float beat_flash_level = compute_beat_flash_level(now_ms, clock);
 
     if (s_menu_visible) {
         handle_menu_taps();
@@ -613,7 +742,6 @@ void tiles_op_mode_scan(void) {
     }
 
     if (s_scale_menu_visible) {
-        uint32_t now_ms = to_ms_since_boot(get_absolute_time());
         handle_scale_menu_taps();
         render_scale_menu(now_ms);
         return;
@@ -621,8 +749,15 @@ void tiles_op_mode_scan(void) {
 
     if (s_active_mode == OP_MODE_SEQUENCER) {
         seq_handle_step_taps();
-        seq_advance_clock();
-        render_sequencer();
+        seq_advance_clock(clock);
+        render_sequencer(beat_flash_level);
+    } else if (s_active_mode == OP_MODE_ARP) {
+        /* Arp mode itself isn't implemented yet (see this file's own
+         * header) -- this is the one real piece of it: circle's beat
+         * flash, driven by the exact same tap-tempo/external-clock state
+         * sequencer mode uses. Override was claimed in set_active_mode()
+         * on entering arp mode. */
+        tiles_buttons_set_override_led(TILES_CIRCLE_BUTTON_ID, beat_flash_level);
     }
 }
 
