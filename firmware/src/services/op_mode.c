@@ -196,40 +196,136 @@ static uint32_t s_beat_flash_start_ms;
  * velocity from -- fixed at a solid, unaccented level rather than
  * guessing a curve with no input to drive it. */
 #define OP_SEQ_VELOCITY 100u
-/* The last of the 15 MPE Member Channels, reserved for sequencer
- * playback -- v1 only ever sounds one sequencer note at a time (a single
- * playhead, full-length gate, see this file's header), so one dedicated
- * channel is enough rather than routing through services/expression.c's
- * own per-touch allocator (which is private to that file, and built
- * around touch/strike lifecycle events sequencer playback doesn't have).
- * Narrow accepted edge case: a touch-driven note that happened to land on
- * this exact channel and is still sounding at the instant sequencer mode
- * starts could theoretically overlap with the first sequencer note --
- * sequencer mode already suppresses NEW touch strikes while it owns the
- * grid (see services/expression.c's own owns_pad_grid check), so this
- * only matters for a note that was already held before switching modes,
- * a brief, rare overlap rather than a structural conflict. */
-#define OP_SEQ_CHANNEL ((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + TILES_MIDI_MPE_NUM_MEMBER_CHANNELS - 1u))
 
 #define OP_SEQ_DIM_RED_LEVEL 0.3f
+/* Real feedback: "we need cuentet stept to be lit up always" -- a dim
+ * white marker on the current step regardless of armed state, distinct
+ * from OP_SEQ_DIM_RED_LEVEL so it never reads as "armed." */
+#define OP_SEQ_CURSOR_LEVEL 0.15f
 
-static bool s_seq_step_armed[OP_SEQ_NUM_STEPS];
+/* ---- Multi-pattern bank ------------------------------------------------
+ * Real feedback: "sub menu triangle is reserved for other stuff... maybe
+ * in triangle we can select midi channels for multiple patterns." 4
+ * patterns -- deliberately matches the grid's own 4 pad rows exactly, so
+ * the picker (below) reuses the mode-picker's one-row-per-item shape
+ * rather than inventing a new layout for a small, fixed item count.
+ * Each pattern keeps its own armed steps, per-step pitch override, length,
+ * and output channel -- what used to be this file's only flat
+ * s_seq_step_armed[]/fixed OP_SEQ_CHANNEL is now per-pattern state behind
+ * active_pattern() below. Default channel per pattern claims from the TOP
+ * of the 15 MPE Member Channels downward (pattern 0 = nibble 15, exactly
+ * today's original single-channel behavior, unchanged for anyone not
+ * using extra patterns) -- a default, not a reservation:
+ * services/expression.c's own live per-touch channel allocator is
+ * untouched, so this can only ever collide with live touch playing in the
+ * rare case of using many fingers at once while ALSO running multiple
+ * active patterns, an accepted edge case rather than something worth
+ * shrinking live MPE polyphony to avoid. */
+#define OP_SEQ_NUM_PATTERNS 4u
+#define OP_SEQ_MIN_LENGTH 1u
+#define OP_SEQ_MAX_LENGTH OP_SEQ_NUM_STEPS
+
+typedef struct {
+    bool step_armed[OP_SEQ_NUM_STEPS];
+    bool step_pitch_override[OP_SEQ_NUM_STEPS];
+    uint8_t step_note[OP_SEQ_NUM_STEPS]; /* only meaningful if step_pitch_override[i] */
+    uint8_t length;                      /* 1..24 active steps -- see OP_SEQ_MIN/MAX_LENGTH */
+    uint8_t channel;                     /* raw 0-15 status-nibble MPE channel */
+} op_seq_pattern_t;
+
+static op_seq_pattern_t s_seq_pattern[OP_SEQ_NUM_PATTERNS];
+static uint8_t s_seq_active_pattern;
+
 static uint8_t s_seq_current_step; /* 0..23 */
 static bool s_seq_note_sounding;
 static uint8_t s_seq_sounding_pad; /* 1..24, valid iff s_seq_note_sounding */
+static uint8_t s_seq_sounding_channel;
+static uint8_t s_seq_sounding_note;
 static uint32_t s_seq_step_started_at_pulse;
 static bool s_seq_prev_pad_touched[TILES_NUM_PADS];
+/* Real feedback: "we need to quantice to midi clock when that is
+ * conected" -- confirmed meaning: a manual (re-)start doesn't just jump
+ * in at whatever phase the clock happens to be at, it waits for the next
+ * beat boundary. Set by seq_start() (entering sequencer mode) and by "+"
+ * (handle_transport_and_length()); consumed by seq_advance_clock(). */
+static bool s_seq_pending_start;
+
+/* ---- Per-step pitch assignment -----------------------------------------
+ * Real feedback: "we need a way to assign pitches to the notes." Holding
+ * a step pad past OP_SEQ_PITCH_ASSIGN_HOLD_MS (seq_handle_step_taps())
+ * opens this -- the grid temporarily becomes a note-picker
+ * (render_pitch_assign()) and the next fresh touch on any pad commits
+ * that pad's tiles_note_map_get_note() as the held step's pitch override.
+ * The same "hold a step, play the note" workflow real hardware step
+ * sequencers (Elektron/Circuit-style) use, adapted to touch-only hardware
+ * with no encoders. */
+#define OP_SEQ_PITCH_ASSIGN_HOLD_MS 350u
+static uint32_t s_seq_step_touch_started_ms[TILES_NUM_PADS]; /* 0 = not currently timing a hold */
+static bool s_seq_pitch_assign_active;
+static uint8_t s_seq_pitch_assign_step; /* 0..23, valid iff s_seq_pitch_assign_active */
+static bool s_pitch_assign_prev_pad_touched[TILES_NUM_PADS];
+
+/* ---- Pattern/channel picker (SW3/triangle, sequencer mode) -------------
+ * Same role triangle already plays in melodic mode (the scale picker) --
+ * see handle_triangle_click()'s own branch on s_active_mode. Row colors
+ * are shades within sequencer's own red identity (the mode-picker's
+ * "sequencer = red" real feedback) rather than melodic/chord/arp's own
+ * colors, so picking a pattern never reads as switching modes. */
+#define OP_PATTERN_1_R 1.0f
+#define OP_PATTERN_1_G 0.0f
+#define OP_PATTERN_1_B 0.0f
+#define OP_PATTERN_2_R 1.0f
+#define OP_PATTERN_2_G 0.5f
+#define OP_PATTERN_2_B 0.0f
+#define OP_PATTERN_3_R 1.0f
+#define OP_PATTERN_3_G 1.0f
+#define OP_PATTERN_3_B 0.0f
+#define OP_PATTERN_4_R 1.0f
+#define OP_PATTERN_4_G 0.0f
+#define OP_PATTERN_4_B 0.5f
+static bool s_pattern_menu_visible;
+static bool s_pattern_menu_prev_pad_touched[TILES_NUM_PADS];
+
+/* ---- Transport + length (SW1 "-"/SW2 "+", sequencer mode only) ---------
+ * Real feedback: "we need a button that starts and stops sequencer... we
+ * need to be able to adjsut length of sequence with shift + -." Plain
+ * press = transport (resolved on release, exactly like
+ * services/octave_control.c's own solo-step-vs-combo disambiguation --
+ * see that file's "solo-step race" fix for why release, not press, is
+ * required). Circle held FIRST, then a fresh "-"/"+" press, steps length
+ * instead -- circle is this board's established "shift" identity, matching
+ * services/expression_control.c's own "hold the modifier first" square-
+ * then-"-"/"+" convention. Only the circle-first order is supported (not
+ * the reverse) -- see handle_transport_and_length()'s own comment.
+ * services/octave_control.c already yields "-"/"+" entirely whenever
+ * tiles_op_mode_owns_pad_grid() is true (sequencer mode included), so
+ * there's no double-handling to guard against here. */
+static bool s_minus_was_held;
+static bool s_plus_was_held;
+static bool s_minus_used_as_combo;
+static bool s_plus_used_as_combo;
 
 static bool other_feature_owns_input(void) {
     return tiles_game_mode_is_active() || tiles_expression_control_owns_pad_grid() ||
            tiles_octave_control_is_transpose_active() || tiles_standby_is_active() || tiles_standby_is_deep_sleep();
 }
 
+static op_seq_pattern_t *active_pattern(void) {
+    return &s_seq_pattern[s_seq_active_pattern];
+}
+
+static void pitch_assign_enter(uint8_t step); /* defined below, used by seq_handle_step_taps()'s own hold detection */
+
+/* Uses the channel/note captured at note-on time (below), not whatever
+ * active_pattern() currently resolves to -- a pattern switch mid-note
+ * (handle_pattern_menu_taps()) always calls this FIRST, but capturing the
+ * actual sounding values independently means correctness never depends on
+ * that ordering being preserved everywhere this gets called from. */
 static void seq_end_current_note(void) {
     if (!s_seq_note_sounding) {
         return;
     }
-    tiles_midi_note_off(OP_SEQ_CHANNEL, tiles_note_map_get_note(s_seq_sounding_pad));
+    tiles_midi_note_off(s_seq_sounding_channel, s_seq_sounding_note);
     tiles_haptics_stop(s_seq_sounding_pad);
     s_seq_note_sounding = false;
 }
@@ -237,43 +333,71 @@ static void seq_end_current_note(void) {
 static void seq_enter_step(uint8_t step) {
     seq_end_current_note();
     s_seq_current_step = step;
-    if (!s_seq_step_armed[step]) {
+    op_seq_pattern_t *pat = active_pattern();
+    if (!pat->step_armed[step]) {
         return;
     }
     uint8_t pad = (uint8_t)(step + 1u);
-    uint8_t note = tiles_note_map_get_note(pad);
-    tiles_midi_note_on(OP_SEQ_CHANNEL, note, OP_SEQ_VELOCITY);
+    uint8_t note = pat->step_pitch_override[step] ? pat->step_note[step] : tiles_note_map_get_note(pad);
+    tiles_midi_note_on(pat->channel, note, OP_SEQ_VELOCITY);
     tiles_haptics_trigger_kick(pad, OP_SEQ_VELOCITY);
     s_seq_note_sounding = true;
     s_seq_sounding_pad = pad;
+    s_seq_sounding_channel = pat->channel;
+    s_seq_sounding_note = note;
 }
 
 static void seq_reset(uint32_t now_pulse) {
     s_seq_step_started_at_pulse = now_pulse;
+    s_seq_pending_start = false;
     seq_enter_step(0u);
 }
 
 /* Called every time sequencer mode is (re-)entered from the menu --
- * deliberately does NOT clear s_seq_step_armed[]: leaving to melodic
- * mode to check something and coming back would otherwise wipe whatever
- * pattern was already programmed, which is more frustrating than useful.
- * Armed steps are only ever cleared at boot (tiles_op_mode_init()). */
+ * deliberately does NOT clear any pattern's step_armed[]: leaving to
+ * melodic mode to check something and coming back would otherwise wipe
+ * whatever pattern was already programmed, which is more frustrating than
+ * useful. Armed steps are only ever cleared at boot (tiles_op_mode_init()).
+ * Arms a pending (quantized) start rather than jumping straight to step 0
+ * -- see s_seq_pending_start's own comment and seq_advance_clock() below;
+ * this is what fixes entering sequencer mode while an external clock is
+ * already mid-phrase landing on an essentially random step. */
 static void seq_start(void) {
     s_seq_current_step = 0u;
     s_seq_note_sounding = false;
     s_seq_step_started_at_pulse = 0u;
+    s_seq_pending_start = true;
+    s_seq_pitch_assign_active = false;
+    s_pattern_menu_visible = false;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_seq_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+        s_seq_step_touch_started_ms[i] = 0u;
     }
 }
 
-static void seq_handle_step_taps(void) {
+/* Extended with hold detection: a touch held past
+ * OP_SEQ_PITCH_ASSIGN_HOLD_MS opens pitch-assign for that step (see this
+ * file's own "Per-step pitch assignment" section) -- the arm-toggle on
+ * touch-down already fired for this same touch, so holding a step both
+ * toggles it AND, if you keep holding, also lets you reassign its pitch;
+ * these don't conflict, they're just both true for the same gesture. */
+static void seq_handle_step_taps(uint32_t now_ms) {
+    op_seq_pattern_t *pat = active_pattern();
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        uint8_t step = (uint8_t)(pad - 1u);
         bool touched = tiles_touch_is_touched(pad);
-        if (touched && !s_seq_prev_pad_touched[pad - 1u]) {
-            s_seq_step_armed[pad - 1u] = !s_seq_step_armed[pad - 1u];
+        bool was_touched = s_seq_prev_pad_touched[step];
+        if (touched && !was_touched) {
+            pat->step_armed[step] = !pat->step_armed[step];
+            s_seq_step_touch_started_ms[step] = now_ms;
+        } else if (!touched) {
+            s_seq_step_touch_started_ms[step] = 0u;
+        } else if (s_seq_step_touch_started_ms[step] != 0u &&
+                   (now_ms - s_seq_step_touch_started_ms[step]) >= OP_SEQ_PITCH_ASSIGN_HOLD_MS) {
+            pitch_assign_enter(step);
+            return; /* grid ownership just changed under this loop -- stop iterating it */
         }
-        s_seq_prev_pad_touched[pad - 1u] = touched;
+        s_seq_prev_pad_touched[step] = touched;
     }
 }
 
@@ -294,6 +418,22 @@ static void seq_advance_clock(tiles_midi_clock_state_t clock) {
         return;
     }
 
+    if (s_seq_pending_start) {
+        /* Real feedback: "we need to quantice to midi clock when that is
+         * conected" -- confirmed meaning: entering sequencer mode (or
+         * pressing "+") while a clock is already running waits for the
+         * next quarter-note boundary rather than jumping in at whatever
+         * pulse_count % OP_SEQ_CLOCKS_PER_STEP happens to be right now. A
+         * fresh Start/tap-tempo establishment already took the branch
+         * above instead (start_edge implies phase-zero already), so this
+         * only ever waits for a resume mid-stream. */
+        if ((clock.pulse_count % OP_CLOCK_PULSES_PER_BEAT) != 0u) {
+            return;
+        }
+        seq_reset(clock.pulse_count);
+        return;
+    }
+
     uint32_t elapsed = clock.pulse_count - s_seq_step_started_at_pulse;
     if (elapsed < OP_SEQ_CLOCKS_PER_STEP) {
         return;
@@ -303,19 +443,34 @@ static void seq_advance_clock(tiles_midi_clock_state_t clock) {
      * incoming clock rate), not just the common one-step case. */
     uint32_t steps_to_advance = elapsed / OP_SEQ_CLOCKS_PER_STEP;
     s_seq_step_started_at_pulse += steps_to_advance * OP_SEQ_CLOCKS_PER_STEP;
-    uint8_t new_step = (uint8_t)((s_seq_current_step + steps_to_advance) % OP_SEQ_NUM_STEPS);
+    uint8_t length = active_pattern()->length;
+    uint8_t new_step = (uint8_t)((s_seq_current_step + steps_to_advance) % length);
     seq_enter_step(new_step);
 }
 
 static void render_sequencer(float beat_flash_level) {
+    op_seq_pattern_t *pat = active_pattern();
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             uint8_t pad = board_pad_for_row_col(row, col);
             uint8_t step = (uint8_t)(pad - 1u);
-            if (!s_seq_step_armed[step]) {
+            bool is_current = (step == s_seq_current_step);
+            if (step >= pat->length) {
+                /* Out of the current loop -- "unavailable are off," this
+                 * codebase's own established rule, unchanged. */
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
-            } else if (step == s_seq_current_step && s_seq_note_sounding) {
+            } else if (is_current && s_seq_note_sounding) {
                 tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f);
+            } else if (is_current) {
+                /* Real feedback: "we need cuentet stept to be lit up
+                 * always" -- a dim cursor marks the playhead even on an
+                 * unarmed step, or while paused/waiting for a quantized
+                 * start (see seq_advance_clock()'s pending-start
+                 * handling). Supersedes this file's own earlier explicit
+                 * "no playhead flash on an empty step" rule. */
+                tiles_lighting_set_standby_pad_rgb(pad, OP_SEQ_CURSOR_LEVEL, OP_SEQ_CURSOR_LEVEL, OP_SEQ_CURSOR_LEVEL);
+            } else if (!pat->step_armed[step]) {
+                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
             } else {
                 tiles_lighting_set_standby_pad_rgb(pad, OP_SEQ_DIM_RED_LEVEL, 0.0f, 0.0f);
             }
@@ -334,6 +489,188 @@ static void render_sequencer(float beat_flash_level) {
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
         tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
     }
+}
+
+/* ---- Per-step pitch assignment ------------------------------------------
+ * See this file's own "Per-step pitch assignment" state-section comment.
+ * Silences whatever's currently sounding the instant this opens (below)
+ * rather than leaving a note stuck on for the whole gesture -- the
+ * sequencer's own timeline keeps advancing underneath regardless (this
+ * doesn't pause playback), so returning to normal view simply catches up
+ * and resumes wherever the clock already is, the same way this file's
+ * other sub-views (the mode picker, the scale picker) have always worked. */
+static void pitch_assign_enter(uint8_t step) {
+    seq_end_current_note();
+    s_seq_pitch_assign_active = true;
+    s_seq_pitch_assign_step = step;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_pitch_assign_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+    }
+}
+
+static void pitch_assign_exit(void) {
+    s_seq_pitch_assign_active = false;
+    /* Re-syncs seq_handle_step_taps()'s own touch tracking so a pad
+     * that's still touched the instant control hands back doesn't misread
+     * as a fresh arm-toggle -- same pattern this file already uses
+     * whenever a sub-view that owned the grid closes. */
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_seq_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+        s_seq_step_touch_started_ms[i] = 0u;
+    }
+}
+
+/* A fresh touch on ANY pad (the held step included, though it can't
+ * produce a fresh edge while still down -- see pitch_assign_enter()'s own
+ * seeding) commits that pad's current note as the held step's override
+ * and closes, same "closes on selection" rule this file's other pickers
+ * use. Releasing the originally-held step without picking a different pad
+ * first cancels with no change. */
+static void handle_pitch_assign_taps(void) {
+    uint8_t held_pad = (uint8_t)(s_seq_pitch_assign_step + 1u);
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        bool touched = tiles_touch_is_touched(pad);
+        bool was_touched = s_pitch_assign_prev_pad_touched[pad - 1u];
+        if (touched && !was_touched) {
+            op_seq_pattern_t *pat = active_pattern();
+            pat->step_pitch_override[s_seq_pitch_assign_step] = true;
+            pat->step_note[s_seq_pitch_assign_step] = tiles_note_map_get_note(pad);
+            tiles_haptics_trigger_kick(pad, OP_MENU_TOUCH_CLICK_VELOCITY);
+            pitch_assign_exit();
+            return; /* grid ownership just changed under this loop -- stop iterating it */
+        }
+        if (!touched && pad == held_pad) {
+            pitch_assign_exit();
+            return;
+        }
+        s_pitch_assign_prev_pad_touched[pad - 1u] = touched;
+    }
+}
+
+/* Reuses services/lighting.c's own melodic-idle note-role coloring
+ * (root=magenta, natural=white, sharp=off, via the same
+ * tiles_note_map_is_root_pad()/_is_natural_pad() accessors) so the "pick a
+ * note" surface looks like a natural extension of melodic play rather
+ * than a new visual language -- the step's currently-assigned note pulses
+ * white instead, this file's own established "selected" language. */
+static void render_pitch_assign(uint32_t now_ms) {
+    float pulse = menu_selected_pulse_level(now_ms);
+    op_seq_pattern_t *pat = active_pattern();
+    uint8_t current_note = pat->step_pitch_override[s_seq_pitch_assign_step]
+                                ? pat->step_note[s_seq_pitch_assign_step]
+                                : tiles_note_map_get_note((uint8_t)(s_seq_pitch_assign_step + 1u));
+
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        if (tiles_note_map_get_note(pad) == current_note) {
+            tiles_lighting_set_standby_pad_rgb(pad, pulse, pulse, pulse);
+        } else if (tiles_note_map_is_root_pad(pad)) {
+            tiles_lighting_set_standby_pad_rgb(pad, OP_MENU_MELODIC_R * OP_SCALE_AVAILABLE_LEVEL,
+                                                OP_MENU_MELODIC_G * OP_SCALE_AVAILABLE_LEVEL,
+                                                OP_MENU_MELODIC_B * OP_SCALE_AVAILABLE_LEVEL);
+        } else if (tiles_note_map_is_natural_pad(pad)) {
+            tiles_lighting_set_standby_pad_rgb(pad, OP_SCALE_AVAILABLE_LEVEL, OP_SCALE_AVAILABLE_LEVEL, OP_SCALE_AVAILABLE_LEVEL);
+        } else {
+            tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
+        }
+    }
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+    }
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+    }
+}
+
+/* ---- Pattern/channel picker (SW3/triangle, sequencer mode) -------------- */
+
+static void pattern_row_color(uint8_t pattern_index, float *r, float *g, float *b) {
+    switch (pattern_index) {
+    case 0u:
+        *r = OP_PATTERN_1_R;
+        *g = OP_PATTERN_1_G;
+        *b = OP_PATTERN_1_B;
+        break;
+    case 1u:
+        *r = OP_PATTERN_2_R;
+        *g = OP_PATTERN_2_G;
+        *b = OP_PATTERN_2_B;
+        break;
+    case 2u:
+        *r = OP_PATTERN_3_R;
+        *g = OP_PATTERN_3_G;
+        *b = OP_PATTERN_3_B;
+        break;
+    default: /* pattern 3 */
+        *r = OP_PATTERN_4_R;
+        *g = OP_PATTERN_4_G;
+        *b = OP_PATTERN_4_B;
+        break;
+    }
+}
+
+static void render_pattern_menu(uint32_t now_ms) {
+    float pulse = menu_selected_pulse_level(now_ms);
+    for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
+        uint8_t pattern_index = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
+        bool selected = (pattern_index == s_seq_active_pattern);
+        float r, g, b;
+        pattern_row_color(pattern_index, &r, &g, &b);
+        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+            if (selected) {
+                tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), pulse, pulse, pulse);
+            } else {
+                tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), r * OP_SCALE_AVAILABLE_LEVEL,
+                                                    g * OP_SCALE_AVAILABLE_LEVEL, b * OP_SCALE_AVAILABLE_LEVEL);
+            }
+        }
+    }
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        float level = (col == TILES_TRIANGLE_BUTTON_COL) ? OP_TRIANGLE_LED_SUBMENU_LEVEL : 0.0f;
+        tiles_buttons_set_standby_led(board_button_for_col(col), level);
+    }
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+    }
+}
+
+static void pattern_menu_exit(void);
+
+/* Same touch-click + push-past-50%-selects gesture as handle_menu_taps()
+ * (the top-level mode picker), reused verbatim since 4 patterns mapping
+ * onto 4 rows is the same shape as 4 modes mapping onto 4 rows. */
+static void handle_pattern_menu_taps(void) {
+    for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
+        uint8_t pattern_index = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
+        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+            uint8_t pad = board_pad_for_row_col(row, col);
+            bool touched = tiles_touch_is_touched(pad);
+            if (touched && !s_pattern_menu_prev_pad_touched[pad - 1u]) {
+                tiles_haptics_trigger_kick(pad, OP_MENU_TOUCH_CLICK_VELOCITY);
+            }
+            if (touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD) {
+                if (pattern_index != s_seq_active_pattern) {
+                    seq_end_current_note();
+                    s_seq_active_pattern = pattern_index;
+                    printf("[op_mode] sequencer pattern -> %u\n", (unsigned)pattern_index);
+                }
+                pattern_menu_exit();
+                return; /* grid ownership just changed under this loop -- stop iterating it */
+            }
+            s_pattern_menu_prev_pad_touched[pad - 1u] = touched;
+        }
+    }
+}
+
+static void pattern_menu_enter(void) {
+    seq_end_current_note();
+    s_pattern_menu_visible = true;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_pattern_menu_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+    }
+}
+
+static void pattern_menu_exit(void) {
+    s_pattern_menu_visible = false;
 }
 
 /* ---- Menu -------------------------------------------------------------- */
@@ -526,6 +863,11 @@ static void set_active_mode(tiles_op_mode_t mode) {
          * active mode anymore. */
         s_scale_menu_visible = false;
     }
+    if (mode != OP_MODE_SEQUENCER) {
+        /* Same reasoning, sequencer's own two sub-views. */
+        s_pattern_menu_visible = false;
+        s_seq_pitch_assign_active = false;
+    }
     s_active_mode = mode;
     if (mode == OP_MODE_SEQUENCER) {
         seq_start();
@@ -606,11 +948,14 @@ static void handle_diamond_click(void) {
 }
 
 /* Same shape as handle_diamond_click() above, one level down: toggles
- * whichever per-mode sub-menu (if any) the CURRENT mode has. Only
- * melodic has one right now. Guarded against the mode-picker also being
- * open (a sub-menu click while picking a top-level mode would be
- * ambiguous/unwanted) the same way the mode-picker itself is guarded
- * against other_feature_owns_input(). */
+ * whichever per-mode sub-menu the CURRENT mode has -- melodic's is the
+ * scale picker, sequencer's is the pattern/channel picker (real feedback:
+ * "sub menu triangle is reserved for other stuff... maybe in triangle we
+ * can select midi channels for multiple patterns"). Guarded against the
+ * mode-picker also being open (a sub-menu click while picking a top-level
+ * mode would be ambiguous/unwanted) the same way the mode-picker itself is
+ * guarded against other_feature_owns_input(), and against a pitch-assign
+ * gesture already owning the grid (sequencer mode only). */
 static void handle_triangle_click(void) {
     bool held = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
 
@@ -622,11 +967,19 @@ static void handle_triangle_click(void) {
     }
 
     if (!held && s_triangle_was_held) {
-        if (!s_triangle_press_had_conflict && !s_menu_visible && s_active_mode == OP_MODE_MELODIC) {
-            if (s_scale_menu_visible) {
-                scale_menu_exit();
-            } else {
-                scale_menu_enter();
+        if (!s_triangle_press_had_conflict && !s_menu_visible) {
+            if (s_active_mode == OP_MODE_MELODIC) {
+                if (s_scale_menu_visible) {
+                    scale_menu_exit();
+                } else {
+                    scale_menu_enter();
+                }
+            } else if (s_active_mode == OP_MODE_SEQUENCER && !s_seq_pitch_assign_active) {
+                if (s_pattern_menu_visible) {
+                    pattern_menu_exit();
+                } else {
+                    pattern_menu_enter();
+                }
             }
         }
     }
@@ -636,31 +989,112 @@ static void handle_triangle_click(void) {
 
 /* Real feedback: "master tap tempo on the instrument with shit round
  * button when not derecting midi clock from a daw. the tapp tempo is
- * only active in sequencer and arp mode." Registers on the PRESS edge
- * (not release, unlike diamond/triangle's click handlers) -- accurate
- * tap timing needs the moment of contact, not release. Qualifies a press
- * as a genuine tap only if: sequencer or arp mode is the active mode,
- * no real external clock is currently detected (services/midi_clock.h's
- * own tiles_midi_clock_register_tap() also defensively re-checks this),
- * and none of game_mode.h's other three reserved combo buttons (SW3
+ * only active in sequencer and arp mode." Qualifies a press as a genuine
+ * tap candidate only if: sequencer or arp mode is the active mode, no
+ * real external clock is currently detected (services/midi_clock.h's own
+ * tiles_midi_clock_register_tap() also defensively re-checks this), and
+ * none of game_mode.h's other three reserved combo buttons (SW3
  * triangle/SW4 diamond/SW5 square) are ALSO currently held -- the same
- * "not part of the 4-button combo" heuristic diamond/triangle's own
- * click handlers use, just checked at press-time instead of release-time
- * since a tap can't wait for release. */
+ * "not part of the 4-button combo" heuristic diamond/triangle's own click
+ * handlers use.
+ * Committed on RELEASE, not press -- a revision from this feature's first
+ * pass, needed once handle_transport_and_length() below started using
+ * "hold circle, then press -/+" for pattern length: circle's OWN press
+ * happens chronologically before minus/plus is ever touched, so the
+ * combo-conflict check above (which only looks at sibling state AT
+ * press-time) can't catch that sequential gesture -- a length-adjust
+ * combo would otherwise always register a spurious tap first. Deferring
+ * to release, gated on whether minus/plus joined mid-hold (below), fixes
+ * this while still using the ORIGINAL press timestamp for the actual
+ * registered tap time, so tap-tempo accuracy is unaffected by the small
+ * press-to-release latency of a real tap. */
+static uint32_t s_circle_press_ms;
+static bool s_circle_press_pending_tap;
+
 static void handle_circle_tap(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
 
     if (held && !s_circle_was_held) {
+        s_circle_press_ms = now_ms;
         bool mode_ok = (s_active_mode == OP_MODE_SEQUENCER || s_active_mode == OP_MODE_ARP);
         bool combo_conflict = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
-        if (mode_ok && !combo_conflict && !tiles_midi_clock_external_active(now_ms)) {
-            tiles_midi_clock_register_tap(now_ms);
+        s_circle_press_pending_tap = mode_ok && !combo_conflict && !tiles_midi_clock_external_active(now_ms);
+    }
+
+    if (held && s_circle_press_pending_tap &&
+        (tiles_button_is_pressed(TILES_MINUS_BUTTON_ID) || tiles_button_is_pressed(TILES_PLUS_BUTTON_ID))) {
+        /* This hold became a length-adjust combo instead -- cancel
+         * candidacy so it doesn't ALSO register as a spurious tap. */
+        s_circle_press_pending_tap = false;
+    }
+
+    if (!held && s_circle_was_held) {
+        if (s_circle_press_pending_tap) {
+            tiles_midi_clock_register_tap(s_circle_press_ms);
         }
     }
 
     s_circle_was_held = held;
+}
+
+/* SW1/SW2 ("-"/"+"), sequencer-mode only -- see this file's own
+ * "Transport + length" state-section comment for the full reasoning
+ * (circle-first-then-"-"/"+" ordering, why the reverse order isn't
+ * supported, the octave_control.c precedent this mirrors). Resolves on
+ * release: a fresh press-edge with circle ALREADY held steps length
+ * immediately (no need to wait for release -- length isn't timing-
+ * critical the way a tap is); a SOLO press (circle never joined) resolves
+ * on release into stop/start instead, using the same
+ * "combo flag set during hold" shape. */
+static void handle_transport_and_length(uint32_t now_ms) {
+    bool minus_held = tiles_button_is_pressed(TILES_MINUS_BUTTON_ID);
+    bool plus_held = tiles_button_is_pressed(TILES_PLUS_BUTTON_ID);
+    bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
+    bool active = (s_active_mode == OP_MODE_SEQUENCER) && !s_pattern_menu_visible && !s_seq_pitch_assign_active;
+
+    if (active && minus_held && !s_minus_was_held && circle_held) {
+        op_seq_pattern_t *pat = active_pattern();
+        if (pat->length > OP_SEQ_MIN_LENGTH) {
+            pat->length--;
+        }
+        s_minus_used_as_combo = true;
+    }
+    if (active && plus_held && !s_plus_was_held && circle_held) {
+        op_seq_pattern_t *pat = active_pattern();
+        if (pat->length < OP_SEQ_MAX_LENGTH) {
+            pat->length++;
+        }
+        s_plus_used_as_combo = true;
+    }
+
+    if (!minus_held && s_minus_was_held) {
+        if (active && !s_minus_used_as_combo) {
+            /* Real feedback: "we need a button that starts and stops
+             * sequencer." */
+            tiles_midi_clock_set_running(false);
+            s_seq_pending_start = false;
+        }
+        s_minus_used_as_combo = false;
+    }
+    if (!plus_held && s_plus_was_held) {
+        if (active && !s_plus_used_as_combo) {
+            /* Only meaningful once a tempo actually exists -- otherwise
+             * this would set `running` true with nothing to ever advance
+             * pulse_count, an inert state rather than "playing." Tap-
+             * tempo's own first establishment already auto-starts (see
+             * midi_clock.c), so in practice "+" is primarily a RESUME
+             * after a manual stop, not the very first start. */
+            if (tiles_midi_clock_tap_tempo_established() || tiles_midi_clock_external_active(now_ms)) {
+                tiles_midi_clock_set_running(true);
+            }
+        }
+        s_plus_used_as_combo = false;
+    }
+
+    s_minus_was_held = minus_held;
+    s_plus_was_held = plus_held;
 }
 
 /* Real feedback: "flash that light as the tempo even when midi sync
@@ -692,13 +1126,31 @@ void tiles_op_mode_init(void) {
     s_scale_menu_visible = false;
     s_triangle_was_held = false;
     s_triangle_press_had_conflict = false;
-    for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
-        s_seq_step_armed[i] = false;
+    for (uint8_t p = 0; p < OP_SEQ_NUM_PATTERNS; p++) {
+        for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
+            s_seq_pattern[p].step_armed[i] = false;
+            s_seq_pattern[p].step_pitch_override[i] = false;
+            s_seq_pattern[p].step_note[i] = 0u;
+        }
+        s_seq_pattern[p].length = OP_SEQ_NUM_STEPS;
+        /* Claims from the TOP of the 15 MPE Member Channels downward --
+         * see this file's own "Multi-pattern bank" section. */
+        s_seq_pattern[p].channel =
+            (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + TILES_MIDI_MPE_NUM_MEMBER_CHANNELS - 1u - p);
     }
+    s_seq_active_pattern = 0u;
     s_seq_current_step = 0u;
     s_seq_note_sounding = false;
     s_seq_step_started_at_pulse = 0u;
+    s_seq_pending_start = false;
+    s_seq_pitch_assign_active = false;
+    s_pattern_menu_visible = false;
+    s_minus_was_held = false;
+    s_plus_was_held = false;
+    s_minus_used_as_combo = false;
+    s_plus_used_as_combo = false;
     s_circle_was_held = false;
+    s_circle_press_pending_tap = false;
     s_last_beat_index = 0xFFFFFFFFu;
     s_beat_flash_start_ms = 0u;
     tiles_buttons_set_override_active(TILES_DIAMOND_BUTTON_ID, true);
@@ -721,12 +1173,15 @@ void tiles_op_mode_scan(void) {
         s_diamond_was_held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
         s_triangle_was_held = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
         s_circle_was_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
+        s_minus_was_held = tiles_button_is_pressed(TILES_MINUS_BUTTON_ID);
+        s_plus_was_held = tiles_button_is_pressed(TILES_PLUS_BUTTON_ID);
         return;
     }
 
     handle_diamond_click();
     handle_triangle_click();
     handle_circle_tap(now_ms);
+    handle_transport_and_length(now_ms);
 
     /* Fetched exactly once per scan -- tiles_midi_clock_get_state()
      * consumes start_edge as a side effect (see midi_clock.h's own
@@ -747,8 +1202,20 @@ void tiles_op_mode_scan(void) {
         return;
     }
 
+    if (s_active_mode == OP_MODE_SEQUENCER && s_pattern_menu_visible) {
+        handle_pattern_menu_taps();
+        render_pattern_menu(now_ms);
+        return;
+    }
+
+    if (s_active_mode == OP_MODE_SEQUENCER && s_seq_pitch_assign_active) {
+        handle_pitch_assign_taps();
+        render_pitch_assign(now_ms);
+        return;
+    }
+
     if (s_active_mode == OP_MODE_SEQUENCER) {
-        seq_handle_step_taps();
+        seq_handle_step_taps(now_ms);
         seq_advance_clock(clock);
         render_sequencer(beat_flash_level);
     } else if (s_active_mode == OP_MODE_ARP) {

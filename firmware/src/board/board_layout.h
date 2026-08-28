@@ -68,6 +68,19 @@ static inline uint8_t board_button_for_col(uint8_t col) {
 #define TILES_TRIANGLE_BUTTON_ID 3u
 #define TILES_TRIANGLE_BUTTON_COL 3u
 
+/* SW2 ("+")/SW1 ("-"), the leftmost two -- services/octave_control.h's
+ * default octave-shift function everywhere except sequencer mode, where
+ * services/op_mode.h repurposes them as transport (start/stop) and,
+ * combined with circle held, pattern length. octave_control.c keeps its
+ * own private BUTTON_ID_MINUS/_PLUS #defines (identical values) rather
+ * than migrating to these -- these exist purely so op_mode.c has a
+ * shared name for the same two physical buttons without duplicating a
+ * second private definition of its own. */
+#define TILES_MINUS_BUTTON_ID 1u
+#define TILES_MINUS_BUTTON_COL 1u
+#define TILES_PLUS_BUTTON_ID 2u
+#define TILES_PLUS_BUTTON_COL 2u
+
 #define TILES_NUM_UNDERGLOW_ANCHORS 4u
 
 static const tiles_grid_point_t g_tiles_underglow_anchor[TILES_NUM_UNDERGLOW_ANCHORS] = {

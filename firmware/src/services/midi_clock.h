@@ -155,3 +155,17 @@ void tiles_midi_clock_register_tap(uint32_t now_ms);
  * already reflect this), but useful for any future "still waiting for
  * enough taps" UI. */
 bool tiles_midi_clock_tap_tempo_established(void);
+
+/* Manually sets the transport's running state -- services/op_mode.h's
+ * sequencer start/stop control (real feedback: "we need a button that
+ * starts and stops sequencer"). A no-op while
+ * tiles_midi_clock_external_active() is true, mirroring
+ * tiles_midi_clock_register_tap()'s own "external always wins" guard --
+ * the DAW's own Start/Stop bytes are the only valid transport control
+ * whenever a real clock is present. Setting `true` does NOT set
+ * start_edge (this resumes wherever pulse_count already is, Continue-
+ * style, not a reset to step zero) -- op_mode.h only calls this to
+ * resume playback that tap-tempo's own first establishment already
+ * started once (that path already sets start_edge itself, see
+ * tiles_midi_clock_register_tap() above). */
+void tiles_midi_clock_set_running(bool running);

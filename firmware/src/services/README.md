@@ -2064,6 +2064,15 @@ not its code.
   both landing in the same counter. **Not hardware-verified** -- the tap
   math, the 4-tap minimum, and the phase-resync-per-tap behavior are all
   first attempts, not felt on real hardware yet.
+  **New `tiles_midi_clock_set_running()`**, real feedback: "we need a
+  button that starts and stops sequencer" -- `op_mode.c`'s own manual
+  transport buttons (see that file's entry below) call this directly to
+  stop/resume the transport when it's being driven by the internal
+  tap-tempo generator. A no-op while `tiles_midi_clock_external_active()`
+  is true, the identical guard `tiles_midi_clock_register_tap()` already
+  uses -- the DAW's own Start/Stop bytes are the only valid transport
+  control whenever a real clock is present. Setting `true` does NOT set
+  `start_edge` (Continue-style resume, not a reset to step zero).
 - `op_mode.h`/`.c` — done for V1: operation modes (melodic/chord/
   sequencer/arpeggiator), SW4 ("diamond")'s function -- real feedback:
   "its time to implement the operation modes. we have standard melodic,
@@ -2262,11 +2271,109 @@ not its code.
   claim would silently break outside sequencer/arp mode -- releasing the
   override immediately re-asserts that default per `buttons.h`'s own
   documented contract.
+  **Sequencer redesigned into a full multi-pattern workflow**, real
+  feedback: "we need to fix the sequencer. lets design a better
+  achitecture... lets study available sequencers and implement into this
+  device the best most human and cool workflow possible." Four pieces,
+  each mapped to something real hardware step sequencers already do,
+  adapted to this board's touch-only, no-encoder hardware:
+  - **4 patterns** (`op_seq_pattern_t`, one per pad row -- 4 was picked
+    specifically because it matches the grid's 4 rows exactly, letting
+    the picker below reuse the mode-picker's own row-per-item shape
+    rather than inventing a new layout). Each pattern owns its own armed
+    steps, per-step pitch overrides, length, and MIDI channel; what used
+    to be one flat `s_seq_step_armed[]` array and a single fixed
+    `OP_SEQ_CHANNEL` constant are now behind `active_pattern()`.
+    **Triangle now picks between them**, real feedback: "sub menu
+    triangle is reserved for other stuff... maybe in triangle we can
+    select midi channels for multiple patterns" -- `handle_triangle_
+    click()` now branches on `s_active_mode` (melodic keeps the scale
+    picker unchanged; sequencer gets a new pattern picker), reusing the
+    mode-picker's exact touch-click-then-push-past-50%-selects gesture.
+    Default channel per pattern claims from the TOP of the 15 MPE Member
+    Channels downward (pattern 0 = nibble 15, exactly the original
+    single-pattern behavior unchanged) -- a default, not a reservation:
+    `expression.c`'s own live per-touch channel allocator is untouched,
+    so this can only ever collide with live touch playing in the rare
+    case of using many fingers at once while ALSO running multiple active
+    patterns, an accepted edge case rather than something worth shrinking
+    live MPE polyphony to avoid.
+  - **Per-step pitch assignment** -- real feedback: "we need a way to
+    assign pitches to the notes." Holding a step past
+    `OP_SEQ_PITCH_ASSIGN_HOLD_MS` (350ms) opens a note-picker view of the
+    whole grid, reusing `lighting.c`'s own melodic-idle root/natural/
+    sharp coloring so it reads as a natural extension of melodic play
+    rather than a new visual language; the step's currently-assigned note
+    pulses white (this file's established "selected" language). A fresh
+    touch on any pad commits that pad's current note as the held step's
+    pitch, independent of the step's own position -- the same "hold the
+    trig, play the note" workflow Elektron/Circuit-style hardware
+    sequencers use for exactly this problem, the closest real-hardware
+    precedent that fits touch-only input with no encoders. Releasing the
+    originally-held step without picking a different pad cancels with no
+    change. The quick-tap arm-toggle is unchanged and fires independently
+    of this -- holding a step both toggles it (immediately, on touch-down,
+    same as always) AND, if you keep holding, also opens pitch-assign;
+    these don't conflict.
+  - **Manual transport + length on SW1 "-"/SW2 "+"**, previously unused
+    in sequencer mode (`octave_control.c`'s own default octave-shift
+    function already yields whenever `tiles_op_mode_owns_pad_grid()` is
+    true). Real feedback: "we need a button that starts and stops
+    sequencer... we need to be able to adjsut length of sequence with
+    shift + -." Plain "-"/"+" = stop/resume
+    (`tiles_midi_clock_set_running()`, new in `midi_clock.c`, a no-op
+    while a real external clock is present -- the DAW's own transport is
+    the only valid control then, mirroring tap tempo's own "external
+    always wins"); "+" specifically only fires if a tempo already exists
+    (tap-established or external) rather than setting `running=true` with
+    nothing to ever advance `pulse_count`. Circle held FIRST, then a
+    fresh "-"/"+" press, steps pattern length by +/-1 (1-24) instead --
+    circle is this board's own established "shift" identity, matching
+    `expression_control.c`'s own "hold the modifier first" square-then-
+    "-"/"+" convention; only that order is supported, not the reverse
+    (holding "-"/"+" first then tapping circle just runs each button's
+    own solo action independently -- acceptable "off-label" behavior, not
+    a crash or a stuck state). Resolved on release with the exact
+    "combo flag set during hold" shape `octave_control.c`'s own
+    solo-step-vs-combo race fix already established, reused rather than
+    reinvented.
+    **Required revising last round's circle-tap handler**: it used to
+    commit a tap-tempo tap on circle's raw PRESS edge. Holding circle
+    then pressing "-"/"+" for a length change would already have
+    registered a spurious tap before "-"/"+" was ever touched -- the
+    combo-conflict check only looks at sibling buttons AT press-time and
+    can't catch a sequential gesture like that. Fixed by deferring the
+    actual `tiles_midi_clock_register_tap()` call to RELEASE, cancelling
+    candidacy the instant "-"/"+" is seen held mid-hold, but still using
+    the ORIGINAL press timestamp for the registered tap -- tap-tempo
+    accuracy is unaffected by the small press-to-release latency of a
+    real tap.
+  - **Quantized (re-)start** -- real feedback: "we need to quantice to
+    midi clock when that is conected," confirmed to mean: entering
+    sequencer mode, or pressing "+", while a clock (real or tap-tempo) is
+    already running waits for the next quarter-note boundary
+    (`s_seq_pending_start`, consumed in `seq_advance_clock()`) before
+    actually resetting to step 0, instead of jumping in at whatever
+    `pulse_count % OP_SEQ_CLOCKS_PER_STEP` the clock happened to already
+    be at. This also fixes a real latent bug from the original build:
+    entering sequencer mode while an external clock was already running
+    landed on an essentially random step immediately (`elapsed = pulse_
+    count - 0` from a fresh `seq_start()`), never actually phase-aligned
+    to the DAW's own beat.
+  - **Current step lit up always**, real feedback superseding this file's
+    own earlier explicit "no playhead flash on an empty step" rule: an
+    unarmed (or armed-but-paused) current step now shows a dim cursor
+    color (`OP_SEQ_CURSOR_LEVEL`) instead of falling through to off, so
+    the playhead is always visible regardless of content or transport
+    state. Steps at or beyond the active pattern's current length still
+    render off regardless, matching the existing "unavailable are off"
+    rule for a pattern shortened below 24 steps.
   **Not hardware-verified at all** -- none of the above (the click
   gesture, the menu, sequencer playback/rendering, the channel
   reservation, the scale picker, the standardized menu language, the
-  press-to-select haptics, the tap-tempo gesture and shared beat flash)
-  has been tried on real hardware yet, including against a real external
-  MIDI clock source.
+  press-to-select haptics, the tap-tempo gesture and shared beat flash,
+  or this round's multi-pattern bank/pitch-assignment/transport-length/
+  quantized-start/always-lit-cursor redesign) has been tried on real
+  hardware yet, including against a real external MIDI clock source.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

@@ -57,55 +57,86 @@
  * logic is built. A deliberate, honest stub, not a guess dressed up as
  * a feature.
  *
- * ---- Sequencer: the one mode fully built this pass -----------------------
+ * ---- Sequencer: reworked into a full multi-pattern workflow --------------
  * All 24 pads = 24 steps, real feedback: "lets build sequencermode with
  * the full 24 keys as a standard 24 step." Step order is row-major,
  * top-left to bottom-right -- pad 1 (row 1, col 1) is step 0, pad 24
  * (row 4, col 6) is step 23, exactly board_pad_for_row_col()'s own
- * numbering, no remapping needed. Tapping a pad while sequencer mode owns
- * the grid toggles whether that step is armed (will play its own
- * note_map.c pitch when the playhead reaches it) or not, the same
- * touch-a-pad-to-toggle interaction expression_control.c's sub-menu
- * slider taps use.
+ * numbering, no remapping needed. Quick tap toggles whether a step is
+ * armed, same as always; holding a step past ~350ms ALSO opens per-step
+ * pitch assignment (see "Pitch assignment" below).
  *
- * Clock: driven entirely by services/midi_clock.h's real, external MIDI
- * clock (no internal free-running fallback tempo -- see that file's own
- * header for why). 1 step = 1 sixteenth note = OP_SEQ_CLOCKS_PER_STEP (6)
- * MIDI clock pulses, the standard convention (24 clocks/quarter note per
- * the MIDI spec, divided by 4 sixteenths/quarter) -- unmeasured against
- * what actually feels right for this board, a starting default like
- * every other timing constant in this codebase. A Start (0xFA) resets
- * the playhead to step 0 and plays it immediately; Continue (0xFB)
- * resumes from wherever the playhead already was, no reset; Stop (0xFC)
- * silences whatever's currently sounding and freezes the playhead in
- * place (armed/disarmed step editing still works with no clock running
- * at all -- only PLAYBACK needs one).
+ * Real feedback asked for "a better architecture" studying real hardware
+ * step sequencers, resulting in four new pieces beyond the original
+ * single-pattern build:
+ *
+ * - **4 patterns**, one per pad row, picked via SW3 (triangle)'s own
+ *   sub-menu while sequencer mode is active -- real feedback: "sub menu
+ *   triangle is reserved for other stuff... maybe in triangle we can
+ *   select midi channels for multiple patterns." Each pattern keeps its
+ *   own armed steps, per-step pitch overrides, length, and MIDI output
+ *   channel; switching patterns is immediate (no quantizing), always
+ *   silencing whatever was sounding on the old pattern's channel first.
+ * - **Pitch assignment**: holding a step opens a note-picker view of the
+ *   whole grid (the same root/natural/sharp coloring melodic idle uses)
+ *   -- tapping any pad sets that step's pitch to that pad's current
+ *   note, independent of the step's own position. The same "hold the
+ *   trig, play the note" workflow real hardware step sequencers use,
+ *   adapted to touch-only hardware with no encoders. Real feedback: "we
+ *   need a way to assign pitches to the notes."
+ * - **Manual transport + length**: SW1 "-"/SW2 "+" (otherwise unused in
+ *   sequencer mode, since services/octave_control.h's own default
+ *   octave-shift function yields whenever this module owns the grid)
+ *   are now stop/start -- real feedback: "we need a button that starts
+ *   and stops sequencer." Held circle FIRST, then a fresh "-"/"+" press
+ *   instead steps pattern length by +/-1 (1-24) -- real feedback: "we
+ *   need to be able to adjsut length of sequence with shift + -." Both
+ *   are no-ops whenever a real external clock is present (the DAW's own
+ *   transport is the only valid control then, mirroring tap tempo's own
+ *   "external always wins").
+ * - **Quantized (re-)start**: real feedback, confirmed meaning: "we need
+ *   to quantice to midi clock when that is conected" -- entering
+ *   sequencer mode, or pressing "+", while a clock (real or tap-tempo)
+ *   is already running waits for the next quarter-note boundary before
+ *   actually resetting to step 0, instead of jumping in at whatever
+ *   phase the clock happened to already be at.
+ *
+ * Clock: driven by services/midi_clock.h's shared pulse counter, fed
+ * either by real external MIDI clock bytes OR that file's own internal
+ * tap-tempo generator (SW6/circle) once established -- op_mode.c doesn't
+ * need to know which. 1 step = 1 sixteenth note = OP_SEQ_CLOCKS_PER_STEP
+ * (6) MIDI clock pulses, the standard convention (24 clocks/quarter note
+ * per the MIDI spec, divided by 4 sixteenths/quarter) -- unmeasured
+ * against what actually feels right for this board, a starting default
+ * like every other timing constant in this codebase. A Start (0xFA, or
+ * tap tempo's first establishment) resets the playhead to step 0 and
+ * plays it immediately; Continue (0xFB) resumes from wherever the
+ * playhead already was, no reset; Stop (0xFC) silences whatever's
+ * currently sounding and freezes the playhead in place (armed/disarmed
+ * step editing still works with no clock running at all -- only
+ * PLAYBACK needs one).
  *
  * Step colors, real feedback: "in sequencer steps that are not playing
  * are slightly dim red. steps thats on is white bright and steps that
- * are unavailable are off." Three states, not two: an ARMED step shows
- * dim red at rest, and bright white for exactly the window its own note
- * is sounding (the playhead indicator); a step that was never armed
- * ("unavailable") shows fully off ALWAYS, including at the instant the
- * playhead passes over it -- no playhead flash on an empty step, per the
- * literal "unavailable are off" with no stated exception. Notes/haptics:
- * "the happtics activate on each active step" -- an armed step reaching
- * the playhead sends a real MIDI note (fixed velocity -- no strike/touch
- * event exists to derive one from) on a single reserved MPE Member
- * Channel (the last of the 15, TILES_MIDI_MPE_NUM_MEMBER_CHANNELS - 1
- * past the first -- sequencer playback only ever sounds one note at a
- * time in this v1, so one dedicated channel is enough; see op_mode.c's
- * OP_SEQ_CHANNEL for the narrow theoretical overlap this simplification
- * accepts) and a tiles_haptics_trigger_kick() on that step's own pad, at
- * the moment the playhead lands on it; note-off + haptics stop fire the
- * moment the playhead LEAVES that step (full-length "gate," no separate
- * gate-length concept yet -- exactly the kind of per-row column variant
- * the file header above already anticipates adding later).
+ * are unavailable are off," later extended: "we need cuentet stept to be
+ * lit up always." Four states now: the CURRENT step (playhead) always
+ * shows something -- bright white while its own note is actually
+ * sounding, a dim cursor color otherwise (unarmed, or paused/waiting on
+ * a quantized start); any other armed step shows dim red at rest; a
+ * step that was never armed shows fully off; a step at or beyond the
+ * pattern's current length shows off regardless of armed state. Notes/
+ * haptics: "the happtics activate on each active step" -- an armed step
+ * reaching the playhead sends a real MIDI note (fixed velocity -- no
+ * strike/touch event exists to derive one from, on whichever channel
+ * the active pattern claims) and a tiles_haptics_trigger_kick() on that
+ * step's own pad; note-off + haptics stop fire the moment the playhead
+ * LEAVES that step (full-length "gate," no separate gate-length concept
+ * yet).
  *
  * Future variations noted, not yet built: a two-lane mode (16 steps per
- * lane instead of 24 in one), configurable pattern length/clocks-per-step,
- * a real gate-length parameter, chord/arp's actual trigger logic -- all
- * left as explicit follow-ups rather than guessed into this first pass.
+ * lane instead of 24 in one), a real gate-length parameter, chord/arp's
+ * actual trigger logic, quantized pattern switching -- all left as
+ * explicit follow-ups rather than guessed into this pass.
  */
 
 #include <stdbool.h>

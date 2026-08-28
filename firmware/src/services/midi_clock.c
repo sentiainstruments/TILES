@@ -145,6 +145,16 @@ bool tiles_midi_clock_tap_tempo_established(void) {
     return s_tap_tempo_established;
 }
 
+void tiles_midi_clock_set_running(bool running) {
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    if (tiles_midi_clock_external_active(now_ms)) {
+        /* Real clock always wins -- see tiles_midi_clock_register_tap()'s
+         * own identical guard. */
+        return;
+    }
+    s_running = running;
+}
+
 void tiles_midi_clock_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
