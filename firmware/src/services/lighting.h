@@ -7,18 +7,24 @@
  * (tiles_lighting_set_pad_press) so those services can call it once
  * they exist, without lighting.c changing.
  *
- * Pad brightness is bounded by services/power.h's live
- * led_brightness_ceiling_percent (35-40% on USB-only, 70-80% once
- * external power is confirmed present, per the truth table there) --
- * but as a real mA BUDGET derived from that percentage, not a blanket
- * per-pad multiplier: lighting.c's pad_dynamic_scale() sums every pad's
- * CURRENT desired brightness into a projected current draw and only
- * scales down if that would exceed the budget, so a few bright pads with
- * the rest at idle can run far brighter than the flat percentage alone
- * would allow, while the true worst case (everything lit) still respects
- * the same documented safety number -- real feedback: "could we push the
- * led celing a bit more safely?" A future profiles/ module can still
- * override the underlying percentage; don't bypass
+ * Pad brightness is a flat fraction of services/power.h's live
+ * led_brightness_ceiling_percent (37% on USB-only, 90% once external
+ * power is confirmed present -- see power.c's own comment for the fuller
+ * current-budget accounting behind those two numbers). Deliberately a
+ * single flat multiplier, not load-aware: an earlier attempt
+ * (pad_dynamic_scale(), since removed) recomputed the ceiling every
+ * frame from real projected current draw so a few bright pads could run
+ * brighter when the rest of the grid was idle -- real feedback after
+ * seeing it on hardware: "this led solution might look glitchy like we
+ * have unstable power. lets find a solution that doesnt include shifting
+ * brightness." A ceiling that reacts to how many other pads are lit
+ * makes the WHOLE board's brightness visibly shift as notes are struck
+ * or an animation's lit-pixel count changes -- reads exactly like a
+ * brownout even when the underlying math is current-safe. A given pad's
+ * brightness at a given state is now always the same fixed value,
+ * changing only when the power MODE itself changes (a rare, deliberate
+ * transition), never with unrelated activity. A future profiles/ module
+ * can still override the underlying percentage; don't bypass
  * tiles_power_get_state() to raise pad brightness some other way.
  *
  * Underglow is always on at its own fixed, high brightness (see

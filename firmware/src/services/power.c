@@ -36,9 +36,24 @@ static tiles_power_mode_t raw_mode_from_pins(void) {
  * "LED color and brightness" -- not invented here. USB-only mirrors
  * USB_DEMO_SAFE (500mA, max 5 haptic voices, 35-40% LED ceiling);
  * external mirrors FULL_DEMO_EXTERNAL (2.5A 5V target, max 12 voices,
- * 70-80% LED ceiling, CV/gate permitted). USB_DEMO_VALIDATED_1P5A is a
- * manual-only override with no automatic trigger and isn't derived
- * here -- a future profiles/ module owns that choice, not this one. */
+ * originally 70-80% LED ceiling, CV/gate permitted). USB_DEMO_VALIDATED_1P5A
+ * is a manual-only override with no automatic trigger and isn't derived
+ * here -- a future profiles/ module owns that choice, not this one.
+ *
+ * External's ceiling raised 75 -> 90, real feedback: "calculate the safe
+ * range again to make sure, acountign for ics lights and haptics and
+ * sensors." Fuller accounting (see services/lighting.c's own "Pad
+ * brightness ceiling" section for the full breakdown): ~448mA LED worst
+ * case + ~220mA estimated MCU/sensor/IC/button-LED overhead + a
+ * pessimistic 300-400mA haptics worst case (motor current itself is
+ * genuinely unmeasured, both hardware docs flag this) still leaves
+ * roughly 1.8A of margin against the 2500mA budget here -- real headroom
+ * to raise, unlike USB-only below. USB-only's 37% is UNCHANGED by that
+ * same accounting: 500mA total minus that same ~220mA overhead minus a
+ * similarly pessimistic haptics worst case leaves little to no confirmed
+ * margin beyond the existing ceiling, so it wasn't raised. Haptic motor
+ * current is the actual highest-priority unknown to measure here, not
+ * LED brightness on either profile. */
 static tiles_power_state_t state_for_mode(tiles_power_mode_t mode) {
     tiles_power_state_t s = {0};
     s.mode = mode;
@@ -48,7 +63,7 @@ static tiles_power_state_t state_for_mode(tiles_power_mode_t mode) {
         s.usb_operating_budget_ma = 0u;
         s.main_5v_budget_ma = 2500u;
         s.max_haptic_voices = 12u;
-        s.led_brightness_ceiling_percent = 75u;
+        s.led_brightness_ceiling_percent = 90u;
         s.cv_gate_permitted = true;
         break;
 
@@ -56,7 +71,7 @@ static tiles_power_state_t state_for_mode(tiles_power_mode_t mode) {
         s.usb_operating_budget_ma = 500u;
         s.main_5v_budget_ma = 2500u;
         s.max_haptic_voices = 12u;
-        s.led_brightness_ceiling_percent = 75u;
+        s.led_brightness_ceiling_percent = 90u;
         s.cv_gate_permitted = true;
         break;
 

@@ -34,8 +34,10 @@ not its code.
   round-robin, so touch reads as responsive rather than laggy. Pad
   brightness ceiling reads live from `power.h`'s
   `tiles_power_get_state().led_brightness_ceiling_percent` (37% on
-  USB-only, 75% once external power is confirmed) instead of a
-  hardcoded constant -- underglow does not use this ceiling at all.
+  USB-only, 90% once external power is confirmed -- see that entry
+  further below for the fuller current-budget accounting behind those
+  numbers) instead of a hardcoded constant -- underglow does not use
+  this ceiling at all.
   **Idle (untouched) coloring by note role, added after real feedback
   that a uniform white grid was hard to read** -- "root should be blue
   and black keys shouldnt have led this in rest non pressed moment...
@@ -81,34 +83,47 @@ not its code.
   Unmeasured -- root's brighter percentage and the natural/sharp
   distinction reading clearly at actual LED brightness/diffusion are
   both first attempts.
-  **Ceiling made dynamic/load-aware**, real feedback: "could we push the
-  led celing a bit more safely?" The old ceiling_level() was a single
-  flat multiplier applied to every pad regardless of how many others were
-  lit -- correct for the worst case (all 24 pads + underglow at full
-  white) but far more conservative than necessary for the much more
-  common case of a few notes held while the rest of the grid sits at a
-  low idle baseline. `pad_dynamic_scale()` now sums every pad's CURRENT
-  desired brightness (`pad_desired_rgb()`, the same standby/press/idle-
-  root/natural/sharp branching write_pad() always had, pulled out so the
-  budget estimate and the actual render can never drift apart) into a
-  real projected mA figure (`TILES_LIGHTING_MA_PER_CHANNEL_AT_FULL`,
-  derived from the SAME documented 448mA-at-full-grid estimate, not a new
-  number) and only scales down if that would exceed the budget
-  `led_brightness_ceiling_percent` (power.c) already establishes for the
-  current power mode -- so a couple of pressed pads can run close to full
-  brightness when the rest of the grid is idle, while the true worst case
-  (everything lit at once) still respects the same documented safety
-  number, now for the first time actually accounting for underglow's own
-  fixed draw (`underglow_fixed_ma()`) cutting into that shared budget,
-  which the old flat percentage never did. Nothing here raises the actual
-  current-draw safety envelope power.c already established -- same
-  numbers, allocated dynamically instead of worst-case-always. Floored/
-  capped (`TILES_LIGHTING_DYNAMIC_SCALE_FLOOR/_CEIL`, 15%/95%) so it never
-  reads as fully dark under pathological load or tries to spend literally
-  100% of the computed budget. Still engineering estimates, not
-  hardware-mandated -- same "revisit once real 5V input current is
-  measured" caveat that already applied to the flat percentage this
-  replaces.
+  **Ceiling made dynamic/load-aware, then reverted -- a real dead end,
+  worth keeping the history of.** Real feedback: "could we push the led
+  celing a bit more safely?" First attempt: `pad_dynamic_scale()` summed
+  every pad's CURRENT desired brightness (`pad_desired_rgb()`, the same
+  standby/press/idle-root/natural/sharp branching `write_pad()` always
+  had, pulled out so the budget estimate and the actual render could
+  never drift apart) into a real projected mA figure and only scaled
+  down if that would exceed the budget `led_brightness_ceiling_percent`
+  (power.c) establishes for the current power mode -- mathematically
+  current-safe, a couple of pressed pads could run close to full
+  brightness while the rest of the grid sat idle. Real feedback after
+  seeing it on hardware: "this led solution might look glitchy like we
+  have unstable power. lets find a solution that doesnt include shifting
+  brightness." Correct call -- a ceiling that reacts every frame to how
+  many OTHER pads happen to be lit makes the WHOLE board's brightness
+  visibly shift as notes are struck/released or an animation's lit-pixel
+  count changes, which reads exactly like a brownout regardless of
+  whether the underlying math is safe. Removed entirely; `write_pad()`
+  is back to a single flat ceiling (`static_ceiling_level()`) that only
+  changes when the power MODE itself changes, never per-frame.
+  **Then, a fuller current-budget accounting**, real feedback: "calculate
+  the safe range again to make sure, acountign for ics lights and
+  haptics and sensors." LEDs are solid (16mA/pixel at full white
+  including ~1mA controller overhead, per the board map's own
+  `current_model` -- 448mA worst case across 28 pixels, matching the
+  number this file was already built on). MCU + 24x TMAG5273 + 2x MPR121
+  + I2C mux/expander ICs + the 6 function-button LEDs add up to roughly
+  220mA of overhead this file's budget math never subtracted before
+  (reasonable datasheet-typical estimates, not measured for this board).
+  Haptic motor current is the real unknown -- both hardware docs flag it
+  explicitly as unmeasured; a pessimistic small-ERM-motor estimate (~60-
+  100mA each, up to 5 simultaneous voices on USB) could be 300-400mA
+  alone, potentially the single largest term in the whole budget. On
+  USB-only (500mA), that leaves little to no confirmed headroom beyond
+  the EXISTING ceiling, so USB_ONLY/FAULT's `led_brightness_ceiling_percent`
+  (power.c) was left at 37%, not raised. External power (2500mA) keeps
+  ~1.8A of margin even under the same pessimistic haptics assumption, so
+  EXTERNAL_ONLY/USB_AND_EXTERNAL's was raised 75 -> 90 there instead --
+  see power.c's own comment for the full numbers. Haptic motor current
+  measurement is the actual highest-priority unknown here now, not
+  anything about LED brightness specifically.
   **Not done:** standby animations (needs its own design pass — see the
   defaults doc), Hall-driven (as opposed to touch-driven) brightness.
 - `buttons.h`/`.c` — done for V1: reads all 6 function buttons
@@ -2020,7 +2035,9 @@ not its code.
   root cause of the persistent dimness; left unchanged per explicit
   direction ("leave USB-only ceiling alone, just note it") rather than
   silently loosening a documented safety margin -- external power gives
-  75%.
+  75% at the time this was written, later raised to 90% (see
+  `lighting.h`'s entry above) once a fuller current-budget accounting
+  confirmed the real headroom there.
   **Menu selection now press-confirmed, not touch-confirmed**, real
   feedback: "when you touch but not click in menu make a strong haptic
   click be felt, push pad to at least mroe than 50% to sleect and

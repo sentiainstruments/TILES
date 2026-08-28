@@ -11,10 +11,10 @@
 /* Real feedback: "make all led brighter its hard to see" -- raised from
  * 10. Still a fraction of the active brightness ceiling (a power-derived
  * safety cap from tiles_power_get_state(), untouched by this change --
- * see this file's "Dynamic, load-aware pad brightness ceiling" section
- * further below for how that ceiling is now computed), so this only
- * spends more of whatever headroom that ceiling already allows on the
- * resting/idle state, not a change to the underlying power budget. */
+ * see this file's "Pad brightness ceiling" section further below for how
+ * that ceiling is picked), so this only spends more of whatever headroom
+ * that ceiling already allows on the resting/idle state, not a change to
+ * the underlying power budget. */
 #define TILES_LIGHTING_IDLE_BASELINE_PERCENT 25u
 
 /* Idle (untouched) chromatic-play pad coloring by note role -- real
@@ -60,58 +60,67 @@
  * budget reason to hold it down the way the 24-pad grid needs to be.
  * It's a fixed ambient halo, not a per-pad state indicator, so running
  * it bright doesn't compete with touch/press feedback the way raising
- * every pad's baseline would. Its contribution IS still counted against
- * the dynamic pad budget below, though -- see underglow_fixed_ma(). */
+ * every pad's baseline would. Its own current draw is still accounted
+ * for in the fuller budget breakdown in this file's "Pad brightness
+ * ceiling" section below, just not by any code here -- it stays a fixed
+ * output regardless. */
 #define TILES_LIGHTING_UNDERGLOW_LEVEL 230u
 
 #define TILES_LIGHTING_NUM_UNDERGLOW_PIXELS 4u
 
-/* ---- Dynamic, load-aware pad brightness ceiling -------------------------
- * Real feedback: "could we push the led celing a bit more safely?" The
- * old ceiling (led_brightness_ceiling_percent from power.c, e.g. 37% on
- * USB-only) was a single flat multiplier applied to every pad regardless
- * of how many others are lit at the same time -- correct for the
- * absolute worst case (all 24 pads + underglow at full white) but far
- * more conservative than necessary for the much more common case of a
- * few notes held while the rest of the grid sits at a low idle baseline.
- * "More safely" means computing the SAME documented current budget from
- * the REAL current load every frame instead of assuming worst-case
- * always -- individual active pads can run much brighter when few pads
- * are lit, while the true worst case still lands at (if anything,
- * slightly more conservative than) today's flat number, since this is
- * the first time underglow's own real contribution is actually
- * subtracted from the shared budget rather than ignored.
+/* ---- Pad brightness ceiling: back to static, deliberately -------------
+ * Real feedback: "could we push the led celing a bit more safely?" led to
+ * a first attempt (pad_dynamic_scale(), recomputing the ceiling every
+ * frame from real projected current draw) -- then, after real hardware
+ * feedback: "this led solution might look glitchy like we have unstable
+ * power. lets find a solution that doesnt include shifting brightness."
+ * Correct call: a ceiling that continuously reacts to how many OTHER
+ * pads happen to be lit means the WHOLE board's brightness visibly
+ * shifts as notes are struck/released or an animation frame's lit-pixel
+ * count changes -- exactly what a real brownout looks like, even though
+ * the underlying math was current-safe. Removed entirely; back to a
+ * single flat ceiling per pad, chosen once (power mode changes, not
+ * every frame) so a given pad's brightness at a given state is always
+ * the same fixed value, never drifting with unrelated activity.
  *
- * The physical numbers are exactly the ones already in
- * docs/architecture/defaults-and-safeguards.md, just used dynamically
- * instead of as a single static clamp -- nothing here raises the actual
- * current-draw safety envelope power.c already established:
- *   - ~448mA at 100% duty across all 24 pad LEDs + 4 underglow pixels
- *     (3 channels each = 84 channels total) -- so ~5.33mA per channel
- *     at full duty, a derived rate, not a new measurement.
- *   - The existing led_brightness_ceiling_percent (power.c) is now read
- *     as "what fraction of that 448mA worst-case total we're willing to
- *     spend on LEDs right now" (166mA on USB-only, 336mA external) --
- *     the SAME percentage, just enforced as a real mA budget against
- *     actual projected load instead of a blanket per-pad multiplier.
- *   - Underglow's own (fixed, unscaled) contribution is computed once
- *     and subtracted first, leaving the real remaining budget for the
- *     24-pad grid specifically -- previously not accounted for at all.
- * Still engineering estimates, not hardware-mandated -- see this
- * project's own "revisit once real 5V input current is measured" note,
- * same caveat that already applied to the flat percentage this replaces. */
-#define TILES_LIGHTING_TOTAL_MA_AT_FULL 448.0f
-#define TILES_LIGHTING_TOTAL_CHANNELS_AT_FULL 84.0f /* (24 pads + 4 underglow) * 3 channels */
-#define TILES_LIGHTING_MA_PER_CHANNEL_AT_FULL (TILES_LIGHTING_TOTAL_MA_AT_FULL / TILES_LIGHTING_TOTAL_CHANNELS_AT_FULL)
-
-/* Small headroom margin even when real load is very light -- never
- * actually spend 100% of the computed budget, standard practice against
- * an estimate this file's own comments already call unmeasured. */
-#define TILES_LIGHTING_DYNAMIC_SCALE_CEIL 0.95f
-/* Sanity floor -- guards the pathological all-pads-lit case (see this
- * section's header) from reading as "basically off" even though the
- * budget math alone would already land well above true black there. */
-#define TILES_LIGHTING_DYNAMIC_SCALE_FLOOR 0.15f
+ * Real feedback then asked to "calculate the safe range again to make
+ * sure, acountign for ics lights and haptics and sensors" -- a fuller
+ * accounting than the original ~448mA-LEDs-only estimate in
+ * docs/architecture/defaults-and-safeguards.md:
+ *   - LEDs: solid. 16mA/pixel at full white including ~1mA controller
+ *     overhead (board map's own current_model), 28 pixels (24 pad + 4
+ *     underglow) -> 448mA worst case, ~28mA idle floor even at zero
+ *     brightness. This is the number the existing ceiling was built on.
+ *   - MCU + sensors + I2C ICs + function-button LEDs: not measured for
+ *     this board, but reasonably estimable from typical datasheet
+ *     figures -- RP2350 active (~60mA) + 24x TMAG5273 Hall sensors
+ *     (~3mA each, ~72mA) + 2x MPR121 (~4mA) + TCA9554/TCA9548A (~2mA) +
+ *     2x PCA9685 IC overhead, not the loads they switch (~2mA) + 6
+ *     function-button LEDs at worst case all lit, 150-ohm-from-5V per
+ *     the board map (~80mA) -- roughly 220mA of overhead this file's
+ *     own ceiling math never subtracted before.
+ *   - Haptic motors: genuinely UNMEASURED -- both hardware docs flag
+ *     this explicitly ("measure one motor's running and stall/start
+ *     current" before trusting the higher-voice profiles). Small ERM
+ *     motors typically run ~60-100mA each while spinning; USB-only
+ *     allows up to 5 simultaneous voices, so a real worst case could be
+ *     300-400mA from haptics ALONE -- potentially the single largest
+ *     term in the whole budget, not LEDs.
+ * On USB-only (500mA total), 220mA overhead + a genuinely uncertain
+ * 300-400mA haptics worst case leaves little to no headroom confirmed
+ * safe for LEDs beyond the existing ceiling -- raising it further isn't
+ * something this fuller accounting actually supports, so power.c's
+ * USB_ONLY/FAULT led_brightness_ceiling_percent stays at 37%, not
+ * increased. External power (2500mA) keeps a large margin
+ * (~1.8A) even under the same pessimistic haptics assumption, so that
+ * ceiling (power.c's led_brightness_ceiling_percent for
+ * EXTERNAL_ONLY/USB_AND_EXTERNAL) was raised 75 -> 90 there instead --
+ * see power.c's own comment. Haptic motor current is the actual
+ * highest-priority unknown to measure here, not anything in this file. */
+static uint8_t static_ceiling_level(void) {
+    uint8_t ceiling_percent = tiles_power_get_state().led_brightness_ceiling_percent;
+    return (uint8_t)((255u * ceiling_percent) / 100u);
+}
 
 typedef struct {
     float r;
@@ -150,26 +159,10 @@ static uint8_t underglow_channel_level(float channel_0_to_1) {
     return (uint8_t)((float)TILES_LIGHTING_UNDERGLOW_LEVEL * clamp01(channel_0_to_1));
 }
 
-/* Underglow's constant contribution to the shared LED current budget --
- * see this file's "Dynamic, load-aware pad brightness ceiling" section.
- * A fixed number (underglow's brightness never varies), computed once
- * per call rather than cached since it's four multiplies and this isn't
- * a hot path. */
-static float underglow_fixed_ma(void) {
-    float channel_fraction = (float)TILES_LIGHTING_UNDERGLOW_LEVEL / 255.0f;
-    float channels = (float)TILES_LIGHTING_NUM_UNDERGLOW_PIXELS * 3.0f;
-    return channels * channel_fraction * TILES_LIGHTING_MA_PER_CHANNEL_AT_FULL;
-}
-
-/* What a pad's r/g/b would want (0.0-1.0 each) at a full 100% ceiling --
- * i.e. BEFORE any budget-driven scaling, using the fixed baseline
- * PERCENT constants directly rather than any ceiling-derived value (that
- * would be circular: the dynamic ceiling itself is computed FROM this
- * function's total across all 24 pads, see pad_dynamic_scale() below).
- * Replicates write_pad()'s own standby/press/idle-root/idle-natural/
- * idle-sharp branching -- kept as the single source of truth for "what
- * does this pad look like" so the budget estimate and the actual render
- * can never drift apart from each other. */
+/* What a pad's r/g/b wants (0.0-1.0 each), independent of the ceiling --
+ * the ceiling is applied once, afterward, in write_pad() below. Kept as
+ * its own function (rather than inlined into write_pad()) as the single
+ * source of truth for "what does this pad look like" in every state. */
 static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
     if (s_standby_active) {
         return s_pad_standby_rgb[pad_index];
@@ -208,47 +201,6 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
     return (tiles_rgb01_t){0.0f, 0.0f, 0.0f};
 }
 
-/* The dynamic replacement for the old flat ceiling_level() -- see this
- * file's "Dynamic, load-aware pad brightness ceiling" section for the
- * full reasoning. Sums every pad's CURRENT desired brightness (at an
- * assumed 100% ceiling, via pad_desired_rgb() above) to get a real
- * projected mA figure, and only scales down if that would exceed the
- * budget power.c's led_brightness_ceiling_percent already establishes
- * for the current power mode -- so a handful of bright pads with the
- * rest at idle can run far brighter than the old flat percentage, while
- * the true worst case (everything lit) still lands at (if anything, more
- * conservative than) that same documented number. Live, not cached --
- * recomputed fresh from current pad state every call, cheap enough (24
- * pads * a few float ops) that this isn't a concern even called once per
- * pad write. */
-static float pad_dynamic_scale(void) {
-    float total_channel_fraction = 0.0f;
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        tiles_rgb01_t desired = pad_desired_rgb(i);
-        total_channel_fraction += desired.r + desired.g + desired.b;
-    }
-    float desired_ma = total_channel_fraction * TILES_LIGHTING_MA_PER_CHANNEL_AT_FULL;
-
-    uint8_t ceiling_percent = tiles_power_get_state().led_brightness_ceiling_percent;
-    float led_budget_ma = ((float)ceiling_percent / 100.0f) * TILES_LIGHTING_TOTAL_MA_AT_FULL;
-    float pad_budget_ma = led_budget_ma - underglow_fixed_ma();
-    if (pad_budget_ma < 0.0f) {
-        pad_budget_ma = 0.0f;
-    }
-
-    float scale = TILES_LIGHTING_DYNAMIC_SCALE_CEIL;
-    if (desired_ma > 0.0f && pad_budget_ma < desired_ma) {
-        scale = pad_budget_ma / desired_ma;
-        if (scale > TILES_LIGHTING_DYNAMIC_SCALE_CEIL) {
-            scale = TILES_LIGHTING_DYNAMIC_SCALE_CEIL;
-        }
-        if (scale < TILES_LIGHTING_DYNAMIC_SCALE_FLOOR) {
-            scale = TILES_LIGHTING_DYNAMIC_SCALE_FLOOR;
-        }
-    }
-    return scale;
-}
-
 static void write_pad(uint8_t pad_index /* 0-23 */) {
     const tiles_pad_config_t *cfg = board_pad_config((uint8_t)(pad_index + 1u));
     if (cfg == NULL) {
@@ -256,10 +208,10 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
     }
 
     tiles_rgb01_t desired = pad_desired_rgb(pad_index);
-    float scale = pad_dynamic_scale();
-    uint8_t r = (uint8_t)(255.0f * clamp01(desired.r * scale));
-    uint8_t g = (uint8_t)(255.0f * clamp01(desired.g * scale));
-    uint8_t b = (uint8_t)(255.0f * clamp01(desired.b * scale));
+    uint8_t ceiling = static_ceiling_level();
+    uint8_t r = (uint8_t)((float)ceiling * clamp01(desired.r));
+    uint8_t g = (uint8_t)((float)ceiling * clamp01(desired.g));
+    uint8_t b = (uint8_t)((float)ceiling * clamp01(desired.b));
     uint32_t pixel = tiles_sk6805_pack_rgb(r, g, b);
 
     tiles_tca9554_disable_all_muxes(&s_led_mux);
