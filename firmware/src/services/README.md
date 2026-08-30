@@ -2836,5 +2836,59 @@ not its code.
   keep the total at 24 -- none of the 6 had a real interval table yet
   regardless, so this costs nothing functional, just one fewer future
   custom slot.
+  **Same real-hardware pass surfaced three more real issues, all fixed:**
+  1. **A step's armed state could flip as a side effect of just holding
+     it to edit** -- real feedback: "when setting the pitch of pad we are
+     still affecting note on." `seq_handle_step_taps()` toggled
+     `step_armed[]` immediately on the PRESS edge, before it was known
+     whether that touch would resolve as a quick tap or the start of a
+     350ms hold into pitch/ratchet edit -- so holding an already-armed
+     step to edit it silently disarmed it first (or armed an unarmed one)
+     the instant contact began, with no way to undo it once the hold
+     escalated. Fixed by deferring the toggle to RELEASE, and only when
+     `s_seq_step_touch_started_ms[step]` shows this exact touch's
+     lifecycle was tracked start-to-finish by this same loop (it's reset
+     to 0 by both `edit_exit()` and a circle+touch ratchet entry, so a
+     touch that got diverted into an edit gesture, or a pitch-edit's
+     pick-a-pad commit landing on a DIFFERENT pad, never also arms/disarms
+     the step it touched -- that pad already did its job). Same fix also
+     removes the old coupling where entering ratchet-edit (circle held +
+     touch) always flipped the step's armed state too, whether or not
+     that was wanted.
+  2. **The sequencer cursor still showed plain white while actually
+     playing** -- real feedback: "play head is still white on play when
+     going over selected step," after the armed-cursor blue color above
+     was added. `s_seq_note_sounding` is only ever true for an ARMED step
+     (`seq_enter_step()` returns before setting it for an unarmed one),
+     so it was always a strict subset of "armed" -- but `render_sequencer()`
+     checked sounding FIRST and let it win as bright white, meaning the
+     one moment blue mattered most (a note actually firing) was exactly
+     when it didn't show. Fixed by checking armed before sounding, so an
+     armed current step is blue unconditionally, playing or not.
+  3. **The mode-picker menu never distinguished "available" from "the
+     mode you're already in," and only ever showed flat full-brightness
+     colors** -- real feedback: "diamond menu doesnt make sense. we
+     defined each row for a family of modes, we defined color ways, but
+     lights should only be on when a mode is available in that pad, aksi
+     curent mode should pulse." This file's own header already documents
+     a standard shared with services/expression_control.c's sub-menu --
+     "select color or active color is always white bright pulsing...
+     respective less bright but still readable bright for non selected
+     and available" -- but `render_menu()` never actually implemented the
+     pulsing-selected tier, just a flat hue for every available row
+     regardless of whether it was the current mode. Fixed: the row
+     matching `s_active_mode` (new `row_is_current_mode()`) now pulses
+     white via this file's existing `menu_selected_pulse_level()`, any
+     OTHER available row dims to `OP_SCALE_AVAILABLE_LEVEL` (the same
+     "readable secondary" level the scale picker's own available-but-
+     unselected pads already use), and an unavailable row stays fully
+     off, unchanged. Real feedback also separately described "something
+     triggering animations when clicking the diamond menu" -- no root
+     cause was found for that in isolation (menu_enter()/render_menu()'s
+     own state resets were reviewed and look correct), so it's flagged
+     here as **not confirmed fixed**; it may simply have been this same
+     flat-color-vs-pulse mismatch read as an "animation," or may be a
+     separate issue that needs a more specific description to chase down
+     if it persists after this round.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

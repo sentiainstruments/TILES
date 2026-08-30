@@ -249,12 +249,13 @@ static uint32_t s_beat_flash_start_ms;
  * (`seq_enter_step()`'s own probability roll) -- without this, the
  * cursor sitting on that step would fall through to the plain white
  * OP_SEQ_CURSOR_LEVEL above, visually indistinguishable from sitting on
- * a step that was never armed at all. Blue now means "the cursor is
- * here AND this step is armed," regardless of whether it's audibly
- * sounding at this exact instant (paused/stopped/skipped-by-probability
- * all still show it) -- bright white (below) still wins whenever it
- * actually IS sounding, matching the existing "sounding = brightest"
- * rule. */
+ * a step that was never armed at all. Blue means "the cursor is here AND
+ * this step is armed" -- unconditionally, sounding or not (a first pass
+ * let bright white win whenever the step was actually sounding, but real
+ * feedback afterward -- "play head is still white on play when going
+ * over selected step" -- confirmed that just reintroduced the exact
+ * confusion this color exists to prevent, since sounding IS the armed
+ * case that matters most; see render_sequencer()'s own comment). */
 #define OP_SEQ_CURSOR_ARMED_R 0.0f
 #define OP_SEQ_CURSOR_ARMED_G 0.3f
 #define OP_SEQ_CURSOR_ARMED_B 1.0f
@@ -371,7 +372,13 @@ static uint32_t s_seq_next_ratchet_pulse;
  * discrete pick-from-24, and one that doesn't have pitch's "had to keep
  * two fingers down" problem since only the one held pad is ever needed.
  * Triangle cancels out of any of the three with no change
- * (handle_triangle_click()'s own branch). */
+ * (handle_triangle_click()'s own branch).
+ * A plain tap's own armed-toggle resolves on RELEASE, not press -- real
+ * feedback: "when setting the pitch of pad we are still affecting note
+ * on." Toggling on press couldn't yet tell a tap from the start of a
+ * hold, so holding an armed step to edit it flipped its armed state
+ * first, before the hold even had a chance to escalate -- see
+ * seq_handle_step_taps()'s own comment for the full fix. */
 typedef enum {
     OP_SEQ_EDIT_NONE = 0,
     OP_SEQ_EDIT_PITCH,
@@ -579,18 +586,34 @@ static void seq_handle_step_taps(uint32_t now_ms) {
         bool touched = tiles_touch_is_touched(pad);
         bool was_touched = s_seq_prev_pad_touched[step];
         if (touched && !was_touched) {
-            pat->step_armed[step] = !pat->step_armed[step];
             if (tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID)) {
                 edit_enter_ratchet(step);
                 return; /* grid ownership just changed under this loop -- stop iterating it */
             }
             s_seq_step_touch_started_ms[step] = now_ms;
-        } else if (!touched) {
+        } else if (touched) {
+            if (s_seq_step_touch_started_ms[step] != 0u &&
+                (now_ms - s_seq_step_touch_started_ms[step]) >= OP_SEQ_PITCH_ASSIGN_HOLD_MS) {
+                edit_enter(step, s_seq_step_touch_started_ms[step]);
+                return; /* grid ownership just changed under this loop -- stop iterating it */
+            }
+        } else {
+            /* Released -- a genuine tap-and-release commits the arm
+             * toggle HERE, not on the original press. Real feedback:
+             * "when setting the pitch of pad we are still affecting note
+             * on" -- toggling immediately on press (the old behavior)
+             * meant holding an already-armed step to open pitch/ratchet
+             * edit silently disarmed it first, before the press even had
+             * a chance to reveal itself as a hold rather than a tap.
+             * started_ms == 0 here means this touch's lifecycle was never
+             * tracked start-to-finish by this loop -- e.g. it's the pad a
+             * pitch-edit pick-a-pad commit just consumed instead (see
+             * edit_exit()'s own resync), which already did its job and
+             * shouldn't ALSO arm/disarm the step it landed on. */
+            if (s_seq_step_touch_started_ms[step] != 0u) {
+                pat->step_armed[step] = !pat->step_armed[step];
+            }
             s_seq_step_touch_started_ms[step] = 0u;
-        } else if (s_seq_step_touch_started_ms[step] != 0u &&
-                   (now_ms - s_seq_step_touch_started_ms[step]) >= OP_SEQ_PITCH_ASSIGN_HOLD_MS) {
-            edit_enter(step, s_seq_step_touch_started_ms[step]);
-            return; /* grid ownership just changed under this loop -- stop iterating it */
         }
         s_seq_prev_pad_touched[step] = touched;
     }
@@ -678,15 +701,20 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
                 /* Out of the current loop -- "unavailable are off," this
                  * codebase's own established rule, unchanged. */
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
-            } else if (is_current && s_seq_note_sounding) {
-                tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f);
             } else if (is_current && pat->step_armed[step]) {
                 /* Real feedback: "make play head on active pad in
                  * sewquencer blue if pad active so it wont look as an
-                 * inactive pad" -- armed but not currently sounding
-                 * (paused/stopped, or this pass got skipped by
-                 * probability) still needs to read as "armed," not
-                 * confusable with an unarmed cursor below. */
+                 * inactive pad" -- then, after trying it: "play head is
+                 * still white on play when going over selected step."
+                 * s_seq_note_sounding is only ever true for an ARMED step
+                 * (seq_enter_step() returns early for an unarmed one
+                 * before ever setting it), so the two used to be separate
+                 * tiers with sounding checked FIRST and winning as plain
+                 * bright white -- meaning the one moment this color most
+                 * needed to read as "armed" (actually playing) was
+                 * exactly when it didn't. Armed now always wins here,
+                 * sounding or not -- one consistent blue for "the cursor
+                 * is on an armed step," full stop. */
                 tiles_lighting_set_standby_pad_rgb(pad, OP_SEQ_CURSOR_ARMED_R, OP_SEQ_CURSOR_ARMED_G, OP_SEQ_CURSOR_ARMED_B);
             } else if (is_current) {
                 /* Real feedback: "we need cuentet stept to be lit up
@@ -1166,11 +1194,50 @@ static void render_menu_row_color(uint8_t row, float *r, float *g, float *b) {
     }
 }
 
-static void render_menu(void) {
+/* Row <-> mode, the inverse of handle_menu_taps()'s own row->mode
+ * switch -- used only to find which single row (if any) is the mode
+ * already active, for render_menu()'s pulsing "current mode" state. */
+static bool row_is_current_mode(uint8_t row) {
+    switch (row) {
+    case OP_ROW_MELODIC:
+        return s_active_mode == OP_MODE_MELODIC;
+    case OP_ROW_SEQUENCER:
+        return s_active_mode == OP_MODE_SEQUENCER;
+    case OP_ROW_GUITAR:
+        return s_active_mode == OP_MODE_GUITAR;
+    default: /* OP_ROW_CHORD */
+        return s_active_mode == OP_MODE_CHORD;
+    }
+}
+
+/* Real feedback: "diamond menu doesnt make sense. we defined each row for
+ * a family of modes, we defined color ways, but lights should only be on
+ * when a mode is available in that pad, aksi curent mode should pulse."
+ * This was already true for the on/off half (row_is_available() gates
+ * color at all), but never carried through the OTHER standardized menu
+ * rule this file's own header already documents for both its menus --
+ * "select color or active color is always white bright pulsing...
+ * respective less bright but still readable bright for non selected and
+ * available" (see OP_MENU_SELECTED_PULSE_PERIOD_MS's own comment): every
+ * available row rendered at the SAME flat full-brightness hue regardless
+ * of whether it was the mode you were already in, so there was no visual
+ * difference between "available" and "this is what you're currently in."
+ * Now: the current mode's row pulses white (this file's one "selected"
+ * language, reused rather than invented fresh), any OTHER available row
+ * shows its own hue dimmed to the readable-secondary level the scale
+ * picker's own "available but not selected" pads already use
+ * (OP_SCALE_AVAILABLE_LEVEL), and an unavailable row stays fully off. */
+static void render_menu(uint32_t now_ms) {
+    float pulse = menu_selected_pulse_level(now_ms);
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         float r = 0.0f, g = 0.0f, b = 0.0f;
-        if (row_is_available(row)) {
+        if (row_is_current_mode(row)) {
+            r = g = b = pulse;
+        } else if (row_is_available(row)) {
             render_menu_row_color(row, &r, &g, &b);
+            r *= OP_SCALE_AVAILABLE_LEVEL;
+            g *= OP_SCALE_AVAILABLE_LEVEL;
+            b *= OP_SCALE_AVAILABLE_LEVEL;
         }
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), r, g, b);
@@ -1769,7 +1836,7 @@ void tiles_op_mode_scan(void) {
 
     if (s_menu_visible) {
         handle_menu_taps();
-        render_menu();
+        render_menu(now_ms);
         return;
     }
 
