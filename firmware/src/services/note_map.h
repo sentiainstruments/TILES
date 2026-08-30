@@ -38,14 +38,22 @@
  * phrigian, lydian, mixo, aeolian, locrian, bluse major and minor,
  * arabian, dim, combination dim, pentatonic major and minor, egyptian,
  * whole tone, japanese miyakobushi, raga todi, the remaining ones are
- * spaces for costume scales." Exactly 18 named scales + 6 reserved
- * "custom" placeholders = 24 -- fills services/op_mode.h's melodic-mode
- * scale-picker grid (one pad per scale) exactly; see
- * TILES_NOTE_MAP_NUM_SCALE_GRID_SLOTS below. Chromatic (the pre-existing
- * boot default) is deliberately NOT one of the 24 grid slots -- the
- * named list above already fills all 24 exactly, and chromatic stays
- * reachable as whatever the board boots into before a scale is ever
- * picked from the new menu, same as it always has been.
+ * spaces for costume scales." 18 named scales fill most of services/
+ * op_mode.h's melodic-mode scale-picker grid (one pad per scale); see
+ * TILES_NOTE_MAP_NUM_SCALE_GRID_SLOTS below.
+ * **Chromatic is grid slot 1**, real feedback: "add the first mode as
+ * chromatic, not major shifting all onse step so we can return to
+ * chromatic mode" -- there was originally no way to get BACK to
+ * chromatic once a real scale was picked, short of a power cycle.
+ * Chromatic already has a real, valid interval table (`scale_table()`'s
+ * own `TILES_SCALE_CHROMATIC` case in note_map.c), so it needed no new
+ * code to become selectable -- just a slot in `SCALE_GRID_ORDER`. Every
+ * named scale shifted down one slot to make room; with only 24 slots
+ * total and 1 (chromatic) + 18 (named) already claiming 19, the 6
+ * reserved "custom" placeholders shrank to 5 (`CUSTOM_6` dropped) to
+ * fit -- none of the 6 have a real interval table yet regardless (see
+ * `tiles_note_map_scale_is_defined()` below), so this costs nothing
+ * functional, just one fewer future custom slot.
  *
  * Each non-chromatic scale has fewer than 12 notes per octave, so a
  * pad's position-derived "degree" (0-23) indexes into the scale's own
@@ -54,9 +62,9 @@
  * folding chromatic uses -- see note_map.c's scale_table()/
  * tiles_note_map_get_note() for the actual math, and the legacy
  * prototype's scaleInterval() in docs/reference/legacy-prototype-v1/ for
- * the shape it's modeled on (not its code). The 6 CUSTOM_* values are
- * real, valid enum values (so the grid has something to reference for
- * those slots) but have no interval table yet -- see
+ * the shape it's modeled on (not its code). The 5 remaining CUSTOM_*
+ * values are real, valid enum values (so the grid has something to
+ * reference for those slots) but have no interval table yet -- see
  * tiles_note_map_scale_is_defined() below; selecting one from the menu
  * is a UI no-op (services/op_mode.h treats undefined slots as
  * unselectable, matching "unavailable" in the standardized menu

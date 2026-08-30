@@ -2764,5 +2764,77 @@ not its code.
   availability gating, and the entire guitar mode (note mapping, fret
   markers, "-"/"+" fret-shift) are first attempts, none tried on real
   hardware yet.
+  **First real-hardware pass found three more real issues, all fixed:**
+  1. Guitar mode's row moved to the LITERAL 3rd row -- real feedback:
+     "fret mode is not activating the correct lights, it shouldnt look
+     like chromatic." The original placement put guitar on row 4 (reading
+     "mode 3" as "the 3rd AVAILABLE mode counting down the list, skipping
+     chord's dark row"), which didn't match what real feedback expected
+     from that same phrase. `OP_ROW_GUITAR` is now literally 3
+     (`OP_ROW_SEQUENCER` moved to 2, `OP_ROW_CHORD` to 4) -- the plain,
+     unambiguous reading. Since every row check in this file already
+     compares against the named `OP_ROW_*` constants rather than raw
+     numbers, reassigning their values was the only change needed.
+  2. **Probability/ratchet's live dial fixed a real value-corruption bug**
+     -- real feedback: "im woried the value decreses before the mode is
+     exited... lets make sure the lift dosnt loose the feature." Lifting
+     a finger is a continuous physical release: Hall depth necessarily
+     passes back down through every lower value before the touch sensor
+     reports "released," so a value tied directly to CURRENT depth was
+     always getting dragged toward zero by the release motion itself,
+     silently overwriting whatever the player actually intended right as
+     they let go. Fixed with peak-tracking (`s_seq_edit_peak_depth`,
+     reset on every fresh entry into probability or ratchet): the pattern
+     data is only ever written on a NEW peak, so the release motion
+     (depth can only go down from there) simply stops producing writes,
+     leaving the last real value in place. `render_value_meter()` still
+     shows live feedback as you press, since it reads the same
+     continuously-updated pattern data -- it just never shows a value
+     un-happening once you've reached it.
+  3. **Current step now shows blue when armed but not sounding** -- real
+     feedback: "make play head on active pad in sewquencer blue if pad
+     active so it wont look as an inactive pad." Needed once per-step
+     probability could make an armed step silently skip a given pass
+     (`seq_enter_step()`'s own probability roll) -- without this, the
+     cursor sitting on that step fell through to the same plain dim-white
+     `OP_SEQ_CURSOR_LEVEL` an UNARMED current step shows, making "armed
+     but this pass got skipped" visually indistinguishable from "never
+     armed at all." New `OP_SEQ_CURSOR_ARMED_*` (blue) fires whenever the
+     current step is armed but not this-instant sounding (paused,
+     stopped, or skipped) -- bright white still wins whenever it actually
+     IS sounding, unchanged.
+- `expression.h`/`.c` — see that file's own entry above for the fuller
+  strike-detection history; this round's addition: **`MIN_STRIKE_DEPTH_
+  DELTA` lowered 300 -> 150**, real feedback: "reduce the deadzone before
+  velocity picks up on pad pressed, rn we cant play lightly enough." 300
+  was raised from 150 in an earlier round specifically to stop a
+  fast-but-shallow flick from reading as a hard strike -- but that same
+  section's own comment at the time flagged the exact risk that came
+  true: "revisit... if deliberate soft presses stop registering." A
+  genuinely light, SLOW, deliberate press has just as little depth as a
+  fast shallow flick, so 300 was rejecting both alike with no note at
+  all, a worse outcome than the misread it was avoiding. Restored to 150
+  -- the one value this section's own real capture data (140 real
+  touches) actually validated as the line between incidental contact
+  (~96 ceiling) and a genuine press (~192 floor); 300 was a guess layered
+  on top of that data, never itself measured against it. The existing
+  elapsed-time velocity model still tells fast strikes from slow ones at
+  this lower threshold exactly as before -- a fast-but-shallow flick
+  still reads as quick (matching how real velocity-sensitive keybeds
+  already work, speed of travel being the standard velocity signal, not
+  a bug) -- while a slow, light press finally gets to register instead
+  of being silently dropped.
+- `note_map.h`/`.c` — see that file's own entry above for the fuller
+  guitar-mode design; this round's addition: **chromatic added to the
+  scale picker as slot 1**, real feedback: "add the first mode as
+  chromatic, not major shifting all onse step so we can return to
+  chromatic mode." There was no way back to chromatic once a real scale
+  was picked, short of a reboot. Chromatic already had a valid interval
+  table (it's the boot default), so no note-mapping code changed -- only
+  `SCALE_GRID_ORDER[]` did: chromatic now leads, every named scale shifts
+  down one slot, and `CUSTOM_6` is dropped (6 reserved slots -> 5) to
+  keep the total at 24 -- none of the 6 had a real interval table yet
+  regardless, so this costs nothing functional, just one fewer future
+  custom slot.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

@@ -75,28 +75,32 @@
  *
  * Also doubles as the elapsed-time model's actuation checkpoint (see
  * "Velocity: elapsed-time-to-actuation" below) -- how far a strike has
- * to travel before its speed even gets measured. Raised 150 -> 300
- * after real feedback that a fast-but-shallow flick still read as a
- * hard strike: "when I press faster but not deep the reading is still
- * strong." At 150 (comfortably above the ~96 touch-only ceiling but
- * still only ~17% of the ~900-unit full-press range), a light flick
- * needs very little real force to cover that little distance quickly,
- * so "fast" and "hard" weren't well correlated at that depth. 300
- * (~33% of full press) requires enough real travel that covering it
- * quickly takes genuine committed force, not just a flick -- the same
- * physical logic a spring/magnet mechanism already applies to any
- * motion: covering more distance in the same short time needs more
- * initial force, since the spring's return force works against it the
- * whole way. Still leaves ~67% of travel for aftertouch after the note
- * fires, same as a synth-action keybed's actuation point sitting well
- * before its mechanical bottom. Unmeasured against this specific
- * complaint -- the capture that validated the original 150 (see this
- * section's header) only measured "touch vs. press," not "how much
- * depth makes fast-but-light strikes rare"; revisit with a labeled
- * capture (explicit "light touch," "fast shallow flick," "real press"
- * trials) if light-fast still reads too hard or deliberate soft presses
- * stop registering. */
-#define MIN_STRIKE_DEPTH_DELTA 300.0f
+ * to travel before its speed even gets measured.
+ * History: raised 150 -> 300 after real feedback that a fast-but-shallow
+ * flick still read as a hard strike ("when I press faster but not deep
+ * the reading is still strong"), reasoning that requiring more real
+ * travel before triggering at all would mean only genuinely committed
+ * force could cross it quickly. That traded away something this
+ * section's own comment explicitly flagged as a risk at the time
+ * ("revisit... if deliberate soft presses stop registering") --  exactly
+ * what happened: real feedback again, "reduce the deadzone before
+ * velocity picks up on pad pressed, rn we cant play lightly enough." A
+ * genuinely light, SLOW, deliberate press has just as little depth as a
+ * fast shallow flick, and 300 was rejecting both alike -- no note at
+ * all, regardless of how deliberately or gently it was played, which is
+ * a worse outcome than the fast-flick misread this was trying to avoid.
+ * Restored to 150 -- the ONE value this whole section's own real capture
+ * data (140 real touches) actually validated as the line between
+ * incidental contact (~96 ceiling) and a genuine press (~192 floor);
+ * 300 was a guess layered on top of that real data, not itself measured
+ * against it. The elapsed-time velocity model (below) still
+ * distinguishes fast strikes from slow ones at this lower threshold same
+ * as it always did -- a genuinely fast-but-shallow flick will still read
+ * as a quick, therefore harder-mapped, strike (matching how real
+ * velocity-sensitive keybeds already work: speed of travel IS the
+ * standard velocity signal, not a bug), while a slow, light press now
+ * finally gets to register at all instead of being silently dropped. */
+#define MIN_STRIKE_DEPTH_DELTA 150.0f
 
 /* Retrigger threshold for a held note -- real feedback: "contact with
  * pad has to be broken for retrigger, that's bad." Raw depth (already

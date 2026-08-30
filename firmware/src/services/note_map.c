@@ -232,9 +232,19 @@ static tiles_scale_table_t scale_table(tiles_scale_mode_t scale) {
     }
 }
 
-/* Grid slot 1-24 -> scale, in real feedback's own listed order. Slots
- * 19-24 are the 6 reserved "custom" placeholders. */
+/* Grid slot 1-24 -> scale. Real feedback: "add the first mode as
+ * chromatic, not major shifting all onse step so we can return to
+ * chromatic mode" -- chromatic is now slot 1 (it already has a real,
+ * valid interval table -- see scale_table()'s own TILES_SCALE_CHROMATIC
+ * case -- so tiles_note_map_scale_is_defined() already reports it
+ * selectable with no other code changes needed), and every named scale
+ * shifts down one slot from where it used to sit. This leaves no room
+ * for all 6 "custom" placeholders in the same 24 slots -- CUSTOM_6 is
+ * dropped (down to 5 reserved slots) rather than dropping a real, named
+ * scale; none of the 6 have a real interval table yet regardless (see
+ * tiles_note_map_scale_is_defined()), so this costs nothing functional. */
 static const tiles_scale_mode_t SCALE_GRID_ORDER[TILES_NOTE_MAP_NUM_SCALE_GRID_SLOTS] = {
+    TILES_SCALE_CHROMATIC,
     TILES_SCALE_IONIAN,
     TILES_SCALE_DORIAN,
     TILES_SCALE_PHRYGIAN,
@@ -258,7 +268,6 @@ static const tiles_scale_mode_t SCALE_GRID_ORDER[TILES_NOTE_MAP_NUM_SCALE_GRID_S
     TILES_SCALE_CUSTOM_3,
     TILES_SCALE_CUSTOM_4,
     TILES_SCALE_CUSTOM_5,
-    TILES_SCALE_CUSTOM_6,
 };
 
 tiles_scale_mode_t tiles_note_map_scale_for_grid_slot(uint8_t slot_1_to_24) {

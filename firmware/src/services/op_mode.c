@@ -46,20 +46,21 @@ typedef enum {
 
 #define OP_NUM_MODES 4u
 
-/* Row assignment within the menu -- matches the order real feedback
- * originally listed the modes in ("standard melodic, chord trigger
- * mode..., sequencer mode..."), with GUITAR now taking the row ARP used
- * to occupy (see the enum's own comment above). Row 1 is the pad row
- * physically closest to the function buttons (TILES_GRID_MIN_ROW + 1),
- * same top-to-bottom sense services/expression_control.h's sub-menu rows
- * use. Reading top to bottom, the AVAILABLE modes land as melodic (1st),
- * sequencer (2nd, skipping chord's still-unavailable row), guitar (3rd)
- * -- matching real feedback's own "mode 3" for guitar under the most
- * natural way to count "the 3rd real, working mode." */
+/* Row assignment within the menu. Row 1 is the pad row physically closest
+ * to the function buttons (TILES_GRID_MIN_ROW + 1), same top-to-bottom
+ * sense services/expression_control.h's sub-menu rows use. Guitar sits on
+ * the LITERAL 3rd row -- real feedback: "this is going to be mode 3 on
+ * the mode function selector," read as the physical 3rd row rather than
+ * "the 3rd available mode counting down the list" (an earlier pass tried
+ * the latter, putting guitar on row 4 instead -- real feedback afterward
+ * ("fret mode is not activating the correct lights") suggested this was
+ * confusing rather than clarifying, so it's now the plain, literal
+ * reading). Chord (still unavailable, see row_is_available() below) took
+ * the row guitar vacated. */
 #define OP_ROW_MELODIC 1u
-#define OP_ROW_CHORD 2u
-#define OP_ROW_SEQUENCER 3u
-#define OP_ROW_GUITAR 4u
+#define OP_ROW_SEQUENCER 2u
+#define OP_ROW_GUITAR 3u
+#define OP_ROW_CHORD 4u
 
 /* Mode-selector row colors -- real feedback's own phrase, "mode selector
  * color": melodic = Sentia magenta (this codebase's brand color,
@@ -238,8 +239,25 @@ static uint32_t s_beat_flash_start_ms;
 #define OP_SEQ_DIM_RED_LEVEL 0.3f
 /* Real feedback: "we need cuentet stept to be lit up always" -- a dim
  * white marker on the current step regardless of armed state, distinct
- * from OP_SEQ_DIM_RED_LEVEL so it never reads as "armed." */
+ * from OP_SEQ_DIM_RED_LEVEL so it never reads as "armed." Only used for
+ * an UNARMED current step now -- see OP_SEQ_CURSOR_ARMED_* below for why
+ * an armed one needs its own, different color. */
 #define OP_SEQ_CURSOR_LEVEL 0.15f
+/* Real feedback: "make play head on active pad in sewquencer blue if pad
+ * active so it wont look as an inactive pad." Needed once probability
+ * could make an ARMED step silently not sound on a given pass
+ * (`seq_enter_step()`'s own probability roll) -- without this, the
+ * cursor sitting on that step would fall through to the plain white
+ * OP_SEQ_CURSOR_LEVEL above, visually indistinguishable from sitting on
+ * a step that was never armed at all. Blue now means "the cursor is
+ * here AND this step is armed," regardless of whether it's audibly
+ * sounding at this exact instant (paused/stopped/skipped-by-probability
+ * all still show it) -- bright white (below) still wins whenever it
+ * actually IS sounding, matching the existing "sounding = brightest"
+ * rule. */
+#define OP_SEQ_CURSOR_ARMED_R 0.0f
+#define OP_SEQ_CURSOR_ARMED_G 0.3f
+#define OP_SEQ_CURSOR_ARMED_B 1.0f
 
 /* ---- Multi-pattern bank ------------------------------------------------
  * Real feedback: "sub menu triangle is reserved for other stuff... maybe
@@ -369,6 +387,23 @@ static op_seq_edit_mode_t s_seq_edit_mode;
 static uint8_t s_seq_edit_step;         /* 0..23, valid iff s_seq_edit_mode != OP_SEQ_EDIT_NONE */
 static uint32_t s_seq_edit_started_ms;  /* the ORIGINAL touch-down time -- escalation is timed from here, not from OP_SEQ_EDIT_PITCH's own entry */
 static bool s_pitch_edit_prev_pad_touched[TILES_NUM_PADS]; /* only meaningful during OP_SEQ_EDIT_PITCH */
+/* Real feedback: "im woried the value decreses before the mode is
+ * exited... lets make sure the lift dosnt loose the feature." Lifting a
+ * finger off a pad is a continuous, physical release -- Hall depth
+ * necessarily passes back down through every lower value on its way to
+ * 0 before the touch sensor itself finally reports "released," so a
+ * live value tied directly to CURRENT depth always gets dragged toward
+ * zero by the release motion itself, corrupting whatever the player
+ * actually intended. Tracking the PEAK depth reached during the current
+ * probability/ratchet hold instead -- only ever increasing, only ever
+ * writing the pattern data on a NEW peak -- means the release motion
+ * (which can only ever pull depth DOWN, never up) simply stops
+ * producing writes, leaving the last real value in place. The live
+ * meter (render_value_meter()) reads the same pattern data this writes
+ * into, so it still visibly tracks your press in real time; it just
+ * never un-shows a value you already reached. Reset to 0 on every fresh
+ * entry into probability or ratchet (both entry points below). */
+static uint16_t s_seq_edit_peak_depth;
 
 /* ---- Pattern/channel picker (SW3/triangle, sequencer mode) -------------
  * Same role triangle already plays in melodic mode (the scale picker) --
@@ -645,6 +680,14 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
             } else if (is_current && s_seq_note_sounding) {
                 tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f);
+            } else if (is_current && pat->step_armed[step]) {
+                /* Real feedback: "make play head on active pad in
+                 * sewquencer blue if pad active so it wont look as an
+                 * inactive pad" -- armed but not currently sounding
+                 * (paused/stopped, or this pass got skipped by
+                 * probability) still needs to read as "armed," not
+                 * confusable with an unarmed cursor below. */
+                tiles_lighting_set_standby_pad_rgb(pad, OP_SEQ_CURSOR_ARMED_R, OP_SEQ_CURSOR_ARMED_G, OP_SEQ_CURSOR_ARMED_B);
             } else if (is_current) {
                 /* Real feedback: "we need cuentet stept to be lit up
                  * always" -- a dim cursor marks the playhead even on an
@@ -729,6 +772,7 @@ static void edit_enter_ratchet(uint8_t step) {
     seq_end_current_note();
     s_seq_edit_mode = OP_SEQ_EDIT_RATCHET;
     s_seq_edit_step = step;
+    s_seq_edit_peak_depth = 0u;
 }
 
 static void edit_exit(void) {
@@ -800,6 +844,7 @@ static void handle_edit_mode(uint32_t now_ms) {
              * escalates exactly like services/standby.h's own circle-hold
              * (4s screensaver -> 8s deep sleep) rather than a new gesture. */
             s_seq_edit_mode = OP_SEQ_EDIT_PROBABILITY;
+            s_seq_edit_peak_depth = 0u;
             return;
         }
         for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
@@ -823,7 +868,14 @@ static void handle_edit_mode(uint32_t now_ms) {
             edit_exit();
             return;
         }
-        active_pattern()->step_probability_percent[s_seq_edit_step] = probability_percent_from_depth(tiles_hall_get_depth(edit_pad));
+        uint16_t depth = tiles_hall_get_depth(edit_pad);
+        if (depth > s_seq_edit_peak_depth) {
+            /* Only writes on a NEW peak -- see s_seq_edit_peak_depth's
+             * own comment for why this is immune to the release motion
+             * dragging the value back down. */
+            s_seq_edit_peak_depth = depth;
+            active_pattern()->step_probability_percent[s_seq_edit_step] = probability_percent_from_depth(depth);
+        }
         return;
     }
 
@@ -832,7 +884,11 @@ static void handle_edit_mode(uint32_t now_ms) {
             edit_exit();
             return;
         }
-        active_pattern()->step_ratchet_count[s_seq_edit_step] = ratchet_count_from_depth(tiles_hall_get_depth(edit_pad));
+        uint16_t depth = tiles_hall_get_depth(edit_pad);
+        if (depth > s_seq_edit_peak_depth) {
+            s_seq_edit_peak_depth = depth;
+            active_pattern()->step_ratchet_count[s_seq_edit_step] = ratchet_count_from_depth(depth);
+        }
         return;
     }
 }
