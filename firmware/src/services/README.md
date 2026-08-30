@@ -2509,5 +2509,66 @@ not its code.
   multi-pattern bank, per-step pitch storage, and quantized-start math
   itself weren't independently re-verified this round, only the specific
   symptoms real feedback called out.
+  **Per-step probability (with a master on/off) and ratchet added**, real
+  feedback: "yes per step probablility but we should be able to turn that
+  on and off, 2 retrigger yess but we need to be able to control that
+  feature." Both reuse the exact same hold-a-step gesture pitch assignment
+  already uses, escalating through two further hold thresholds
+  (`OP_SEQ_PROBABILITY_HOLD_MS` 1.2s, `OP_SEQ_RATCHET_HOLD_MS` 2.2s) --
+  the same shape `standby.c`'s own circle-hold already uses to escalate
+  from screensaver (4s) to deep sleep (8s), reused rather than inventing a
+  new gesture. `s_seq_edit_mode` generalizes what used to be a
+  pitch-only `s_seq_pitch_assign_active` flag into a 3-way enum
+  (`OP_SEQ_EDIT_PITCH`/`_PROBABILITY`/`_RATCHET`); `pitch_assign_enter()`/
+  `_exit()`/`handle_pitch_assign_taps()`/`render_pitch_assign()` are now
+  `edit_enter()`/`edit_exit()`/`handle_edit_mode()`/`render_edit_mode()`,
+  the last two branching on which of the three is active.
+  Probability and ratchet are a fundamentally different INTERACTION shape
+  from pitch, not just a different value: pitch is a discrete pick-from-24
+  (hence last round's "make it a toggle" fix, since holding one pad while
+  tapping a second is awkward), while these are a continuous live DIAL --
+  Hall depth of the SAME still-held pad maps directly to the value every
+  scan while held (`probability_percent_from_depth()`/`ratchet_count_
+  from_depth()`, both using the same ~900 full-scale reference this file
+  already uses elsewhere), and releasing simply leaves whatever the value
+  last read. Only one pad is ever needed for either, so neither has
+  pitch's original two-finger problem to begin with. Rendered as a simple
+  linear meter across all 24 pads (`render_value_meter()`, shared by
+  both, amber for probability / blue for ratchet) -- how many pads are lit
+  is directly proportional to the current value, giving immediate visual
+  feedback as you press deeper or shallower.
+  Probability is rolled once per step OCCURRENCE, not per ratchet hit --
+  a whole step either fires (with all its ratchets) or it doesn't,
+  matching how real hardware "trig probability" works, not a per-hit
+  coin-flip. Gated on a new per-pattern `probability_enabled` (default
+  off, so every existing/new pattern behaves exactly as before until
+  explicitly turned on) -- real feedback: "we should be able to turn that
+  on and off." Toggled by a plain circle click while the pattern picker is
+  open (circle is otherwise unclaimed there -- length-adjust is already
+  disabled in that view too), shown on circle's own LED; this also
+  required excluding the pattern picker and any per-step edit view from
+  tap-tempo's own `mode_ok` check (`handle_circle_tap()`), since tapping a
+  tempo mid-edit never made sense anyway and it's what frees circle up for
+  this new meaning specifically inside the picker.
+  Ratchet fires additional sub-hits WITHIN a single step's own pulse
+  window (`OP_SEQ_CLOCKS_PER_STEP`, 6) -- `seq_enter_step()`'s one-time
+  note-on logic was split into a shared `seq_fire_note()` (no step-index/
+  probability logic of its own) reused by both the step's first hit and
+  every subsequent ratchet hit, which `seq_advance_clock()` now fires on
+  schedule (`s_seq_ratchet_remaining`/`s_seq_ratchet_interval_pulses`/
+  `s_seq_next_ratchet_pulse`) before checking for a step boundary each
+  scan, so a hit due right at a step's edge is never skipped. A pattern
+  switch mid-ratchet explicitly clears this state (`handle_pattern_menu_
+  taps()`) -- the only path that changes what step index means without
+  going through `seq_enter_step()`'s own reset, so it needed an explicit
+  fix to avoid firing a stray hit against the NEW pattern's data.
+  Armed steps with probability < 100% (only while `probability_enabled`,
+  so a dialed-but-currently-inert value doesn't mislead) or ratchet > 1
+  now tint away from plain dim red toward amber/blue respectively on the
+  normal step view, so which steps have something set is visible at a
+  glance without re-opening each one's own edit view.
+  **Not hardware-verified** -- the escalation timing, the Hall-depth-to-
+  value mapping, the meter rendering, and the ratchet sub-hit timing are
+  all first attempts.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

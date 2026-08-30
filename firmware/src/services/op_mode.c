@@ -19,6 +19,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 typedef enum {
     OP_MODE_MELODIC = 0,
@@ -236,13 +237,28 @@ static uint32_t s_beat_flash_start_ms;
 #define OP_SEQ_NUM_PATTERNS 4u
 #define OP_SEQ_MIN_LENGTH 1u
 #define OP_SEQ_MAX_LENGTH OP_SEQ_NUM_STEPS
+/* Real feedback: "2 retrigger yess but we need to be able to control that
+ * feature." Capped at OP_SEQ_CLOCKS_PER_STEP (6) since a ratchet can't
+ * usefully subdivide a step finer than the step's own pulse resolution --
+ * 4 leaves each sub-hit at least 1 full clock pulse apart even at the max. */
+#define OP_SEQ_MAX_RATCHET 4u
 
 typedef struct {
     bool step_armed[OP_SEQ_NUM_STEPS];
     bool step_pitch_override[OP_SEQ_NUM_STEPS];
-    uint8_t step_note[OP_SEQ_NUM_STEPS]; /* only meaningful if step_pitch_override[i] */
-    uint8_t length;                      /* 1..24 active steps -- see OP_SEQ_MIN/MAX_LENGTH */
-    uint8_t channel;                     /* raw 0-15 status-nibble MPE channel */
+    uint8_t step_note[OP_SEQ_NUM_STEPS];             /* only meaningful if step_pitch_override[i] */
+    uint8_t step_probability_percent[OP_SEQ_NUM_STEPS]; /* 0-100, default 100 -- only applied if probability_enabled */
+    uint8_t step_ratchet_count[OP_SEQ_NUM_STEPS];    /* 1..OP_SEQ_MAX_RATCHET, default 1 (no ratchet), always applied */
+    /* Real feedback: "yes per step probablility but we should be able to
+     * turn that on and off." Per-pattern master switch -- while false,
+     * every step behaves as if its own probability were 100% regardless
+     * of what's stored, so a performer can flip a whole pattern back to
+     * fully deterministic without having to remember/reset every
+     * individually-dialed step. Toggled via a plain circle click while
+     * the pattern picker (below) is open -- see handle_circle_tap(). */
+    bool probability_enabled;
+    uint8_t length;  /* 1..24 active steps -- see OP_SEQ_MIN/MAX_LENGTH */
+    uint8_t channel; /* raw 0-15 status-nibble MPE channel */
 } op_seq_pattern_t;
 
 static op_seq_pattern_t s_seq_pattern[OP_SEQ_NUM_PATTERNS];
@@ -262,20 +278,52 @@ static bool s_seq_prev_pad_touched[TILES_NUM_PADS];
  * (handle_transport_and_length()); consumed by seq_advance_clock(). */
 static bool s_seq_pending_start;
 
-/* ---- Per-step pitch assignment -----------------------------------------
- * Real feedback: "we need a way to assign pitches to the notes." Holding
- * a step pad past OP_SEQ_PITCH_ASSIGN_HOLD_MS (seq_handle_step_taps())
- * opens this -- the grid temporarily becomes a note-picker
- * (render_pitch_assign()) and the next fresh touch on any pad commits
- * that pad's tiles_note_map_get_note() as the held step's pitch override.
- * The same "hold a step, play the note" workflow real hardware step
- * sequencers (Elektron/Circuit-style) use, adapted to touch-only hardware
- * with no encoders. */
+/* Ratchet playback state for the CURRENT step only -- reset every time a
+ * new step is entered (seq_enter_step()), consumed by seq_advance_clock()
+ * firing additional sub-hits within that same step's own pulse window.
+ * s_seq_ratchet_remaining counts hits still owed AFTER the one seq_enter_
+ * step() already fired directly. */
+static uint8_t s_seq_ratchet_remaining;
+static uint32_t s_seq_ratchet_interval_pulses;
+static uint32_t s_seq_next_ratchet_pulse;
+
+/* ---- Per-step editing: pitch, probability, ratchet ---------------------
+ * Real feedback: "we need a way to assign pitches to the notes"; later,
+ * asked for as controllable features rather than fixed values: "yes per
+ * step probablility but we should be able to turn that on and off, 2
+ * retrigger yess but we need to be able to control that feature."
+ * Holding a step pad opens this (seq_handle_step_taps() detects the
+ * initial OP_SEQ_PITCH_ASSIGN_HOLD_MS threshold) -- continuing to hold
+ * the SAME pad past two further thresholds ESCALATES through pitch ->
+ * probability -> ratchet, mirroring services/standby.h's own circle-hold
+ * escalation (4s screensaver -> 8s deep sleep) rather than inventing a
+ * new gesture shape. Pitch stays a genuine TOGGLE once opened (real
+ * feedback from the previous round: "it should be a toggle... not a
+ * momentary thing") -- releasing the held pad before escalating leaves it
+ * open, waiting for a fresh tap on any pad to commit a note. Probability
+ * and ratchet are a live DIAL instead (Hall depth of the SAME held pad
+ * maps continuously to the value while still held, committing simply by
+ * however the value stood at release) -- a fundamentally different shape
+ * from pitch's discrete pick-from-24, and one that doesn't have pitch's
+ * "had to keep two fingers down" problem since only the one held pad is
+ * ever needed. Triangle cancels out of any of the three with no change
+ * (handle_triangle_click()'s own branch). */
+typedef enum {
+    OP_SEQ_EDIT_NONE = 0,
+    OP_SEQ_EDIT_PITCH,
+    OP_SEQ_EDIT_PROBABILITY,
+    OP_SEQ_EDIT_RATCHET,
+} op_seq_edit_mode_t;
+
 #define OP_SEQ_PITCH_ASSIGN_HOLD_MS 350u
+#define OP_SEQ_PROBABILITY_HOLD_MS 1200u
+#define OP_SEQ_RATCHET_HOLD_MS 2200u
+
 static uint32_t s_seq_step_touch_started_ms[TILES_NUM_PADS]; /* 0 = not currently timing a hold */
-static bool s_seq_pitch_assign_active;
-static uint8_t s_seq_pitch_assign_step; /* 0..23, valid iff s_seq_pitch_assign_active */
-static bool s_pitch_assign_prev_pad_touched[TILES_NUM_PADS];
+static op_seq_edit_mode_t s_seq_edit_mode;
+static uint8_t s_seq_edit_step;         /* 0..23, valid iff s_seq_edit_mode != OP_SEQ_EDIT_NONE */
+static uint32_t s_seq_edit_started_ms;  /* the ORIGINAL touch-down time -- escalation is timed from here, not from OP_SEQ_EDIT_PITCH's own entry */
+static bool s_pitch_edit_prev_pad_touched[TILES_NUM_PADS]; /* only meaningful during OP_SEQ_EDIT_PITCH */
 
 /* ---- Pattern/channel picker (SW3/triangle, sequencer mode) -------------
  * Same role triangle already plays in melodic mode (the scale picker) --
@@ -326,7 +374,7 @@ static op_seq_pattern_t *active_pattern(void) {
     return &s_seq_pattern[s_seq_active_pattern];
 }
 
-static void pitch_assign_enter(uint8_t step); /* defined below, used by seq_handle_step_taps()'s own hold detection */
+static void edit_enter(uint8_t step, uint32_t started_ms); /* defined below, used by seq_handle_step_taps()'s own hold detection */
 
 /* Uses the channel/note captured at note-on time (below), not whatever
  * active_pattern() currently resolves to -- a pattern switch mid-note
@@ -342,13 +390,14 @@ static void seq_end_current_note(void) {
     s_seq_note_sounding = false;
 }
 
-static void seq_enter_step(uint8_t step) {
+/* Fires ONE note for `step` -- shared by seq_enter_step() (the step's
+ * first hit) and seq_advance_clock() (any additional ratchet sub-hits
+ * within that same step) so both go through identical logic. Does NOT
+ * touch s_seq_current_step or roll probability -- those are seq_enter_
+ * step()'s own concerns, once per step, not per ratchet hit. */
+static void seq_fire_note(uint8_t step) {
     seq_end_current_note();
-    s_seq_current_step = step;
     op_seq_pattern_t *pat = active_pattern();
-    if (!pat->step_armed[step]) {
-        return;
-    }
     uint8_t pad = (uint8_t)(step + 1u);
     uint8_t note = pat->step_pitch_override[step] ? pat->step_note[step] : tiles_note_map_get_note(pad);
     tiles_midi_note_on(pat->channel, note, OP_SEQ_VELOCITY);
@@ -357,6 +406,41 @@ static void seq_enter_step(uint8_t step) {
     s_seq_sounding_pad = pad;
     s_seq_sounding_channel = pat->channel;
     s_seq_sounding_note = note;
+}
+
+/* Real feedback: "yes per step probablility but we should be able to
+ * turn that on and off, 2 retrigger yess but we need to be able to
+ * control that feature." Rolls this step's probability (once per step
+ * occurrence, not per ratchet hit -- a whole step either fires or it
+ * doesn't, matching how real hardware "trig probability" works) and, if
+ * it fires, arms however many additional ratchet hits it's set for --
+ * seq_advance_clock() below fires those on schedule via seq_fire_note(). */
+static void seq_enter_step(uint8_t step) {
+    seq_end_current_note();
+    s_seq_current_step = step;
+    s_seq_ratchet_remaining = 0u;
+    op_seq_pattern_t *pat = active_pattern();
+    if (!pat->step_armed[step]) {
+        return;
+    }
+    if (pat->probability_enabled && (uint32_t)(rand() % 100) >= pat->step_probability_percent[step]) {
+        /* This occurrence of an otherwise-armed step is silently
+         * skipped -- the cursor still moves, nothing sounds. */
+        return;
+    }
+    uint8_t ratchet_total = pat->step_ratchet_count[step];
+    if (ratchet_total < 1u) {
+        ratchet_total = 1u;
+    }
+    seq_fire_note(step);
+    if (ratchet_total > 1u) {
+        s_seq_ratchet_remaining = (uint8_t)(ratchet_total - 1u);
+        s_seq_ratchet_interval_pulses = OP_SEQ_CLOCKS_PER_STEP / ratchet_total;
+        if (s_seq_ratchet_interval_pulses < 1u) {
+            s_seq_ratchet_interval_pulses = 1u;
+        }
+        s_seq_next_ratchet_pulse = s_seq_step_started_at_pulse + s_seq_ratchet_interval_pulses;
+    }
 }
 
 static void seq_reset(uint32_t now_pulse) {
@@ -379,7 +463,7 @@ static void seq_start(void) {
     s_seq_note_sounding = false;
     s_seq_step_started_at_pulse = 0u;
     s_seq_pending_start = true;
-    s_seq_pitch_assign_active = false;
+    s_seq_edit_mode = OP_SEQ_EDIT_NONE;
     s_pattern_menu_visible = false;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_seq_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
@@ -388,11 +472,11 @@ static void seq_start(void) {
 }
 
 /* Extended with hold detection: a touch held past
- * OP_SEQ_PITCH_ASSIGN_HOLD_MS opens pitch-assign for that step (see this
- * file's own "Per-step pitch assignment" section) -- the arm-toggle on
- * touch-down already fired for this same touch, so holding a step both
- * toggles it AND, if you keep holding, also lets you reassign its pitch;
- * these don't conflict, they're just both true for the same gesture. */
+ * OP_SEQ_PITCH_ASSIGN_HOLD_MS opens per-step editing (see this file's own
+ * "Per-step editing" section) -- the arm-toggle on touch-down already
+ * fired for this same touch, so holding a step both toggles it AND, if
+ * you keep holding, also lets you edit it; these don't conflict, they're
+ * just both true for the same gesture. */
 static void seq_handle_step_taps(uint32_t now_ms) {
     op_seq_pattern_t *pat = active_pattern();
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
@@ -406,7 +490,7 @@ static void seq_handle_step_taps(uint32_t now_ms) {
             s_seq_step_touch_started_ms[step] = 0u;
         } else if (s_seq_step_touch_started_ms[step] != 0u &&
                    (now_ms - s_seq_step_touch_started_ms[step]) >= OP_SEQ_PITCH_ASSIGN_HOLD_MS) {
-            pitch_assign_enter(step);
+            edit_enter(step, s_seq_step_touch_started_ms[step]);
             return; /* grid ownership just changed under this loop -- stop iterating it */
         }
         s_seq_prev_pad_touched[step] = touched;
@@ -444,6 +528,20 @@ static void seq_advance_clock(tiles_midi_clock_state_t clock) {
         }
         seq_reset(clock.pulse_count);
         return;
+    }
+
+    /* Real feedback: "2 retrigger yess but we need to be able to control
+     * that feature." Fires any ratchet sub-hits due WITHIN the current
+     * step BEFORE checking for a step boundary below, so a hit scheduled
+     * right at the edge of the step never gets skipped. Guarded, not an
+     * unbounded while(), matching this function's own "handle more than
+     * one due" pattern elsewhere. */
+    uint32_t ratchet_guard = 0u;
+    while (s_seq_ratchet_remaining > 0u && clock.pulse_count >= s_seq_next_ratchet_pulse && ratchet_guard < OP_SEQ_MAX_RATCHET) {
+        seq_fire_note(s_seq_current_step);
+        s_seq_ratchet_remaining--;
+        s_seq_next_ratchet_pulse += s_seq_ratchet_interval_pulses;
+        ratchet_guard++;
     }
 
     uint32_t elapsed = clock.pulse_count - s_seq_step_started_at_pulse;
@@ -484,7 +582,22 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
             } else if (!pat->step_armed[step]) {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
             } else {
-                tiles_lighting_set_standby_pad_rgb(pad, OP_SEQ_DIM_RED_LEVEL, 0.0f, 0.0f);
+                /* Tints the dim-red armed color toward amber if this step
+                 * has a real chance of getting skipped this loop (only
+                 * shown while probability_enabled -- an untinted dialed
+                 * value that's currently inert would be misleading), and
+                 * toward blue if it's set to ratchet -- an at-a-glance
+                 * "this step has something going on" cue without needing
+                 * to re-open its own edit view to check. */
+                float green = 0.0f;
+                float blue = 0.0f;
+                if (pat->probability_enabled && pat->step_probability_percent[step] < 100u) {
+                    green = OP_SEQ_DIM_RED_LEVEL * (float)(100u - pat->step_probability_percent[step]) / 100.0f;
+                }
+                if (pat->step_ratchet_count[step] > 1u) {
+                    blue = OP_SEQ_DIM_RED_LEVEL * (float)(pat->step_ratchet_count[step] - 1u) / (float)(OP_SEQ_MAX_RATCHET - 1u);
+                }
+                tiles_lighting_set_standby_pad_rgb(pad, OP_SEQ_DIM_RED_LEVEL, green, blue);
             }
         }
     }
@@ -514,25 +627,27 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
     }
 }
 
-/* ---- Per-step pitch assignment ------------------------------------------
- * See this file's own "Per-step pitch assignment" state-section comment.
- * Silences whatever's currently sounding the instant this opens (below)
- * rather than leaving a note stuck on for the whole gesture -- the
- * sequencer's own timeline keeps advancing underneath regardless (this
- * doesn't pause playback), so returning to normal view simply catches up
- * and resumes wherever the clock already is, the same way this file's
- * other sub-views (the mode picker, the scale picker) have always worked. */
-static void pitch_assign_enter(uint8_t step) {
+/* ---- Per-step editing: pitch, probability, ratchet ----------------------
+ * See this file's own "Per-step editing" state-section comment for the
+ * full design (escalating hold thresholds, pitch's toggle shape vs
+ * probability/ratchet's live-dial shape). Silences whatever's currently
+ * sounding the instant this opens rather than leaving a note stuck on for
+ * the whole gesture -- the sequencer's own timeline keeps advancing
+ * underneath regardless (this doesn't pause playback), so returning to
+ * normal view simply catches up and resumes wherever the clock already
+ * is, the same way this file's other sub-views have always worked. */
+static void edit_enter(uint8_t step, uint32_t started_ms) {
     seq_end_current_note();
-    s_seq_pitch_assign_active = true;
-    s_seq_pitch_assign_step = step;
+    s_seq_edit_mode = OP_SEQ_EDIT_PITCH;
+    s_seq_edit_step = step;
+    s_seq_edit_started_ms = started_ms;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        s_pitch_assign_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+        s_pitch_edit_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
     }
 }
 
-static void pitch_assign_exit(void) {
-    s_seq_pitch_assign_active = false;
+static void edit_exit(void) {
+    s_seq_edit_mode = OP_SEQ_EDIT_NONE;
     /* Re-syncs seq_handle_step_taps()'s own touch tracking so a pad
      * that's still touched the instant control hands back doesn't misread
      * as a fresh arm-toggle -- same pattern this file already uses
@@ -543,31 +658,113 @@ static void pitch_assign_exit(void) {
     }
 }
 
-/* A genuine TOGGLE, not a hold-and-don't-let-go gesture -- real feedback:
- * "it should be a toggle to set pitch of sequencer note. not a momentary
- * thing." Once opened (by the hold in seq_handle_step_taps()), this stays
- * open regardless of whether the originally-held step pad is still
- * touched -- release it freely, no finger has to stay down. A fresh
- * touch on ANY pad (the held step included -- tapping your OWN step again
- * re-commits it to its own current note, a harmless no-op unless it had a
- * different override before, in which case it resets to default) commits
- * that pad's current note as the held step's pitch and closes, same
- * "closes on selection" rule this file's other pickers use. Triangle is
- * the escape hatch for "back out with no change at all" -- see
- * handle_triangle_click()'s own branch. */
-static void handle_pitch_assign_taps(void) {
-    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-        bool touched = tiles_touch_is_touched(pad);
-        bool was_touched = s_pitch_assign_prev_pad_touched[pad - 1u];
-        if (touched && !was_touched) {
-            op_seq_pattern_t *pat = active_pattern();
-            pat->step_pitch_override[s_seq_pitch_assign_step] = true;
-            pat->step_note[s_seq_pitch_assign_step] = tiles_note_map_get_note(pad);
-            tiles_haptics_trigger_touch_pulse(pad);
-            pitch_assign_exit();
-            return; /* grid ownership just changed under this loop -- stop iterating it */
+static uint8_t probability_percent_from_depth(uint16_t depth) {
+    /* Same ~900 full-scale reference this file already uses
+     * (OP_MENU_SELECT_DEPTH_THRESHOLD's own comment). */
+    float fraction = (float)depth / 900.0f;
+    if (fraction < 0.0f) {
+        fraction = 0.0f;
+    }
+    if (fraction > 1.0f) {
+        fraction = 1.0f;
+    }
+    return (uint8_t)(fraction * 100.0f + 0.5f);
+}
+
+static uint8_t ratchet_count_from_depth(uint16_t depth) {
+    float fraction = (float)depth / 900.0f;
+    if (fraction < 0.0f) {
+        fraction = 0.0f;
+    }
+    if (fraction > 1.0f) {
+        fraction = 1.0f;
+    }
+    uint8_t count = (uint8_t)(1u + (uint32_t)(fraction * (float)(OP_SEQ_MAX_RATCHET - 1u) + 0.5f));
+    if (count > OP_SEQ_MAX_RATCHET) {
+        count = OP_SEQ_MAX_RATCHET;
+    }
+    return count;
+}
+
+/* Pitch: a genuine TOGGLE, not a hold-and-don't-let-go gesture -- real
+ * feedback: "it should be a toggle to set pitch of sequencer note. not a
+ * momentary thing." Once opened, it stays open regardless of whether the
+ * originally-held step pad is still touched -- release it freely, no
+ * finger has to stay down. A fresh touch on ANY pad (the held step
+ * included -- tapping your OWN step again re-commits it to its own
+ * current note, a harmless no-op unless it had a different override
+ * before, in which case it resets to default) commits that pad's current
+ * note and closes, same "closes on selection" rule this file's other
+ * pickers use. Triangle is the escape hatch for "back out with no change
+ * at all" (handle_triangle_click()'s own branch).
+ * Probability/ratchet: the OPPOSITE shape, a live DIAL -- Hall depth of
+ * the SAME held pad maps continuously to the value while still held
+ * (see probability_percent_from_depth()/ratchet_count_from_depth()
+ * above), and releasing simply leaves whatever the last-read value was.
+ * This needs the one pad to stay down the whole time, unlike pitch --
+ * but unlike pitch, there's no second pad to also reach for, so it never
+ * has pitch's original "two fingers, one of them pinned down" problem. */
+static void handle_edit_mode(uint32_t now_ms) {
+    uint8_t edit_pad = (uint8_t)(s_seq_edit_step + 1u);
+    bool edit_pad_touched = tiles_touch_is_touched(edit_pad);
+
+    if (s_seq_edit_mode == OP_SEQ_EDIT_PITCH) {
+        if (edit_pad_touched && (now_ms - s_seq_edit_started_ms) >= OP_SEQ_PROBABILITY_HOLD_MS) {
+            /* Real feedback: "yes per step probablility... 2 retrigger
+             * yess but we need to be able to control that feature" --
+             * escalates exactly like services/standby.h's own circle-hold
+             * (4s screensaver -> 8s deep sleep) rather than a new gesture. */
+            s_seq_edit_mode = OP_SEQ_EDIT_PROBABILITY;
+            return;
         }
-        s_pitch_assign_prev_pad_touched[pad - 1u] = touched;
+        for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+            bool touched = tiles_touch_is_touched(pad);
+            bool was_touched = s_pitch_edit_prev_pad_touched[pad - 1u];
+            if (touched && !was_touched) {
+                op_seq_pattern_t *pat = active_pattern();
+                pat->step_pitch_override[s_seq_edit_step] = true;
+                pat->step_note[s_seq_edit_step] = tiles_note_map_get_note(pad);
+                tiles_haptics_trigger_touch_pulse(pad);
+                edit_exit();
+                return; /* grid ownership just changed under this loop -- stop iterating it */
+            }
+            s_pitch_edit_prev_pad_touched[pad - 1u] = touched;
+        }
+        return;
+    }
+
+    if (s_seq_edit_mode == OP_SEQ_EDIT_PROBABILITY) {
+        if (!edit_pad_touched) {
+            edit_exit();
+            return;
+        }
+        if ((now_ms - s_seq_edit_started_ms) >= OP_SEQ_RATCHET_HOLD_MS) {
+            s_seq_edit_mode = OP_SEQ_EDIT_RATCHET;
+            return;
+        }
+        active_pattern()->step_probability_percent[s_seq_edit_step] = probability_percent_from_depth(tiles_hall_get_depth(edit_pad));
+        return;
+    }
+
+    if (s_seq_edit_mode == OP_SEQ_EDIT_RATCHET) {
+        if (!edit_pad_touched) {
+            edit_exit();
+            return;
+        }
+        active_pattern()->step_ratchet_count[s_seq_edit_step] = ratchet_count_from_depth(tiles_hall_get_depth(edit_pad));
+        return;
+    }
+}
+
+static void render_transport_toggle_leds(bool transport_running) {
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        float level = 0.0f;
+        if (col == TILES_MINUS_BUTTON_COL) {
+            level = transport_running ? 0.0f : OP_TRANSPORT_LED_LEVEL;
+        } else if (col == TILES_PLUS_BUTTON_COL) {
+            level = transport_running ? OP_TRANSPORT_LED_LEVEL : 0.0f;
+        }
+        tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
 }
 
@@ -577,12 +774,11 @@ static void handle_pitch_assign_taps(void) {
  * note" surface looks like a natural extension of melodic play rather
  * than a new visual language -- the step's currently-assigned note pulses
  * white instead, this file's own established "selected" language. */
-static void render_pitch_assign(uint32_t now_ms, bool transport_running) {
+static void render_pitch_edit(uint32_t now_ms, bool transport_running) {
     float pulse = menu_selected_pulse_level(now_ms);
     op_seq_pattern_t *pat = active_pattern();
-    uint8_t current_note = pat->step_pitch_override[s_seq_pitch_assign_step]
-                                ? pat->step_note[s_seq_pitch_assign_step]
-                                : tiles_note_map_get_note((uint8_t)(s_seq_pitch_assign_step + 1u));
+    uint8_t current_note = pat->step_pitch_override[s_seq_edit_step] ? pat->step_note[s_seq_edit_step]
+                                                                      : tiles_note_map_get_note((uint8_t)(s_seq_edit_step + 1u));
 
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         if (tiles_note_map_get_note(pad) == current_note) {
@@ -597,17 +793,50 @@ static void render_pitch_assign(uint32_t now_ms, bool transport_running) {
             tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
         }
     }
-    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        float level = 0.0f;
-        if (col == TILES_MINUS_BUTTON_COL) {
-            level = transport_running ? 0.0f : OP_TRANSPORT_LED_LEVEL;
-        } else if (col == TILES_PLUS_BUTTON_COL) {
-            level = transport_running ? OP_TRANSPORT_LED_LEVEL : 0.0f;
-        }
-        tiles_buttons_set_standby_led(board_button_for_col(col), level);
-    }
+    render_transport_toggle_leds(transport_running);
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
         tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+    }
+}
+
+/* A simple linear "meter" across all 24 pads -- how many are lit is
+ * directly proportional to the live value, so pressing deeper/shallower
+ * gives immediate, legible visual feedback of exactly what Hall depth is
+ * currently dialing in. */
+static void render_value_meter(uint8_t lit_count, float r, float g, float b, bool transport_running) {
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        if (pad <= lit_count) {
+            tiles_lighting_set_standby_pad_rgb(pad, r, g, b);
+        } else {
+            tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
+        }
+    }
+    render_transport_toggle_leds(transport_running);
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+    }
+}
+
+static void render_edit_mode(uint32_t now_ms, bool transport_running) {
+    switch (s_seq_edit_mode) {
+    case OP_SEQ_EDIT_PITCH: {
+        render_pitch_edit(now_ms, transport_running);
+        break;
+    }
+    case OP_SEQ_EDIT_PROBABILITY: {
+        uint8_t percent = active_pattern()->step_probability_percent[s_seq_edit_step];
+        uint8_t lit = (uint8_t)((uint32_t)percent * TILES_NUM_PADS / 100u);
+        render_value_meter(lit, 1.0f, 0.8f, 0.0f, transport_running); /* amber */
+        break;
+    }
+    case OP_SEQ_EDIT_RATCHET: {
+        uint8_t count = active_pattern()->step_ratchet_count[s_seq_edit_step];
+        uint8_t lit = (uint8_t)((uint32_t)count * TILES_NUM_PADS / OP_SEQ_MAX_RATCHET);
+        render_value_meter(lit, 0.0f, 0.4f, 1.0f, transport_running); /* blue */
+        break;
+    }
+    default:
+        break;
     }
 }
 
@@ -662,6 +891,10 @@ static void render_pattern_menu(uint32_t now_ms, bool transport_running) {
             level = transport_running ? 0.0f : OP_TRANSPORT_LED_LEVEL;
         } else if (col == TILES_PLUS_BUTTON_COL) {
             level = transport_running ? OP_TRANSPORT_LED_LEVEL : 0.0f;
+        } else if (col == TILES_CIRCLE_BUTTON_COL) {
+            /* A plain circle click here toggles this -- see
+             * handle_circle_tap()'s own release branch. */
+            level = active_pattern()->probability_enabled ? 1.0f : 0.0f;
         }
         tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
@@ -687,6 +920,13 @@ static void handle_pattern_menu_taps(void) {
             if (touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD) {
                 if (pattern_index != s_seq_active_pattern) {
                     seq_end_current_note();
+                    /* A ratchet mid-sequence when switching would
+                     * otherwise fire its remaining hits against the NEW
+                     * pattern's data at the same step index once
+                     * seq_advance_clock() next checks -- a cross-pattern
+                     * mix-up seq_enter_step()'s own reset doesn't reach
+                     * here since this path doesn't go through it. */
+                    s_seq_ratchet_remaining = 0u;
                     s_seq_active_pattern = pattern_index;
                     printf("[op_mode] sequencer pattern -> %u\n", (unsigned)pattern_index);
                 }
@@ -903,7 +1143,7 @@ static void set_active_mode(tiles_op_mode_t mode) {
     if (mode != OP_MODE_SEQUENCER) {
         /* Same reasoning, sequencer's own two sub-views. */
         s_pattern_menu_visible = false;
-        s_seq_pitch_assign_active = false;
+        s_seq_edit_mode = OP_SEQ_EDIT_NONE;
     }
     s_active_mode = mode;
     if (mode == OP_MODE_SEQUENCER) {
@@ -1000,11 +1240,11 @@ static void handle_diamond_click(void) {
  * mode-picker also being open (a sub-menu click while picking a top-level
  * mode would be ambiguous/unwanted) the same way the mode-picker itself is
  * guarded against other_feature_owns_input().
- * While pitch-assign owns the grid, triangle instead cancels it with no
- * change -- the escape hatch a toggle-style gesture needs (real feedback:
- * "it should be a toggle to set pitch of sequencer note, not a momentary
- * thing" -- see pitch_assign_exit()/handle_pitch_assign_taps() for the
- * rest of that change). */
+ * While any per-step edit (pitch/probability/ratchet) owns the grid,
+ * triangle instead cancels it with no change -- the escape hatch a
+ * toggle-style gesture needs (real feedback: "it should be a toggle to
+ * set pitch of sequencer note, not a momentary thing" -- see this file's
+ * own "Per-step editing" section for the rest of that change). */
 static void handle_triangle_click(void) {
     bool held = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
 
@@ -1024,8 +1264,8 @@ static void handle_triangle_click(void) {
                     scale_menu_enter();
                 }
             } else if (s_active_mode == OP_MODE_SEQUENCER) {
-                if (s_seq_pitch_assign_active) {
-                    pitch_assign_exit();
+                if (s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
+                    edit_exit();
                 } else if (s_pattern_menu_visible) {
                     pattern_menu_exit();
                 } else {
@@ -1058,7 +1298,12 @@ static void handle_triangle_click(void) {
  * to release, gated on whether minus/plus joined mid-hold (below), fixes
  * this while still using the ORIGINAL press timestamp for the actual
  * registered tap time, so tap-tempo accuracy is unaffected by the small
- * press-to-release latency of a real tap. */
+ * press-to-release latency of a real tap.
+ * Also excludes the pattern picker and any per-step edit view from
+ * `mode_ok` -- tapping a tempo while mid-edit doesn't make sense anyway,
+ * and it frees up a plain circle CLICK while the pattern picker is open
+ * to mean something else instead: toggling that pattern's probability_
+ * enabled (see the release branch below). */
 static uint32_t s_circle_press_ms;
 static bool s_circle_press_pending_tap;
 
@@ -1067,7 +1312,8 @@ static void handle_circle_tap(uint32_t now_ms) {
 
     if (held && !s_circle_was_held) {
         s_circle_press_ms = now_ms;
-        bool mode_ok = (s_active_mode == OP_MODE_SEQUENCER || s_active_mode == OP_MODE_ARP);
+        bool mode_ok = (s_active_mode == OP_MODE_ARP) ||
+                       (s_active_mode == OP_MODE_SEQUENCER && !s_pattern_menu_visible && s_seq_edit_mode == OP_SEQ_EDIT_NONE);
         bool combo_conflict = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
@@ -1082,7 +1328,18 @@ static void handle_circle_tap(uint32_t now_ms) {
     }
 
     if (!held && s_circle_was_held) {
-        if (s_circle_press_pending_tap) {
+        if (s_active_mode == OP_MODE_SEQUENCER && s_pattern_menu_visible) {
+            /* Real feedback: "yes per step probablility but we should be
+             * able to turn that on and off." A per-pattern master switch,
+             * toggled here rather than inside the picker's own tap
+             * handling since circle is otherwise unclaimed while the
+             * picker is open (length-adjust is disabled there too -- see
+             * handle_transport_and_length()'s own `active` gate). */
+            op_seq_pattern_t *pat = active_pattern();
+            pat->probability_enabled = !pat->probability_enabled;
+            printf("[op_mode] pattern %u probability_enabled -> %d\n", (unsigned)s_seq_active_pattern,
+                   (int)pat->probability_enabled);
+        } else if (s_circle_press_pending_tap) {
             tiles_midi_clock_register_tap(s_circle_press_ms);
         }
     }
@@ -1103,7 +1360,7 @@ static void handle_transport_and_length(uint32_t now_ms) {
     bool minus_held = tiles_button_is_pressed(TILES_MINUS_BUTTON_ID);
     bool plus_held = tiles_button_is_pressed(TILES_PLUS_BUTTON_ID);
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
-    bool active = (s_active_mode == OP_MODE_SEQUENCER) && !s_pattern_menu_visible && !s_seq_pitch_assign_active;
+    bool active = (s_active_mode == OP_MODE_SEQUENCER) && !s_pattern_menu_visible && s_seq_edit_mode == OP_SEQ_EDIT_NONE;
 
     if (active && minus_held && !s_minus_was_held && circle_held) {
         op_seq_pattern_t *pat = active_pattern();
@@ -1206,7 +1463,10 @@ void tiles_op_mode_init(void) {
             s_seq_pattern[p].step_armed[i] = false;
             s_seq_pattern[p].step_pitch_override[i] = false;
             s_seq_pattern[p].step_note[i] = 0u;
+            s_seq_pattern[p].step_probability_percent[i] = 100u;
+            s_seq_pattern[p].step_ratchet_count[i] = 1u;
         }
+        s_seq_pattern[p].probability_enabled = false;
         s_seq_pattern[p].length = OP_SEQ_NUM_STEPS;
         /* Claims from the TOP of the 15 MPE Member Channels downward --
          * see this file's own "Multi-pattern bank" section. */
@@ -1218,7 +1478,8 @@ void tiles_op_mode_init(void) {
     s_seq_note_sounding = false;
     s_seq_step_started_at_pulse = 0u;
     s_seq_pending_start = false;
-    s_seq_pitch_assign_active = false;
+    s_seq_ratchet_remaining = 0u;
+    s_seq_edit_mode = OP_SEQ_EDIT_NONE;
     s_pattern_menu_visible = false;
     s_minus_was_held = false;
     s_plus_was_held = false;
@@ -1302,9 +1563,9 @@ void tiles_op_mode_scan(void) {
         return;
     }
 
-    if (s_active_mode == OP_MODE_SEQUENCER && s_seq_pitch_assign_active) {
-        handle_pitch_assign_taps();
-        render_pitch_assign(now_ms, clock.running);
+    if (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
+        handle_edit_mode(now_ms);
+        render_edit_mode(now_ms, clock.running);
         return;
     }
 
