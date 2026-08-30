@@ -2775,22 +2775,40 @@ not its code.
      unambiguous reading. Since every row check in this file already
      compares against the named `OP_ROW_*` constants rather than raw
      numbers, reassigning their values was the only change needed.
-  2. **Probability/ratchet's live dial fixed a real value-corruption bug**
-     -- real feedback: "im woried the value decreses before the mode is
-     exited... lets make sure the lift dosnt loose the feature." Lifting
-     a finger is a continuous physical release: Hall depth necessarily
-     passes back down through every lower value before the touch sensor
-     reports "released," so a value tied directly to CURRENT depth was
-     always getting dragged toward zero by the release motion itself,
-     silently overwriting whatever the player actually intended right as
-     they let go. Fixed with peak-tracking (`s_seq_edit_peak_depth`,
-     reset on every fresh entry into probability or ratchet): the pattern
-     data is only ever written on a NEW peak, so the release motion
-     (depth can only go down from there) simply stops producing writes,
-     leaving the last real value in place. `render_value_meter()` still
-     shows live feedback as you press, since it reads the same
-     continuously-updated pattern data -- it just never shows a value
-     un-happening once you've reached it.
+  2. **Probability/ratchet's live dial fixed a real value-corruption bug
+     -- in two passes.** Real feedback: "im woried the value decreses
+     before the mode is exited... lets make sure the lift dosnt loose the
+     feature." Lifting a finger is a continuous physical release: Hall
+     depth necessarily passes back down through every lower value before
+     the touch sensor reports "released," so a value tied directly to
+     CURRENT depth was always getting dragged toward zero by the release
+     motion itself, silently overwriting whatever the player actually
+     intended right as they let go. A first pass fixed this with
+     peak-tracking (only ever write on a new maximum depth) -- immune to
+     the release drag, but real feedback after trying it: "we solved the
+     push and increse and hold but we didnt solve the reduce value...
+     we need some way to hold and not loose value but still have reduce
+     power funciton" -- peak-tracking also made it impossible to
+     deliberately dial the value back DOWN while still holding, since any
+     decrease at all was ignored, intentional or not. Replaced with a
+     release-guard instead (`OP_SEQ_EDIT_RELEASE_GUARD_DEPTH`, 60 out of
+     the ~900 full-scale reference): depth is written on every sample,
+     up OR down, as long as it's still at or above the guard; only the
+     FINAL approach toward the sensor's true near-zero rest depth (below
+     the guard) is ignored, since that's the one part of a decrease that
+     really is unambiguous -- a deliberate low setting settles and holds
+     above the guard, while an actual release always finishes by crossing
+     below it on the way to full contact loss. This does cap the dial's
+     lowest reachable value while holding to just above true zero rather
+     than exactly 0 (an accepted trade -- a step that should never fire
+     is better served by disarming it than by fighting this gesture down
+     to an exact zero). **`OP_SEQ_EDIT_RELEASE_GUARD_DEPTH` is a
+     first-attempt guess, not yet validated against real capture data**
+     the way `expression.c`'s `MIN_STRIKE_DEPTH_DELTA` was -- revisit if
+     it's cutting off legitimately-low intended values, or still letting
+     the release motion sneak in a bad write. `render_value_meter()`
+     still shows live feedback either way, since it reads the same
+     pattern data this writes into.
   3. **Current step now shows blue when armed but not sounding** -- real
      feedback: "make play head on active pad in sewquencer blue if pad
      active so it wont look as an inactive pad." Needed once per-step

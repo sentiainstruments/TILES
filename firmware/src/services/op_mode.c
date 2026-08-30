@@ -399,18 +399,38 @@ static bool s_pitch_edit_prev_pad_touched[TILES_NUM_PADS]; /* only meaningful du
  * finger off a pad is a continuous, physical release -- Hall depth
  * necessarily passes back down through every lower value on its way to
  * 0 before the touch sensor itself finally reports "released," so a
- * live value tied directly to CURRENT depth always gets dragged toward
+ * live value tied directly to CURRENT depth always got dragged toward
  * zero by the release motion itself, corrupting whatever the player
- * actually intended. Tracking the PEAK depth reached during the current
- * probability/ratchet hold instead -- only ever increasing, only ever
- * writing the pattern data on a NEW peak -- means the release motion
- * (which can only ever pull depth DOWN, never up) simply stops
- * producing writes, leaving the last real value in place. The live
- * meter (render_value_meter()) reads the same pattern data this writes
- * into, so it still visibly tracks your press in real time; it just
- * never un-shows a value you already reached. Reset to 0 on every fresh
- * entry into probability or ratchet (both entry points below). */
-static uint16_t s_seq_edit_peak_depth;
+ * actually intended.
+ * A first attempt tracked the PEAK depth reached and only ever wrote on
+ * a NEW peak -- immune to the release drag, but real feedback after
+ * trying it: "we solved the push and increse and hold but we didnt
+ * solve the reduce value... we need some way to hold and not loose
+ * value but still have reduce power funciton" -- peak-tracking also made
+ * it impossible to deliberately DIAL a value back down while still
+ * holding, since any decrease (intentional or not) was simply ignored.
+ * Depth alone can't tell "easing off on purpose, still holding" from
+ * "beginning to lift off entirely" -- both look identical, a smooth
+ * decrease -- until the very end of a release, which always finishes by
+ * passing through the sensor's true near-zero rest depth on its way to
+ * full contact loss. So instead of ignoring every decrease, only the
+ * FINAL approach to that near-zero floor is ignored: below
+ * OP_SEQ_EDIT_RELEASE_GUARD_DEPTH, depth stops being written to the
+ * pattern data at all, freezing whatever the last real value above the
+ * guard was. Above the guard, depth is written on every sample,
+ * increase or decrease alike -- a genuine two-way live dial. This does
+ * mean the dial's lowest reachable value while still holding is capped
+ * just above true zero (using the guard's own probability-percent
+ * mapping, roughly OP_SEQ_EDIT_RELEASE_GUARD_DEPTH / 900 * 100) rather
+ * than exactly 0 -- an accepted trade, since a step that should never
+ * fire is better served by disarming it or the probability master
+ * toggle than by fighting this gesture down to an exact zero.
+ * OP_SEQ_EDIT_RELEASE_GUARD_DEPTH itself is a first-attempt guess, not
+ * yet validated against real capture data the way
+ * expression.c's MIN_STRIKE_DEPTH_DELTA was -- revisit if real hardware
+ * testing shows it's cutting off legitimately-intended low values, or
+ * conversely still letting the release motion sneak in a bad write. */
+#define OP_SEQ_EDIT_RELEASE_GUARD_DEPTH 60u
 
 /* ---- Pattern/channel picker (SW3/triangle, sequencer mode) -------------
  * Same role triangle already plays in melodic mode (the scale picker) --
@@ -800,7 +820,6 @@ static void edit_enter_ratchet(uint8_t step) {
     seq_end_current_note();
     s_seq_edit_mode = OP_SEQ_EDIT_RATCHET;
     s_seq_edit_step = step;
-    s_seq_edit_peak_depth = 0u;
 }
 
 static void edit_exit(void) {
@@ -872,7 +891,6 @@ static void handle_edit_mode(uint32_t now_ms) {
              * escalates exactly like services/standby.h's own circle-hold
              * (4s screensaver -> 8s deep sleep) rather than a new gesture. */
             s_seq_edit_mode = OP_SEQ_EDIT_PROBABILITY;
-            s_seq_edit_peak_depth = 0u;
             return;
         }
         for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
@@ -897,11 +915,11 @@ static void handle_edit_mode(uint32_t now_ms) {
             return;
         }
         uint16_t depth = tiles_hall_get_depth(edit_pad);
-        if (depth > s_seq_edit_peak_depth) {
-            /* Only writes on a NEW peak -- see s_seq_edit_peak_depth's
-             * own comment for why this is immune to the release motion
-             * dragging the value back down. */
-            s_seq_edit_peak_depth = depth;
+        if (depth >= OP_SEQ_EDIT_RELEASE_GUARD_DEPTH) {
+            /* Live both ways (up or down) above the guard -- see
+             * OP_SEQ_EDIT_RELEASE_GUARD_DEPTH's own comment for why only
+             * the final near-zero approach (below the guard) is ignored,
+             * not every decrease. */
             active_pattern()->step_probability_percent[s_seq_edit_step] = probability_percent_from_depth(depth);
         }
         return;
@@ -913,8 +931,7 @@ static void handle_edit_mode(uint32_t now_ms) {
             return;
         }
         uint16_t depth = tiles_hall_get_depth(edit_pad);
-        if (depth > s_seq_edit_peak_depth) {
-            s_seq_edit_peak_depth = depth;
+        if (depth >= OP_SEQ_EDIT_RELEASE_GUARD_DEPTH) {
             active_pattern()->step_ratchet_count[s_seq_edit_step] = ratchet_count_from_depth(depth);
         }
         return;
