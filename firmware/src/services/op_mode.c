@@ -1026,6 +1026,21 @@ static void menu_exit(void) {
         tiles_lighting_set_standby_active(false);
         tiles_buttons_set_standby_active(false);
     }
+    /* Real bug found from real feedback: "load a fix for exiting menues,
+     * led stays toggled." Diamond has a PERMANENT override claimed (see
+     * tiles_op_mode_init()), so buttons.c's own refresh_all_button_leds()
+     * (run by tiles_buttons_set_standby_active(false) above) deliberately
+     * SKIPS it -- "that controller's own next scan repaints it correctly"
+     * is buttons.h's own documented contract, but nothing was actually
+     * doing that repaint here. Canceling the menu with a diamond click
+     * (as opposed to SELECTING a mode, which routes through
+     * set_active_mode() -- that function's own trailing override write
+     * already covers this) left diamond stuck at render_menu()'s own
+     * OP_DIAMOND_LED_MENU_LEVEL (bright) forever, since nothing wrote to
+     * it again afterward. The menu is only ever reachable from melodic
+     * mode to begin with, so 0.0f (melodic's own "diamond off" state) is
+     * always the correct value to restore here, unconditionally. */
+    tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, 0.0f);
 }
 
 static void render_menu_row_color(uint8_t row, float *r, float *g, float *b) {

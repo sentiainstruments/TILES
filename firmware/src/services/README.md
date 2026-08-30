@@ -2609,5 +2609,23 @@ not its code.
      start handling now branches on it, calling the new
      `seq_resume_current_step()` (re-fires wherever the playhead already
      was, no position reset) instead of `seq_reset()` for the resume case.
+  **Diamond's LED found stuck lit after canceling the mode picker**, real
+  feedback: "load a fix for exiting menues, led stays toggled." Diamond
+  has a PERMANENT override claimed since `tiles_op_mode_init()`, so
+  `buttons.c`'s own `refresh_all_button_leds()` (run whenever standby
+  ends) deliberately skips it -- "that controller's own next scan
+  repaints it correctly" is `buttons.h`'s own documented contract for
+  override-held buttons, but nothing was actually doing that repaint on
+  this specific path. Selecting a mode from the picker was already fine
+  (`set_active_mode()`'s own trailing override write covers it), but
+  CANCELING the picker with a plain diamond click -- `menu_exit()` alone,
+  no `set_active_mode()` call -- left diamond stuck at `render_menu()`'s
+  own bright `OP_DIAMOND_LED_MENU_LEVEL` forever, since nothing wrote to
+  it again afterward. `menu_exit()` now also writes diamond's override
+  back to 0.0f directly; the mode picker is only ever reachable from
+  melodic mode to begin with, so that's always the correct value to
+  restore here. The scale/pattern pickers don't share this bug -- both
+  already render diamond at 0 the whole time they're open, so there was
+  nothing to restore.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
