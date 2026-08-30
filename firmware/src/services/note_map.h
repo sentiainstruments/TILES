@@ -176,3 +176,40 @@ bool tiles_note_map_is_root_pad(uint8_t logical_pad);
  * true (natural) for an out-of-range pad, matching this function's
  * "nothing special about this pad" default. */
 bool tiles_note_map_is_natural_pad(uint8_t logical_pad);
+
+/* ---- Guitar/bass fret mode ----------------------------------------------
+ * Real feedback: "lets imoplenment for note mode a guitar fret mode for 4
+ * stings with the structure of bass shapes, -+ change frets up and down.
+ * each row is a string each colum is a fret." A completely different note
+ * -mapping shape from the scale system above (absolute string+fret, not
+ * scale-degree-relative) -- see note_map.c's own header comment on the
+ * standard 4-string bass tuning and the TAB-notation row/string
+ * convention this follows. services/op_mode.h's guitar mode (selectable
+ * from the mode picker) is the only caller of the setters below; while
+ * active, tiles_note_map_get_note() branches to the guitar computation
+ * entirely instead of the scale-based one, so services/expression.c's
+ * whole touch/velocity/pitch-bend/haptics pipeline works completely
+ * unchanged -- it just ends up playing different notes. */
+void tiles_note_map_set_guitar_mode(bool active);
+bool tiles_note_map_is_guitar_mode_active(void);
+
+/* Which 6-fret window is currently visible (columns 1-6 show frets
+ * offset+0 .. offset+5) -- 0 = open position. Clamped to
+ * [0, 24-6] = [0, 18]... see note_map.c's own GUITAR_MAX_FRET_OFFSET for
+ * the exact derivation, matching a 24-fret neck. Stepped by "-"/"+" in
+ * guitar mode (real feedback: "-+ change frets up and down"). */
+void tiles_note_map_set_guitar_fret_offset(uint8_t offset);
+uint8_t tiles_note_map_get_guitar_fret_offset(void);
+
+/* True if this pad's CURRENT fret (guitar mode only -- meaningless
+ * otherwise) is one of the standard inlay-dot marker positions real
+ * guitar/bass necks use to help a player find their place without
+ * counting frets one by one (3/5/7/9/15/17/19/21, and the octave points
+ * 12/24 -- universal convention, not invented here). Marks the WHOLE
+ * column (all 4 strings), matching how a real neck's inlay dot spans the
+ * width of the fretboard rather than sitting under one specific string.
+ * *out_is_octave (if non-NULL) distinguishes the double-dot octave
+ * markers (12/24) from the single-dot ones, for a brighter/distinct
+ * rendering -- services/lighting.c's own idle pad coloring is the one
+ * caller. */
+bool tiles_note_map_is_guitar_fret_marker_pad(uint8_t logical_pad, bool *out_is_octave);

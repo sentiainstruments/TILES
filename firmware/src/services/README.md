@@ -130,6 +130,30 @@ not its code.
   anything about LED brightness specifically.
   **Not done:** standby animations (needs its own design pass — see the
   defaults doc), Hall-driven (as opposed to touch-driven) brightness.
+  **Idle brightness standardized, real feedback: "lets standardise led
+  brightnbess, resting led should be brigher always. en its too dim."**
+  `TILES_LIGHTING_IDLE_BASELINE_PERCENT` 25 -> 50, `TILES_LIGHTING_ROOT_
+  BASELINE_PERCENT` 20 -> 40 (kept at roughly the same ~80% ratio to the
+  natural-key baseline, not a fresh number). 50 specifically matches
+  `services/op_mode.c`'s own `OP_SCALE_AVAILABLE_LEVEL` -- an already-
+  validated "readable secondary brightness" constant from an earlier
+  round of the identical complaint -- rather than picking a third,
+  different "resting" percentage; genuine standardization on one shared
+  value for "visible but not the active thing," not just another
+  brightness bump.
+  **Guitar/bass fret mode's own idle coloring added**, real feedback:
+  "the lights should light up as frets for whatever marking make the
+  most sence" -- see `note_map.c`'s own entry for the standard inlay-dot
+  fret-marker convention this renders (`tiles_note_map_is_guitar_fret_
+  marker_pad()`), checked in `pad_desired_rgb()` before the melodic root/
+  natural logic (mutually exclusive with it). Unmarked frets reuse the
+  SAME `TILES_LIGHTING_IDLE_BASELINE_PERCENT` the melodic idle state uses
+  (this round's own standardization, above), tinted amber instead of
+  white so guitar mode still reads as visually distinct; single-dot
+  markers step up to 75%, octave (double-dot) markers to 100% -- mirroring
+  how a real neck's double dots stand out more than the single ones.
+  Pads STILL show plain white when actually touched, in guitar mode or
+  out of it -- that branch is untouched, shared by both modes.
 - `buttons.h`/`.c` — done for V1: reads all 6 function buttons
   (debounced, 10ms), lights each one's PCA9685-driven LED while (and
   only while) it's held -- the default for any button without a
@@ -294,6 +318,47 @@ not its code.
   `firmware/test/test_note_map.c` still passes unmodified (chromatic's
   table is `{0..11}`, count 12 -- the new generic fold reduces to the
   exact old formula for that specific case, verified no regression).
+  **Guitar/bass fret mode added**, real feedback: "lets imoplenment for
+  note mode a guitar fret mode for 4 stings with the structure of bass
+  shapes, -+ change frets up and down. each row is a string each colum is
+  a fret." A completely different note-mapping shape from the scale
+  system above -- absolute string+fret, not scale-degree-relative --
+  gated by a new `s_guitar_mode_active` flag `tiles_note_map_get_note()`
+  checks FIRST, before the scale logic. Standard 4-string bass tuning
+  (E1=28, A1=33, D2=38, G2=43 in MIDI note numbers -- each string a
+  perfect 4th, 5 semitones, above the last, the real standard interval,
+  not invented here). Row-to-string order follows standard TAB notation
+  -- researched as the closest existing convention to this exact
+  row=string/column=fret-or-time shape: a real fretboard/tab diagram
+  always draws the HIGHEST string on the top line and the LOWEST on the
+  bottom, mirroring the strings' physical arrangement viewed from above
+  in normal playing position. Row 1 (closest to the function buttons) =
+  G2, row 4 (farthest) = E1. Column 1-6 shows a sliding 6-fret window
+  into a modeled 24-fret neck (`GUITAR_MAX_FRET`), controlled by
+  `tiles_note_map_set_guitar_fret_offset()` -- `services/op_mode.c`'s
+  guitar mode steps this with "-"/"+" (real feedback: "-+ change frets up
+  and down").
+  **Fret markers**: `tiles_note_map_is_guitar_fret_marker_pad()` reports
+  the standard inlay-dot marker positions every real guitar/bass neck
+  uses to help a player find their place without counting frets one by
+  one -- single dots at 3/5/7/9 (and their next-octave repeats
+  15/17/19/21), double dots at the octave points 12/24, not invented
+  here. Marks the WHOLE column (all 4 strings) regardless of row, since a
+  real neck's inlay dot spans the fretboard's width rather than sitting
+  under one specific string -- `services/lighting.c`'s idle pad coloring
+  is the one caller, see that file's own entry for the rendering.
+  **Deliberately does NOT touch `services/expression.c`** -- that file's
+  entire touch/velocity/pitch-bend/aftertouch/haptics pipeline already
+  funnels through exactly one call to `tiles_note_map_get_note()` per
+  strike (captured once into `active_note` and reused for both the
+  note-on and its later matching note-off), so making note_map.c itself
+  guitar-aware was enough to make the WHOLE existing pipeline play
+  guitar-mapped notes with zero changes elsewhere -- confirmed by reading
+  through expression.c's actual call site before relying on this design,
+  not assumed. `services/op_mode.c`'s guitar mode is architecturally much
+  closer to "melodic mode with a different note-mapping function" than to
+  a custom instrument because of this -- see that file's own "Guitar/bass
+  fret mode" section for the rest.
 - `octave_control.h`/`.c` — done for V1: the default function of SW1
   ("-") and SW2 ("+") is octave shift down/up, one octave per press
   (fires on release, not the press itself -- see this entry's own
@@ -414,6 +479,16 @@ not its code.
   color are all first-pass judgment calls, not measurements. The
   solo-step-race and pad-grid-ownership fixes above are untested on real
   hardware too.
+  **New guitar mode also yields "-"/"+"** -- this file's own scan-gate
+  now checks `services/op_mode.h`'s `tiles_op_mode_owns_octave_buttons()`
+  instead of `tiles_op_mode_owns_pad_grid()` directly. Broader than the
+  original check on purpose: guitar mode needs "-"/"+" ownership (its own
+  fret-window shift) WITHOUT the "suppress new note strikes" side effect
+  full pad-grid ownership carries elsewhere (`services/expression.c`
+  checks `owns_pad_grid()` for exactly that, and guitar mode's whole
+  design depends on real notes still playing normally through that same
+  pipeline -- see `note_map.c`'s own entry). Sequencer mode is unaffected
+  either way, since it already legitimately owns the whole grid.
 - `expression_control.h`/`.c` — done for V1: SW5 (square, "sentia")'s
   function-button role, corrected from an earlier pass that built the
   same behaviors onto circle by mistake -- see `standby.h`'s entry above
@@ -2627,5 +2702,67 @@ not its code.
   restore here. The scale/pattern pickers don't share this bug -- both
   already render diamond at 0 the whole time they're open, so there was
   nothing to restore.
+  **Mode picker now only lights/selects AVAILABLE modes**, real feedback:
+  "the mode selector has all these lights always on. only availabkle
+  modes shouyld be on meaning for now only sequencer, and the note mode."
+  New `row_is_available()` gates both `render_menu()` (an unavailable
+  row renders fully off, the "unavailable = off" language this file's own
+  scale/pattern pickers already established for their own reserved slots)
+  and `handle_menu_taps()` (an unavailable row is a no-op to select,
+  though it still gets the same touch-click haptic acknowledgment every
+  OTHER pad does while browsing -- matches the scale picker's own
+  identical precedent for its undefined slots).
+  **Arp mode removed entirely, replaced by a real guitar/bass fret
+  mode.** Real feedback: "lets imoplenment for note mode a guitar fret
+  mode for 4 stings with the structure of bass shapes... this is going
+  to be mode 3 on the mode function selector." Arp was never more than a
+  selectable stub (no real trigger logic, just circle's beat-flash
+  override) -- rather than leave it as unreachable dead code once its
+  picker row was needed for a real feature, it's gone: `OP_MODE_ARP`,
+  `OP_ROW_ARP`, `OP_MENU_ARP_*`, and the circle-override claim/release
+  tied to it are all deleted. A genuine future arp mode would be a fresh,
+  deliberate feature request, not scaffolding worth preserving unreachable.
+  Chord keeps its own row and enum value (still a real planned mode, just
+  correctly marked unavailable now like guitar's neighbor row) -- only
+  arp was removed, since guitar directly took its exact slot. Reading top
+  to bottom, the available modes land as melodic (1st), sequencer (2nd,
+  skipping chord's dark row), guitar (3rd) -- matching real feedback's
+  own "mode 3" under the most natural way to count "the 3rd real mode."
+  **Guitar/bass fret mode itself** -- see `note_map.c`'s own entry for
+  the note-mapping/fret-marker design (row=string in standard TAB order,
+  column=fret, standard 4-string bass tuning) and `lighting.c`'s own
+  entry for the idle rendering. This file's own share of it is
+  deliberately small: `set_active_mode()` pushes `mode == OP_MODE_GUITAR`
+  into `tiles_note_map_set_guitar_mode()` (the one flag that makes
+  `services/expression.c`'s existing pipeline start playing guitar notes
+  and `services/lighting.c`'s existing idle-coloring start showing fret
+  markers, with no changes needed in either file), and
+  `handle_transport_and_length()` (renamed in spirit though not in name --
+  the function now serves TWO otherwise-unrelated mutually-exclusive
+  modes rather than just sequencer's transport/length, sharing one read
+  of "-"/"+" press state instead of duplicating it) steps
+  `tiles_note_map_set_guitar_fret_offset()` by +/-1 per press on release,
+  one fret per press with no auto-repeat -- matching this codebase's own
+  established "-"/"+" convention everywhere else (octave shift, key
+  transpose, sequencer length). Guitar mode deliberately does NOT claim
+  `tiles_op_mode_owns_pad_grid()` -- see `note_map.c`'s own entry for why
+  this mode is architecturally closer to "melodic mode with a different
+  note-mapping function" than to sequencer's custom-rendered instrument;
+  it needs only the new, narrower `tiles_op_mode_owns_octave_buttons()`
+  (see this file's header for the full reasoning on why that accessor
+  exists separately from `owns_pad_grid()`).
+  Also fixed proactively, applying the exact lesson from the diamond-LED
+  bug above before it could recur: "-"/"+" have a PERMANENT override
+  claimed by `services/octave_control.c`, and entering guitar mode takes
+  over their input without claiming standby_active -- `set_active_mode()`
+  explicitly zeros their override LEDs on entry so nothing is left
+  showing whatever pattern octave_control.c's own default behavior last
+  displayed; leaving guitar mode needs no symmetric fix, since octave_
+  control.c's own scan resumes and repaints them correctly on its very
+  next tick once it stops yielding.
+  **Not hardware-verified at all** -- the row reassignment, the
+  availability gating, and the entire guitar mode (note mapping, fret
+  markers, "-"/"+" fret-shift) are first attempts, none tried on real
+  hardware yet.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

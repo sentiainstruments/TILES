@@ -21,31 +21,55 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+/* Real feedback: "also the mode selector has all these lights always on.
+ * only availabkle modes shouyld be on meaning for now only sequencer, and
+ * the note mode" -- CHORD was already a real, planned, but unimplemented
+ * stub (see this file's own header); ARP was the identical kind of stub,
+ * but real feedback replaced its picker row outright with a real feature
+ * instead of leaving it as a placeholder: "lets imoplenment for note mode
+ * a guitar fret mode... this is going to be mode 3 on the mode function
+ * selector." ARP is removed entirely (it had no real logic beyond a
+ * stub + circle's beat-flash override, both deleted with it) rather than
+ * kept as unreachable dead code alongside a mode that no longer has a
+ * picker row -- a genuine future arp mode would be a fresh, deliberate
+ * feature request, not scaffolding worth preserving unreachable. CHORD
+ * keeps its enum value and row (still a real planned mode, just not
+ * built yet) but that row now renders unavailable -- see
+ * row_is_available() below -- so "only available modes lit" holds for
+ * both stubs the same way. */
 typedef enum {
     OP_MODE_MELODIC = 0,
     OP_MODE_CHORD,
     OP_MODE_SEQUENCER,
-    OP_MODE_ARP,
+    OP_MODE_GUITAR,
 } tiles_op_mode_t;
 
 #define OP_NUM_MODES 4u
 
 /* Row assignment within the menu -- matches the order real feedback
- * listed the 4 modes in ("standard melodic, chord trigger mode...,
- * sequencer mode..., arpeggiator mode"). Row 1 is the pad row physically
- * closest to the function buttons (TILES_GRID_MIN_ROW + 1), same
- * top-to-bottom sense services/expression_control.h's sub-menu rows use. */
+ * originally listed the modes in ("standard melodic, chord trigger
+ * mode..., sequencer mode..."), with GUITAR now taking the row ARP used
+ * to occupy (see the enum's own comment above). Row 1 is the pad row
+ * physically closest to the function buttons (TILES_GRID_MIN_ROW + 1),
+ * same top-to-bottom sense services/expression_control.h's sub-menu rows
+ * use. Reading top to bottom, the AVAILABLE modes land as melodic (1st),
+ * sequencer (2nd, skipping chord's still-unavailable row), guitar (3rd)
+ * -- matching real feedback's own "mode 3" for guitar under the most
+ * natural way to count "the 3rd real, working mode." */
 #define OP_ROW_MELODIC 1u
 #define OP_ROW_CHORD 2u
 #define OP_ROW_SEQUENCER 3u
-#define OP_ROW_ARP 4u
+#define OP_ROW_GUITAR 4u
 
 /* Mode-selector row colors -- real feedback's own phrase, "mode selector
  * color": melodic = Sentia magenta (this codebase's brand color,
  * redefined locally here same as services/expression_control.c and
  * services/boot_sequence.c each already do rather than sharing one
- * definition -- established precedent, not an oversight), chord =
- * green, sequencer = red, arp = blue. */
+ * definition -- established precedent, not an oversight), chord = green,
+ * sequencer = red. Guitar = amber/orange (an instrument-wood-toned
+ * accent, distinct from every other mode's color and from the guitar
+ * fretboard's own idle amber coloring in services/lighting.c, tying the
+ * two together visually). */
 #define OP_MENU_MELODIC_R 1.0f
 #define OP_MENU_MELODIC_G 0.0f
 #define OP_MENU_MELODIC_B 1.0f
@@ -55,9 +79,9 @@ typedef enum {
 #define OP_MENU_SEQUENCER_R 1.0f
 #define OP_MENU_SEQUENCER_G 0.0f
 #define OP_MENU_SEQUENCER_B 0.0f
-#define OP_MENU_ARP_R 0.0f
-#define OP_MENU_ARP_G 0.0f
-#define OP_MENU_ARP_B 1.0f
+#define OP_MENU_GUITAR_R 1.0f
+#define OP_MENU_GUITAR_G 0.5f
+#define OP_MENU_GUITAR_B 0.0f
 
 /* Diamond LED glow while the top-level mode picker is actually open --
  * the button itself is monochrome PWM (not addressable RGB like the
@@ -188,10 +212,11 @@ static bool s_scale_menu_prev_pad_touched[TILES_NUM_PADS];
  * state at the moment of the press instead of latching a flag to check
  * on release. */
 static bool s_circle_was_held;
-/* Beat-flash rendering state -- shared across whichever mode is
- * currently showing it (render_sequencer() directly, or the diamond-
- * style button override for arp mode), computed once per scan in
- * tiles_op_mode_scan() so both paths see the identical flash timing. */
+/* Beat-flash rendering state -- consumed by render_sequencer(),
+ * computed once per scan in tiles_op_mode_scan() regardless. (Arp mode
+ * used to ALSO show this via circle's button override before it was
+ * removed -- see the mode enum's own comment -- leaving sequencer as the
+ * only consumer for now.) */
 static uint32_t s_last_beat_index = 0xFFFFFFFFu;
 static uint32_t s_beat_flash_start_ms;
 
@@ -1043,6 +1068,23 @@ static void menu_exit(void) {
     tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, 0.0f);
 }
 
+/* Real feedback: "the mode selector has all these lights always on. only
+ * availabkle modes shouyld be on meaning for now only sequencer, and the
+ * note mode" (plus, with this round's guitar mode added, guitar itself).
+ * Matches the "unavailable = off and not selectable" language this file
+ * already established for the scale/pattern pickers' own reserved slots
+ * -- see handle_menu_taps() below for the "not selectable" half. */
+static bool row_is_available(uint8_t row) {
+    switch (row) {
+    case OP_ROW_MELODIC:
+    case OP_ROW_SEQUENCER:
+    case OP_ROW_GUITAR:
+        return true;
+    default: /* OP_ROW_CHORD -- still a real planned mode, just not built yet */
+        return false;
+    }
+}
+
 static void render_menu_row_color(uint8_t row, float *r, float *g, float *b) {
     switch (row) {
     case OP_ROW_MELODIC:
@@ -1060,18 +1102,20 @@ static void render_menu_row_color(uint8_t row, float *r, float *g, float *b) {
         *g = OP_MENU_SEQUENCER_G;
         *b = OP_MENU_SEQUENCER_B;
         break;
-    default: /* OP_ROW_ARP */
-        *r = OP_MENU_ARP_R;
-        *g = OP_MENU_ARP_G;
-        *b = OP_MENU_ARP_B;
+    default: /* OP_ROW_GUITAR */
+        *r = OP_MENU_GUITAR_R;
+        *g = OP_MENU_GUITAR_G;
+        *b = OP_MENU_GUITAR_B;
         break;
     }
 }
 
 static void render_menu(void) {
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
-        float r, g, b;
-        render_menu_row_color(row, &r, &g, &b);
+        float r = 0.0f, g = 0.0f, b = 0.0f;
+        if (row_is_available(row)) {
+            render_menu_row_color(row, &r, &g, &b);
+        }
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), r, g, b);
         }
@@ -1194,18 +1238,6 @@ static void set_active_mode(tiles_op_mode_t mode) {
     if (s_active_mode == OP_MODE_SEQUENCER && mode != OP_MODE_SEQUENCER) {
         seq_end_current_note();
     }
-    if (s_active_mode == OP_MODE_ARP && mode != OP_MODE_ARP) {
-        /* Releases circle's beat-flash override -- see this file's own
-         * "Master tap tempo" section for why this is claimed/released
-         * around arp mode specifically rather than permanently like
-         * diamond's own override: circle has a real pre-existing "LED
-         * follows press" default (services/standby.h's screensaver/
-         * deep-sleep hold gesture's own visual feedback) that claiming
-         * it permanently would silently break outside sequencer/arp
-         * mode. Releasing immediately re-asserts that default per
-         * buttons.h's own documented contract. */
-        tiles_buttons_set_override_active(TILES_CIRCLE_BUTTON_ID, false);
-    }
     if (mode != OP_MODE_MELODIC) {
         /* Melodic's own sub-menu can't stay open once melodic isn't the
          * active mode anymore. */
@@ -1225,17 +1257,39 @@ static void set_active_mode(tiles_op_mode_t mode) {
         tiles_lighting_set_standby_active(false);
         tiles_buttons_set_standby_active(false);
     }
-    if (mode == OP_MODE_ARP) {
-        tiles_buttons_set_override_active(TILES_CIRCLE_BUTTON_ID, true);
+    /* Guitar mode reuses melodic's own touch/expression/lighting pipeline
+     * entirely (see this file's own "Guitar/bass fret mode" section) --
+     * it does NOT claim standby_active above, unlike sequencer. Pushing
+     * this one flag into note_map.c is the only thing needed for
+     * services/expression.c's existing note-triggering to start playing
+     * guitar-mapped notes instead of scale-mapped ones, and for
+     * services/lighting.c's idle coloring to switch to fret markers --
+     * both already read note_map.c's own state, no changes needed there
+     * beyond note_map.c/lighting.c's own guitar-awareness. */
+    tiles_note_map_set_guitar_mode(mode == OP_MODE_GUITAR);
+    if (mode == OP_MODE_GUITAR) {
+        /* Real feedback: "load a fix for exiting menues, led stays
+         * toggled" -- applying that same lesson here proactively rather
+         * than waiting to find the identical bug again: "-"/"+" have a
+         * PERMANENT override claimed by services/octave_control.c, and
+         * this mode takes over their input (see tiles_op_mode_owns_
+         * octave_buttons() below) without claiming standby_active, so
+         * nothing else will write their LEDs while guitar mode owns
+         * them -- explicitly turning them off here avoids leaving
+         * whatever pattern octave_control.c's own default behavior last
+         * showed stuck on screen. Leaving guitar mode needs no symmetric
+         * fix: octave_control.c's own scan resumes immediately once
+         * tiles_op_mode_owns_octave_buttons() goes false again, and its
+         * normal logic repaints them correctly on its very next scan. */
+        tiles_buttons_set_override_led(TILES_MINUS_BUTTON_ID, 0.0f);
+        tiles_buttons_set_override_led(TILES_PLUS_BUTTON_ID, 0.0f);
     }
     /* Always off here -- diamond only ever lights while the mode picker
      * itself is open (render_menu()'s own write), not just because some
      * non-melodic mode happens to be active. See OP_DIAMOND_LED_MENU_
      * LEVEL's own comment. This override write only matters for
-     * CHORD/ARP anyway (sequencer claims standby_active, making any
-     * override here a no-op per buttons.h's own contract -- see this
-     * file's "Master tap tempo" section for the identical reasoning
-     * applied to circle). */
+     * CHORD/GUITAR anyway (sequencer claims standby_active, making any
+     * override here a no-op per buttons.h's own contract). */
     tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, 0.0f);
     printf("[op_mode] active mode -> %d\n", (int)mode);
 }
@@ -1255,14 +1309,14 @@ static void handle_menu_taps(void) {
             if (touched && !s_menu_prev_pad_touched[pad - 1u]) {
                 tiles_haptics_trigger_touch_pulse(pad);
             }
-            if (touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD) {
+            if (touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD && row_is_available(row)) {
                 tiles_op_mode_t mode = OP_MODE_MELODIC;
                 if (row == OP_ROW_CHORD) {
                     mode = OP_MODE_CHORD;
                 } else if (row == OP_ROW_SEQUENCER) {
                     mode = OP_MODE_SEQUENCER;
-                } else if (row == OP_ROW_ARP) {
-                    mode = OP_MODE_ARP;
+                } else if (row == OP_ROW_GUITAR) {
+                    mode = OP_MODE_GUITAR;
                 }
                 menu_exit();
                 set_active_mode(mode);
@@ -1397,8 +1451,10 @@ static void handle_circle_tap(uint32_t now_ms) {
 
     if (held && !s_circle_was_held) {
         s_circle_press_ms = now_ms;
-        bool mode_ok = (s_active_mode == OP_MODE_ARP) ||
-                       (s_active_mode == OP_MODE_SEQUENCER && !s_pattern_menu_visible && s_seq_edit_mode == OP_SEQ_EDIT_NONE);
+        /* ARP mode (the original other half of "only active in sequencer
+         * and arp mode") has been removed entirely -- see the mode enum's
+         * own comment -- so tap tempo is sequencer-only now. */
+        bool mode_ok = (s_active_mode == OP_MODE_SEQUENCER && !s_pattern_menu_visible && s_seq_edit_mode == OP_SEQ_EDIT_NONE);
         bool combo_conflict = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
@@ -1433,20 +1489,25 @@ static void handle_circle_tap(uint32_t now_ms) {
     s_circle_was_held = held;
 }
 
-/* SW1/SW2 ("-"/"+"), sequencer-mode only -- see this file's own
- * "Transport + length" state-section comment for the full reasoning
- * (circle-first-then-"-"/"+" ordering, why the reverse order isn't
- * supported, the octave_control.c precedent this mirrors). Resolves on
- * release: a fresh press-edge with circle ALREADY held steps length
- * immediately (no need to wait for release -- length isn't timing-
- * critical the way a tap is); a SOLO press (circle never joined) resolves
- * on release into stop/start instead, using the same
- * "combo flag set during hold" shape. */
+/* SW1/SW2 ("-"/"+") -- sequencer mode's own transport/length (unchanged),
+ * plus guitar mode's fret-window shift (real feedback: "-+ change frets
+ * up and down"). One function, not two, so both share a single press-
+ * tracking read/update of these two buttons rather than each keeping its
+ * own redundant copy -- the two modes are mutually exclusive, so there's
+ * never a real conflict over what a release should mean. See this file's
+ * own "Transport + length" state-section comment for sequencer's own
+ * reasoning (circle-first-then-"-"/"+" ordering, the octave_control.c
+ * solo-vs-combo precedent this mirrors). Guitar's own fret-shift needs
+ * none of that -- no combo, just a plain step on release, matching
+ * services/octave_control.c's own "resolves on release" convention for
+ * its default octave-shift function (the one this mode is effectively
+ * replacing for as long as it's active). */
 static void handle_transport_and_length(uint32_t now_ms) {
     bool minus_held = tiles_button_is_pressed(TILES_MINUS_BUTTON_ID);
     bool plus_held = tiles_button_is_pressed(TILES_PLUS_BUTTON_ID);
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
     bool active = (s_active_mode == OP_MODE_SEQUENCER) && !s_pattern_menu_visible && s_seq_edit_mode == OP_SEQ_EDIT_NONE;
+    bool guitar_active = (s_active_mode == OP_MODE_GUITAR);
 
     if (active && minus_held && !s_minus_was_held && circle_held) {
         op_seq_pattern_t *pat = active_pattern();
@@ -1482,6 +1543,16 @@ static void handle_transport_and_length(uint32_t now_ms) {
                 s_seq_note_sounding = false;
                 s_seq_pending_start = false;
             }
+        } else if (guitar_active) {
+            /* Real feedback: "-+ change frets up and down." One fret per
+             * press, no auto-repeat -- matches this codebase's own
+             * established "-"/"+" convention everywhere else (octave
+             * shift, key transpose, sequencer length all step by 1 per
+             * press). */
+            uint8_t offset = tiles_note_map_get_guitar_fret_offset();
+            if (offset > 0u) {
+                tiles_note_map_set_guitar_fret_offset((uint8_t)(offset - 1u));
+            }
         }
         s_minus_used_as_combo = false;
     }
@@ -1515,6 +1586,10 @@ static void handle_transport_and_length(uint32_t now_ms) {
                 s_seq_pending_start = true;
                 s_seq_pending_restart = false;
             }
+        } else if (guitar_active) {
+            /* tiles_note_map_set_guitar_fret_offset() clamps internally
+             * (GUITAR_MAX_FRET_OFFSET), no bound check needed here. */
+            tiles_note_map_set_guitar_fret_offset((uint8_t)(tiles_note_map_get_guitar_fret_offset() + 1u));
         }
         s_plus_used_as_combo = false;
     }
@@ -1586,10 +1661,6 @@ void tiles_op_mode_init(void) {
     s_beat_flash_start_ms = 0u;
     tiles_buttons_set_override_active(TILES_DIAMOND_BUTTON_ID, true);
     tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, 0.0f);
-    /* Circle's own override is claimed/released around arp mode
-     * specifically, not here at boot -- see set_active_mode()'s own
-     * comment for why a permanent claim (like diamond's) would break
-     * circle's pre-existing "LED follows press" default. */
 }
 
 void tiles_op_mode_scan(void) {
@@ -1668,18 +1739,32 @@ void tiles_op_mode_scan(void) {
         seq_handle_step_taps(now_ms);
         seq_advance_clock(clock);
         render_sequencer(beat_flash_level, clock.running);
-    } else if (s_active_mode == OP_MODE_ARP) {
-        /* Arp mode itself isn't implemented yet (see this file's own
-         * header) -- this is the one real piece of it: circle's beat
-         * flash, driven by the exact same tap-tempo/external-clock state
-         * sequencer mode uses. Override was claimed in set_active_mode()
-         * on entering arp mode. */
-        tiles_buttons_set_override_led(TILES_CIRCLE_BUTTON_ID, beat_flash_level);
     }
+    /* Guitar mode needs nothing further here -- handle_transport_and_
+     * length() above already handles its "-"/"+" fret-shift, and its
+     * note-playing/idle-fret-marker rendering both go entirely through
+     * services/expression.c's and services/lighting.c's own EXISTING
+     * pipelines (now guitar-aware via services/note_map.h), completely
+     * unowned by this function -- see set_active_mode()'s own comment on
+     * why guitar mode never claims standby_active. Chord stays a stub
+     * that passes touch straight through to melodic, same as always. */
 }
 
 bool tiles_op_mode_owns_pad_grid(void) {
     return s_menu_visible || s_scale_menu_visible || s_active_mode == OP_MODE_SEQUENCER;
+}
+
+/* Broader than tiles_op_mode_owns_pad_grid() above: also true for guitar
+ * mode, which needs "-"/"+" ownership (so services/octave_control.c
+ * yields its own default octave-shift function -- see that file's own
+ * scan-gate) WITHOUT the "suppress new note strikes" side effect real
+ * grid ownership carries (services/expression.c checks owns_pad_grid()
+ * for exactly that, and guitar mode's whole design depends on real notes
+ * still playing normally -- see this file's "Guitar/bass fret mode"
+ * section). Sequencer mode is covered either way, since it already
+ * legitimately owns the whole grid. */
+bool tiles_op_mode_owns_octave_buttons(void) {
+    return tiles_op_mode_owns_pad_grid() || s_active_mode == OP_MODE_GUITAR;
 }
 
 bool tiles_op_mode_is_sequencer_active(void) {

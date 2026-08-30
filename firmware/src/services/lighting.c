@@ -8,14 +8,23 @@
 #include "sk6805.h"
 #include "tca9554.h"
 
-/* Real feedback: "make all led brighter its hard to see" -- raised from
- * 10. Still a fraction of the active brightness ceiling (a power-derived
+/* Real feedback, across several rounds: "make all led brighter its hard
+ * to see" (10 -> 25), then "lets standardise led brightnbess, resting led
+ * should be brigher always. en its too dim" -- raised again, 25 -> 50, to
+ * match OP_SCALE_AVAILABLE_LEVEL (services/op_mode.c) -- this codebase's
+ * own already-validated "readable secondary brightness" convention
+ * (itself raised 0.35 -> 0.5 for the identical complaint), rather than
+ * inventing a third, different "resting" percentage. Standardizing on
+ * one shared value for "visible but not the active/selected thing" across
+ * melodic idle pads AND menu-available items, instead of two similar-but-
+ * different numbers that drifted apart over separate rounds of tuning.
+ * Still a fraction of the active brightness ceiling (a power-derived
  * safety cap from tiles_power_get_state(), untouched by this change --
  * see this file's "Pad brightness ceiling" section further below for how
  * that ceiling is picked), so this only spends more of whatever headroom
  * that ceiling already allows on the resting/idle state, not a change to
  * the underlying power budget. */
-#define TILES_LIGHTING_IDLE_BASELINE_PERCENT 25u
+#define TILES_LIGHTING_IDLE_BASELINE_PERCENT 50u
 
 /* Idle (untouched) chromatic-play pad coloring by note role -- real
  * feedback: "root should be blue and black keys shouldnt have led this
@@ -44,12 +53,15 @@
  * Raised from 6, real feedback: "make root note led also brighter" (part
  * of a broader "make all led brighter its hard to see" -- see
  * TILES_LIGHTING_IDLE_BASELINE_PERCENT above), then raised again, real
- * feedback: "root note as well slightly brighter." Kept below that
+ * feedback: "root note as well slightly brighter," then once more
+ * alongside the natural-key baseline's own 25 -> 50 standardization
+ * (20 -> 40, keeping roughly the same ~80% ratio to the natural-key
+ * baseline rather than picking a fresh number). Kept below that
  * constant's own value so root stays visibly dimmer than a natural key
  * at rest, per the same real feedback that made it dimmer in the first
  * place -- just a less extreme gap now that both are brighter in
  * absolute terms. */
-#define TILES_LIGHTING_ROOT_BASELINE_PERCENT 20u
+#define TILES_LIGHTING_ROOT_BASELINE_PERCENT 40u
 
 /* Underglow's own fixed brightness, out of 255 -- deliberately NOT
  * scaled by the active brightness ceiling/the power state. It used to be
@@ -178,13 +190,37 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         float level = baseline + (1.0f - baseline) * clamp01(s_pad_press[pad_index]);
         return (tiles_rgb01_t){level, level, level};
     }
+    uint8_t logical_pad = (uint8_t)(pad_index + 1u);
+
+    /* Guitar/bass fret mode: a completely different idle-coloring scheme,
+     * checked before the melodic root/natural logic below (mutually
+     * exclusive -- see services/note_map.h's own header). Real feedback:
+     * "the lights should light up as frets for whatever marking make the
+     * most sence" -- the standard inlay-dot convention every real guitar/
+     * bass neck uses (see tiles_note_map_is_guitar_fret_marker_pad()'s own
+     * comment for the exact fret numbers). Unmarked frets use the SAME
+     * baseline brightness the melodic idle state does (this file's own
+     * "standardize resting brightness" pass), just tinted amber instead
+     * of white so guitar mode still reads as visually distinct at a
+     * glance; marked frets step up from there, octave markers brightest
+     * of all, mirroring how a real neck's double-dot markers stand out
+     * more than the single dots. */
+    if (tiles_note_map_is_guitar_mode_active()) {
+        bool is_octave = false;
+        if (tiles_note_map_is_guitar_fret_marker_pad(logical_pad, &is_octave)) {
+            float level = is_octave ? 1.0f : 0.75f;
+            return (tiles_rgb01_t){level, level * 0.5f, 0.0f};
+        }
+        float level = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;
+        return (tiles_rgb01_t){level, level * 0.5f, 0.0f};
+    }
+
     /* Idle (untouched), normal chromatic play: color by note role -- real
      * feedback: "root should be blue [later: purple] and black keys
      * shouldnt have led this in rest non pressed moment." Root checked
      * first since a root pad can itself be a sharp/black key depending on
      * the current key offset (see tiles_note_map_is_root_pad()'s own
      * comment) -- root's color always wins over that. */
-    uint8_t logical_pad = (uint8_t)(pad_index + 1u);
     if (tiles_note_map_is_root_pad(logical_pad)) {
         /* Sentia Instruments Magenta (#FF00FF) -- R and B channels only,
          * G stays 0 -- see TILES_LIGHTING_ROOT_BASELINE_PERCENT's own

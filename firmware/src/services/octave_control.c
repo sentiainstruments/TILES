@@ -237,7 +237,7 @@ void tiles_octave_control_scan(void) {
     bool plus_pressed = tiles_button_is_pressed(BUTTON_ID_PLUS);
 
     if (tiles_game_mode_is_active() || tiles_standby_owns_octave_buttons() ||
-        tiles_expression_control_owns_pad_grid() || tiles_op_mode_owns_pad_grid()) {
+        tiles_expression_control_owns_pad_grid() || tiles_op_mode_owns_octave_buttons()) {
         /* A game has claimed SW1/SW2 as its own controls -- see the
          * "Deferring to game mode" section of the file header -- or a
          * manually-entered screensaver has repurposed them as
@@ -247,11 +247,15 @@ void tiles_octave_control_scan(void) {
          * intensity via SW1/SW2 directly, or just passively visible with
          * SW1/SW2 otherwise idle -- see expression_control.h's
          * tiles_expression_control_owns_pad_grid()) -- or op_mode.h's
-         * mode-select menu/sequencer owns the pad grid. Same fix either
-         * way: keep edge-tracking state current and do nothing else, so
-         * a scroll/game/intensity/mode-select press -- or a press meant
-         * only to dismiss the sub-menu -- doesn't *also* silently step
-         * the octave or transpose key underneath. */
+         * mode-select menu/sequencer/guitar mode owns "-"/"+"
+         * (tiles_op_mode_owns_octave_buttons(), broader than that file's
+         * own tiles_op_mode_owns_pad_grid() specifically so guitar mode
+         * can take over just these two buttons without also suppressing
+         * real note playing the way full grid ownership would). Same fix
+         * either way: keep edge-tracking state current and do nothing
+         * else, so a scroll/game/intensity/mode-select/fret-shift press
+         * -- or a press meant only to dismiss the sub-menu -- doesn't
+         * *also* silently step the octave or transpose key underneath. */
         s_prev_minus_pressed = minus_pressed;
         s_prev_plus_pressed = plus_pressed;
         s_combo_was_held = minus_pressed && plus_pressed;

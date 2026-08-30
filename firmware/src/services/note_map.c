@@ -8,6 +8,106 @@ static tiles_scale_mode_t s_scale = TILES_SCALE_CHROMATIC;
 static int8_t s_octave_shift = 0;
 static int8_t s_key_offset = 0;
 
+/* ---- Guitar/bass fret mode ----------------------------------------------
+ * Real feedback: "lets imoplenment for note mode a guitar fret mode for 4
+ * stings with the structure of bass shapes, -+ change frets up and down.
+ * each row is a string each colum is a fret." Standard 4-string bass
+ * tuning, low to high: E1, A1, D2, G2 -- each string a perfect 4th (5
+ * semitones) above the one below it, the real, standard bass/guitar
+ * tuning interval, not invented here. MIDI note numbers (middle C = 60):
+ * E1=28, A1=33, D2=38, G2=43.
+ * Row-to-string assignment follows standard TAB notation -- the
+ * near-universal convention for exactly this "row = string, column =
+ * fret/time" shape (a real fretboard/tab diagram always draws the
+ * HIGHEST-pitched string on the top line and the LOWEST on the bottom,
+ * mirroring how the strings sit when the instrument is held in normal
+ * playing position and viewed from above). Row 1 (closest to the
+ * function buttons) = G2, the highest string; row 4 (farthest) = E1, the
+ * lowest. */
+#define GUITAR_NUM_STRINGS 4u
+#define GUITAR_VISIBLE_FRETS 6u
+#define GUITAR_MAX_FRET 24u /* a common high-end real bass/guitar fret count */
+#define GUITAR_MAX_FRET_OFFSET (GUITAR_MAX_FRET - GUITAR_VISIBLE_FRETS + 1u) /* 19 -- window's last column then shows fret 24 */
+
+static const uint8_t GUITAR_STRING_OPEN_NOTE[GUITAR_NUM_STRINGS] = {
+    43u, /* row 1 (top) = G2 */
+    38u, /* row 2 = D2 */
+    33u, /* row 3 = A1 */
+    28u, /* row 4 (bottom) = E1 */
+};
+
+static bool s_guitar_mode_active;
+static uint8_t s_guitar_fret_offset;
+
+/* Standard fretboard inlay-dot positions -- single dots at 3/5/7/9 and
+ * their next-octave repeats 15/17/19/21, double dots at the octave points
+ * 12/24. Universal across virtually every real guitar/bass neck. */
+static bool guitar_fret_is_single_marker(uint8_t fret) {
+    switch (fret % 12u) {
+    case 3u:
+    case 5u:
+    case 7u:
+    case 9u:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool guitar_fret_is_octave_marker(uint8_t fret) {
+    return fret != 0u && (fret % 12u) == 0u;
+}
+
+void tiles_note_map_set_guitar_mode(bool active) {
+    s_guitar_mode_active = active;
+}
+
+bool tiles_note_map_is_guitar_mode_active(void) {
+    return s_guitar_mode_active;
+}
+
+void tiles_note_map_set_guitar_fret_offset(uint8_t offset) {
+    if (offset > (uint8_t)GUITAR_MAX_FRET_OFFSET) {
+        offset = (uint8_t)GUITAR_MAX_FRET_OFFSET;
+    }
+    s_guitar_fret_offset = offset;
+}
+
+uint8_t tiles_note_map_get_guitar_fret_offset(void) {
+    return s_guitar_fret_offset;
+}
+
+static uint8_t guitar_note_for_pad(const tiles_pad_config_t *cfg) {
+    uint8_t string_index = (uint8_t)(cfg->row - 1u); /* 0..3 */
+    uint8_t fret = (uint8_t)(s_guitar_fret_offset + (cfg->col - 1u));
+    int note = (int)GUITAR_STRING_OPEN_NOTE[string_index] + (int)fret;
+    if (note > 127) {
+        note = 127;
+    }
+    return (uint8_t)note;
+}
+
+bool tiles_note_map_is_guitar_fret_marker_pad(uint8_t logical_pad, bool *out_is_octave) {
+    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
+    if (cfg == NULL) {
+        return false;
+    }
+    uint8_t fret = (uint8_t)(s_guitar_fret_offset + (cfg->col - 1u));
+    if (guitar_fret_is_octave_marker(fret)) {
+        if (out_is_octave != NULL) {
+            *out_is_octave = true;
+        }
+        return true;
+    }
+    if (guitar_fret_is_single_marker(fret)) {
+        if (out_is_octave != NULL) {
+            *out_is_octave = false;
+        }
+        return true;
+    }
+    return false;
+}
+
 /* Natural-note pitch classes (0=C, 1=C#, ... 11=B) -- true = natural
  * (white key), false = sharp/flat (black key). Indexed by ABSOLUTE pitch
  * class (a note number mod 12), not by key-relative scale degree.
@@ -226,6 +326,12 @@ uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
     const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
     if (cfg == NULL) {
         return 0u;
+    }
+
+    if (s_guitar_mode_active) {
+        /* A completely different note-mapping shape from the scale system
+         * below -- see this file's own "Guitar/bass fret mode" section. */
+        return guitar_note_for_pad(cfg);
     }
 
     /* Row 4 (bottom) is musical row 0, row 1 (top) is musical row 3 --

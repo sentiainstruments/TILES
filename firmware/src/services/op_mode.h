@@ -1,20 +1,22 @@
 #pragma once
 
 /*
- * Operation modes: melodic (the board's normal, default behavior),
- * chord, sequencer, and arpeggiator -- real feedback: "its time to
- * implement the operation modes. we have standard melodic, chord
- * trigger mode (does full chords on one click but not implemented yet),
+ * Operation modes: melodic (the board's normal, default behavior), chord,
+ * sequencer, and guitar/bass fret mode -- real feedback: "its time to
+ * implement the operation modes. we have standard melodic, chord trigger
+ * mode (does full chords on one click but not implemented yet),
  * sequencer mode..., arpeggiator mode.... we trigger those with the
- * rombus diamond button."
+ * rombus diamond button." Arp was later replaced outright by guitar mode
+ * (see the enum's own comment in op_mode.c) rather than kept as an
+ * unreachable stub alongside it.
  *
  * ---- Mode select: SW4 (diamond), single click -------------------------
  * A single click (press then release, not a hold) toggles between three
  * things: MELODIC + no menu -> opens the menu; the MENU -> cancels back
- * to melodic; any other active mode (chord/sequencer/arp) -> exits back
- * to melodic. To actually CHANGE modes, click to open the menu, then tap
- * a pad in the mode's row. Deliberately the simplest possible gesture --
- * real feedback compared this to game_mode.h's own menu trigger, but
+ * to melodic; any other active mode (chord/sequencer/guitar) -> exits
+ * back to melodic. To actually CHANGE modes, click to open the menu, then
+ * tap a pad in the mode's row. Deliberately the simplest possible gesture
+ * -- real feedback compared this to game_mode.h's own menu trigger, but
  * that one is a 700ms hold of 4 buttons together; this is a plain click
  * of one, since there's no second "away from melodic" state that a click
  * could ambiguously mean here the way there is for game mode (which
@@ -41,21 +43,50 @@
  * without disturbing this file's overall shape. Tapping any pad in a row
  * activates that row's mode (default variant) and closes the menu.
  * Row colors ("mode selector color" -- real feedback's own phrase):
- * melodic = Sentia magenta, chord = green, sequencer = red, arp = blue.
+ * melodic = Sentia magenta, chord = green, sequencer = red, guitar =
+ * amber/orange.
+ * **Only AVAILABLE rows actually light up or respond to a tap** -- real
+ * feedback: "the mode selector has all these lights always on. only
+ * availabkle modes shouyld be on meaning for now only sequencer, and the
+ * note mode" (now joined by guitar). Chord's row renders fully off and
+ * is a no-op to tap, the same "unavailable" language this file's own
+ * scale/pattern pickers already use for their own reserved slots.
  *
- * ---- Chord and arp: selectable, not yet implemented ----------------------
- * Real feedback named chord mode explicitly as "not implemented yet";
- * arp's real trigger logic (which pattern, which rate, which note order
- * from the currently-held notes) wasn't specified in enough detail to
- * build without guessing blind -- same "measure/spec before building"
- * discipline this codebase has followed all along. Both ARE selectable
- * from the menu (their row lights, tapping it "activates" the mode, the
- * diamond LED glows to confirm something other than melodic is
- * selected) but neither claims the pad grid -- see
- * tiles_op_mode_owns_pad_grid() below -- so touching pads keeps playing
- * completely normal melodic notes underneath until each mode's real
- * logic is built. A deliberate, honest stub, not a guess dressed up as
- * a feature.
+ * ---- Chord: selectable, not yet implemented ------------------------------
+ * Real feedback named chord mode explicitly as "not implemented yet" --
+ * still a real planned mode (not removed, unlike arp), just correctly
+ * marked unavailable in the picker for now (see above). Selecting it
+ * anyway (were its row ever made available again) wouldn't claim the pad
+ * grid -- see tiles_op_mode_owns_pad_grid() below -- so touching pads
+ * would keep playing completely normal melodic notes underneath until
+ * its real logic is built. A deliberate, honest stub, not a guess
+ * dressed up as a feature.
+ *
+ * ---- Guitar/bass fret mode ------------------------------------------------
+ * Real feedback: "lets imoplenment for note mode a guitar fret mode for 4
+ * stings with the structure of bass shapes, -+ change frets up and down.
+ * each row is a string each colum is a fret." Row = string (4 rows, 4
+ * strings -- a real bass's own string count), column = fret: a sliding
+ * 6-fret window into a modeled 24-fret neck, shifted by "-"/"+" one fret
+ * per press ("-+ change frets up and down"), standard 4-string bass
+ * tuning (E1/A1/D2/G2, each string a perfect 4th above the last -- the
+ * real, standard interval, not invented here). String-to-row order
+ * follows standard TAB notation (highest string on top, lowest on
+ * bottom) -- the closest existing convention to this exact row=string,
+ * column=fret/time shape. See services/note_map.h's own "Guitar/bass fret
+ * mode" section for the full note-mapping/fret-marker design.
+ * Deliberately reuses services/expression.c's and services/lighting.c's
+ * EXISTING touch/velocity/pitch-bend/haptics/idle-coloring pipelines
+ * wholesale rather than building a custom rendering path the way
+ * sequencer mode did -- this mode is architecturally much closer to
+ * "melodic mode with a different note-mapping function" than to a
+ * custom instrument, so it doesn't claim tiles_op_mode_owns_pad_grid()
+ * at all (unlike sequencer); the ONLY thing this file owns for guitar
+ * mode is "-"/"+" ownership (tiles_op_mode_owns_octave_buttons() below)
+ * and pushing the active/fret-offset state into services/note_map.h,
+ * which both services/expression.c (note computation) and
+ * services/lighting.c (idle fret-marker coloring) already read from
+ * directly.
  *
  * ---- Sequencer: reworked into a full multi-pattern workflow --------------
  * All 24 pads = 24 steps, real feedback: "lets build sequencermode with
@@ -145,7 +176,7 @@
  * yet).
  *
  * Future variations noted, not yet built: a two-lane mode (16 steps per
- * lane instead of 24 in one), a real gate-length parameter, chord/arp's
+ * lane instead of 24 in one), a real gate-length parameter, chord's
  * actual trigger logic, quantized pattern switching -- all left as
  * explicit follow-ups rather than guessed into this pass.
  */
@@ -168,10 +199,22 @@ void tiles_op_mode_scan(void);
  * services/game_mode.h, services/expression_control.h's sub-menu,
  * services/octave_control.h's transpose mode, and services/standby.h,
  * exactly like those features are already mutually exclusive with each
- * other. False while melodic, chord, or arp is selected (chord/arp are
- * still unimplemented stubs that pass touch straight through to normal
- * melodic play -- see this file's own header). */
+ * other. False while melodic, chord, or guitar is selected -- chord is
+ * still an unimplemented stub that passes touch straight through to
+ * normal melodic play, and guitar mode deliberately reuses that same
+ * "doesn't own the grid" pass-through pipeline on purpose (see this
+ * file's own "Guitar/bass fret mode" section above). */
 bool tiles_op_mode_owns_pad_grid(void);
+
+/* Broader than the accessor above: also true for guitar mode, which needs
+ * "-"/"+" ownership (so services/octave_control.h's own default
+ * octave-shift function yields -- see that file's own scan-gate) WITHOUT
+ * the "suppress new note strikes" side effect real pad-grid ownership
+ * carries elsewhere (services/expression.h checks owns_pad_grid() for
+ * exactly that, and guitar mode's whole design depends on real notes
+ * still playing normally through that same pipeline). Sequencer mode is
+ * covered either way, since it already legitimately owns the whole grid. */
+bool tiles_op_mode_owns_octave_buttons(void);
 
 /* True whenever sequencer mode is the currently active mode, regardless
  * of which sequencer sub-view (pattern picker, pitch assign, normal step
