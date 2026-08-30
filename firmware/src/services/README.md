@@ -2570,5 +2570,44 @@ not its code.
   **Not hardware-verified** -- the escalation timing, the Hall-depth-to-
   value mapping, the meter rendering, and the ratchet sub-hit timing are
   all first attempts.
+  **Second real-hardware pass found two more real problems, both fixed:**
+  real feedback: "the interactions and mapping are not intuitive yet...
+  time escalation is good but not for so many features. -+ aree not doing
+  properly single play. when stopped makes play, play when playing brings
+  head to start point again, stop when stopped brings head back to pad1,
+  stop when playing jsut stops and play head strays the same without
+  restarting."
+  1. **Ratchet moved off the hold-escalation timeline.** Three timing
+     tiers (pitch/probability/ratchet) on one continuous hold asked for
+     too much precision to land on the right one reliably. Ratchet now
+     has its own separate, immediate entry instead: holding circle FIRST,
+     then touching a step, opens ratchet-edit directly with no wait at
+     all (`edit_enter_ratchet()`, called from `seq_handle_step_taps()`'s
+     own check for circle already held on a fresh touch) -- an extension
+     of the SAME "circle = shift, modifies whatever you're doing" pattern
+     circle+"-"/"+" already established for length, not a new convention.
+     Pitch and probability still share the original two-tier hold escalate
+     (`OP_SEQ_PITCH_ASSIGN_HOLD_MS`/`OP_SEQ_PROBABILITY_HOLD_MS`) -- just
+     one fewer tier to land on now. This new circle+step combo needed the
+     same fix circle+"-"/"+" already needed: `handle_circle_tap()`'s
+     mid-hold tap-candidacy cancellation now also cancels on ANY pad
+     touch (`any_pad_touched()`), not just minus/plus, since circle's own
+     press already happens before the step is touched in this ordering
+     too.
+  2. **"+"/"-" resume vs. restart were conflated.** Real feedback pinned
+     down four DISTINCT required behaviors precisely: "+" while stopped
+     must RESUME exactly where a plain stop left the playhead (not reset
+     it); "+" while already playing must RESTART from step 0; "-" while
+     playing must just stop in place; "-" while already stopped (a second
+     stop) rewinds to step 0. The first three of these were already
+     correct, but "+" while stopped was silently behaving like a restart
+     too, because the one `s_seq_pending_start` flag routed BOTH cases
+     through `seq_reset()` (always step 0). Fixed with a second flag,
+     `s_seq_pending_restart`, set true only for a genuine restart (fresh
+     sequencer-mode entry, or "+" while already playing) and false for a
+     plain resume ("+" while stopped) -- `seq_advance_clock()`'s pending-
+     start handling now branches on it, calling the new
+     `seq_resume_current_step()` (re-fires wherever the playhead already
+     was, no position reset) instead of `seq_reset()` for the resume case.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

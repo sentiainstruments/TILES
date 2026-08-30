@@ -275,8 +275,19 @@ static bool s_seq_prev_pad_touched[TILES_NUM_PADS];
  * conected" -- confirmed meaning: a manual (re-)start doesn't just jump
  * in at whatever phase the clock happens to be at, it waits for the next
  * beat boundary. Set by seq_start() (entering sequencer mode) and by "+"
- * (handle_transport_and_length()); consumed by seq_advance_clock(). */
+ * (handle_transport_and_length()); consumed by seq_advance_clock().
+ * s_seq_pending_restart distinguishes what happens once that boundary
+ * arrives -- real feedback pinned down the exact required behavior:
+ * "play when playing brings head to start point again" (restart, step 0)
+ * vs "when stopped makes play" with the head otherwise left wherever a
+ * plain stop left it (resume IN PLACE, no reset) -- these are genuinely
+ * different actions, not the same one applied at different times, so one
+ * pending flag isn't enough on its own. True for a genuine restart
+ * (seq_start()'s own fresh entry, and "+" pressed WHILE already playing);
+ * false for a plain resume ("+" pressed while stopped, not preceded by a
+ * double-stop rewind). */
 static bool s_seq_pending_start;
+static bool s_seq_pending_restart;
 
 /* Ratchet playback state for the CURRENT step only -- reset every time a
  * new step is entered (seq_enter_step()), consumed by seq_advance_clock()
@@ -291,22 +302,32 @@ static uint32_t s_seq_next_ratchet_pulse;
  * Real feedback: "we need a way to assign pitches to the notes"; later,
  * asked for as controllable features rather than fixed values: "yes per
  * step probablility but we should be able to turn that on and off, 2
- * retrigger yess but we need to be able to control that feature."
- * Holding a step pad opens this (seq_handle_step_taps() detects the
- * initial OP_SEQ_PITCH_ASSIGN_HOLD_MS threshold) -- continuing to hold
- * the SAME pad past two further thresholds ESCALATES through pitch ->
- * probability -> ratchet, mirroring services/standby.h's own circle-hold
- * escalation (4s screensaver -> 8s deep sleep) rather than inventing a
- * new gesture shape. Pitch stays a genuine TOGGLE once opened (real
- * feedback from the previous round: "it should be a toggle... not a
- * momentary thing") -- releasing the held pad before escalating leaves it
- * open, waiting for a fresh tap on any pad to commit a note. Probability
- * and ratchet are a live DIAL instead (Hall depth of the SAME held pad
- * maps continuously to the value while still held, committing simply by
- * however the value stood at release) -- a fundamentally different shape
- * from pitch's discrete pick-from-24, and one that doesn't have pitch's
- * "had to keep two fingers down" problem since only the one held pad is
- * ever needed. Triangle cancels out of any of the three with no change
+ * retrigger yess but we need to be able to control that feature." A
+ * first pass escalated through THREE hold-duration tiers (pitch ->
+ * probability -> ratchet) mirroring services/standby.h's own circle-hold
+ * escalation -- real feedback after trying it: "time escalation is good
+ * but not for so many features." Reworked to two DIFFERENT entry
+ * mechanisms instead of one long timeline:
+ * - Pitch and probability still escalate on a single hold
+ *   (seq_handle_step_taps() detects OP_SEQ_PITCH_ASSIGN_HOLD_MS,
+ *   handle_edit_mode() itself escalates to OP_SEQ_PROBABILITY_HOLD_MS) --
+ *   only two tiers now, easier to land on reliably.
+ * - Ratchet is now a SEPARATE, immediate combo instead of a third timing
+ *   tier: holding circle (this board's established "shift") FIRST, then
+ *   touching a step, enters ratchet-edit directly, no wait at all --
+ *   matches how circle+"-"/"+" already means "the shifted version of
+ *   this action" elsewhere in this file, so it's an extension of an
+ *   already-learned convention rather than a new one.
+ * Pitch stays a genuine TOGGLE once opened (real feedback from an
+ * earlier round: "it should be a toggle... not a momentary thing") --
+ * releasing the held pad before escalating leaves it open, waiting for a
+ * fresh tap on any pad to commit a note. Probability and ratchet are a
+ * live DIAL instead (Hall depth of the SAME held pad maps continuously
+ * to the value while still held, committing simply by however the value
+ * stood at release) -- a fundamentally different shape from pitch's
+ * discrete pick-from-24, and one that doesn't have pitch's "had to keep
+ * two fingers down" problem since only the one held pad is ever needed.
+ * Triangle cancels out of any of the three with no change
  * (handle_triangle_click()'s own branch). */
 typedef enum {
     OP_SEQ_EDIT_NONE = 0,
@@ -317,7 +338,6 @@ typedef enum {
 
 #define OP_SEQ_PITCH_ASSIGN_HOLD_MS 350u
 #define OP_SEQ_PROBABILITY_HOLD_MS 1200u
-#define OP_SEQ_RATCHET_HOLD_MS 2200u
 
 static uint32_t s_seq_step_touch_started_ms[TILES_NUM_PADS]; /* 0 = not currently timing a hold */
 static op_seq_edit_mode_t s_seq_edit_mode;
@@ -375,6 +395,7 @@ static op_seq_pattern_t *active_pattern(void) {
 }
 
 static void edit_enter(uint8_t step, uint32_t started_ms); /* defined below, used by seq_handle_step_taps()'s own hold detection */
+static void edit_enter_ratchet(uint8_t step); /* defined below, used by seq_handle_step_taps()'s own circle+touch detection */
 
 /* Uses the channel/note captured at note-on time (below), not whatever
  * active_pattern() currently resolves to -- a pattern switch mid-note
@@ -449,6 +470,16 @@ static void seq_reset(uint32_t now_pulse) {
     seq_enter_step(0u);
 }
 
+/* The other half of s_seq_pending_restart's distinction -- resumes
+ * whatever step the playhead was already parked on (re-firing it fresh,
+ * including a new probability roll/ratchet cycle, since from the
+ * player's perspective this IS a new occurrence of that step) instead of
+ * jumping back to step 0. */
+static void seq_resume_current_step(uint32_t now_pulse) {
+    s_seq_step_started_at_pulse = now_pulse;
+    seq_enter_step(s_seq_current_step);
+}
+
 /* Called every time sequencer mode is (re-)entered from the menu --
  * deliberately does NOT clear any pattern's step_armed[]: leaving to
  * melodic mode to check something and coming back would otherwise wipe
@@ -463,6 +494,7 @@ static void seq_start(void) {
     s_seq_note_sounding = false;
     s_seq_step_started_at_pulse = 0u;
     s_seq_pending_start = true;
+    s_seq_pending_restart = true; /* fresh entry always starts from step 0 */
     s_seq_edit_mode = OP_SEQ_EDIT_NONE;
     s_pattern_menu_visible = false;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
@@ -476,7 +508,10 @@ static void seq_start(void) {
  * "Per-step editing" section) -- the arm-toggle on touch-down already
  * fired for this same touch, so holding a step both toggles it AND, if
  * you keep holding, also lets you edit it; these don't conflict, they're
- * just both true for the same gesture. */
+ * just both true for the same gesture. A fresh touch while circle is
+ * ALREADY held instead goes straight to ratchet-edit, no hold needed --
+ * see this file's own "Per-step editing" section for why ratchet moved
+ * off the hold-escalation timeline entirely. */
 static void seq_handle_step_taps(uint32_t now_ms) {
     op_seq_pattern_t *pat = active_pattern();
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
@@ -485,6 +520,10 @@ static void seq_handle_step_taps(uint32_t now_ms) {
         bool was_touched = s_seq_prev_pad_touched[step];
         if (touched && !was_touched) {
             pat->step_armed[step] = !pat->step_armed[step];
+            if (tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID)) {
+                edit_enter_ratchet(step);
+                return; /* grid ownership just changed under this loop -- stop iterating it */
+            }
             s_seq_step_touch_started_ms[step] = now_ms;
         } else if (!touched) {
             s_seq_step_touch_started_ms[step] = 0u;
@@ -522,11 +561,21 @@ static void seq_advance_clock(tiles_midi_clock_state_t clock) {
          * pulse_count % OP_SEQ_CLOCKS_PER_STEP happens to be right now. A
          * fresh Start/tap-tempo establishment already took the branch
          * above instead (start_edge implies phase-zero already), so this
-         * only ever waits for a resume mid-stream. */
+         * only ever waits for a resume mid-stream.
+         * s_seq_pending_restart decides WHAT happens once that boundary
+         * arrives -- real feedback pinned this down precisely: "play when
+         * playing brings head to start point again" (restart, step 0) is
+         * a genuinely different action from "when stopped makes play"
+         * (resume exactly where a plain stop left it, no reset). */
         if ((clock.pulse_count % OP_CLOCK_PULSES_PER_BEAT) != 0u) {
             return;
         }
-        seq_reset(clock.pulse_count);
+        s_seq_pending_start = false;
+        if (s_seq_pending_restart) {
+            seq_reset(clock.pulse_count);
+        } else {
+            seq_resume_current_step(clock.pulse_count);
+        }
         return;
     }
 
@@ -646,6 +695,17 @@ static void edit_enter(uint8_t step, uint32_t started_ms) {
     }
 }
 
+/* Ratchet's own, separate entry point -- real feedback: "time escalation
+ * is good but not for so many features." Reached directly (circle held,
+ * then the step touched -- see seq_handle_step_taps()'s own check), no
+ * hold-duration wait at all, rather than a third escalation tier off the
+ * same timeline pitch/probability already share. */
+static void edit_enter_ratchet(uint8_t step) {
+    seq_end_current_note();
+    s_seq_edit_mode = OP_SEQ_EDIT_RATCHET;
+    s_seq_edit_step = step;
+}
+
 static void edit_exit(void) {
     s_seq_edit_mode = OP_SEQ_EDIT_NONE;
     /* Re-syncs seq_handle_step_taps()'s own touch tracking so a pad
@@ -736,10 +796,6 @@ static void handle_edit_mode(uint32_t now_ms) {
     if (s_seq_edit_mode == OP_SEQ_EDIT_PROBABILITY) {
         if (!edit_pad_touched) {
             edit_exit();
-            return;
-        }
-        if ((now_ms - s_seq_edit_started_ms) >= OP_SEQ_RATCHET_HOLD_MS) {
-            s_seq_edit_mode = OP_SEQ_EDIT_RATCHET;
             return;
         }
         active_pattern()->step_probability_percent[s_seq_edit_step] = probability_percent_from_depth(tiles_hall_get_depth(edit_pad));
@@ -1303,9 +1359,23 @@ static void handle_triangle_click(void) {
  * `mode_ok` -- tapping a tempo while mid-edit doesn't make sense anyway,
  * and it frees up a plain circle CLICK while the pattern picker is open
  * to mean something else instead: toggling that pattern's probability_
- * enabled (see the release branch below). */
+ * enabled (see the release branch below).
+ * Mid-hold cancellation ALSO checks for any pad touch now, not just
+ * minus/plus -- real feedback moved ratchet-edit onto a "hold circle,
+ * then touch a step" combo (see seq_handle_step_taps()'s own check),
+ * which is exactly the same "circle-first" ordering length-adjust
+ * already needed this exact fix for. */
 static uint32_t s_circle_press_ms;
 static bool s_circle_press_pending_tap;
+
+static bool any_pad_touched(void) {
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        if (tiles_touch_is_touched(pad)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 static void handle_circle_tap(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
@@ -1321,9 +1391,10 @@ static void handle_circle_tap(uint32_t now_ms) {
     }
 
     if (held && s_circle_press_pending_tap &&
-        (tiles_button_is_pressed(TILES_MINUS_BUTTON_ID) || tiles_button_is_pressed(TILES_PLUS_BUTTON_ID))) {
-        /* This hold became a length-adjust combo instead -- cancel
-         * candidacy so it doesn't ALSO register as a spurious tap. */
+        (tiles_button_is_pressed(TILES_MINUS_BUTTON_ID) || tiles_button_is_pressed(TILES_PLUS_BUTTON_ID) || any_pad_touched())) {
+        /* This hold became a length-adjust or ratchet-edit combo instead
+         * -- cancel candidacy so it doesn't ALSO register as a spurious
+         * tap. */
         s_circle_press_pending_tap = false;
     }
 
@@ -1407,8 +1478,11 @@ static void handle_transport_and_length(uint32_t now_ms) {
                  * Re-arming pending-start quantizes the restart to the
                  * next beat boundary exactly like a fresh start would
                  * (see seq_advance_clock()), rather than snapping to step
-                 * 0 mid-beat. */
+                 * 0 mid-beat. pending_restart=true is what makes this
+                 * land back on step 0 rather than replaying wherever the
+                 * playhead already was. */
                 s_seq_pending_start = true;
+                s_seq_pending_restart = true;
             } else if (tiles_midi_clock_tap_tempo_established() || tiles_midi_clock_external_active(now_ms)) {
                 /* Only meaningful once a tempo actually exists --
                  * otherwise this would set `running` true with nothing
@@ -1417,9 +1491,14 @@ static void handle_transport_and_length(uint32_t now_ms) {
                  * resume to the next beat boundary instead of fast-
                  * forwarding through however many pulses accumulated
                  * while stopped (pulse_count keeps advancing even while
-                 * !running -- see midi_clock.h's own header). */
+                 * !running -- see midi_clock.h's own header).
+                 * pending_restart=false: real feedback: "when stopped
+                 * makes play" -- resumes exactly where a plain stop left
+                 * the playhead (or step 0, if a double-stop rewound it
+                 * first), never resetting position on its own. */
                 tiles_midi_clock_set_running(true);
                 s_seq_pending_start = true;
+                s_seq_pending_restart = false;
             }
         }
         s_plus_used_as_combo = false;
@@ -1478,6 +1557,7 @@ void tiles_op_mode_init(void) {
     s_seq_note_sounding = false;
     s_seq_step_started_at_pulse = 0u;
     s_seq_pending_start = false;
+    s_seq_pending_restart = false;
     s_seq_ratchet_remaining = 0u;
     s_seq_edit_mode = OP_SEQ_EDIT_NONE;
     s_pattern_menu_visible = false;

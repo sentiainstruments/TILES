@@ -84,13 +84,17 @@
  *   trig, play the note" workflow real hardware step sequencers use,
  *   adapted to touch-only hardware with no encoders. Real feedback: "we
  *   need a way to assign pitches to the notes." Continuing to hold the
- *   same pad escalates into two further per-step edits instead of a new
- *   gesture: probability (a per-pattern-togglable chance a step's
- *   otherwise-armed occurrence actually fires) and ratchet (additional
- *   retriggers within that same step), both set by Hall depth as a live
- *   dial rather than pitch's discrete pick -- real feedback: "yes per
- *   step probablility but we should be able to turn that on and off, 2
- *   retrigger yess but we need to be able to control that feature."
+ *   same pad escalates into one further per-step edit, probability (a
+ *   per-pattern-togglable chance a step's otherwise-armed occurrence
+ *   actually fires), set by Hall depth as a live dial rather than
+ *   pitch's discrete pick -- real feedback: "yes per step probablility
+ *   but we should be able to turn that on and off." Ratchet (additional
+ *   retriggers within that same step, real feedback: "2 retrigger yess
+ *   but we need to be able to control that feature") is a SEPARATE
+ *   gesture instead of a third hold tier -- real feedback after trying
+ *   three tiers on one timeline: "time escalation is good but not for so
+ *   many features" -- reached by holding circle first, then touching the
+ *   step, no wait at all.
  * - **Manual transport + length**: SW1 "-"/SW2 "+" (otherwise unused in
  *   sequencer mode, since services/octave_control.h's own default
  *   octave-shift function yields whenever this module owns the grid)
