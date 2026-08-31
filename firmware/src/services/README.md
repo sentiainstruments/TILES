@@ -2903,10 +2903,28 @@ not its code.
      off, unchanged. Real feedback also separately described "something
      triggering animations when clicking the diamond menu" -- no root
      cause was found for that in isolation (menu_enter()/render_menu()'s
-     own state resets were reviewed and look correct), so it's flagged
-     here as **not confirmed fixed**; it may simply have been this same
-     flat-color-vs-pulse mismatch read as an "animation," or may be a
-     separate issue that needs a more specific description to chase down
-     if it persists after this round.
+     own state resets were reviewed and look correct); **follow-up: root
+     cause found, see `standby.c`'s own entry below.**
+- `standby.c` -- root-caused the "something triggering animations when
+  clicking the diamond menu" report above. It wasn't the click itself:
+  `tiles_standby_scan()`'s automatic idle timeout (60s outside sequencer
+  mode) doesn't know or care that `op_mode.c` currently has a sub-view
+  open, only whether there's been real touch/button/pedal input --
+  reading a menu takes none of those, so simply pausing to look at the
+  mode picker (or the scale picker, pattern picker, or a per-step pitch/
+  probability/ratchet editor) for 60+ real seconds let the idle timer
+  elapse mid-browse, and standby's own screensaver animation silently
+  replaced the menu (`tiles_op_mode_scan()` yields the instant
+  `tiles_standby_is_active()` goes true -- see `other_feature_owns_
+  input()` -- and `tiles_standby_scan()` runs immediately after it in
+  `main.c`'s scan order, so the very same tick's screensaver frame
+  overwrites whatever the menu had just drawn). Fixed with a new
+  `tiles_op_mode_has_menu_open()` accessor (true for any of that file's
+  four sub-views) that now holds off the AWAKE -> STANDBY idle-timeout
+  check entirely while true, refreshing `s_last_activity_ms` every tick
+  the same way genuine touch/button/pedal activity already does -- the
+  same shape `tiles_op_mode_is_sequencer_active()` already established
+  for giving sequencer mode its own longer timeout, extended here to "a
+  menu is open" rather than "a particular mode is active."
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

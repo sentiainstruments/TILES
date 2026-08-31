@@ -1910,3 +1910,7 @@ bool tiles_op_mode_owns_octave_buttons(void) {
 bool tiles_op_mode_is_sequencer_active(void) {
     return s_active_mode == OP_MODE_SEQUENCER;
 }
+
+bool tiles_op_mode_has_menu_open(void) {
+    return s_menu_visible || s_scale_menu_visible || s_pattern_menu_visible || s_seq_edit_mode != OP_SEQ_EDIT_NONE;
+}

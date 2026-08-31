@@ -223,3 +223,17 @@ bool tiles_op_mode_owns_octave_buttons(void);
  * idle gets -- real feedback: "sleep screensaver should be set to 20
  * minute in sequencer mode since its a more stratic thing." */
 bool tiles_op_mode_is_sequencer_active(void);
+
+/* True while any of this module's own sub-views is open: the top-level
+ * mode picker, melodic's scale picker, sequencer's pattern picker, or a
+ * sequencer per-step pitch/probability/ratchet editor. Used by
+ * services/standby.h to hold off its own automatic idle timeout while
+ * one of these is showing -- real feedback: "something triggering
+ * animations when clicking the diamond menu" turned out to be
+ * services/standby.h's plain 60-second idle timer elapsing while the
+ * mode picker sat open with no touch on it (reading a menu takes no
+ * touch input at all), silently replacing the menu with the screensaver
+ * animation mid-browse. The same class of interruption applies to any of
+ * this file's other sub-views for the same reason, not just the one that
+ * happened to get reported first. */
+bool tiles_op_mode_has_menu_open(void);

@@ -2369,6 +2369,22 @@ void tiles_standby_scan(void) {
     }
 
     if (s_state == TILES_STANDBY_STATE_AWAKE) {
+        /* Real feedback: "something triggering animations when clicking
+         * the diamond menu" -- root cause was this idle timer itself,
+         * elapsing while a services/op_mode.h sub-view (the mode picker,
+         * most commonly) sat open with no touch on it, silently
+         * replacing it with the screensaver mid-browse. Reading a menu
+         * takes no touch at all, so holding off the timeout entirely
+         * while one is open -- refreshing s_last_activity_ms every tick
+         * it's open, same effect real_input_active() has for genuine
+         * touch/button/pedal activity -- is the fix, not a longer
+         * timeout (this isn't sequencer's "can legitimately run
+         * unattended" case, it's "the player is actively reading the
+         * screen right now"). */
+        if (tiles_op_mode_has_menu_open()) {
+            s_last_activity_ms = now_ms;
+            return;
+        }
         uint32_t idle_timeout =
             tiles_op_mode_is_sequencer_active() ? TILES_STANDBY_SEQUENCER_IDLE_TIMEOUT_MS : TILES_STANDBY_IDLE_TIMEOUT_MS;
         if (now_ms - s_last_activity_ms >= idle_timeout) {
