@@ -42,5 +42,13 @@ companion-app UI, diagnostics — hand-rolls its own copy of either.
 
 ## Status
 
-Scaffolding only. Modules currently contain placeholder READMEs describing
-intent; implementation starts once each piece is designed in conversation.
+`firmware/` is real, under active iterative development against real
+Rev A0 hardware — see `firmware/README.md`'s own Status section and
+`firmware/src/services/README.md` for the full history. `companion-app/`,
+`shared/`, and `tools/` are still scaffolding: placeholder READMEs
+describing intent, implementation not yet started.
+
+## For agents
+
+Start at `AGENTS.md` — it routes to the module-specific doc you actually
+need instead of duplicating it here.

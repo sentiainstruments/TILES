@@ -26,9 +26,15 @@ cmake -DPICO_BOARD=pico2 ..
 make -j
 ```
 
-Produces `src/sentia_tiles_firmware.uf2` — flash by holding BOOTSEL while
-plugging in the Pico 2, then copying the `.uf2` to the mass-storage
-device that appears.
+Produces `src/sentia_tiles_firmware.uf2`. Flash with `picotool`, not
+drag-and-drop copy to the mass-storage device — the latter was found
+unreliable on this hardware (see `AGENTS.md` for why and the full flash
+workflow). `brew install picotool`, then, with the board in BOOTSEL
+mode:
+
+```bash
+picotool load -x -v --ignore-partitions build/src/sentia_tiles_firmware.uf2
+```
 
 ## Running the pad-table test (no toolchain needed)
 
