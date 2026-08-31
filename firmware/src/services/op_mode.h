@@ -8,9 +8,25 @@
  * sequencer mode..., arpeggiator mode.... we trigger those with the
  * rombus diamond button." Arp was later replaced outright by guitar mode
  * (see the enum's own comment in op_mode.c) rather than kept as an
- * unreachable stub alongside it.
+ * unreachable stub alongside it. (At the time of that quote, mode-select
+ * really was diamond -- see the swap note below.)
  *
- * ---- Mode select: SW4 (diamond), single click -------------------------
+ * ---- SW3 (triangle) <-> SW4 (diamond): functionality swapped -----------
+ * Real feedback: "switch triangle and diamond functionality swapp them
+ * fully." Everything below describes CURRENT behavior post-swap: SW3/
+ * triangle is now the top-level mode-select click (was SW4/diamond), and
+ * SW4/diamond is now each mode's own per-mode sub-menu click (was SW3/
+ * triangle) -- a full, symmetric reversal of the two buttons' roles, not
+ * a partial remap. Every identifier in op_mode.c reflects this (e.g.
+ * `handle_triangle_click()` is the mode-picker handler, `handle_diamond_
+ * click()` is the sub-menu handler -- exactly backwards from what their
+ * names alone would suggest before you know about this swap). Quotes
+ * elsewhere in this file that predate the swap and still say "diamond"
+ * for mode-select or "triangle" for sub-menu (like the one just above)
+ * are left verbatim as accurate historical record of what was actually
+ * said at the time, not stale documentation of current behavior.
+ *
+ * ---- Mode select: SW3 (triangle), single click -------------------------
  * A single click (press then release, not a hold) toggles between three
  * things: MELODIC + no menu -> opens the menu; the MENU -> cancels back
  * to melodic; any other active mode (chord/sequencer/guitar) -> exits
@@ -21,12 +37,12 @@
  * of one, since there's no second "away from melodic" state that a click
  * could ambiguously mean here the way there is for game mode (which
  * needed a hold to not eat every accidental brush of all 4 during normal
- * play -- SW4 alone has no such normal-play collision).
+ * play -- SW3 alone has no such normal-play collision).
  *
  * Guarded against game_mode.h's own SW3+SW4+SW5+SW6 entry combo: since
- * SW4 is one of that combo's four buttons, a diamond press that also
- * sees SW3 go down before release is never treated as this module's own
- * click -- see s_diamond_press_had_conflict in op_mode.c. The two
+ * SW3 is one of that combo's four buttons, a triangle press that also
+ * sees SW4 go down before release is never treated as this module's own
+ * click -- see s_triangle_press_had_conflict in op_mode.c. The two
  * features are otherwise fully mutually exclusive (see
  * tiles_op_mode_owns_pad_grid() below and game_mode.c's gm_combo_held(),
  * which now also refuses to fire while this module owns the grid).
@@ -101,13 +117,15 @@
  * step sequencers, resulting in four new pieces beyond the original
  * single-pattern build:
  *
- * - **4 patterns**, one per pad row, picked via SW3 (triangle)'s own
- *   sub-menu while sequencer mode is active -- real feedback: "sub menu
- *   triangle is reserved for other stuff... maybe in triangle we can
- *   select midi channels for multiple patterns." Each pattern keeps its
- *   own armed steps, per-step pitch overrides, length, and MIDI output
- *   channel; switching patterns is immediate (no quantizing), always
- *   silencing whatever was sounding on the old pattern's channel first.
+ * - **4 patterns**, one per pad row, picked via SW4 (diamond)'s own
+ *   sub-menu while sequencer mode is active (SW3/triangle at the time of
+ *   the quote below -- see this file's own swap note above) -- real
+ *   feedback: "sub menu triangle is reserved for other stuff... maybe in
+ *   triangle we can select midi channels for multiple patterns." Each
+ *   pattern keeps its own armed steps, per-step pitch overrides, length,
+ *   and MIDI output channel; switching patterns is immediate (no
+ *   quantizing), always silencing whatever was sounding on the old
+ *   pattern's channel first.
  * - **Pitch assignment**: holding a step opens a note-picker view of the
  *   whole grid (the same root/natural/sharp coloring melodic idle uses)
  *   -- tapping any pad sets that step's pitch to that pad's current
@@ -185,7 +203,8 @@
 
 void tiles_op_mode_init(void);
 
-/* Handles the diamond click, menu pad taps, and (while sequencer mode is
+/* Handles the triangle click (mode-select), the diamond click (each
+ * mode's own sub-menu), menu pad taps, and (while sequencer mode is
  * active) step-arm taps + clock-driven playback. Call every main-loop
  * iteration, after tiles_buttons_scan()/tiles_touch_scan() (fresh input)
  * and services/midi_clock.h's tiles_midi_clock_scan() (fresh clock

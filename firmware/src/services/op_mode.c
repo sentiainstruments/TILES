@@ -84,7 +84,7 @@ typedef enum {
 #define OP_MENU_GUITAR_G 0.5f
 #define OP_MENU_GUITAR_B 0.0f
 
-/* Diamond LED glow while the top-level mode picker is actually open --
+/* Triangle LED glow while the top-level mode picker is actually open --
  * the button itself is monochrome PWM (not addressable RGB like the
  * pads), so it can't show the mode-selector colors above; this is just a
  * "you're picking a mode right now" brightness cue, same reasoning
@@ -92,11 +92,14 @@ typedef enum {
  * "the led for modes should light up on menu on not alwayus" -- this
  * USED to also glow continuously (a since-removed OP_DIAMOND_LED_MODE_
  * ACTIVE_LEVEL) for the entire time any non-melodic mode was active, not
- * just while browsing the picker; real feedback reversed that. */
-#define OP_DIAMOND_LED_MENU_LEVEL 1.0f
-/* Same idea, triangle's own LED, lit while its per-mode sub-menu (e.g.
+ * just while browsing the picker; real feedback reversed that. (Named
+ * for diamond back then -- see this file's own note on the later
+ * triangle/diamond functionality swap for why the mode-picker LED is
+ * named for triangle now instead.) */
+#define OP_TRIANGLE_LED_MENU_LEVEL 1.0f
+/* Same idea, diamond's own LED, lit while its per-mode sub-menu (e.g.
  * melodic's scale picker) is showing. */
-#define OP_TRIANGLE_LED_SUBMENU_LEVEL 1.0f
+#define OP_DIAMOND_LED_SUBMENU_LEVEL 1.0f
 /* Real feedback: "the led for start and top shoukld light up as toggles
  * respectively" -- SW1 "-"/SW2 "+" light up as a two-state transport
  * indicator (see render_sequencer()'s own use) rather than sitting dark
@@ -181,29 +184,30 @@ static float menu_selected_pulse_level(uint32_t now_ms) {
 static tiles_op_mode_t s_active_mode;
 static bool s_menu_visible;
 
-static bool s_diamond_was_held;
-/* True if SW3 was ALSO seen held at any point during the CURRENT diamond
+static bool s_triangle_was_held;
+/* True if SW4 was ALSO seen held at any point during the CURRENT triangle
  * press -- see this file's own header on why (game_mode.h's entry combo
  * is SW3+SW4+SW5+SW6; without this, imperfectly-simultaneous presses of
- * that combo could misread as a plain diamond click, the identical
+ * that combo could misread as a plain triangle click, the identical
  * collision real feedback already found once between this board's
  * circle+square gestures and that same combo). Checked on release, not
  * press, same "can't know it's a genuine click until it's over" reasoning
  * services/standby.c's own circle-short-tap wake fix uses. */
-static bool s_diamond_press_had_conflict;
+static bool s_triangle_press_had_conflict;
 
 static bool s_menu_prev_pad_touched[TILES_NUM_PADS];
 
-/* ---- Per-mode sub-menu (SW3/triangle) ---------------------------------
+/* ---- Per-mode sub-menu (SW4/diamond, SW3/triangle at the time of the
+ * quote below -- see this file's own swap note in op_mode.h) -----------
  * Real feedback: "the triangle is sub menues per each mode so that
  * button toggles its onw menue in each mode. for melodic it toggles
  * different scale modes." Only melodic's sub-menu (the scale picker) is
  * built -- other modes don't have one yet, same "selectable but not
- * implemented" spirit as chord/arp themselves; handle_triangle_click()
+ * implemented" spirit as chord/arp themselves; handle_diamond_click()
  * below is the extension point once they do. */
 static bool s_scale_menu_visible;
-static bool s_triangle_was_held;
-static bool s_triangle_press_had_conflict; /* see s_diamond_press_had_conflict's own comment -- same reasoning, watches diamond instead of triangle */
+static bool s_diamond_was_held;
+static bool s_diamond_press_had_conflict; /* see s_triangle_press_had_conflict's own comment -- same reasoning, watches diamond instead of triangle */
 static bool s_scale_menu_prev_pad_touched[TILES_NUM_PADS];
 
 /* Tap-tempo press tracking -- see this file's own "Master tap tempo"
@@ -371,8 +375,8 @@ static uint32_t s_seq_next_ratchet_pulse;
  * stood at release) -- a fundamentally different shape from pitch's
  * discrete pick-from-24, and one that doesn't have pitch's "had to keep
  * two fingers down" problem since only the one held pad is ever needed.
- * Triangle cancels out of any of the three with no change
- * (handle_triangle_click()'s own branch).
+ * Diamond cancels out of any of the three with no change
+ * (handle_diamond_click()'s own branch).
  * A plain tap's own armed-toggle resolves on RELEASE, not press -- real
  * feedback: "when setting the pitch of pad we are still affecting note
  * on." Toggling on press couldn't yet tell a tap from the start of a
@@ -432,9 +436,9 @@ static bool s_pitch_edit_prev_pad_touched[TILES_NUM_PADS]; /* only meaningful du
  * conversely still letting the release motion sneak in a bad write. */
 #define OP_SEQ_EDIT_RELEASE_GUARD_DEPTH 60u
 
-/* ---- Pattern/channel picker (SW3/triangle, sequencer mode) -------------
- * Same role triangle already plays in melodic mode (the scale picker) --
- * see handle_triangle_click()'s own branch on s_active_mode. Row colors
+/* ---- Pattern/channel picker (SW4/diamond, sequencer mode) --------------
+ * Same role diamond already plays in melodic mode (the scale picker) --
+ * see handle_diamond_click()'s own branch on s_active_mode. Row colors
  * are shades within sequencer's own red identity (the mode-picker's
  * "sequencer = red" real feedback) rather than melodic/chord/arp's own
  * colors, so picking a pattern never reads as switching modes. */
@@ -771,7 +775,7 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
      * alwayus." It used to glow continuously (OP_DIAMOND_LED_MODE_
      * ACTIVE_LEVEL) for the whole time any non-melodic mode was active;
      * now it only ever lights while the top-level mode picker itself is
-     * actually open (render_menu()'s own OP_DIAMOND_LED_MENU_LEVEL). */
+     * actually open (render_menu()'s own OP_TRIANGLE_LED_MENU_LEVEL). */
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         float level = 0.0f;
         if (col == TILES_CIRCLE_BUTTON_COL) {
@@ -871,8 +875,8 @@ static uint8_t ratchet_count_from_depth(uint16_t depth) {
  * current note, a harmless no-op unless it had a different override
  * before, in which case it resets to default) commits that pad's current
  * note and closes, same "closes on selection" rule this file's other
- * pickers use. Triangle is the escape hatch for "back out with no change
- * at all" (handle_triangle_click()'s own branch).
+ * pickers use. Diamond is the escape hatch for "back out with no change
+ * at all" (handle_diamond_click()'s own branch).
  * Probability/ratchet: the OPPOSITE shape, a live DIAL -- Hall depth of
  * the SAME held pad maps continuously to the value while still held
  * (see probability_percent_from_depth()/ratchet_count_from_depth()
@@ -1022,7 +1026,7 @@ static void render_edit_mode(uint32_t now_ms, bool transport_running) {
     }
 }
 
-/* ---- Pattern/channel picker (SW3/triangle, sequencer mode) -------------- */
+/* ---- Pattern/channel picker (SW4/diamond, sequencer mode) --------------- */
 
 static void pattern_row_color(uint8_t pattern_index, float *r, float *g, float *b) {
     switch (pattern_index) {
@@ -1067,8 +1071,8 @@ static void render_pattern_menu(uint32_t now_ms, bool transport_running) {
     }
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         float level = 0.0f;
-        if (col == TILES_TRIANGLE_BUTTON_COL) {
-            level = OP_TRIANGLE_LED_SUBMENU_LEVEL;
+        if (col == TILES_DIAMOND_BUTTON_COL) {
+            level = OP_DIAMOND_LED_SUBMENU_LEVEL;
         } else if (col == TILES_MINUS_BUTTON_COL) {
             level = transport_running ? 0.0f : OP_TRANSPORT_LED_LEVEL;
         } else if (col == TILES_PLUS_BUTTON_COL) {
@@ -1153,20 +1157,23 @@ static void menu_exit(void) {
         tiles_buttons_set_standby_active(false);
     }
     /* Real bug found from real feedback: "load a fix for exiting menues,
-     * led stays toggled." Diamond has a PERMANENT override claimed (see
-     * tiles_op_mode_init()), so buttons.c's own refresh_all_button_leds()
-     * (run by tiles_buttons_set_standby_active(false) above) deliberately
-     * SKIPS it -- "that controller's own next scan repaints it correctly"
-     * is buttons.h's own documented contract, but nothing was actually
-     * doing that repaint here. Canceling the menu with a diamond click
-     * (as opposed to SELECTING a mode, which routes through
-     * set_active_mode() -- that function's own trailing override write
-     * already covers this) left diamond stuck at render_menu()'s own
-     * OP_DIAMOND_LED_MENU_LEVEL (bright) forever, since nothing wrote to
-     * it again afterward. The menu is only ever reachable from melodic
-     * mode to begin with, so 0.0f (melodic's own "diamond off" state) is
-     * always the correct value to restore here, unconditionally. */
-    tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, 0.0f);
+     * led stays toggled." (Diamond back then, per that bug's original
+     * discovery -- triangle now, since the mode-picker button is
+     * triangle's job post-swap; see this file's own header note.)
+     * Triangle has a PERMANENT override claimed (see tiles_op_mode_init()),
+     * so buttons.c's own refresh_all_button_leds() (run by tiles_buttons_
+     * set_standby_active(false) above) deliberately SKIPS it -- "that
+     * controller's own next scan repaints it correctly" is buttons.h's
+     * own documented contract, but nothing was actually doing that
+     * repaint here. Canceling the menu with a triangle click (as opposed
+     * to SELECTING a mode, which routes through set_active_mode() --
+     * that function's own trailing override write already covers this)
+     * left triangle stuck at render_menu()'s own OP_TRIANGLE_LED_MENU_
+     * LEVEL (bright) forever, since nothing wrote to it again afterward.
+     * The menu is only ever reachable from melodic mode to begin with, so
+     * 0.0f (melodic's own "triangle off" state) is always the correct
+     * value to restore here, unconditionally. */
+    tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
 }
 
 /* Real feedback: "the mode selector has all these lights always on. only
@@ -1261,7 +1268,7 @@ static void render_menu(uint32_t now_ms) {
         }
     }
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        float level = (col == TILES_DIAMOND_BUTTON_COL) ? OP_DIAMOND_LED_MENU_LEVEL : 0.0f;
+        float level = (col == TILES_TRIANGLE_BUTTON_COL) ? OP_TRIANGLE_LED_MENU_LEVEL : 0.0f;
         tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
@@ -1310,7 +1317,7 @@ static void render_scale_menu(uint32_t now_ms) {
         tiles_haptics_trigger_touch_pulse(selected_pad);
     }
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        float level = (col == TILES_TRIANGLE_BUTTON_COL) ? OP_TRIANGLE_LED_SUBMENU_LEVEL : 0.0f;
+        float level = (col == TILES_DIAMOND_BUTTON_COL) ? OP_DIAMOND_LED_SUBMENU_LEVEL : 0.0f;
         tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
@@ -1332,7 +1339,7 @@ static void scale_menu_exit(void);
  * different scales could be tried while watching/hearing the
  * difference); real feedback reversed that call -- matches the
  * mode-picker's own close-on-select behavior now, one consistent rule
- * for both menus in this file. Re-opening (a fresh triangle click) shows
+ * for both menus in this file. Re-opening (a fresh diamond click) shows
  * whatever's now selected pulsing, same as before. */
 static void handle_scale_menu_taps(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
@@ -1424,13 +1431,13 @@ static void set_active_mode(tiles_op_mode_t mode) {
         tiles_buttons_set_override_led(TILES_MINUS_BUTTON_ID, 0.0f);
         tiles_buttons_set_override_led(TILES_PLUS_BUTTON_ID, 0.0f);
     }
-    /* Always off here -- diamond only ever lights while the mode picker
+    /* Always off here -- triangle only ever lights while the mode picker
      * itself is open (render_menu()'s own write), not just because some
-     * non-melodic mode happens to be active. See OP_DIAMOND_LED_MENU_
+     * non-melodic mode happens to be active. See OP_TRIANGLE_LED_MENU_
      * LEVEL's own comment. This override write only matters for
      * CHORD/GUITAR anyway (sequencer claims standby_active, making any
      * override here a no-op per buttons.h's own contract). */
-    tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, 0.0f);
+    tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
     printf("[op_mode] active mode -> %d\n", (int)mode);
 }
 
@@ -1469,21 +1476,21 @@ static void handle_menu_taps(void) {
 
 /* ---- Diamond click + top-level scan -------------------------------------- */
 
-static void handle_diamond_click(void) {
-    bool held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
+static void handle_triangle_click(void) {
+    bool held = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
 
-    if (held && !s_diamond_was_held) {
-        s_diamond_press_had_conflict = false;
+    if (held && !s_triangle_was_held) {
+        s_triangle_press_had_conflict = false;
     }
-    if (held && tiles_button_is_pressed(3u)) {
-        /* See this file's header + s_diamond_press_had_conflict's own
+    if (held && tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID)) {
+        /* See this file's header + s_triangle_press_had_conflict's own
          * comment -- part of game_mode.h's reserved 4-button combo, not
-         * a genuine solo diamond press. */
-        s_diamond_press_had_conflict = true;
+         * a genuine solo triangle press. */
+        s_triangle_press_had_conflict = true;
     }
 
-    if (!held && s_diamond_was_held) {
-        if (!s_diamond_press_had_conflict) {
+    if (!held && s_triangle_was_held) {
+        if (!s_triangle_press_had_conflict) {
             if (s_menu_visible) {
                 menu_exit();
             } else if (s_active_mode != OP_MODE_MELODIC) {
@@ -1494,10 +1501,10 @@ static void handle_diamond_click(void) {
         }
     }
 
-    s_diamond_was_held = held;
+    s_triangle_was_held = held;
 }
 
-/* Same shape as handle_diamond_click() above, one level down: toggles
+/* Same shape as handle_triangle_click() above, one level down: toggles
  * whichever per-mode sub-menu the CURRENT mode has -- melodic's is the
  * scale picker, sequencer's is the pattern/channel picker (real feedback:
  * "sub menu triangle is reserved for other stuff... maybe in triangle we
@@ -1506,22 +1513,22 @@ static void handle_diamond_click(void) {
  * mode would be ambiguous/unwanted) the same way the mode-picker itself is
  * guarded against other_feature_owns_input().
  * While any per-step edit (pitch/probability/ratchet) owns the grid,
- * triangle instead cancels it with no change -- the escape hatch a
+ * diamond instead cancels it with no change -- the escape hatch a
  * toggle-style gesture needs (real feedback: "it should be a toggle to
  * set pitch of sequencer note, not a momentary thing" -- see this file's
  * own "Per-step editing" section for the rest of that change). */
-static void handle_triangle_click(void) {
-    bool held = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
+static void handle_diamond_click(void) {
+    bool held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
 
-    if (held && !s_triangle_was_held) {
-        s_triangle_press_had_conflict = false;
+    if (held && !s_diamond_was_held) {
+        s_diamond_press_had_conflict = false;
     }
-    if (held && tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID)) {
-        s_triangle_press_had_conflict = true;
+    if (held && tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID)) {
+        s_diamond_press_had_conflict = true;
     }
 
-    if (!held && s_triangle_was_held) {
-        if (!s_triangle_press_had_conflict && !s_menu_visible) {
+    if (!held && s_diamond_was_held) {
+        if (!s_diamond_press_had_conflict && !s_menu_visible) {
             if (s_active_mode == OP_MODE_MELODIC) {
                 if (s_scale_menu_visible) {
                     scale_menu_exit();
@@ -1540,7 +1547,7 @@ static void handle_triangle_click(void) {
         }
     }
 
-    s_triangle_was_held = held;
+    s_diamond_was_held = held;
 }
 
 /* Real feedback: "master tap tempo on the instrument with shit round
@@ -1595,8 +1602,8 @@ static void handle_circle_tap(uint32_t now_ms) {
          * and arp mode") has been removed entirely -- see the mode enum's
          * own comment -- so tap tempo is sequencer-only now. */
         bool mode_ok = (s_active_mode == OP_MODE_SEQUENCER && !s_pattern_menu_visible && s_seq_edit_mode == OP_SEQ_EDIT_NONE);
-        bool combo_conflict = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
-                               tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
+        bool combo_conflict = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
+                               tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
         s_circle_press_pending_tap = mode_ok && !combo_conflict && !tiles_midi_clock_external_active(now_ms);
     }
@@ -1762,11 +1769,11 @@ static float compute_beat_flash_level(uint32_t now_ms, tiles_midi_clock_state_t 
 void tiles_op_mode_init(void) {
     s_active_mode = OP_MODE_MELODIC;
     s_menu_visible = false;
-    s_diamond_was_held = false;
-    s_diamond_press_had_conflict = false;
-    s_scale_menu_visible = false;
     s_triangle_was_held = false;
     s_triangle_press_had_conflict = false;
+    s_scale_menu_visible = false;
+    s_diamond_was_held = false;
+    s_diamond_press_had_conflict = false;
     for (uint8_t p = 0; p < OP_SEQ_NUM_PATTERNS; p++) {
         for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
             s_seq_pattern[p].step_armed[i] = false;
@@ -1799,8 +1806,8 @@ void tiles_op_mode_init(void) {
     s_circle_press_pending_tap = false;
     s_last_beat_index = 0xFFFFFFFFu;
     s_beat_flash_start_ms = 0u;
-    tiles_buttons_set_override_active(TILES_DIAMOND_BUTTON_ID, true);
-    tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, 0.0f);
+    tiles_buttons_set_override_active(TILES_TRIANGLE_BUTTON_ID, true);
+    tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
 }
 
 void tiles_op_mode_scan(void) {
@@ -1812,8 +1819,8 @@ void tiles_op_mode_scan(void) {
          * click/tap -- same pattern services/expression_control.c and
          * services/game_mode.c already use for their own equivalent
          * guards. */
-        s_diamond_was_held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
         s_triangle_was_held = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
+        s_diamond_was_held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
         s_circle_was_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
         s_minus_was_held = tiles_button_is_pressed(TILES_MINUS_BUTTON_ID);
         s_plus_was_held = tiles_button_is_pressed(TILES_PLUS_BUTTON_ID);
@@ -1839,8 +1846,8 @@ void tiles_op_mode_scan(void) {
         return;
     }
 
-    handle_diamond_click();
     handle_triangle_click();
+    handle_diamond_click();
     handle_circle_tap(now_ms);
     handle_transport_and_length(now_ms);
 

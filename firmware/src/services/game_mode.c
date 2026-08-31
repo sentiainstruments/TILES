@@ -1324,8 +1324,10 @@ static bool gm_combo_held(void) {
     if (tiles_expression_control_owns_pad_grid() || tiles_op_mode_owns_pad_grid()) {
         /* services/expression_control.h's sub-menu (circle+square held)
          * or services/op_mode.h's mode-select menu/sequencer already owns
-         * the pad grid -- SW4 (diamond) alone is op_mode.h's own click
-         * trigger, and SW5 (square)/SW6 (circle) are two of THIS combo's
+         * the pad grid -- SW3 (triangle) alone is op_mode.h's own click
+         * trigger (SW4/diamond was, before a later real-feedback swap --
+         * see op_mode.h's own note), and SW5 (square)/SW6 (circle) are
+         * two of THIS combo's
          * four buttons, so without this guard a player deep in an
          * already-open sub-menu/sequencer who also happens to be resting
          * on the other buttons could accidentally toggle game mode on

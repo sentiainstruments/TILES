@@ -55,16 +55,20 @@ static inline uint8_t board_button_for_col(uint8_t col) {
 #define TILES_SQUARE_BUTTON_ID 5u
 #define TILES_SQUARE_BUTTON_COL 5u
 
-/* SW4 (diamond), two left of circle -- operation-mode select
- * (services/op_mode.h): a single click toggles the mode-picker menu (or
- * exits back to melodic play). */
+/* SW4 (diamond), two left of circle -- each operation mode's own
+ * sub-menu (services/op_mode.h): a single click toggles that mode's
+ * sub-menu (melodic's is the scale picker; other modes don't have one
+ * yet). Real feedback later swapped this role with SW3/triangle below --
+ * see op_mode.h's own swap note for the full history; this constant's
+ * physical identity (still SW4, still the diamond-shaped key) never
+ * changes, only which functional role op_mode.c assigns to it. */
 #define TILES_DIAMOND_BUTTON_ID 4u
 #define TILES_DIAMOND_BUTTON_COL 4u
 
-/* SW3 (triangle), three left of circle -- each operation mode's own
- * sub-menu (services/op_mode.h): a single click toggles that mode's
- * sub-menu (melodic's is the scale picker; other modes don't have one
- * yet). */
+/* SW3 (triangle), three left of circle -- operation-mode select
+ * (services/op_mode.h): a single click toggles the mode-picker menu (or
+ * exits back to melodic play). See TILES_DIAMOND_BUTTON_ID's own comment
+ * above -- this was diamond's role until a later real-feedback swap. */
 #define TILES_TRIANGLE_BUTTON_ID 3u
 #define TILES_TRIANGLE_BUTTON_COL 3u
 
