@@ -2926,21 +2926,36 @@ not its code.
   same shape `tiles_op_mode_is_sequencer_active()` already established
   for giving sequencer mode its own longer timeout, extended here to "a
   menu is open" rather than "a particular mode is active."
-- **"diamond light is on at boot"** -- real feedback, investigated but
-  **not root-caused this round**. Traced the full boot sequence (`main.c`):
-  `tiles_buttons_init()` corrects the PCA9685's power-on-lit default to
-  dark before outputs ever go live; `boot_sequence.c`'s ~4s animation
-  legitimately lights every button LED (including diamond's) as part of
-  its own show, but explicitly zeros them and calls `tiles_buttons_set_
-  standby_active(false)` before returning, which repaints every non-
-  override button from `s_debounced` (dark, if not physically held);
-  `tiles_op_mode_init()` (the only thing that claims diamond's PERMANENT
-  override) then explicitly writes it off again regardless. No gap was
-  found in this trace where diamond could end up lit and then never get
-  corrected -- worth a live debug session (serial log at each of these
-  transition points, or a scope/multimeter on the actual LED line) rather
-  than more static code review, if it's still reproducible after this
-  round's swap below.
+- **"the mode light is on at boot" (diamond, then triangle after the swap
+  below) -- confirmed real, still not root-caused, given a defensive
+  fix instead of a real one.** Traced the full boot sequence (`main.c`)
+  twice, across two rounds, and found no logic gap: `tiles_buttons_init()`
+  corrects the PCA9685's power-on-lit default to dark before outputs ever
+  go live; `boot_sequence.c`'s ~4s animation legitimately lights every
+  button LED as part of its own show but explicitly zeros them and calls
+  `tiles_buttons_set_standby_active(false)` before returning, which
+  repaints every non-override button from `s_debounced` (dark, if not
+  physically held); `tiles_op_mode_init()` (the only thing that claims
+  the mode-picker button's PERMANENT override) then explicitly writes it
+  off again regardless. Real feedback after the triangle/diamond swap
+  confirmed the symptom followed the ROLE, not the physical button ("now
+  on boot the tringle is light up... it goes away after entering and
+  exiting menu") -- ruling out a hardware-specific LED/channel issue,
+  since the exact same code path (just pointed at a different physical
+  button) reproduces it. That's real signal that this is a software
+  timing issue -- most likely a PCA9685 chip-level glitch during power-on
+  racing the one-shot init-time write -- but a live serial-log session to
+  pin down the exact mechanism was abandoned mid-attempt (real feedback:
+  "just fix that simopkle thing") in favor of a direct fix: `tiles_op_
+  mode_scan()` now re-asserts the same "off" write on every scan for
+  `OP_BOOT_RELIGHT_GUARD_MS` (1000ms) after init, not just once --
+  self-healing against whatever the transient actually is, without
+  needing to identify it first. Genuinely **not a root-cause fix** --
+  flagged here so a future round doesn't mistake the guard window for an
+  understood mechanism if something adjacent breaks it (e.g. a boot
+  sequence slow enough to still be corrupting the LED after the window
+  closes would need `OP_BOOT_RELIGHT_GUARD_MS` raised, not re-diagnosed
+  from scratch).
 - **SW3 (triangle) <-> SW4 (diamond): functionality swapped, fully** --
   real feedback: "switch triangle and diamond functionality swapp them
   fully." Triangle is now the top-level mode-picker single click
@@ -2952,12 +2967,7 @@ not its code.
   their `_COL` counterparts (`board_layout.h`) keep their original
   physical meaning unchanged (diamond is still SW4/GP17, triangle is
   still SW3/GP16) -- only which of the two `op_mode.c` reads for which
-  role moved. If the still-unresolved "diamond light on at boot" bug
-  above is a logic bug tied to the override mechanism, it should now
-  show up on triangle instead (the new permanent-override holder) --
-  if it instead stays on the physical diamond position regardless, that
-  points to a hardware-specific issue with that LED/button channel
-  rather than firmware logic, which would be a useful, cheap diagnostic
-  to check on the next flash.
+  role moved. (This swap is also what confirmed the boot-LED bug above
+  is software, not hardware -- see that entry's own updated text.)
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

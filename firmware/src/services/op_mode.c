@@ -184,6 +184,25 @@ static float menu_selected_pulse_level(uint32_t now_ms) {
 static tiles_op_mode_t s_active_mode;
 static bool s_menu_visible;
 
+/* Real feedback: "its powering on with the mode light on" -- triangle's
+ * permanent override gets explicitly claimed and set to 0.0f (off) once,
+ * at the end of tiles_op_mode_init() below, and that write was traced
+ * through the entire boot sequence (boot_sequence.c's animation,
+ * buttons.c's own PCA9685 init-time correction, this file's own init)
+ * without finding a logic gap where it should fail -- yet real hardware
+ * still sometimes shows it lit right after boot, cleared only once the
+ * player manually opens and closes the mode picker (whose own menu_exit()
+ * makes the identical write). Rather than keep chasing an exact
+ * mechanism with no further code-level lead, this re-asserts the same
+ * "off" write on every scan for a short window after boot instead of
+ * only once -- self-healing against whatever transient (a PCA9685
+ * chip-level glitch during power-on, most likely, given the timing) is
+ * corrupting the single init-time write, without needing to identify it
+ * first. Not a real root-cause fix -- see this file's own README entry
+ * for the honest state of this investigation. */
+#define OP_BOOT_RELIGHT_GUARD_MS 1000u
+static uint32_t s_boot_relight_guard_until_ms;
+
 static bool s_triangle_was_held;
 /* True if SW4 was ALSO seen held at any point during the CURRENT triangle
  * press -- see this file's own header on why (game_mode.h's entry combo
@@ -1808,10 +1827,22 @@ void tiles_op_mode_init(void) {
     s_beat_flash_start_ms = 0u;
     tiles_buttons_set_override_active(TILES_TRIANGLE_BUTTON_ID, true);
     tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
+    s_boot_relight_guard_until_ms = to_ms_since_boot(get_absolute_time()) + OP_BOOT_RELIGHT_GUARD_MS;
 }
 
 void tiles_op_mode_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+
+    /* See s_boot_relight_guard_until_ms's own comment -- re-asserts
+     * triangle's override LED off on every scan for a short window after
+     * boot, self-healing whatever occasionally corrupts the one-shot
+     * write tiles_op_mode_init() already made. A no-op once the window
+     * closes; also a no-op whenever render_menu() actually owns the LED
+     * (tiles_buttons_set_override_led()'s own standby-active guard),
+     * so this can't fight a menu that's genuinely showing at boot. */
+    if (now_ms < s_boot_relight_guard_until_ms) {
+        tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
+    }
 
     if (other_feature_owns_input()) {
         /* Keep edge-tracking current so a button/touch already active the
