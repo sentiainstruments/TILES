@@ -47,6 +47,7 @@
 #include "tusb.h"
 
 #include "board/board_init.h"
+#include "board/unit_id.h"
 #include "diagnostics/calibration.h"
 #include "diagnostics/i2c_scan.h"
 #include "midi/midi_out.h"
@@ -95,6 +96,8 @@ int main(void) {
     tiles_usb_device_init();
 
     stdio_init_all();
+
+    printf("[main] SENTIA TILES unit %u/%u\n", (unsigned)TILES_UNIT_NUMBER, (unsigned)TILES_UNIT_COUNT);
 
     board_init();
 

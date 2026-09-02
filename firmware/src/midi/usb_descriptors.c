@@ -17,8 +17,10 @@
  * see tusb_config.h's header comment.
  */
 
+#include <stdio.h>
 #include <string.h>
 
+#include "board/unit_id.h"
 #include "pico/unique_id.h"
 #include "tusb.h"
 
@@ -122,7 +124,7 @@ enum {
 static char const *string_desc_arr[] = {
     NULL, /* 0: language ID, handled specially below */
     "SENTIA Instruments",
-    "SENTIA TILES",
+    NULL, /* 2: product, built from unit_id.h's TILES_UNIT_NUMBER/COUNT below */
     NULL, /* 3: serial, filled from the RP2350's unique flash ID below */
     "SENTIA TILES Diagnostics",
     "SENTIA TILES MIDI",
@@ -138,6 +140,26 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
         case STRID_LANGID: {
             desc_str[1] = 0x0409u; /* English (US) */
             chr_count = 1;
+            break;
+        }
+        case STRID_PRODUCT: {
+            /* Real feedback: "were moving to have identifiers" -- see
+             * unit_id.h's own header for the full reasoning. Built here
+             * (rather than a plain string_desc_arr entry) so this is
+             * visible without a serial terminal: `picotool info -a` and
+             * the host OS's own USB device listing both show the
+             * product string. */
+            char buf[32];
+            int written = snprintf(buf, sizeof(buf), "SENTIA TILES (Unit %u/%u)", (unsigned)TILES_UNIT_NUMBER,
+                                    (unsigned)TILES_UNIT_COUNT);
+            chr_count = (written > 0) ? (size_t)written : 0u;
+            const size_t max_count = sizeof(desc_str) / sizeof(desc_str[0]) - 1u;
+            if (chr_count > max_count) {
+                chr_count = max_count;
+            }
+            for (size_t i = 0; i < chr_count; i++) {
+                desc_str[1 + i] = (uint16_t)buf[i];
+            }
             break;
         }
         case STRID_SERIAL: {

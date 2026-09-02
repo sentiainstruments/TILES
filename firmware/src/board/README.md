@@ -27,3 +27,17 @@ Contents so far:
   copy of this mapping. The underglow anchor points are based on the
   user's verbal description of the physical board, not a hardware doc
   (confirmed absent from `docs/hardware/`).
+- `unit_id.h` — header-only, `TILES_UNIT_NUMBER`/`TILES_UNIT_COUNT` --
+  real feedback: "were moving to have identifiers." A human-assigned
+  pre-production sequence number ("2 of 4"), edited by hand before each
+  physical board's own build+flash -- not the RP2350's own unique
+  silicon ID (`pico_get_unique_board_id()`, already used as the USB
+  serial number in `midi/usb_descriptors.c`), which identifies a CHIP,
+  not something you could read off a box. No persistent per-unit
+  storage exists yet (`storage/` isn't built), so this is compile-time
+  only -- reconfiguring isn't needed, it's a plain header, just edit and
+  do a normal incremental build. Surfaced two places: the USB product
+  string (`midi/usb_descriptors.c`'s `STRID_PRODUCT` case, so `picotool
+  info -a` or the host OS's own USB device listing shows it without a
+  serial terminal) and one `printf` at the very top of `main()`, for
+  correlating a captured serial log back to a specific physical board.
