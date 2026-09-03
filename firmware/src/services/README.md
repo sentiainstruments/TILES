@@ -3111,5 +3111,31 @@ not its code.
     stays out of V1 scope, see `hall.h`), and still just 4 sampled pads
     on one unit, not a full 24-pad/4-unit sweep -- revisit if the rest
     turns out meaningfully different.
+  Follow-up, same session, real feedback right after trying the linear
+  curve above: "vewlocity shoots up to max xeasely, we need more playing
+  range and less inmediatye hard strike." `STRIKE_TIME_MIN_VELOCITY_MS`
+  widened 150 -> 300: the previous 140ms-wide window put an ordinary,
+  unhurried tap well past the midpoint under the now-linear mapping, so
+  it read as most of the way to max. Doubling the slow-end window
+  stretches normal-to-slow playing across more of the range without
+  changing what counts as a genuinely fast strike (still <= 10ms for
+  127).
+- **`game_mode.c`'s 4-button entry combo, real feedback: "we need some
+  tolerance fotrht e 4 button press for menu open for game mode its very
+  hard to trigger."** `gm_combo_held()` requires all four buttons
+  simultaneously pressed on the exact current scan tick; the old
+  `gm_check_toggle_gesture()` reset its 700ms hold timer to zero the
+  instant even one button so much as blipped, so one momentary bounce
+  anywhere in that window (four human fingers holding four separate
+  physical buttons rock-steady is a harder ask than it looks) threw away
+  all progress. Fixed by bridging brief drops the same way `expression.c`'s
+  own `TOUCH_DROPOUT_GRACE_MS` already bridges a capacitive touch
+  glitch -- a much longer grace window here (`GM_COMBO_DROPOUT_GRACE_MS`,
+  250ms, not 12ms), since this is smoothing four-finger muscle micro-
+  adjustments, not an electrical blip on one sensor. Only helps a hold
+  that's already gotten all four down at least once keep going through a
+  wobble -- it doesn't make four fingers land together any easier in the
+  first place, so if entry is still hard after this, that's the
+  remaining piece to chase.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

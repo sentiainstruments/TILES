@@ -124,6 +124,27 @@ static bool s_gm_combo_was_held;
 static bool s_gm_combo_fired;
 static uint32_t s_gm_hold_start_ms;
 
+/* Real feedback: "we need some tolerance fotrht e 4 button press for
+ * menu open for game mode its very hard to trigger." gm_combo_held()
+ * requires all four buttons simultaneously pressed on the EXACT current
+ * scan tick -- four human fingers landing on four separate physical
+ * buttons, then holding rock-steady for a full GM_HOLD_MS with zero
+ * bounce, is a much harder ask than it looks on paper. The previous
+ * version reset s_gm_hold_start_ms to "now" the instant any single
+ * button so much as blipped, so one momentary bounce anywhere in the
+ * 700ms window threw away all the progress made until then. Bridges
+ * brief drops the same way expression.c's own TOUCH_DROPOUT_GRACE_MS
+ * already bridges a capacitive touch glitch -- a much longer window
+ * here (250ms, not 12ms) since this is smoothing human muscle
+ * micro-adjustments across four fingers, not an electrical blip on one
+ * sensor. Only bridges drops AFTER all four have been simultaneously
+ * down at least once; it doesn't help four fingers land together in the
+ * first place, only keeps a hold that already started from being
+ * punished by a brief wobble. */
+#define GM_COMBO_DROPOUT_GRACE_MS 250u
+static uint32_t s_gm_combo_last_true_ms;
+static bool s_gm_combo_last_true_valid;
+
 static bool s_gm_prev_pad1_touched;
 static bool s_gm_prev_pad2_touched;
 static bool s_gm_prev_pad3_touched;
@@ -1493,7 +1514,16 @@ static void gm_toggle(uint32_t now_ms) {
 }
 
 static void gm_check_toggle_gesture(uint32_t now_ms) {
-    bool held = gm_combo_held();
+    bool raw_held = gm_combo_held();
+    if (raw_held) {
+        s_gm_combo_last_true_ms = now_ms;
+        s_gm_combo_last_true_valid = true;
+    }
+    /* See GM_COMBO_DROPOUT_GRACE_MS's own comment -- bridges a brief
+     * drop so it doesn't read as a full release and reset the hold. */
+    bool held =
+        raw_held || (s_gm_combo_last_true_valid && (now_ms - s_gm_combo_last_true_ms) < GM_COMBO_DROPOUT_GRACE_MS);
+
     if (held && !s_gm_combo_was_held) {
         s_gm_hold_start_ms = now_ms;
         s_gm_combo_fired = false;
@@ -1563,6 +1593,7 @@ void tiles_game_mode_init(void) {
     s_gm_last_frame_ms = 0u;
     s_gm_combo_was_held = false;
     s_gm_combo_fired = false;
+    s_gm_combo_last_true_valid = false;
     s_gm_prev_pad1_touched = false;
     s_gm_prev_pad2_touched = false;
     s_gm_prev_pad3_touched = false;

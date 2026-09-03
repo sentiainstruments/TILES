@@ -198,9 +198,22 @@
  * unlike the depth-delta numbers above. The `[expression]` print below
  * now reports strike_time_ms directly on every commit specifically so
  * the next real-hardware session can calibrate these three constants
- * from real numbers instead of guessing a third velocity model. */
+ * from real numbers instead of guessing a third velocity model.
+ *
+ * STRIKE_TIME_MIN_VELOCITY_MS widened 150 -> 300 same session, real
+ * feedback right after trying the linear curve above: "vewlocity shoots
+ * up to max xeasely, we need more playing range and less inmediatye
+ * hard strike." A 140ms-wide window (10-150) meant an ordinary,
+ * unhurried tap -- nowhere near a deliberate slow push, but nowhere
+ * near a fast strike either -- already sat well past the midpoint of
+ * the range, so under the now-linear mapping it read as most of the way
+ * to max velocity. Widening the slow end to 300ms doesn't change what
+ * counts as a genuinely fast strike (still <= 10ms for 127), but it
+ * stretches ordinary-to-slow playing across double the window, giving
+ * real dynamic range to press speeds that used to cluster near the top
+ * instead of only ever separating out the most extreme soft touches. */
 #define STRIKE_TIME_MAX_VELOCITY_MS 10u
-#define STRIKE_TIME_MIN_VELOCITY_MS 150u
+#define STRIKE_TIME_MIN_VELOCITY_MS 300u
 #define VELOCITY_CURVE_EXPONENT 1.0f
 
 /* Even a strike weak enough to barely clear MIN_STRIKE_DEPTH_DELTA
