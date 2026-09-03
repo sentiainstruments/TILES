@@ -3047,5 +3047,28 @@ not its code.
      round -- doing so would mean weakening that safeguard everywhere
      else it's used too, which wasn't part of this ask and isn't
      something to risk the night before a demo.
+  5. **Real regression found and fixed same-session: game mode wouldn't
+     enter at all after part 4 above landed.** Real feedback: "game mode
+     wont louch anymore when 4 function buttons presed at once."
+     `gm_override_button_pressed()` checked raw held state, not a press
+     edge -- so the instant `gm_toggle()` turned game mode ON (after the
+     4-button hold), all four override-eligible buttons were, by
+     definition, STILL physically down from that same hold, which the
+     very next check read as "triangle/diamond just got pressed" and
+     immediately exited right back out, same tick. Fixed with real
+     press-edge tracking (`s_gm_override_prev_*`) instead of raw state,
+     seeded to `true` for all four right in `gm_toggle()`'s own entry
+     branch -- since they're guaranteed already held at that exact
+     moment, seeding them true means that first post-entry check
+     correctly reads "still held, not a new press" and leaves the menu
+     alone. (This fix originally shipped alongside an unrelated,
+     unconfirmed `lighting.c` change -- a settling delay for a separately
+     reported magenta boot-animation bleed -- that combination froze the
+     board solid on real hardware: no USB, no bootloader, no haptics,
+     lights stuck mid-frame. Reverted immediately and re-applied ONLY
+     this game-mode fix in isolation; the `lighting.c` change is NOT
+     included here and needs its own separate, careful attempt with
+     actual hardware verification before trying again -- see this file's
+     git history around the revert for exactly what was pulled back.)
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
