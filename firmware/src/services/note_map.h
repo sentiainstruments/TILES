@@ -62,12 +62,39 @@
  * folding chromatic uses -- see note_map.c's scale_table()/
  * tiles_note_map_get_note() for the actual math, and the legacy
  * prototype's scaleInterval() in docs/reference/legacy-prototype-v1/ for
- * the shape it's modeled on (not its code). The 5 remaining CUSTOM_*
- * values are real, valid enum values (so the grid has something to
- * reference for those slots) but have no interval table yet -- see
- * tiles_note_map_scale_is_defined() below; selecting one from the menu
- * is a UI no-op (services/op_mode.h treats undefined slots as
- * unselectable, matching "unavailable" in the standardized menu
+ * the shape it's modeled on (not its code).
+ *
+ * PHRYGIAN, LOCRIAN, COMBINATION_DIMINISHED, and RAGA_TODI were dropped
+ * from the grid (see SCALE_GRID_ORDER in note_map.c) -- real feedback:
+ * "we have to many scales on the scale selector and its kinda
+ * overwhelming... cut the ones that have less than 5 notes" led to
+ * checking every scale's real note count (none were actually below 5,
+ * see services/README.md's own entry for the full table), then a
+ * follow-up redirected the criterion entirely: "we should get rid of
+ * non atractive experimental ones not experiemntal easy to get into" --
+ * Locrian (the one mode most musicians avoid, its flattened 5th over
+ * the root reads as unresolved rather than musical) and Phrygian (a
+ * harder, tenser sound for a lot of ears) were the two flagged as
+ * "simple but not attractive"; Combination Diminished and Raga Todi were
+ * cut as the least load-bearing of the "theory/exotic" scales once the
+ * list needed shortening, while the genuinely fun exotic ones (Arabian,
+ * Egyptian, Japanese Miyakobushi, Diminished, Whole Tone) were kept on
+ * purpose, real feedback: "they sound fun." Their enum values are kept
+ * (removing them outright would be needless churn for four scales that
+ * still have real, correct interval tables -- see scale_table() in
+ * note_map.c, which still handles all four) -- they're just no longer
+ * placed in SCALE_GRID_ORDER, so they're unreachable from the picker
+ * without also restoring their grid slot. Freed 4 grid slots, used to
+ * add TILES_SCALE_CUSTOM_7/8/9 below (real feedback's own removals
+ * happened to be named scales, not custom placeholders, so the total
+ * custom-slot count only grew as a side effect of keeping the grid at a
+ * full 24 -- not a deliberate request to add more custom slots).
+ *
+ * The remaining CUSTOM_* values are real, valid enum values (so the grid
+ * has something to reference for those slots) but have no interval
+ * table yet -- see tiles_note_map_scale_is_defined() below; selecting
+ * one from the menu is a UI no-op (services/op_mode.h treats undefined
+ * slots as unselectable, matching "unavailable" in the standardized menu
  * language), and tiles_note_map_get_note() would fall back to chromatic
  * internally if one somehow got selected anyway, rather than producing
  * garbage. */
@@ -97,7 +124,10 @@ typedef enum {
     TILES_SCALE_CUSTOM_4,
     TILES_SCALE_CUSTOM_5,
     TILES_SCALE_CUSTOM_6,
-    TILES_NUM_SCALE_VALUES, /* sentinel -- 1 (chromatic) + 24 (grid) = 25 */
+    TILES_SCALE_CUSTOM_7,
+    TILES_SCALE_CUSTOM_8,
+    TILES_SCALE_CUSTOM_9,
+    TILES_NUM_SCALE_VALUES, /* sentinel */
 } tiles_scale_mode_t;
 
 /* The scale-picker grid is exactly this many pads -- matches
@@ -105,10 +135,12 @@ typedef enum {
 #define TILES_NOTE_MAP_NUM_SCALE_GRID_SLOTS 24u
 
 /* The scale assigned to grid slot 1-24 (services/op_mode.h's melodic
- * scale-picker, one pad per slot, in the same order real feedback listed
- * them: ionian..raga todi filling slots 1-18, CUSTOM_1-6 filling
- * 19-24). Returns TILES_SCALE_CHROMATIC (never actually placed on the
- * grid) for an out-of-range slot. */
+ * scale-picker, one pad per slot) -- see SCALE_GRID_ORDER in note_map.c
+ * for the exact, real-feedback-driven order (chromatic, then major,
+ * then minor, then the rest, per "we start with chrommatic, major,
+ * minor and then the rest") and this header's own enum comment for why
+ * 4 named scales are no longer placed on it. Returns TILES_SCALE_CHROMATIC
+ * (never actually placed on the grid) for an out-of-range slot. */
 tiles_scale_mode_t tiles_note_map_scale_for_grid_slot(uint8_t slot_1_to_24);
 
 /* True if `scale` has a real interval table (every named scale above);

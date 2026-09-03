@@ -226,48 +226,59 @@ static tiles_scale_table_t scale_table(tiles_scale_mode_t scale) {
     case TILES_SCALE_CHROMATIC:
         return (tiles_scale_table_t)SCALE_TABLE(CHROMATIC_INTERVALS);
     default:
-        /* TILES_SCALE_CUSTOM_1..6 -- no table yet, see this file's
-         * header + tiles_note_map_scale_is_defined() below. */
+        /* TILES_SCALE_CUSTOM_1..9 -- no table yet, see this file's
+         * header + tiles_note_map_scale_is_defined() below. (PHRYGIAN/
+         * LOCRIAN/COMBINATION_DIMINISHED/RAGA_TODI still have their own
+         * real cases above and still resolve correctly if ever called
+         * with directly -- they're just no longer placed anywhere in
+         * SCALE_GRID_ORDER below, so the picker itself can't reach them
+         * -- see note_map.h's own enum comment for why their cases
+         * were kept rather than deleted.) */
         return (tiles_scale_table_t){NULL, 0u};
     }
 }
 
-/* Grid slot 1-24 -> scale. Real feedback: "add the first mode as
- * chromatic, not major shifting all onse step so we can return to
- * chromatic mode" -- chromatic is now slot 1 (it already has a real,
- * valid interval table -- see scale_table()'s own TILES_SCALE_CHROMATIC
- * case -- so tiles_note_map_scale_is_defined() already reports it
- * selectable with no other code changes needed), and every named scale
- * shifts down one slot from where it used to sit. This leaves no room
- * for all 6 "custom" placeholders in the same 24 slots -- CUSTOM_6 is
- * dropped (down to 5 reserved slots) rather than dropping a real, named
- * scale; none of the 6 have a real interval table yet regardless (see
- * tiles_note_map_scale_is_defined()), so this costs nothing functional. */
+/* Grid slot 1-24 -> scale. Real feedback, this round: "we have to many
+ * scales on the scale selector and its kinda overwhelming... rearange so
+ * we start with chrommatic, major, minor and then the rest. remove the
+ * one on pad: 13, 19, the 2 modes you sugested as well" -- "the 2 modes
+ * you suggested" being Locrian and Phrygian (see this file's own header
+ * enum comment for the full "attractive vs not" reasoning), and pads 13/
+ * 19 (in the PREVIOUS order) being Combination Diminished and Raga Todi.
+ * Chromatic stays slot 1 (from an earlier round's own fix, real
+ * feedback: "add the first mode as chromatic... so we can return to
+ * chromatic mode"), then Ionian ("major") and Aeolian ("minor") lead --
+ * the two most commonly reached-for scales -- before the remaining 12
+ * named scales in their previous relative order. Dropping 4 named scales
+ * frees 4 grid slots; rather than shrink the grid or leave gaps, those
+ * went to 3 new reserved custom placeholders (CUSTOM_7/8/9, alongside
+ * the existing 6) so the grid stays a full 24 slots -- see
+ * TILES_NOTE_MAP_NUM_SCALE_GRID_SLOTS. */
 static const tiles_scale_mode_t SCALE_GRID_ORDER[TILES_NOTE_MAP_NUM_SCALE_GRID_SLOTS] = {
     TILES_SCALE_CHROMATIC,
     TILES_SCALE_IONIAN,
+    TILES_SCALE_AEOLIAN,
     TILES_SCALE_DORIAN,
-    TILES_SCALE_PHRYGIAN,
     TILES_SCALE_LYDIAN,
     TILES_SCALE_MIXOLYDIAN,
-    TILES_SCALE_AEOLIAN,
-    TILES_SCALE_LOCRIAN,
     TILES_SCALE_BLUES_MAJOR,
     TILES_SCALE_BLUES_MINOR,
     TILES_SCALE_ARABIAN,
     TILES_SCALE_DIMINISHED,
-    TILES_SCALE_COMBINATION_DIMINISHED,
     TILES_SCALE_PENTATONIC_MAJOR,
     TILES_SCALE_PENTATONIC_MINOR,
     TILES_SCALE_EGYPTIAN,
     TILES_SCALE_WHOLE_TONE,
     TILES_SCALE_JAPANESE_MIYAKOBUSHI,
-    TILES_SCALE_RAGA_TODI,
     TILES_SCALE_CUSTOM_1,
     TILES_SCALE_CUSTOM_2,
     TILES_SCALE_CUSTOM_3,
     TILES_SCALE_CUSTOM_4,
     TILES_SCALE_CUSTOM_5,
+    TILES_SCALE_CUSTOM_6,
+    TILES_SCALE_CUSTOM_7,
+    TILES_SCALE_CUSTOM_8,
+    TILES_SCALE_CUSTOM_9,
 };
 
 tiles_scale_mode_t tiles_note_map_scale_for_grid_slot(uint8_t slot_1_to_24) {

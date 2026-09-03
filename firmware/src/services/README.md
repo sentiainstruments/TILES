@@ -3163,5 +3163,30 @@ not its code.
   peak-depth-at-commit data yet the way `MIN_STRIKE_DEPTH_DELTA` has;
   revisit once a real light-vs-hard session records those numbers
   directly instead of only `strike_time_ms`.
+- **`note_map.c`'s scale picker, trimmed and reordered -- real feedback:
+  "we have to many scales on the scale selector and its kinda
+  overwhelming."** Checking every scale's actual note count first
+  (real feedback: "cut the ones that have less than 5 notes") found
+  nothing to cut -- every scale already has 5+ notes (Pentatonic Major/
+  Minor, Egyptian, and Japanese Miyakobushi are the four 5-note scales,
+  nothing sits lower; see each scale's own `_INTERVALS[]` array above
+  for the exact per-scale count). The criterion changed instead:
+  "we should get rid of non atractive
+  experimental ones not experiemntal easy to get into" -- Locrian and
+  Phrygian (simple, common modes, but among the least immediately
+  pleasant-sounding to most ears) got cut, while the genuinely fun
+  exotic scales (Arabian, Egyptian, Japanese Miyakobushi, Diminished,
+  Whole Tone) were explicitly kept: "they sound fun." Combination
+  Diminished and Raga Todi were also cut as the least load-bearing
+  once the list needed shortening. Real feedback then reordered what's
+  left: "rearange so we start with chrommatic, major, minor and then
+  the rest" -- Ionian and Aeolian (major/minor) now lead right after
+  chromatic, ahead of the other 12 named scales. All four removed
+  scales keep their real interval tables in `scale_table()` (removing
+  them outright would have been needless churn) -- they're simply no
+  longer placed in `SCALE_GRID_ORDER`, so the picker can't reach them.
+  Dropping 4 named scales freed 4 grid slots, filled with 3 new
+  reserved custom placeholders (`TILES_SCALE_CUSTOM_7/8/9`, alongside
+  the existing 6) to keep the grid a full 24 slots.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
