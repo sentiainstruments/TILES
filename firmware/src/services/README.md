@@ -3070,5 +3070,46 @@ not its code.
      included here and needs its own separate, careful attempt with
      actual hardware verification before trying again -- see this file's
      git history around the revert for exactly what was pulled back.)
+  6. **Still-remaining haptics/MIDI leak into game mode, real feedback:
+     "we have haptics vibration randomly in mini games, that shouldnt
+     happen"** -- the `expression.c` fix in part 1 above only guarded
+     `PAD_STATE_IDLE`'s fresh-touch gate, so a pad already past IDLE the
+     instant game mode activates (near-certain incidental contact during
+     the 4-button entry hold, both hands being busy holding it) was
+     "deliberately left alone" per that gate's own stated philosophy --
+     and kept running its full strike/haptic pipeline, unsupervised,
+     for the rest of that game session. Real buttons sitting physically
+     right above pad row 1, mashed constantly during Snake/Tetris/Pong/
+     Brick-Breaker, made this reliably reachable via PCB vibration.
+     Fixed with a new `tiles_expression_force_release_all()`
+     (`expression.h`/`.c`): force-ends any `PAD_STATE_NOTE_ON` pad (real
+     note-off + haptic stop) and resets every pad to `PAD_STATE_IDLE`,
+     called once from `game_mode.c`'s `gm_toggle()` right at the OFF ->
+     ON transition -- closing the one gap the touch-gate alone couldn't.
+- **`expression.c`'s velocity curve and aftertouch full-scale, both made
+  less steep -- real feedback: "make velocity curve and aftertouch less
+  steep. more gradual for soft detection better."**
+  - `VELOCITY_CURVE_EXPONENT` 1.8 -> 1.0 (plain linear). The 1.8 value
+    was a deliberate earlier choice ("suppressing the low end... closer
+    to how an acoustic action feels") but its own math cuts against soft
+    detection: `d(curved)/d(time)` is smallest exactly where slow/soft
+    strikes live for any exponent > 1, compressing a wide range of
+    genuinely different soft touches into a narrow band near
+    `MIN_VELOCITY` with little felt difference between them. Linear
+    gives equal sensitivity across the whole speed range instead.
+  - `s_depth_to_aftertouch_full_scale` default 900 -> 1450, now backed by
+    unit 2's own real capture session (see `diagnostics/README.md`'s
+    entry) rather than an earlier, different unit's data: that unit
+    measured a "regular full press" (784-1184, average 918, the source
+    of 900) but unit 2's session measured a genuine STRONG STRIKE across
+    4 sampled corner pads -- 1697/1488/1328/1280, average ~1448, 60%
+    higher. Leaving full-scale at 900 against unit 2's real ~1450
+    ceiling meant aftertouch pegged at 127 well before a real hard
+    press's actual travel was used -- steep/twitchy, with little room
+    left for gradual continued-pressure expression once already maxed.
+    Still one shared constant across all 24 pads (a real per-pad curve
+    stays out of V1 scope, see `hall.h`), and still just 4 sampled pads
+    on one unit, not a full 24-pad/4-unit sweep -- revisit if the rest
+    turns out meaningfully different.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

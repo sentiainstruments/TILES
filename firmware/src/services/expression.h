@@ -89,3 +89,24 @@ void tiles_expression_set_aftertouch_sensitivity(uint16_t depth_full_scale);
  * already follows. Note-on/off and velocity are NOT affected -- basic
  * MIDI keeps working while muted, only the expressive layer stops. */
 void tiles_expression_set_muted(bool muted);
+
+/* Real feedback: "we have haptics vibration randomly in mini games,
+ * that shouldnt happen." Root cause: the PAD_STATE_IDLE fresh-touch
+ * gate (see expression.c's own comment there) only ever stops a NEW
+ * touch from starting a strike while services/game_mode.h owns the
+ * board -- a pad already past IDLE at the exact moment game mode
+ * activates (e.g. incidental contact during the 4-button entry hold)
+ * was deliberately left alone, same as it is for every other "who owns
+ * the grid" case. That's the right call for expression_control's/
+ * op_mode's/octave_control's menus, where an in-flight note is probably
+ * a deliberate held note worth protecting -- but a pad still mid-strike
+ * the instant game mode turns on is essentially never a real musical
+ * note (both hands are on the 4 combo buttons to get there), so leaving
+ * it alone just means it keeps sampling Hall depth and can still commit
+ * a real note+haptic kick mid-game from mechanical vibration through
+ * the shared PCB as the player mashes the adjacent buttons. Call once,
+ * right when services/game_mode.h transitions into an active state --
+ * force-ends any pad already at PAD_STATE_NOTE_ON (real note-off +
+ * haptic stop) and resets every pad to PAD_STATE_IDLE regardless of
+ * where it was, closing the gap the fresh-touch gate alone couldn't. */
+void tiles_expression_force_release_all(void);

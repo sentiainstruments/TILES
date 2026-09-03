@@ -180,21 +180,28 @@
  * feedback ("give some flat full velocity... to aid aftertouch"), so a
  * confidently fast hit reliably maxes out. At or above the "min" time,
  * velocity floors at MIN_VELOCITY -- a slow, deliberate push. Between
- * them, VELOCITY_CURVE_EXPONENT (> 1) shapes the curve the same way it
- * did before: suppressing the low end relative to a straight line, so
- * a merely-adequate-speed press reads noticeably quieter than a
- * confidently fast one, closer to how an acoustic action feels than a
- * linear response would. All three constants are first attempts, not
- * measured against real strikes -- there's no equivalent captured data
- * yet for "how many ms does a hard strike actually take to cross
- * MIN_STRIKE_DEPTH_DELTA on this hardware," unlike the depth-delta
- * numbers above. The `[expression]` print below now reports
- * strike_time_ms directly on every commit specifically so the next
- * real-hardware session can calibrate these three constants from real
- * numbers instead of guessing a third velocity model. */
+ * them, VELOCITY_CURVE_EXPONENT shapes the curve: real feedback first
+ * asked for the acoustic-instrument feel a exponent > 1 gives (1.8,
+ * suppressing the low/slow end relative to a straight line so a merely-
+ * adequate-speed press reads noticeably quieter than a confidently fast
+ * one) -- then, after trying it: "make velocity curve and aftertouch
+ * less steep. more gradual for soft detection better." Suppressing the
+ * low end is exactly what made soft detection worse: d(curved)/d(time)
+ * is smallest right where slow/soft strikes live, compressing a wide
+ * range of genuinely different soft touches into a narrow band near
+ * MIN_VELOCITY with little to no felt difference between them. Dropped
+ * to 1.0 -- a plain linear response, equal sensitivity across the whole
+ * speed range, no low-end suppression at all. Both constants are still
+ * first attempts, not measured against real strikes -- there's no
+ * equivalent captured data yet for "how many ms does a hard strike
+ * actually take to cross MIN_STRIKE_DEPTH_DELTA on this hardware,"
+ * unlike the depth-delta numbers above. The `[expression]` print below
+ * now reports strike_time_ms directly on every commit specifically so
+ * the next real-hardware session can calibrate these three constants
+ * from real numbers instead of guessing a third velocity model. */
 #define STRIKE_TIME_MAX_VELOCITY_MS 10u
 #define STRIKE_TIME_MIN_VELOCITY_MS 150u
-#define VELOCITY_CURVE_EXPONENT 1.8f
+#define VELOCITY_CURVE_EXPONENT 1.0f
 
 /* Even a strike weak enough to barely clear MIN_STRIKE_DEPTH_DELTA
  * should produce an audible note, not near-silence -- the curve above
@@ -202,25 +209,35 @@
  * it's still clamped up to a floor rather than left near-silent. */
 #define MIN_VELOCITY 8u
 
-/* Real calibration data, not a placeholder: a serial-driven capture
- * session (diagnostics/calibration.h's 'f' command) with all 24 magnets
- * seated measured a normal, regular full press -- which bottoms out the
- * pad's mechanical travel, there's no further "harder" position -- as
- * |raw Z - rest baseline| = 784 to 1184 across all 24 pads, average 918.
- * 900 sits in that range: every pad reaches its own true full press
- * comfortably past this point (127 well before the mechanical stop, not
- * exactly at it), and using the average rather than the low end of the
- * spread keeps real dynamic range across most of a strike's travel
- * instead of every pad capping out early to accommodate the single
- * least-sensitive one. A real per-pad calibration curve (correcting for
- * that spread individually) is still explicitly out of V1 scope -- see
- * hall.h.
+/* Real calibration data, not a placeholder -- now from TWO sessions on
+ * TWO different physical units, which don't agree, and the newer one
+ * wins. An earlier unit's serial capture session (diagnostics/
+ * calibration.h's 'f' command, all 24 magnets seated, a normal regular
+ * full press -- which bottomed that unit's mechanical travel, no further
+ * "harder" position existed) measured |raw Z - rest baseline| = 784 to
+ * 1184, average 918; 900 was picked from that. Unit 2's own later
+ * session (diagnostics/README.md's own capture-session entry) measured
+ * a genuine STRONG STRIKE, not a "regular full press," across 4 sampled
+ * corner pads: 1697, 1488, 1328, 1280, average ~1448 -- 60% higher.
+ * Real feedback afterward: "make velocity curve and aftertouch less
+ * steep. more gradual for soft detection better." Leaving full-scale at
+ * 900 against unit 2's real ~1450 ceiling means aftertouch pegs at 127
+ * well before a real hard press's actual travel is used, which reads as
+ * steep/twitchy -- little room for gradual continued-pressure
+ * expression once it's already maxed out. Raised to 1450, unit 2's own
+ * real average, so the full 0-127 aftertouch sweep uses this unit's
+ * real strike range instead of an older, softer-reading unit's. Still a
+ * single shared constant across all 24 pads, not a real per-pad curve
+ * (explicitly out of V1 scope -- see hall.h) -- and still just the
+ * average of 4 sampled pads on ONE unit, not all 24; revisit if the
+ * remaining 20 pads (or the other 3 units) turn out meaningfully
+ * different once fully sampled.
  *
  * Runtime, not a fixed #define, so services/expression_control.h's
  * sub-menu (row 4, aftertouch sensitivity) can adjust it live via
  * tiles_expression_set_aftertouch_sensitivity() below. Defaults to
- * exactly this same calibrated 900 value. */
-static uint16_t s_depth_to_aftertouch_full_scale = 900u;
+ * exactly this same calibrated 1450 value. */
+static uint16_t s_depth_to_aftertouch_full_scale = 1450u;
 
 /* Aftertouch is meant to read like continuing pressure after the
  * strike, not raw per-sample noise -- an exponential moving average
@@ -881,9 +898,12 @@ static uint8_t velocity_from_strike_time(uint32_t strike_time_ms) {
     if (strike_time_ms >= STRIKE_TIME_MIN_VELOCITY_MS) {
         return (uint8_t)MIN_VELOCITY;
     }
-    /* Power curve, not linear -- normalized in (0, 1) as "how much of
-     * the way from slow to fast," exponent > 1 suppresses the low
-     * (slow) end relative to a straight line. */
+    /* powf() with VELOCITY_CURVE_EXPONENT == 1.0 is a plain linear
+     * response (see that constant's own comment for why) -- kept as a
+     * general power curve rather than hand-simplified to a straight
+     * multiply, so a future round can retune the exponent again without
+     * restructuring this function. normalized is in (0, 1) as "how much
+     * of the way from slow to fast." */
     float normalized = (float)(STRIKE_TIME_MIN_VELOCITY_MS - strike_time_ms) /
                         (float)(STRIKE_TIME_MIN_VELOCITY_MS - STRIKE_TIME_MAX_VELOCITY_MS);
     float curved = powf(normalized, VELOCITY_CURVE_EXPONENT);
@@ -951,6 +971,25 @@ static void end_held_note(pad_expr_t *s, uint8_t pad) {
     s->pitch_bend_active = false;
     uint8_t idx = (uint8_t)(s->midi_channel - TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL);
     s_mpe_channels[idx].in_use = false;
+}
+
+/* See this file's own header comment for the full "haptics vibration
+ * randomly in mini games" reasoning -- called once by services/
+ * game_mode.h right when it takes over the board. Only PAD_STATE_NOTE_ON
+ * pads need the real end_held_note() teardown (note-off + haptic stop +
+ * MPE channel release); a pad merely at PAD_STATE_AWAITING_STRIKE never
+ * claimed a channel or sent a note-on in the first place, so it just
+ * needs its state reset -- calling end_held_note() on one of those would
+ * send a bogus note-off and free an MPE channel that was never claimed. */
+void tiles_expression_force_release_all(void) {
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        uint8_t pad = (uint8_t)(i + 1u);
+        pad_expr_t *s = &s_pads[i];
+        if (s->state == PAD_STATE_NOTE_ON) {
+            end_held_note(s, pad);
+        }
+        s->state = PAD_STATE_IDLE;
+    }
 }
 
 /* MPE Member Channel allocator -- see s_mpe_channels' own comment for

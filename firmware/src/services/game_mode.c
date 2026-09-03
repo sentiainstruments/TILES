@@ -3,6 +3,7 @@
 #include "board_layout.h"
 #include "board_pins.h"
 #include "buttons.h"
+#include "expression.h"
 #include "expression_control.h"
 #include "hall.h"
 #include "haptics.h"
@@ -1457,6 +1458,16 @@ static void gm_toggle(uint32_t now_ms) {
         tiles_lighting_set_standby_active(true);
         tiles_buttons_set_standby_active(true);
         gm_enter_menu();
+        /* Real feedback: "we have haptics vibration randomly in mini
+         * games, that shouldnt happen" -- see expression.c's own
+         * tiles_expression_force_release_all() for the full reasoning.
+         * Closes the one gap the touch-gate fix in expression.c's
+         * PAD_STATE_IDLE branch couldn't: a pad already mid-strike or
+         * mid-note the instant the 4-button entry combo fires (almost
+         * certainly incidental contact, not deliberate play, since both
+         * hands are busy holding the combo) no longer keeps running its
+         * full strike/haptic pipeline unsupervised through gameplay. */
+        tiles_expression_force_release_all();
         /* Real bug found from real feedback: "game mode wont louch
          * anymore when 4 function buttons presed at once." All four
          * override-eligible buttons (triangle/diamond/circle/square) are
