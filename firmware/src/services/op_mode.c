@@ -31,11 +31,11 @@
  * selector." ARP is removed entirely (it had no real logic beyond a
  * stub + circle's beat-flash override, both deleted with it) rather than
  * kept as unreachable dead code alongside a mode that no longer has a
- * picker row -- a genuine future arp mode would be a fresh, deliberate
+ * picker slot -- a genuine future arp mode would be a fresh, deliberate
  * feature request, not scaffolding worth preserving unreachable. CHORD
- * keeps its enum value and row (still a real planned mode, just not
- * built yet) but that row now renders unavailable -- see
- * row_is_available() below -- so "only available modes lit" holds for
+ * keeps its enum value and a reserved menu slot (still a real planned
+ * mode, just not built yet) but that slot renders unavailable -- see
+ * col_is_available() below -- so "only available modes lit" holds for
  * both stubs the same way. */
 typedef enum {
     OP_MODE_MELODIC = 0,
@@ -46,21 +46,28 @@ typedef enum {
 
 #define OP_NUM_MODES 4u
 
-/* Row assignment within the menu. Row 1 is the pad row physically closest
- * to the function buttons (TILES_GRID_MIN_ROW + 1), same top-to-bottom
- * sense services/expression_control.h's sub-menu rows use. Guitar sits on
- * the LITERAL 3rd row -- real feedback: "this is going to be mode 3 on
- * the mode function selector," read as the physical 3rd row rather than
- * "the 3rd available mode counting down the list" (an earlier pass tried
- * the latter, putting guitar on row 4 instead -- real feedback afterward
- * ("fret mode is not activating the correct lights") suggested this was
- * confusing rather than clarifying, so it's now the plain, literal
- * reading). Chord (still unavailable, see row_is_available() below) took
- * the row guitar vacated. */
-#define OP_ROW_MELODIC 1u
-#define OP_ROW_SEQUENCER 2u
-#define OP_ROW_GUITAR 3u
-#define OP_ROW_CHORD 4u
+/* Menu layout: one pad per mode, packed together on a single row, each
+ * its own color -- real feedback: "the row thing for the mode menu on
+ * triangle is bad... like the minigame menu," pointing at
+ * services/game_mode.h's own game-select screen (gm_enter_menu()'s
+ * render_menu(): row 1, one pad per game, snake/brick/tetris/pong/simon
+ * each a single differently-colored pad, nothing else lit) as the
+ * reference shape to copy. Replaces an earlier design where each mode
+ * claimed an entire row (all 6 columns, same color) -- that version's
+ * own history (guitar moved from "3rd available mode" to "literal 3rd
+ * row" after real feedback found the row-counting confusing) is now
+ * moot along with the row scheme itself. Row 1 is the pad row physically
+ * closest to the function buttons (TILES_GRID_MIN_ROW + 1), matching
+ * both game_mode.h's own choice and services/expression_control.h's
+ * sub-menu's top-to-bottom sense. Column order: available modes first
+ * (melodic, sequencer, guitar), chord last since it's still unavailable
+ * (see col_is_available() below) -- a stable reserved slot rather than
+ * omitted, so the layout doesn't shift columns if chord ever ships. */
+#define OP_MENU_ROW 1u
+#define OP_MENU_COL_MELODIC 1u
+#define OP_MENU_COL_SEQUENCER 2u
+#define OP_MENU_COL_GUITAR 3u
+#define OP_MENU_COL_CHORD 4u
 
 /* Mode-selector row colors -- real feedback's own phrase, "mode selector
  * color": melodic = Sentia magenta (this codebase's brand color,
@@ -1201,35 +1208,33 @@ static void menu_exit(void) {
  * Matches the "unavailable = off and not selectable" language this file
  * already established for the scale/pattern pickers' own reserved slots
  * -- see handle_menu_taps() below for the "not selectable" half. */
-static bool row_is_available(uint8_t row) {
-    switch (row) {
-    case OP_ROW_MELODIC:
-    case OP_ROW_SEQUENCER:
-    case OP_ROW_GUITAR:
+static bool col_is_available(uint8_t col) {
+    switch (col) {
+    case OP_MENU_COL_MELODIC:
+    case OP_MENU_COL_SEQUENCER:
+    case OP_MENU_COL_GUITAR:
         return true;
-    default: /* OP_ROW_CHORD -- still a real planned mode, just not built yet */
+    default: /* OP_MENU_COL_CHORD (not built yet), or outside the menu entirely */
         return false;
     }
 }
 
-static void render_menu_row_color(uint8_t row, float *r, float *g, float *b) {
-    switch (row) {
-    case OP_ROW_MELODIC:
+static void render_menu_col_color(uint8_t col, float *r, float *g, float *b) {
+    switch (col) {
+    case OP_MENU_COL_MELODIC:
         *r = OP_MENU_MELODIC_R;
         *g = OP_MENU_MELODIC_G;
         *b = OP_MENU_MELODIC_B;
         break;
-    case OP_ROW_CHORD:
-        *r = OP_MENU_CHORD_R;
-        *g = OP_MENU_CHORD_G;
-        *b = OP_MENU_CHORD_B;
-        break;
-    case OP_ROW_SEQUENCER:
+    case OP_MENU_COL_SEQUENCER:
         *r = OP_MENU_SEQUENCER_R;
         *g = OP_MENU_SEQUENCER_G;
         *b = OP_MENU_SEQUENCER_B;
         break;
-    default: /* OP_ROW_GUITAR */
+    default: /* OP_MENU_COL_GUITAR -- only ever called for an available
+              * column (see render_menu() below), so this catch-all is
+              * safe: melodic/sequencer are handled above, chord is never
+              * available, leaving only guitar. */
         *r = OP_MENU_GUITAR_R;
         *g = OP_MENU_GUITAR_G;
         *b = OP_MENU_GUITAR_B;
@@ -1237,52 +1242,56 @@ static void render_menu_row_color(uint8_t row, float *r, float *g, float *b) {
     }
 }
 
-/* Row <-> mode, the inverse of handle_menu_taps()'s own row->mode
- * switch -- used only to find which single row (if any) is the mode
- * already active, for render_menu()'s pulsing "current mode" state. */
-static bool row_is_current_mode(uint8_t row) {
-    switch (row) {
-    case OP_ROW_MELODIC:
+/* Column <-> mode, the inverse of handle_menu_taps()'s own col->mode
+ * switch -- used only to find which single slot (if any) is the mode
+ * already active, for render_menu()'s pulsing "current mode" state.
+ * Every case listed explicitly (no catch-all default beyond false) --
+ * unlike render_menu_col_color() above, this is called for EVERY column
+ * including the ones outside the menu's 4 slots, so a careless default
+ * here would misreport some other column as "chord," pulsing a pad that
+ * isn't a mode slot at all. */
+static bool col_is_current_mode(uint8_t col) {
+    switch (col) {
+    case OP_MENU_COL_MELODIC:
         return s_active_mode == OP_MODE_MELODIC;
-    case OP_ROW_SEQUENCER:
+    case OP_MENU_COL_SEQUENCER:
         return s_active_mode == OP_MODE_SEQUENCER;
-    case OP_ROW_GUITAR:
+    case OP_MENU_COL_GUITAR:
         return s_active_mode == OP_MODE_GUITAR;
-    default: /* OP_ROW_CHORD */
+    case OP_MENU_COL_CHORD:
         return s_active_mode == OP_MODE_CHORD;
+    default:
+        return false;
     }
 }
 
-/* Real feedback: "diamond menu doesnt make sense. we defined each row for
- * a family of modes, we defined color ways, but lights should only be on
- * when a mode is available in that pad, aksi curent mode should pulse."
- * This was already true for the on/off half (row_is_available() gates
- * color at all), but never carried through the OTHER standardized menu
- * rule this file's own header already documents for both its menus --
- * "select color or active color is always white bright pulsing...
- * respective less bright but still readable bright for non selected and
- * available" (see OP_MENU_SELECTED_PULSE_PERIOD_MS's own comment): every
- * available row rendered at the SAME flat full-brightness hue regardless
- * of whether it was the mode you were already in, so there was no visual
- * difference between "available" and "this is what you're currently in."
- * Now: the current mode's row pulses white (this file's one "selected"
- * language, reused rather than invented fresh), any OTHER available row
- * shows its own hue dimmed to the readable-secondary level the scale
- * picker's own "available but not selected" pads already use
- * (OP_SCALE_AVAILABLE_LEVEL), and an unavailable row stays fully off. */
+/* Real feedback: "the row thing for the mode menu on triangle is bad...
+ * like the minigame menu" -- see OP_MENU_ROW/OP_MENU_COL_*'s own comment
+ * for the reference this copies (services/game_mode.h's game-select
+ * screen: one pad per game, packed onto row 1, nothing else lit). Same
+ * color rules an earlier round already established for the row-based
+ * version, just applied to a single pad per mode instead of an entire
+ * row: the current mode's pad pulses white (this file's one "selected"
+ * language, reused rather than invented fresh), any OTHER available
+ * mode's pad shows its own hue dimmed to the readable-secondary level
+ * the scale picker's own "available but not selected" pads already use
+ * (OP_SCALE_AVAILABLE_LEVEL), chord's reserved slot and every pad
+ * outside the menu row stay fully off. */
 static void render_menu(uint32_t now_ms) {
     float pulse = menu_selected_pulse_level(now_ms);
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
-        float r = 0.0f, g = 0.0f, b = 0.0f;
-        if (row_is_current_mode(row)) {
-            r = g = b = pulse;
-        } else if (row_is_available(row)) {
-            render_menu_row_color(row, &r, &g, &b);
-            r *= OP_SCALE_AVAILABLE_LEVEL;
-            g *= OP_SCALE_AVAILABLE_LEVEL;
-            b *= OP_SCALE_AVAILABLE_LEVEL;
-        }
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+            float r = 0.0f, g = 0.0f, b = 0.0f;
+            if (row == OP_MENU_ROW) {
+                if (col_is_current_mode(col)) {
+                    r = g = b = pulse;
+                } else if (col_is_available(col)) {
+                    render_menu_col_color(col, &r, &g, &b);
+                    r *= OP_SCALE_AVAILABLE_LEVEL;
+                    g *= OP_SCALE_AVAILABLE_LEVEL;
+                    b *= OP_SCALE_AVAILABLE_LEVEL;
+                }
+            }
             tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), r, g, b);
         }
     }
@@ -1466,7 +1475,11 @@ static void set_active_mode(tiles_op_mode_t mode) {
  * immediately (no persistent "selected, still browsing" state here the
  * way the scale picker has -- a mode activates and takes over the grid
  * the instant it's confirmed), so there's no pulsing-haptic step for
- * this menu specifically. */
+ * this menu specifically. Touch-click haptic acknowledgment still fires
+ * for ANY pad on the grid (matching the old row-based version's own
+ * behavior), even though selection itself now only ever fires on
+ * OP_MENU_ROW's 4 slots -- see render_menu()'s own comment for why the
+ * rest of the grid is otherwise unlit and unused while this menu is up. */
 static void handle_menu_taps(void) {
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
@@ -1475,13 +1488,14 @@ static void handle_menu_taps(void) {
             if (touched && !s_menu_prev_pad_touched[pad - 1u]) {
                 tiles_haptics_trigger_touch_pulse(pad);
             }
-            if (touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD && row_is_available(row)) {
+            if (row == OP_MENU_ROW && touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD &&
+                col_is_available(col)) {
                 tiles_op_mode_t mode = OP_MODE_MELODIC;
-                if (row == OP_ROW_CHORD) {
+                if (col == OP_MENU_COL_CHORD) {
                     mode = OP_MODE_CHORD;
-                } else if (row == OP_ROW_SEQUENCER) {
+                } else if (col == OP_MENU_COL_SEQUENCER) {
                     mode = OP_MODE_SEQUENCER;
-                } else if (row == OP_ROW_GUITAR) {
+                } else if (col == OP_MENU_COL_GUITAR) {
                     mode = OP_MODE_GUITAR;
                 }
                 menu_exit();

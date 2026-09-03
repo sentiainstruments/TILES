@@ -43,6 +43,18 @@ diagnostics down with it.
   a wake threshold needs a light-touch data point this session didn't
   capture (only rest and full-press), not just re-running the same two
   numbers.
+  **Standing rule since unit 2's own capture session, real feedback:
+  "calculate two values. no press and strong strke... add this as
+  calibration rules on github":** only rest baseline ('r') + one strong
+  strike ('m') per pad from here on, not a separate "regular full press"
+  ('f') step -- see `calibration.h`'s own header for the full reasoning
+  (unit 2's sampled pad 1 showed a huge 33-vs-1697 gap between a normal
+  press and a real hard strike, confirming "regular" isn't a
+  standardizable target the way "as hard as it goes" is). Unit 2's own
+  first sampled pad this way: pad 1, baseline z=384, strong-strike
+  depth=1697 -- one pad so far, session moved on before covering the
+  rest of the originally-planned 4-corner sample (1, 6, 19, 24); pick
+  this back up before trusting any constant derived from it.
 - Everything else in this list (per-pad commands beyond calibration
   capture, calibration save/erase, manufacturing tests) is not built
   yet.

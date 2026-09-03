@@ -48,31 +48,36 @@
  * which now also refuses to fire while this module owns the grid).
  *
  * ---- The menu -----------------------------------------------------------
- * 4 rows (one per mode), the same "row = feature, column = value" shape
- * services/expression_control.h's sub-menu uses rather than
- * services/game_mode.h's single row of 4 touch-targets -- real feedback:
- * "we have those 4 modes for now each on its own row because we might
- * add alternative modes derived from each to each corresponding
- * column." Only column 1 (the whole row, for now) is wired to anything;
- * later variants (e.g. the two-lane 16-step sequencer variant mentioned
- * in real feedback) would occupy other columns of the SEQUENCER row
- * without disturbing this file's overall shape. Tapping any pad in a row
- * activates that row's mode (default variant) and closes the menu.
- * Row colors ("mode selector color" -- real feedback's own phrase):
+ * One pad per mode, all four packed onto a single row -- real feedback:
+ * "the row thing for the mode menu on triangle is bad... like the
+ * minigame menu," pointing at services/game_mode.h's own game-select
+ * screen (one pad per game on row 1) as the shape to copy. Replaces an
+ * earlier design that gave each mode an entire row (all 6 columns, one
+ * color): "we have those 4 modes for now each on its own row because we
+ * might add alternative modes derived from each to each corresponding
+ * column" was that version's own reasoning, now superseded -- no mode
+ * currently has any such column-variant built, so the row-per-mode
+ * headroom it was reserving was never actually used. Tapping a mode's
+ * pad activates that mode and closes the menu; every other pad, in the
+ * menu row or not, is unlit and does nothing while browsing.
+ * Slot colors ("mode selector color" -- real feedback's own phrase):
  * melodic = Sentia magenta, chord = green, sequencer = red, guitar =
  * amber/orange.
- * **Only AVAILABLE rows actually light up or respond to a tap** -- real
+ * **Only AVAILABLE slots actually light up or respond to a tap** -- real
  * feedback: "the mode selector has all these lights always on. only
  * availabkle modes shouyld be on meaning for now only sequencer, and the
- * note mode" (now joined by guitar). Chord's row renders fully off and
+ * note mode" (now joined by guitar). Chord's slot renders fully off and
  * is a no-op to tap, the same "unavailable" language this file's own
- * scale/pattern pickers already use for their own reserved slots.
+ * scale/pattern pickers already use for their own reserved slots. The
+ * current mode's own slot pulses white rather than showing its plain
+ * hue, this file's one "selected" language, matching the same rule
+ * services/expression_control.h's sub-menu uses.
  *
  * ---- Chord: selectable, not yet implemented ------------------------------
  * Real feedback named chord mode explicitly as "not implemented yet" --
  * still a real planned mode (not removed, unlike arp), just correctly
  * marked unavailable in the picker for now (see above). Selecting it
- * anyway (were its row ever made available again) wouldn't claim the pad
+ * anyway (were its slot ever made available again) wouldn't claim the pad
  * grid -- see tiles_op_mode_owns_pad_grid() below -- so touching pads
  * would keep playing completely normal melodic notes underneath until
  * its real logic is built. A deliberate, honest stub, not a guess
