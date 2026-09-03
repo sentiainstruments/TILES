@@ -292,15 +292,48 @@ bool tiles_note_map_is_chord_mode_active(void);
 bool tiles_note_map_is_chord_region_pad(uint8_t logical_pad);
 
 /* Computes the 3 notes (root, diatonic third, diatonic fifth -- built
- * from the CURRENTLY selected scale's own degree spacing, so the triad
+ * from a real 7-note diatonic scale's own degree spacing, so the triad
  * quality (major/minor/diminished) automatically matches whichever
- * scale is active, exactly like a real "auto-chord"/chord-organ
+ * diatonic scale is active, exactly like a real "auto-chord"/chord-organ
  * instrument harmonizes each scale degree) for a chord-region pad, each
- * ALREADY shifted one octave down from where the equivalent melody note
+ * ALREADY shifted two octaves down from where the equivalent melody note
  * would sit -- real feedback: "the main thing is chords are one octave
- * lower than melodic." Writes exactly 3 notes into out_notes; a pad
- * outside the chord region (or chord mode not active) writes all
+ * lower than melodic," then "make chords an octave loower." Uses the
+ * globally selected scale if it's genuinely diatonic (7 notes), else
+ * falls back to Ionian (major) -- real feedback, once heard on real
+ * hardware: "chords are not structured propperly. they should all be
+ * the chords on a same key and real chords not random 3 note group";
+ * the skip-one/skip-two harmonization below only produces a real triad
+ * against a real diatonic scale (see note_map.c's own chord_mode_
+ * scale_table() for the full reasoning). Writes exactly 3 notes into
+ * out_notes, always in root position (root, third, fifth ascending) --
+ * a pad outside the chord region (or chord mode not active) writes all
  * zeros -- callers are expected to only call this for pads
- * tiles_note_map_is_chord_region_pad() already confirmed. */
+ * tiles_note_map_is_chord_region_pad() already confirmed. Callers that
+ * want smoother voice leading between successive chords (see op_mode.c's
+ * chord_pad_note_on()) are expected to re-voice these 3 notes themselves
+ * via tiles_note_map_nearest_pitch_class() below -- this function always
+ * returns the same root-position triad for a given pad regardless of
+ * what played before it, so a caller with no voice-leading state (or
+ * anything just wanting the plain triad) still gets a musically correct
+ * answer. */
 #define TILES_NOTE_MAP_CHORD_NUM_NOTES 3u
 void tiles_note_map_get_chord_notes(uint8_t logical_pad, uint8_t out_notes[TILES_NOTE_MAP_CHORD_NUM_NOTES]);
+
+/* Nearest instance of `note`'s own pitch class to `anchor` (e.g. pitch
+ * class G folds to 5 semitones BELOW an anchor of C, not 7 above, since
+ * |-5| < |+7|). Real feedback, chord mode heard on real hardware: "make
+ * the chords with inversions to make them feel more musical" -- the
+ * intended caller is op_mode.c's chord playback, re-voicing each new
+ * chord's raw root-position triad (from tiles_note_map_get_chord_notes()
+ * above) toward wherever the previous chord actually sounded, one note
+ * at a time, rather than every chord always stacking upward fresh from
+ * its own root -- the same "keep the voicing compact, in the same
+ * register" quality a real chord organ/autoharp's auto-chord has, and
+ * automatically produces real chord INVERSIONS wherever that's what
+ * keeps a chord tone closest to where the music already was. Exposed
+ * here rather than kept internal because the "last chord played" state
+ * that supplies `anchor` belongs in op_mode.c alongside this file's
+ * other chord-playback bookkeeping, not in this otherwise-stateless
+ * note-mapping file. */
+uint8_t tiles_note_map_nearest_pitch_class(uint8_t note, uint8_t anchor);

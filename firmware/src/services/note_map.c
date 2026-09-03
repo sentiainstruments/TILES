@@ -120,8 +120,11 @@ bool tiles_note_map_is_guitar_fret_marker_pad(uint8_t logical_pad, bool *out_is_
 #define CHORD_MELODY_MIN_COL 3u
 #define CHORD_MELODY_NUM_COLS 4u
 /* Chord octave offset -- real feedback: "the main thing is chords are
- * one octave lower than melodic." */
-#define CHORD_OCTAVE_DOWN_SEMITONES 12
+ * one octave lower than melodic," then, once heard on real hardware,
+ * "make chords an octave loower" -- one octave wasn't low enough to
+ * read as a distinct "bass/pad" register from the melody grid, so this
+ * is now two full octaves below the equivalent melody note. */
+#define CHORD_OCTAVE_DOWN_SEMITONES 24
 /* Diatonic third and fifth, in SCALE-DEGREE space (not semitones) --
  * skip-one, skip-two through the scale's own interval table, same as
  * how a real chord-organ/autoharp harmonizes each scale degree. This is
@@ -130,6 +133,24 @@ bool tiles_note_map_is_guitar_fret_marker_pad(uint8_t logical_pad, bool *out_is_
  * building a plain major triad regardless of scale. */
 #define CHORD_THIRD_DEGREE_STEP 2u
 #define CHORD_FIFTH_DEGREE_STEP 4u
+/* Real feedback, once played on real hardware: "chords are not
+ * structured propperly. they should all be the chords on a same key
+ * and real chords not random 3 note group. and melodic side should me
+ * in key not chormatic." Root cause: TILES boots into TILES_SCALE_
+ * CHROMATIC by default (`s_scale`'s own initializer above), and the
+ * skip-one/skip-two degree harmonization above ONLY produces a real
+ * triad when the active scale has exactly 7 notes -- stacking by
+ * scale-degree thirds is the textbook definition of diatonic harmony,
+ * but it's only equivalent to real musical thirds (3-4 semitones) and
+ * fifths (7 semitones) for a 7-note (diatonic) scale. On the 12-note
+ * chromatic scale, "skip two scale degrees" is just "skip two
+ * semitones" -- exactly the "random 3 note group" (and "chromatic"
+ * melody) real feedback heard. Chord mode now always harmonizes/plays
+ * melody against a real 7-note diatonic scale regardless of whatever
+ * exotic/chromatic scale is globally selected -- see
+ * chord_mode_scale_table() below, added right after current_scale_
+ * table() since it needs that function's own type. */
+#define CHORD_DIATONIC_SCALE_NOTE_COUNT 7u
 
 static bool s_chord_mode_active;
 
@@ -400,17 +421,75 @@ static tiles_scale_table_t current_scale_table(void) {
     return table;
 }
 
-/* Folds `degree` through the currently selected scale's own interval
- * table, exactly like tiles_note_map_get_note()'s own tail end -- shared
- * so chord mode's melody notes and its chord triads (which need this
- * done up to 3 times, once per chord tone) both agree with normal
- * scale-based play on what a given degree actually sounds like. */
-static int note_for_scale_degree(uint8_t degree) {
-    tiles_scale_table_t table = current_scale_table();
+/* Folds `degree` through `table` -- the shared tail end both
+ * tiles_note_map_get_note() and tiles_note_map_get_chord_notes() use to
+ * turn a scale degree into an actual note, factored out so both take an
+ * explicit table instead of always reading the globally selected scale
+ * (see chord_mode_scale_table() below for why chord mode needs that). */
+static int note_for_scale_degree_using(tiles_scale_table_t table, uint8_t degree) {
     uint8_t octave_num = (uint8_t)(degree / table.count);
     uint8_t degree_in_octave = (uint8_t)(degree % table.count);
     int interval = (int)octave_num * 12 + (int)table.intervals[degree_in_octave];
     return (int)TILES_NOTE_MAP_BASE_NOTE + interval + (int)s_octave_shift * 12 + (int)s_key_offset;
+}
+
+/* Plain scale-based play (normal melodic/guitar-off play, and chord
+ * mode's melody grid when the globally selected scale already IS
+ * diatonic) always uses whatever scale is actually selected. */
+static int note_for_scale_degree(uint8_t degree) {
+    return note_for_scale_degree_using(current_scale_table(), degree);
+}
+
+/* See CHORD_DIATONIC_SCALE_NOTE_COUNT's own comment above: chord mode's
+ * skip-one/skip-two harmonization only produces real triads (and a
+ * real "in key" melody) against a genuine 7-note diatonic scale. Uses
+ * the globally selected scale as-is when it qualifies (so choosing
+ * Dorian/Lydian/Mixolydian etc. from the picker still colors chord
+ * mode's chords/melody correctly), falls back to Ionian (major) -- the
+ * most common "default key" -- whenever it doesn't (chromatic
+ * (TILES_SCALE_CHROMATIC is this file's own boot default), pentatonic,
+ * blues, whole-tone, diminished, or an exotic/custom scale, none of
+ * which have a musically real "third"/"fifth" two/four scale-steps
+ * away). Checked by note count, not by an enum whitelist, so any
+ * future 7-note custom scale automatically qualifies too. */
+static tiles_scale_table_t chord_mode_scale_table(void) {
+    tiles_scale_table_t table = current_scale_table();
+    if (table.count == CHORD_DIATONIC_SCALE_NOTE_COUNT) {
+        return table;
+    }
+    return scale_table(TILES_SCALE_IONIAN);
+}
+
+/* Nearest instance of `note`'s own pitch class to `anchor` -- e.g. pitch
+ * class G (7 semitones above C) folds to 5 semitones BELOW an anchor of
+ * C, not 7 above, since |-5| < |+7|. Used by chord_pad_note_on() in
+ * op_mode.c to voice each new chord as close as possible to whatever
+ * chord last sounded, rather than always stacking root-third-fifth
+ * upward from each chord's own root -- see that function's own comment
+ * for why ("make the chords with inversions to make them feel more
+ * musical," real feedback, matching how a real chord organ/autoharp's
+ * auto-chord voicing stays compact instead of leaping registers every
+ * time the harmonized root climbs to a new scale degree). Exposed here
+ * (not static) because op_mode.c, not this file, is where the "last
+ * chord played" state that supplies `anchor` naturally lives -- this
+ * file's own note-mapping functions have no sequential/temporal state
+ * of their own otherwise, and this keeps it that way. */
+uint8_t tiles_note_map_nearest_pitch_class(uint8_t note, uint8_t anchor) {
+    int pitch_class = (int)note % 12;
+    int octave_base = (int)anchor - ((int)anchor % 12);
+    int candidate = octave_base + pitch_class;
+    if (candidate - (int)anchor > 6) {
+        candidate -= 12;
+    } else if ((int)anchor - candidate > 6) {
+        candidate += 12;
+    }
+    if (candidate < 0) {
+        candidate = 0;
+    }
+    if (candidate > 127) {
+        candidate = 127;
+    }
+    return (uint8_t)candidate;
 }
 
 void tiles_note_map_get_chord_notes(uint8_t logical_pad, uint8_t out_notes[TILES_NOTE_MAP_CHORD_NUM_NOTES]) {
@@ -421,10 +500,11 @@ void tiles_note_map_get_chord_notes(uint8_t logical_pad, uint8_t out_notes[TILES
         }
         return;
     }
+    tiles_scale_table_t table = chord_mode_scale_table();
     uint8_t root_degree = chord_mode_degree(cfg);
     const uint8_t degree_steps[TILES_NOTE_MAP_CHORD_NUM_NOTES] = {0u, CHORD_THIRD_DEGREE_STEP, CHORD_FIFTH_DEGREE_STEP};
     for (uint8_t i = 0; i < TILES_NOTE_MAP_CHORD_NUM_NOTES; i++) {
-        int note = note_for_scale_degree((uint8_t)(root_degree + degree_steps[i])) - CHORD_OCTAVE_DOWN_SEMITONES;
+        int note = note_for_scale_degree_using(table, (uint8_t)(root_degree + degree_steps[i])) - CHORD_OCTAVE_DOWN_SEMITONES;
         if (note < 0) {
             note = 0;
         }
@@ -454,9 +534,15 @@ uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
          * this function. This still returns something sane (this
          * region's own root, at melodic pitch, no octave-down) purely so
          * a stray call here can't return garbage; nothing that actually
-         * plays a sound is expected to use it for a chord-region pad. */
+         * plays a sound is expected to use it for a chord-region pad.
+         * Melody-region pads (col 3-6) DO really play through here (this
+         * is services/expression.c's own real note lookup for them) --
+         * chord_mode_scale_table(), not current_scale_table(), so the
+         * melody grid is always a real "in key" diatonic scale even when
+         * the globally selected scale is chromatic or otherwise
+         * non-diatonic -- see that function's own comment. */
         uint8_t degree = chord_mode_degree(cfg);
-        int note = note_for_scale_degree(degree);
+        int note = note_for_scale_degree_using(chord_mode_scale_table(), degree);
         if (note < 0) {
             note = 0;
         }
@@ -501,9 +587,15 @@ bool tiles_note_map_is_root_pad(uint8_t logical_pad) {
      * see tiles_note_map_is_chord_region_pad()), so which specific
      * formula runs for them doesn't matter in practice; using the same
      * one keeps this function total and simple rather than adding a
-     * third branch for a case nothing ever looks at. */
+     * third branch for a case nothing ever looks at. Chord mode divides
+     * by chord_mode_scale_table()'s count, not current_scale_table()'s
+     * -- must agree with tiles_note_map_get_note()'s own melody-region
+     * branch above on which table is actually in play, or this would
+     * mislabel root pads whenever the globally selected scale isn't
+     * diatonic. */
     uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : pad_degree(cfg);
-    return (degree % current_scale_table().count) == 0u;
+    uint8_t scale_note_count = s_chord_mode_active ? chord_mode_scale_table().count : current_scale_table().count;
+    return (degree % scale_note_count) == 0u;
 }
 
 bool tiles_note_map_is_natural_pad(uint8_t logical_pad) {

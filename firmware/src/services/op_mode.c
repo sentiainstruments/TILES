@@ -549,6 +549,23 @@ static bool s_chord_pad_touched[TILES_NUM_PADS];
 static bool s_chord_pad_sounding[TILES_NUM_PADS];
 static uint8_t s_chord_pad_notes[TILES_NUM_PADS][TILES_NOTE_MAP_CHORD_NUM_NOTES];
 
+/* Real feedback, chord mode heard on real hardware: "make the chords
+ * with inversions to make them feel more musical, take insouration from
+ * the [Omnichord]" -- a real chord-organ/autoharp doesn't just stack
+ * every chord root-third-fifth fresh off its own root (which, across 8
+ * different scale-degree roots, would mean each chord's overall
+ * register keeps climbing as you move up the strip); it keeps the
+ * voicing compact by choosing whichever inversion sits closest to
+ * wherever the music already was. Tracks the actual 3 notes of
+ * whichever chord was most recently STRUCK (not released -- see
+ * chord_pad_note_on() below), so consecutive chords gravitate toward
+ * each other instead of each being voiced in isolation. Not reset on
+ * release (a chord ending shouldn't erase where the voicing was, only
+ * a fresh entry into chord mode should -- see set_active_mode()'s own
+ * chord-mode-entry block, which clears s_chord_voice_anchor_valid). */
+static uint8_t s_chord_voice_anchor_notes[TILES_NOTE_MAP_CHORD_NUM_NOTES];
+static bool s_chord_voice_anchor_valid;
+
 static void chord_pad_note_off(uint8_t pad) {
     if (!s_chord_pad_sounding[pad - 1u]) {
         return;
@@ -562,9 +579,29 @@ static void chord_pad_note_off(uint8_t pad) {
 
 static void chord_pad_note_on(uint8_t pad) {
     tiles_note_map_get_chord_notes(pad, s_chord_pad_notes[pad - 1u]);
+    /* Re-voice this chord's raw root-position triad toward whichever
+     * chord last sounded -- each of the 3 notes independently folds to
+     * the nearest octave of its own pitch class relative to the
+     * CORRESPONDING voice of the anchor chord (voice 0<->0, 1<->1,
+     * 2<->2), not just to a single shared reference point, so root
+     * stays near the previous root, third near the previous third, and
+     * fifth near the previous fifth -- minimal movement per voice,
+     * exactly the "smooth voice leading" a real chord organ/autoharp's
+     * auto-chord aims for. The very first chord since entering chord
+     * mode has no anchor yet, so it plays in plain root position
+     * unchanged -- exactly matching what tiles_note_map_get_chord_notes()
+     * already returned before this re-voicing step existed. */
+    if (s_chord_voice_anchor_valid) {
+        for (uint8_t i = 0; i < TILES_NOTE_MAP_CHORD_NUM_NOTES; i++) {
+            s_chord_pad_notes[pad - 1u][i] =
+                tiles_note_map_nearest_pitch_class(s_chord_pad_notes[pad - 1u][i], s_chord_voice_anchor_notes[i]);
+        }
+    }
     for (uint8_t i = 0; i < TILES_NOTE_MAP_CHORD_NUM_NOTES; i++) {
         tiles_midi_note_on(OP_CHORD_CHANNEL, s_chord_pad_notes[pad - 1u][i], OP_CHORD_VELOCITY);
+        s_chord_voice_anchor_notes[i] = s_chord_pad_notes[pad - 1u][i];
     }
+    s_chord_voice_anchor_valid = true;
     tiles_haptics_trigger_kick(pad, OP_CHORD_VELOCITY);
     s_chord_pad_sounding[pad - 1u] = true;
 }
@@ -1558,6 +1595,13 @@ static void set_active_mode(tiles_op_mode_t mode) {
      * mode takes over. */
     tiles_note_map_set_chord_mode(mode == OP_MODE_CHORD);
     if (mode == OP_MODE_CHORD) {
+        /* Fresh voice-leading anchor every time chord mode is (re-)
+         * entered -- see s_chord_voice_anchor_valid's own comment above
+         * chord_pad_note_on() for why: the very first chord of a new
+         * session should play in plain root position, not gravitate
+         * toward wherever some earlier, unrelated chord-mode session
+         * happened to leave off. */
+        s_chord_voice_anchor_valid = false;
         for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
             s_chord_pad_touched[pad - 1u] = tiles_touch_is_touched(pad);
         }

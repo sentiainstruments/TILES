@@ -3309,5 +3309,62 @@ not its code.
   chord's column (it was hardcoded false while chord was still an
   unbuilt stub), making it selectable from the mode picker for the
   first time.
+- **Chord mode, corrected after real hardware testing -- real feedback:
+  "chords are not structured propperly. they should all be the chords
+  on a same key and real chords not random 3 note group. and melodic
+  side should me in key not chormatic," then "make chords an octave
+  loower and make the chords with inversions to make them feel more
+  musical take insouration from the [Omnichord]."** Root cause of the
+  first complaint: `note_map.c` boots into `TILES_SCALE_CHROMATIC` by
+  default, and chord mode's skip-one/skip-two scale-degree
+  harmonization only produces a real musical third/fifth when the
+  active scale genuinely has 7 notes (that's the textbook definition of
+  diatonic harmony) -- on the 12-note chromatic scale, "skip two scale
+  degrees" is just "skip two semitones," which is exactly the "random 3
+  note group" (and chromatic-sounding melody) heard on real hardware.
+  Fixed with a new `chord_mode_scale_table()` in `note_map.c`: uses the
+  globally selected scale as-is when it's already diatonic (7 notes --
+  so picking Dorian/Lydian/Mixolydian etc. from the picker still colors
+  chord mode correctly), falls back to Ionian (major) otherwise. Both
+  the chord strip (`tiles_note_map_get_chord_notes()`) and the melody
+  grid (`tiles_note_map_get_note()`'s chord-mode branch) now go through
+  this instead of whatever scale happens to be globally selected, so
+  melody is always real and "in key" and chords are always real triads,
+  regardless of the global scale. `tiles_note_map_is_root_pad()`'s own
+  modulo was updated to match, or it would have mislabeled root pads
+  under the same fallback. `note_for_scale_degree()` was split into a
+  table-parameterized `note_for_scale_degree_using()` to let both the
+  normal path and this new fallback path share the identical fold logic
+  rather than duplicating it.
+
+  "make chords an octave loower": `CHORD_OCTAVE_DOWN_SEMITONES` raised
+  12 -> 24 -- one octave down read as too close to the melody grid's own
+  register to feel like a distinct bass/pad layer.
+
+  "make the chords with inversions to make them feel more musical, take
+  insouration from the [Omnichord]" -- real chord organs/autoharps (the
+  Omnichord being the canonical example) don't just stack every chord
+  root-third-fifth fresh off its own root; across 8 different
+  scale-degree roots that would mean each chord's overall register
+  keeps climbing as you move up the strip, never settling into a
+  compact "pad" sound. Added `tiles_note_map_nearest_pitch_class(note,
+  anchor)` in `note_map.c` -- folds `note`'s own pitch class to whichever
+  octave sits closest to `anchor` (e.g. a fifth 7 semitones above the
+  anchor folds to 5 semitones BELOW it instead, since |-5| < |+7|,
+  automatically producing a real chord INVERSION wherever that's what
+  keeps the chord compact). `op_mode.c`'s `chord_pad_note_on()` now
+  tracks the actual 3 notes of whichever chord last STRUCK
+  (`s_chord_voice_anchor_notes`, reset only on a fresh entry into chord
+  mode -- see `set_active_mode()`) and re-voices each new chord's raw
+  root-position triad toward the previous chord's corresponding voice
+  (root toward root, third toward third, fifth toward fifth) before it
+  ever fires, one octave-fold per voice. The very first chord struck in
+  a session has no anchor yet and plays in plain root position, exactly
+  as `tiles_note_map_get_chord_notes()` returns it. This function lives
+  in `note_map.c` rather than being kept an internal op_mode.c detail
+  because it's pure pitch-class math with no state of its own, but the
+  "last chord played" state it needs stays in `op_mode.c` alongside
+  this file's other chord-playback bookkeeping -- `note_map.c`'s own
+  note-mapping functions otherwise carry no sequential/temporal state.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
