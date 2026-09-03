@@ -8,8 +8,6 @@
 #include "sk6805.h"
 #include "tca9554.h"
 
-#include "pico/time.h"
-
 /* Real feedback, across several rounds: "make all led brighter its hard
  * to see" (10 -> 25), then "lets standardise led brightnbess, resting led
  * should be brigher always. en its too dim" -- raised again, 25 -> 50, to
@@ -257,24 +255,6 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
     tiles_tca9554_disable_all_muxes(&s_led_mux);
     tiles_tca9554_set_select(&s_led_mux, cfg->led.mux_channel);
     tiles_tca9554_enable_mux(&s_led_mux, cfg->led.mux_index);
-    /* Real feedback: "why does the ripple have a bleed of magenta in
-     * some pads" -- during the boot animation's white rain/fade phases,
-     * which only ever command equal R=G=B (see boot_sequence.c's
-     * write_frame_white()), so no color bias is possible from the value
-     * being sent -- the packed word is GRB-ordered (sk6805.c's own
-     * tiles_sk6805_pack_rgb()) with green transmitted FIRST; if this
-     * pad's downstream analog mux channel hasn't fully settled by the
-     * time the PIO starts clocking bits, green -- the first byte out --
-     * is the one most likely to arrive short, and white missing its
-     * green is exactly magenta. Nothing enforced a settling gap here
-     * before now: enable_mux() returns as soon as its own I2C write
-     * finishes, which says nothing about how fast the actual downstream
-     * switch has physically settled, and that likely varies pad-to-pad
-     * with trace length/capacitance -- consistent with "some pads," not
-     * all of them. This is a first-attempt guess, NOT a confirmed root
-     * cause (no scope/logic-analyzer trace backs it) -- revert if it
-     * doesn't actually clear the bleed on real hardware. */
-    sleep_us(20);
     tiles_sk6805_write(&s_pad_chain, &pixel, 1);
     tiles_tca9554_disable_all_muxes(&s_led_mux);
 }

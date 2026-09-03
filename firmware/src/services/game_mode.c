@@ -1447,32 +1447,11 @@ static bool gm_combo_held(void) {
            tiles_button_is_pressed(6u);
 }
 
-static bool s_gm_override_prev_triangle;
-static bool s_gm_override_prev_diamond;
-static bool s_gm_override_prev_circle;
-static bool s_gm_override_prev_square;
-
 static void gm_toggle(uint32_t now_ms) {
     if (s_gm_state == GM_STATE_OFF) {
         tiles_lighting_set_standby_active(true);
         tiles_buttons_set_standby_active(true);
         gm_enter_menu();
-        /* Real bug found from real feedback: "game mode wont louch
-         * anymore when 4 function buttons presed at once." All four
-         * override-eligible buttons (triangle/diamond/circle/square) are
-         * BY DEFINITION still physically held right now -- that's what
-         * gm_combo_held() just required to get here. Seeding these
-         * "previous state" trackers to true (matching reality) means
-         * gm_override_button_pressed()'s very first check right after
-         * entry sees no NEW press edge on any of them and doesn't
-         * immediately exit what was just entered. Leaving them at
-         * whatever stale value they last held (most likely false, from
-         * a prior clean exit) would misread this continued hold as a
-         * fresh press and cancel entry on the very same tick. */
-        s_gm_override_prev_triangle = true;
-        s_gm_override_prev_diamond = true;
-        s_gm_override_prev_circle = true;
-        s_gm_override_prev_square = true;
     } else {
         s_gm_state = GM_STATE_OFF;
         tiles_lighting_set_standby_active(false);
@@ -1513,38 +1492,19 @@ static void gm_check_toggle_gesture(uint32_t now_ms) {
  * suppressed" pattern (a deliberate anti-spurious-click safeguard, see
  * their own comments) means a release-then-press is needed to actually
  * open that button's menu, one extra motion rather than a seamless
- * single press.
- * Fires on a fresh PRESS EDGE of the relevant button(s), not just
- * "currently held" -- real bug found from real feedback: "game mode
- * wont louch anymore when 4 function buttons presed at once." Checking
- * raw held state meant the tail end of the entry combo itself (all four
- * buttons still physically down the instant gm_toggle() just turned
- * game mode ON) immediately satisfied "triangle or diamond is held" on
- * the very next check, canceling the entry it was still in the middle
- * of. gm_toggle()'s own entry branch seeds these four "previous state"
- * trackers to true for exactly this reason -- see its own comment. */
+ * single press. */
 static bool gm_override_button_pressed(void) {
-    bool triangle = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
-    bool diamond = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
-    bool circle = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
-    bool square = tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
-
-    bool triggered = false;
-    if (s_gm_state != GM_STATE_OFF) {
-        if ((triangle && !s_gm_override_prev_triangle) || (diamond && !s_gm_override_prev_diamond)) {
-            triggered = true;
-        }
-        if (s_gm_state == GM_STATE_MENU &&
-            ((circle && !s_gm_override_prev_circle) || (square && !s_gm_override_prev_square))) {
-            triggered = true;
-        }
+    if (s_gm_state == GM_STATE_OFF) {
+        return false;
     }
-
-    s_gm_override_prev_triangle = triangle;
-    s_gm_override_prev_diamond = diamond;
-    s_gm_override_prev_circle = circle;
-    s_gm_override_prev_square = square;
-    return triggered;
+    if (tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) || tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID)) {
+        return true;
+    }
+    if (s_gm_state == GM_STATE_MENU &&
+        (tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID) || tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID))) {
+        return true;
+    }
+    return false;
 }
 
 void tiles_game_mode_init(void) {
@@ -1558,10 +1518,6 @@ void tiles_game_mode_init(void) {
     s_gm_prev_pad4_touched = false;
     s_gm_prev_pad5_touched = false;
     s_gm_melody_active = false;
-    s_gm_override_prev_triangle = false;
-    s_gm_override_prev_diamond = false;
-    s_gm_override_prev_circle = false;
-    s_gm_override_prev_square = false;
 }
 
 void tiles_game_mode_scan(void) {

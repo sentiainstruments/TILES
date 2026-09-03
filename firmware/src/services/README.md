@@ -3047,44 +3047,5 @@ not its code.
      round -- doing so would mean weakening that safeguard everywhere
      else it's used too, which wasn't part of this ask and isn't
      something to risk the night before a demo.
-  5. **Real regression found and fixed same-session: game mode wouldn't
-     enter at all after part 4 above landed.** Real feedback: "game mode
-     wont louch anymore when 4 function buttons presed at once."
-     `gm_override_button_pressed()` checked raw held state, not a press
-     edge -- so the instant `gm_toggle()` turned game mode ON (after the
-     4-button hold), all four override-eligible buttons were, by
-     definition, STILL physically down from that same hold, which the
-     very next check read as "triangle/diamond just got pressed" and
-     immediately exited right back out, same tick. Fixed with real
-     press-edge tracking (`s_gm_override_prev_*`) instead of raw state,
-     seeded to `true` for all four right in `gm_toggle()`'s own entry
-     branch -- since they're guaranteed already held at that exact
-     moment, seeding them true means that first post-entry check
-     correctly reads "still held, not a new press" and leaves the menu
-     alone.
-- **`lighting.c`'s per-pad LED mux: added a settling delay, first
-  attempt at "why does the ripple have a bleed of magenta in some
-  pads."** Not a confirmed root cause. Each pad's SK6805 LED sits behind
-  a TCA9554-driven analog mux (`write_pad()`: disable all channels,
-  select this pad's channel, enable its mux, THEN write one pixel) --
-  unlike underglow, which is a real daisy chain written all at once.
-  During the boot animation's white rain/fade phases (the "ripple"),
-  every command is equal R=G=B (`boot_sequence.c`'s `write_frame_white()`),
-  so no color bias is possible from the VALUE being sent; the packed
-  word is GRB-ordered (`sk6805.c`'s `tiles_sk6805_pack_rgb()`) with green
-  transmitted first, so if a given pad's mux channel hasn't fully
-  settled by the time the PIO starts clocking bits, green -- the first
-  byte out -- is the one most likely to arrive short, and white missing
-  its green reads as magenta. Nothing enforced a settling gap before now
-  -- `tiles_tca9554_enable_mux()` returns as soon as its own I2C write
-  completes, which says nothing about how fast the actual downstream
-  analog switch has physically settled, and that plausibly varies pad-
-  to-pad with trace length/capacitance, matching "some pads," not all of
-  them. Added a 20us `sleep_us()` between enabling the mux and starting
-  the SK6805 write -- cheap (negligible next to the existing 300us
-  reset-low time per pad) but **genuinely unconfirmed without a scope or
-  logic analyzer on the actual signal** -- revert if it doesn't clear
-  the bleed on real hardware; if it does, that's real confirmation of
-  the mechanism, worth writing up properly then.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
