@@ -23,20 +23,20 @@
 
 /* Real feedback: "also the mode selector has all these lights always on.
  * only availabkle modes shouyld be on meaning for now only sequencer, and
- * the note mode" -- CHORD was already a real, planned, but unimplemented
- * stub (see this file's own header); ARP was the identical kind of stub,
- * but real feedback replaced its picker row outright with a real feature
- * instead of leaving it as a placeholder: "lets imoplenment for note mode
- * a guitar fret mode... this is going to be mode 3 on the mode function
- * selector." ARP is removed entirely (it had no real logic beyond a
- * stub + circle's beat-flash override, both deleted with it) rather than
- * kept as unreachable dead code alongside a mode that no longer has a
- * picker slot -- a genuine future arp mode would be a fresh, deliberate
- * feature request, not scaffolding worth preserving unreachable. CHORD
- * keeps its enum value and a reserved menu slot (still a real planned
- * mode, just not built yet) but that slot renders unavailable -- see
- * col_is_available() below -- so "only available modes lit" holds for
- * both stubs the same way. */
+ * the note mode" -- CHORD was, at the time, a real, planned, but
+ * unimplemented stub (see this file's own header); ARP was the identical
+ * kind of stub, but real feedback replaced its picker row outright with a
+ * real feature instead of leaving it as a placeholder: "lets imoplenment
+ * for note mode a guitar fret mode... this is going to be mode 3 on the
+ * mode function selector." ARP is removed entirely (it had no real logic
+ * beyond a stub + circle's beat-flash override, both deleted with it)
+ * rather than kept as unreachable dead code alongside a mode that no
+ * longer has a picker slot -- a genuine future arp mode would be a fresh,
+ * deliberate feature request, not scaffolding worth preserving
+ * unreachable. CHORD later became a real 4th mode too -- real feedback:
+ * "lets create a mode that does chords on one side colum 1 and 2... and
+ * melody in columns 3456... so this would go as our 4th play mode" -- see
+ * this file's own "Chord mode" section below. */
 typedef enum {
     OP_MODE_MELODIC = 0,
     OP_MODE_CHORD,
@@ -59,10 +59,11 @@ typedef enum {
  * moot along with the row scheme itself. Row 1 is the pad row physically
  * closest to the function buttons (TILES_GRID_MIN_ROW + 1), matching
  * both game_mode.h's own choice and services/expression_control.h's
- * sub-menu's top-to-bottom sense. Column order: available modes first
- * (melodic, sequencer, guitar), chord last since it's still unavailable
- * (see col_is_available() below) -- a stable reserved slot rather than
- * omitted, so the layout doesn't shift columns if chord ever ships. */
+ * sub-menu's top-to-bottom sense. Column order: melodic, sequencer,
+ * guitar, chord -- chord now a real, available mode too (see
+ * col_is_available() below and this file's own "Chord mode" section),
+ * kept last in this same column order it already had as a reserved
+ * slot, so the layout doesn't shift now that it ships. */
 #define OP_MENU_ROW 1u
 #define OP_MENU_COL_MELODIC 1u
 #define OP_MENU_COL_SEQUENCER 2u
@@ -73,17 +74,21 @@ typedef enum {
  * color": melodic = Sentia magenta (this codebase's brand color,
  * redefined locally here same as services/expression_control.c and
  * services/boot_sequence.c each already do rather than sharing one
- * definition -- established precedent, not an oversight), chord = green,
- * sequencer = red. Guitar = amber/orange (an instrument-wood-toned
- * accent, distinct from every other mode's color and from the guitar
- * fretboard's own idle amber coloring in services/lighting.c, tying the
- * two together visually). */
+ * definition -- established precedent, not an oversight), sequencer =
+ * red. Guitar = amber/orange (an instrument-wood-toned accent, distinct
+ * from every other mode's color and from the guitar fretboard's own
+ * idle amber coloring in services/lighting.c, tying the two together
+ * visually). Chord = blue -- real feedback, alongside the mode's own
+ * design: "so this would go as our 4th play mode and its designated
+ * blue," matching the chord strip's own solid-blue LED coloring in
+ * services/lighting.c (was green, back when chord was still an
+ * unimplemented, unavailable stub). */
 #define OP_MENU_MELODIC_R 1.0f
 #define OP_MENU_MELODIC_G 0.0f
 #define OP_MENU_MELODIC_B 1.0f
 #define OP_MENU_CHORD_R 0.0f
-#define OP_MENU_CHORD_G 1.0f
-#define OP_MENU_CHORD_B 0.0f
+#define OP_MENU_CHORD_G 0.0f
+#define OP_MENU_CHORD_B 1.0f
 #define OP_MENU_SEQUENCER_R 1.0f
 #define OP_MENU_SEQUENCER_G 0.0f
 #define OP_MENU_SEQUENCER_B 0.0f
@@ -501,6 +506,94 @@ static bool s_minus_was_held;
 static bool s_plus_was_held;
 static bool s_minus_used_as_combo;
 static bool s_plus_used_as_combo;
+
+/* ---- Chord mode (columns 1-2) -------------------------------------------
+ * Real feedback: "lets create a mode that does chords on one side colum 1
+ * and 2 (pad19 cchord, pad20 d chord, pad13 chord e and loke that.) and
+ * melody in columns 3456 in a 4x4 grid starting with c in pad 21... so
+ * this would go as our 4th play mode." The melody columns need nothing
+ * here at all -- they pass straight through services/expression.c's
+ * unmodified pipeline, remapped via services/note_map.h exactly like
+ * guitar mode's fretboard. Only the 8 chord-strip pads need real logic:
+ * services/note_map.h's tiles_note_map_is_chord_region_pad() already
+ * says which pads those are (columns 1-2, only while this mode is
+ * active), so this claims exactly those pads (via tiles_op_mode_owns_
+ * pad() below) and drives 3-note chords on them directly, the same
+ * "claim the pads, drive MIDI directly" shape this file's sequencer
+ * already uses for the whole grid, just narrowed to 8 pads. Per-pad
+ * state (not a single global "sounding note" the way the sequencer has)
+ * because, unlike the sequencer's one-step-at-a-time playhead, multiple
+ * chord pads can plausibly be held down together. */
+#define OP_CHORD_CHANNEL 10u /* raw 0-15 nibble -- one below game_mode.c's
+                                 own GM_MELODY_CHANNEL (11) and this
+                                 file's own sequencer patterns (12-15), so
+                                 none of this codebase's other direct-MIDI
+                                 claims collide. A default claim, not a
+                                 hard reservation, same as the sequencer's
+                                 own per-pattern channels above: services/
+                                 expression.c's live per-touch allocator
+                                 (still running for chord mode's own
+                                 melody columns) is untouched, so this can
+                                 only ever collide with live touch play in
+                                 the rare case of using many fingers at
+                                 once while chords are also held -- an
+                                 accepted edge case, not worth shrinking
+                                 live MPE polyphony to avoid. */
+#define OP_CHORD_VELOCITY 100u /* fixed -- chord pads are triggered
+                                   directly here, bypassing services/
+                                   expression.c entirely, so there's no
+                                   real strike-velocity signal to read;
+                                   matches this file's own OP_SEQ_VELOCITY
+                                   precedent for the identical reason. */
+static bool s_chord_pad_touched[TILES_NUM_PADS];
+static bool s_chord_pad_sounding[TILES_NUM_PADS];
+static uint8_t s_chord_pad_notes[TILES_NUM_PADS][TILES_NOTE_MAP_CHORD_NUM_NOTES];
+
+static void chord_pad_note_off(uint8_t pad) {
+    if (!s_chord_pad_sounding[pad - 1u]) {
+        return;
+    }
+    for (uint8_t i = 0; i < TILES_NOTE_MAP_CHORD_NUM_NOTES; i++) {
+        tiles_midi_note_off(OP_CHORD_CHANNEL, s_chord_pad_notes[pad - 1u][i]);
+    }
+    tiles_haptics_stop(pad);
+    s_chord_pad_sounding[pad - 1u] = false;
+}
+
+static void chord_pad_note_on(uint8_t pad) {
+    tiles_note_map_get_chord_notes(pad, s_chord_pad_notes[pad - 1u]);
+    for (uint8_t i = 0; i < TILES_NOTE_MAP_CHORD_NUM_NOTES; i++) {
+        tiles_midi_note_on(OP_CHORD_CHANNEL, s_chord_pad_notes[pad - 1u][i], OP_CHORD_VELOCITY);
+    }
+    tiles_haptics_trigger_kick(pad, OP_CHORD_VELOCITY);
+    s_chord_pad_sounding[pad - 1u] = true;
+}
+
+/* Releases every currently-sounding chord pad -- called whenever chord
+ * mode stops being the active mode (set_active_mode() below), the same
+ * "clean up whatever's sounding the instant a mode hands off control"
+ * rule this file's own seq_end_current_note()/set_active_mode() pairing
+ * already established for the sequencer. */
+static void chord_end_all_notes(void) {
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        chord_pad_note_off(pad);
+    }
+}
+
+static void handle_chord_pad_taps(void) {
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        if (!tiles_note_map_is_chord_region_pad(pad)) {
+            continue;
+        }
+        bool touched = tiles_touch_is_touched(pad);
+        if (touched && !s_chord_pad_touched[pad - 1u]) {
+            chord_pad_note_on(pad);
+        } else if (!touched && s_chord_pad_touched[pad - 1u]) {
+            chord_pad_note_off(pad);
+        }
+        s_chord_pad_touched[pad - 1u] = touched;
+    }
+}
 
 static bool other_feature_owns_input(void) {
     return tiles_game_mode_is_active() || tiles_expression_control_owns_pad_grid() ||
@@ -1204,7 +1297,8 @@ static void menu_exit(void) {
 
 /* Real feedback: "the mode selector has all these lights always on. only
  * availabkle modes shouyld be on meaning for now only sequencer, and the
- * note mode" (plus, with this round's guitar mode added, guitar itself).
+ * note mode" (plus, with this round's guitar mode added, guitar itself,
+ * and now chord mode too -- "so this would go as our 4th play mode").
  * Matches the "unavailable = off and not selectable" language this file
  * already established for the scale/pattern pickers' own reserved slots
  * -- see handle_menu_taps() below for the "not selectable" half. */
@@ -1213,8 +1307,9 @@ static bool col_is_available(uint8_t col) {
     case OP_MENU_COL_MELODIC:
     case OP_MENU_COL_SEQUENCER:
     case OP_MENU_COL_GUITAR:
+    case OP_MENU_COL_CHORD:
         return true;
-    default: /* OP_MENU_COL_CHORD (not built yet), or outside the menu entirely */
+    default: /* outside the menu entirely */
         return false;
     }
 }
@@ -1231,10 +1326,15 @@ static void render_menu_col_color(uint8_t col, float *r, float *g, float *b) {
         *g = OP_MENU_SEQUENCER_G;
         *b = OP_MENU_SEQUENCER_B;
         break;
+    case OP_MENU_COL_CHORD:
+        *r = OP_MENU_CHORD_R;
+        *g = OP_MENU_CHORD_G;
+        *b = OP_MENU_CHORD_B;
+        break;
     default: /* OP_MENU_COL_GUITAR -- only ever called for an available
               * column (see render_menu() below), so this catch-all is
-              * safe: melodic/sequencer are handled above, chord is never
-              * available, leaving only guitar. */
+              * safe: melodic/sequencer/chord are handled above, leaving
+              * only guitar. */
         *r = OP_MENU_GUITAR_R;
         *g = OP_MENU_GUITAR_G;
         *b = OP_MENU_GUITAR_B;
@@ -1413,6 +1513,9 @@ static void set_active_mode(tiles_op_mode_t mode) {
     if (s_active_mode == OP_MODE_SEQUENCER && mode != OP_MODE_SEQUENCER) {
         seq_end_current_note();
     }
+    if (s_active_mode == OP_MODE_CHORD && mode != OP_MODE_CHORD) {
+        chord_end_all_notes();
+    }
     if (mode != OP_MODE_MELODIC) {
         /* Melodic's own sub-menu can't stay open once melodic isn't the
          * active mode anymore. */
@@ -1442,6 +1545,23 @@ static void set_active_mode(tiles_op_mode_t mode) {
      * both already read note_map.c's own state, no changes needed there
      * beyond note_map.c/lighting.c's own guitar-awareness. */
     tiles_note_map_set_guitar_mode(mode == OP_MODE_GUITAR);
+    /* Chord mode's own equivalent of the guitar-mode flag above -- pushes
+     * this file's chord-strip/melody split into note_map.c so services/
+     * lighting.c's idle coloring and this file's own chord_pad_note_on()/
+     * tiles_op_mode_owns_pad() below all agree on which 8 pads are chord
+     * pads. Seeds s_chord_pad_touched[] from whatever's ACTUALLY touched
+     * right now (not false) the instant chord mode becomes active, the
+     * same "don't let a finger already resting on a pad read as a fresh
+     * touch" precedent scale_menu_enter() above already established --
+     * otherwise a finger already on a chord pad while the mode-picker
+     * menu is confirmed would fire an unintended chord the moment this
+     * mode takes over. */
+    tiles_note_map_set_chord_mode(mode == OP_MODE_CHORD);
+    if (mode == OP_MODE_CHORD) {
+        for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+            s_chord_pad_touched[pad - 1u] = tiles_touch_is_touched(pad);
+        }
+    }
     if (mode == OP_MODE_GUITAR) {
         /* Real feedback: "load a fix for exiting menues, led stays
          * toggled" -- applying that same lesson here proactively rather
@@ -1888,6 +2008,16 @@ void tiles_op_mode_scan(void) {
         if (s_seq_note_sounding) {
             seq_end_current_note();
         }
+        /* Same reasoning as the sequencer case just above, applied to
+         * chord mode's own directly-driven notes: whatever's sounding on
+         * the chord strip when some other feature takes the board (e.g.
+         * standby) must not keep sounding/buzzing until control returns
+         * AND a pad is released. chord_end_all_notes() is a no-op once
+         * nothing's sounding, so this is harmless every scan while
+         * frozen here, same as seq_end_current_note() above. */
+        if (s_active_mode == OP_MODE_CHORD) {
+            chord_end_all_notes();
+        }
         return;
     }
 
@@ -1932,18 +2062,38 @@ void tiles_op_mode_scan(void) {
         seq_advance_clock(clock);
         render_sequencer(beat_flash_level, clock.running);
     }
+    if (s_active_mode == OP_MODE_CHORD) {
+        handle_chord_pad_taps();
+    }
     /* Guitar mode needs nothing further here -- handle_transport_and_
      * length() above already handles its "-"/"+" fret-shift, and its
      * note-playing/idle-fret-marker rendering both go entirely through
      * services/expression.c's and services/lighting.c's own EXISTING
      * pipelines (now guitar-aware via services/note_map.h), completely
      * unowned by this function -- see set_active_mode()'s own comment on
-     * why guitar mode never claims standby_active. Chord stays a stub
-     * that passes touch straight through to melodic, same as always. */
+     * why guitar mode never claims standby_active. Chord mode's melody
+     * columns follow that identical pass-through pattern (nothing needed
+     * here for them either); only its chord-strip pads need the explicit
+     * handle_chord_pad_taps() call above, and even that needs no render
+     * call of its own -- services/lighting.c's pad_desired_rgb() already
+     * paints the whole strip solid blue by itself once note_map.c reports
+     * chord mode active, the same "lighting.c already reads note_map.c's
+     * own state" precedent guitar mode's fret markers established. */
 }
 
 bool tiles_op_mode_owns_pad_grid(void) {
     return s_menu_visible || s_scale_menu_visible || s_active_mode == OP_MODE_SEQUENCER;
+}
+
+/* See this accessor's own declaration in op_mode.h for the full
+ * reasoning -- every mode except chord just defers to the blanket
+ * accessor above; chord narrows that answer down to its own 8
+ * chord-strip pads instead of claiming (or releasing) the whole grid. */
+bool tiles_op_mode_owns_pad(uint8_t logical_pad) {
+    if (s_active_mode == OP_MODE_CHORD) {
+        return tiles_note_map_is_chord_region_pad(logical_pad);
+    }
+    return tiles_op_mode_owns_pad_grid();
 }
 
 /* Broader than tiles_op_mode_owns_pad_grid() above: also true for guitar

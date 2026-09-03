@@ -1176,9 +1176,19 @@ void tiles_expression_scan(void) {
              * this same real note+haptic pipeline completely unaware
              * anything else owned the board). A pad already past IDLE
              * when any of these opens is deliberately left alone (see the
-             * loop below), only a brand-new touch is suppressed here. */
+             * loop below), only a brand-new touch is suppressed here.
+             *
+             * tiles_op_mode_owns_pad(pad) (not the blanket _owns_pad_grid())
+             * here specifically because chord mode only needs its own 8
+             * chord-strip pads excluded -- its other 16 melody pads must
+             * keep running this exact real strike pipeline unmodified, the
+             * same "reuse expression.c, just remap notes" approach guitar
+             * mode already established (see services/note_map.h's own
+             * "Chord mode" section). Every other mode's answer is
+             * identical to _owns_pad_grid()'s own, unchanged from before
+             * this per-pad accessor existed. */
             if (touched && !tiles_expression_control_owns_pad_grid() && !tiles_octave_control_is_transpose_active() &&
-                !tiles_op_mode_owns_pad_grid() && !tiles_game_mode_is_active()) {
+                !tiles_op_mode_owns_pad(pad) && !tiles_game_mode_is_active()) {
                 begin_awaiting_strike(s, pad, now_ms);
                 /* Touch-only haptic acknowledgment, independent of
                  * whether this ever becomes a real press -- see

@@ -108,6 +108,64 @@ bool tiles_note_map_is_guitar_fret_marker_pad(uint8_t logical_pad, bool *out_is_
     return false;
 }
 
+/* ---- Chord mode -----------------------------------------------------
+ * See note_map.h's own "Chord mode" section for the full design. Columns
+ * 1-2 are an 8-pad chord strip, columns 3-6 a 16-pad (4x4) melody
+ * sub-grid -- both use the SAME bottom-to-top, left-to-right degree
+ * sweep every other mode in this file already uses (see pad_degree()
+ * above), just narrowed to however many columns that region actually
+ * has instead of the full 6. */
+#define CHORD_REGION_MAX_COL 2u
+#define CHORD_REGION_NUM_COLS 2u
+#define CHORD_MELODY_MIN_COL 3u
+#define CHORD_MELODY_NUM_COLS 4u
+/* Chord octave offset -- real feedback: "the main thing is chords are
+ * one octave lower than melodic." */
+#define CHORD_OCTAVE_DOWN_SEMITONES 12
+/* Diatonic third and fifth, in SCALE-DEGREE space (not semitones) --
+ * skip-one, skip-two through the scale's own interval table, same as
+ * how a real chord-organ/autoharp harmonizes each scale degree. This is
+ * what makes the triad quality (major/minor/diminished) automatically
+ * correct for whichever scale is currently selected, rather than always
+ * building a plain major triad regardless of scale. */
+#define CHORD_THIRD_DEGREE_STEP 2u
+#define CHORD_FIFTH_DEGREE_STEP 4u
+
+static bool s_chord_mode_active;
+
+void tiles_note_map_set_chord_mode(bool active) {
+    s_chord_mode_active = active;
+}
+
+bool tiles_note_map_is_chord_mode_active(void) {
+    return s_chord_mode_active;
+}
+
+bool tiles_note_map_is_chord_region_pad(uint8_t logical_pad) {
+    if (!s_chord_mode_active) {
+        return false;
+    }
+    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
+    if (cfg == NULL) {
+        return false;
+    }
+    return cfg->col <= CHORD_REGION_MAX_COL;
+}
+
+/* Degree within whichever of chord mode's two regions `cfg` falls in --
+ * shared by tiles_note_map_get_note() (melody region) and
+ * tiles_note_map_get_chord_notes() (chord region) below, the same
+ * "one shared degree function, several callers" shape pad_degree()
+ * above already established. Only meaningful while chord mode is
+ * active; callers already gate on that. */
+static uint8_t chord_mode_degree(const tiles_pad_config_t *cfg) {
+    uint8_t musical_row = (uint8_t)(4u - cfg->row);
+    if (cfg->col <= CHORD_REGION_MAX_COL) {
+        return (uint8_t)(musical_row * CHORD_REGION_NUM_COLS + (cfg->col - 1u));
+    }
+    return (uint8_t)(musical_row * CHORD_MELODY_NUM_COLS + (cfg->col - CHORD_MELODY_MIN_COL));
+}
+
 /* Natural-note pitch classes (0=C, 1=C#, ... 11=B) -- true = natural
  * (white key), false = sharp/flat (black key). Indexed by ABSOLUTE pitch
  * class (a note number mod 12), not by key-relative scale degree.
@@ -342,6 +400,41 @@ static tiles_scale_table_t current_scale_table(void) {
     return table;
 }
 
+/* Folds `degree` through the currently selected scale's own interval
+ * table, exactly like tiles_note_map_get_note()'s own tail end -- shared
+ * so chord mode's melody notes and its chord triads (which need this
+ * done up to 3 times, once per chord tone) both agree with normal
+ * scale-based play on what a given degree actually sounds like. */
+static int note_for_scale_degree(uint8_t degree) {
+    tiles_scale_table_t table = current_scale_table();
+    uint8_t octave_num = (uint8_t)(degree / table.count);
+    uint8_t degree_in_octave = (uint8_t)(degree % table.count);
+    int interval = (int)octave_num * 12 + (int)table.intervals[degree_in_octave];
+    return (int)TILES_NOTE_MAP_BASE_NOTE + interval + (int)s_octave_shift * 12 + (int)s_key_offset;
+}
+
+void tiles_note_map_get_chord_notes(uint8_t logical_pad, uint8_t out_notes[TILES_NOTE_MAP_CHORD_NUM_NOTES]) {
+    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
+    if (!s_chord_mode_active || cfg == NULL || cfg->col > CHORD_REGION_MAX_COL) {
+        for (uint8_t i = 0; i < TILES_NOTE_MAP_CHORD_NUM_NOTES; i++) {
+            out_notes[i] = 0u;
+        }
+        return;
+    }
+    uint8_t root_degree = chord_mode_degree(cfg);
+    const uint8_t degree_steps[TILES_NOTE_MAP_CHORD_NUM_NOTES] = {0u, CHORD_THIRD_DEGREE_STEP, CHORD_FIFTH_DEGREE_STEP};
+    for (uint8_t i = 0; i < TILES_NOTE_MAP_CHORD_NUM_NOTES; i++) {
+        int note = note_for_scale_degree((uint8_t)(root_degree + degree_steps[i])) - CHORD_OCTAVE_DOWN_SEMITONES;
+        if (note < 0) {
+            note = 0;
+        }
+        if (note > 127) {
+            note = 127;
+        }
+        out_notes[i] = (uint8_t)note;
+    }
+}
+
 uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
     const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
     if (cfg == NULL) {
@@ -354,18 +447,31 @@ uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
         return guitar_note_for_pad(cfg);
     }
 
+    if (s_chord_mode_active) {
+        /* Chord-region pads (col 1-2) don't really have a single "note"
+         * -- see note_map.h's own "Chord mode" section, real play there
+         * goes through tiles_note_map_get_chord_notes() instead, never
+         * this function. This still returns something sane (this
+         * region's own root, at melodic pitch, no octave-down) purely so
+         * a stray call here can't return garbage; nothing that actually
+         * plays a sound is expected to use it for a chord-region pad. */
+        uint8_t degree = chord_mode_degree(cfg);
+        int note = note_for_scale_degree(degree);
+        if (note < 0) {
+            note = 0;
+        }
+        if (note > 127) {
+            note = 127;
+        }
+        return (uint8_t)note;
+    }
+
     /* Row 4 (bottom) is musical row 0, row 1 (top) is musical row 3 --
      * i.e. the physical grid is walked bottom-to-top. Within a row,
      * columns 1-6 walk left-to-right. degree 0..23 is this pad's
      * position in that bottom-to-top, left-to-right sweep. */
     uint8_t degree = pad_degree(cfg);
-
-    tiles_scale_table_t table = current_scale_table();
-    uint8_t octave_num = (uint8_t)(degree / table.count);
-    uint8_t degree_in_octave = (uint8_t)(degree % table.count);
-    int interval = (int)octave_num * 12 + (int)table.intervals[degree_in_octave];
-
-    int note = (int)TILES_NOTE_MAP_BASE_NOTE + interval + (int)s_octave_shift * 12 + (int)s_key_offset;
+    int note = note_for_scale_degree(degree);
     if (note < 0) {
         note = 0;
     }
@@ -386,8 +492,18 @@ bool tiles_note_map_is_root_pad(uint8_t logical_pad) {
      * root repeats exactly every table.count degrees, independent of
      * key_offset (it cancels out, since transposing shifts every pad's
      * note by the same amount) -- see note_map.h's own comment on how
-     * many pads that works out to per scale. */
-    return (pad_degree(cfg) % current_scale_table().count) == 0u;
+     * many pads that works out to per scale. Chord mode's melody
+     * sub-grid uses its own narrower degree sweep (chord_mode_degree())
+     * -- pad_degree()'s 6-wide formula would give a wrong answer for a
+     * 4-wide region, same reason tiles_note_map_get_note() branches
+     * here too. Chord-region pads don't really have a "root pad" of
+     * their own (the whole strip renders one solid color regardless --
+     * see tiles_note_map_is_chord_region_pad()), so which specific
+     * formula runs for them doesn't matter in practice; using the same
+     * one keeps this function total and simple rather than adding a
+     * third branch for a case nothing ever looks at. */
+    uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : pad_degree(cfg);
+    return (degree % current_scale_table().count) == 0u;
 }
 
 bool tiles_note_map_is_natural_pad(uint8_t logical_pad) {

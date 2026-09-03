@@ -3224,5 +3224,90 @@ not its code.
   (a hard strike has a real window to keep climbing in now, not one
   sample, so it can plausibly overshoot further than before) -- both
   still first-attempt guesses, not measured against real strikes.
+- **Chord mode -- TILES' 4th play mode, built from real feedback: "lets
+  create a mode that does chords on one side colum 1 and 2 (pad19
+  cchord, pad20 d chord, pad13 chord e and loke that.) and melody in
+  columns 3456 in a 4x4 grid starting with c in pad 21. the main thing
+  is chords are one octave lower than melodic... leds for chords are
+  color blue all of them together and meody does the usual black and
+  white keys with root in sentia color. so this would go as our 4th
+  play mode and its designated blue."** A genuine hybrid of this
+  codebase's two existing mode architectures rather than a new one:
+  columns 1-2 (pads 1/2/7/8/13/14/19/20, the "chord strip") behave like
+  the sequencer -- `op_mode.c` claims those 8 pads directly and drives
+  MIDI itself, bypassing `expression.c` -- while columns 3-6 (the
+  4x4 "melody grid") behave like guitar mode -- pads stay unclaimed and
+  play through `expression.c`'s completely unmodified touch/velocity/
+  aftertouch/haptics pipeline, just remapped to different notes via
+  `note_map.c`. Neither existing pad-ownership accessor could express
+  that split: `tiles_op_mode_owns_pad_grid()` is all-or-nothing (claims
+  every pad, the way sequencer mode needs, or none, the way guitar mode
+  needs). A new, finer-grained `tiles_op_mode_owns_pad(uint8_t
+  logical_pad)` was added alongside it in `op_mode.h`/`op_mode.c`:
+  every mode except chord just defers to the existing blanket accessor
+  (identical behavior to before this function existed), while chord
+  mode answers per-pad, true only for its own 8 chord-strip pads.
+  `expression.c`'s `PAD_STATE_IDLE` fresh-touch gate now calls this
+  instead of the blanket accessor, so chord mode's 16 melody pads keep
+  triggering real strikes exactly like melodic play while its 8 chord
+  pads are correctly excluded.
+
+  Both regions share one row/column reading, `note_map.c`'s new
+  `chord_mode_degree()`: columns 1-2 fold to a 2-wide degree grid
+  (`musical_row * 2 + (col - 1)`, musical_row counted bottom-to-top same
+  as everywhere else in this file), columns 3-6 fold to a 4-wide degree
+  grid the identical way -- both are the same bottom-to-top,
+  left-to-right reading every other mode already uses, just narrowed to
+  fewer columns, which is why pad 19 (bottom-left of the chord strip)
+  lands on scale degree 0 (the root, C in the default key) and pad 13
+  lands on degree 2, matching "pad19 cchord... pad13 chord e" exactly
+  once folded through whatever scale is currently active. The melody
+  grid reuses `tiles_note_map_get_note()`'s existing scale-degree fold
+  (factored out into a new shared `note_for_scale_degree()` helper so
+  both the melody path and the chord math below call the identical
+  logic, rather than duplicating it) -- it plays as a real scale-aware
+  4x4 melodic sub-grid, root/natural/sharp coloring included, exactly
+  like normal melodic play just narrower.
+
+  Chord notes are computed, not looked up from a fixed chord table: a
+  new `tiles_note_map_get_chord_notes()` takes a chord pad's own scale
+  DEGREE (not semitone) as the root, then folds root+2 and root+4
+  through that SAME scale-degree math -- automatically producing
+  whichever triad quality (major/minor/diminished) the currently active
+  scale implies for that degree, the same way a real chord-organ/
+  autoharp harmonizes each scale degree, with zero hardcoded
+  major-vs-minor logic. Real feedback's "chords are one octave lower
+  than melodic" is one flat `-12` semitone shift applied to all 3 notes
+  after that fold. Each chord pad's 3 notes fire together as real
+  polyphonic MIDI (`tiles_midi_note_on()` x3 on press,
+  `tiles_midi_note_off()` x3 on release) on a new dedicated channel,
+  nibble 10 (`OP_CHORD_CHANNEL`) -- one below `game_mode.c`'s own
+  `GM_MELODY_CHANNEL` (11) and below the sequencer's own per-pattern
+  channels (12-15), so none of this codebase's direct-MIDI claims
+  collide. Like those existing claims, this is a default, not a hard
+  reservation: `expression.c`'s live per-touch MPE allocator (still
+  running for chord mode's own melody columns) is untouched, so a
+  genuine collision is only possible while using many fingers at once
+  AND holding chords simultaneously -- an accepted edge case, not worth
+  shrinking live MPE polyphony to avoid, matching the precedent already
+  established for game mode's and the sequencer's own channel claims.
+  Per-pad (not single global) sounding-note state, since -- unlike the
+  sequencer's one-step-at-a-time playhead -- multiple chord pads can
+  plausibly be held down together.
+
+  "leds for chords are color blue all of them together" -- `lighting.c`'s
+  `pad_desired_rgb()` gained a chord-region branch (checked before the
+  normal root/natural/sharp logic) that paints the whole strip one flat
+  idle-brightness blue, no per-pad note-role coloring; the melody grid
+  needed no equivalent branch at all, since `tiles_note_map_is_root_pad()`/
+  `_is_natural_pad()` already read whatever `tiles_note_map_get_note()`
+  currently returns, which is automatically chord-mode-aware once
+  `note_map.c`'s own degree folding is. Chord's mode-picker color
+  (`OP_MENU_CHORD_R/G/B` in `op_mode.c`) changed from its old placeholder
+  green to blue for the same reason -- "its designated blue" -- matching
+  the strip's own idle color. `col_is_available()` now returns true for
+  chord's column (it was hardcoded false while chord was still an
+  unbuilt stub), making it selectable from the mode picker for the
+  first time.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

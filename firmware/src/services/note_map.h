@@ -253,3 +253,54 @@ uint8_t tiles_note_map_get_guitar_fret_offset(void);
  * rendering -- services/lighting.c's own idle pad coloring is the one
  * caller. */
 bool tiles_note_map_is_guitar_fret_marker_pad(uint8_t logical_pad, bool *out_is_octave);
+
+/* ---- Chord mode -----------------------------------------------------
+ * Real feedback: "lets create a mode that does chords on one side colum
+ * 1 and 2 (pad19 c chord, pad20 d chord, pad13 chord e and loke that.)
+ * and melody in columns 3456 in a 4x4 grid starting with c in pad 21...
+ * the main thing is chords are one octave lower than melodic." A hybrid
+ * of the two shapes above: columns 1-2 (8 pads) are a self-contained
+ * chord strip using the SAME bottom-to-top, left-to-right reading order
+ * every other mode in this file already uses, just narrowed to 2
+ * columns instead of 6; columns 3-6 (16 pads, a real 4x4 grid) are a
+ * self-contained MELODY sub-grid using the identical scale-degree
+ * folding tiles_note_map_get_note() already does for normal play, just
+ * narrowed to 4 columns instead of 6, so it still reads as chromatic/
+ * scale-aware single-note melodic play, root/natural/sharp coloring and
+ * all -- see note_map.c's own chord_mode_degree() for the exact
+ * row/column math both regions share.
+ *
+ * Chord region pads don't go through tiles_note_map_get_note() at all
+ * during real play -- a single MIDI note can't represent a full chord,
+ * so services/op_mode.h claims those 8 pads directly (see
+ * tiles_op_mode_owns_pad() in op_mode.h) and calls
+ * tiles_note_map_get_chord_notes() below instead, exactly the same
+ * "claim the grid, drive MIDI directly" pattern services/op_mode.h's
+ * sequencer already uses, just for 8 specific pads instead of all 24.
+ * Melody region pads DON'T get claimed -- they fall through to
+ * services/expression.c's completely unchanged normal touch/velocity/
+ * aftertouch/haptics pipeline, the same "reuse the existing pipeline,
+ * only remap notes" approach guitar mode above already established. */
+void tiles_note_map_set_chord_mode(bool active);
+bool tiles_note_map_is_chord_mode_active(void);
+
+/* True if this pad is in chord mode's own chord strip (columns 1-2) --
+ * meaningless (always false) unless chord mode is active. The one
+ * caller is services/lighting.c, to render the whole strip one solid
+ * color instead of per-pad note-role coloring -- real feedback: "leds
+ * for chords are color blue all of them together." */
+bool tiles_note_map_is_chord_region_pad(uint8_t logical_pad);
+
+/* Computes the 3 notes (root, diatonic third, diatonic fifth -- built
+ * from the CURRENTLY selected scale's own degree spacing, so the triad
+ * quality (major/minor/diminished) automatically matches whichever
+ * scale is active, exactly like a real "auto-chord"/chord-organ
+ * instrument harmonizes each scale degree) for a chord-region pad, each
+ * ALREADY shifted one octave down from where the equivalent melody note
+ * would sit -- real feedback: "the main thing is chords are one octave
+ * lower than melodic." Writes exactly 3 notes into out_notes; a pad
+ * outside the chord region (or chord mode not active) writes all
+ * zeros -- callers are expected to only call this for pads
+ * tiles_note_map_is_chord_region_pad() already confirmed. */
+#define TILES_NOTE_MAP_CHORD_NUM_NOTES 3u
+void tiles_note_map_get_chord_notes(uint8_t logical_pad, uint8_t out_notes[TILES_NOTE_MAP_CHORD_NUM_NOTES]);

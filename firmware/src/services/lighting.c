@@ -215,6 +215,20 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         return (tiles_rgb01_t){level, level * 0.5f, 0.0f};
     }
 
+    /* Chord mode's chord strip (columns 1-2): one solid color for the
+     * whole region, no per-pad root/natural/sharp distinction -- real
+     * feedback: "leds for chords are color blue all of them together."
+     * Checked before the melody sub-grid's own root/natural/sharp logic
+     * below, which already handles chord mode's melody region (columns
+     * 3-6) correctly on its own -- tiles_note_map_is_root_pad()/
+     * is_natural_pad() are both already chord-mode-aware (see
+     * note_map.c's own chord_mode_degree()), so no separate branch is
+     * needed for that half. */
+    if (tiles_note_map_is_chord_region_pad(logical_pad)) {
+        float level = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;
+        return (tiles_rgb01_t){0.0f, 0.0f, level};
+    }
+
     /* Idle (untouched), normal chromatic play: color by note role -- real
      * feedback: "root should be blue [later: purple] and black keys
      * shouldnt have led this in rest non pressed moment." Root checked

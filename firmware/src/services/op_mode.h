@@ -205,6 +205,7 @@
  */
 
 #include <stdbool.h>
+#include <stdint.h>
 
 void tiles_op_mode_init(void);
 
@@ -223,11 +224,13 @@ void tiles_op_mode_scan(void);
  * services/game_mode.h, services/expression_control.h's sub-menu,
  * services/octave_control.h's transpose mode, and services/standby.h,
  * exactly like those features are already mutually exclusive with each
- * other. False while melodic, chord, or guitar is selected -- chord is
- * still an unimplemented stub that passes touch straight through to
- * normal melodic play, and guitar mode deliberately reuses that same
- * "doesn't own the grid" pass-through pipeline on purpose (see this
- * file's own "Guitar/bass fret mode" section above). */
+ * other. False while melodic, chord, or guitar is selected -- guitar
+ * mode deliberately reuses that same "doesn't own the grid" pass-through
+ * pipeline on purpose (see this file's own "Guitar/bass fret mode"
+ * section above), and chord mode follows the identical pattern for its
+ * own melody columns. Chord mode's 8 chord-strip pads are the one
+ * exception -- excluded from normal play via the finer-grained
+ * tiles_op_mode_owns_pad() below instead of this blanket accessor. */
 bool tiles_op_mode_owns_pad_grid(void);
 
 /* Broader than the accessor above: also true for guitar mode, which needs
@@ -239,6 +242,21 @@ bool tiles_op_mode_owns_pad_grid(void);
  * still playing normally through that same pipeline). Sequencer mode is
  * covered either way, since it already legitimately owns the whole grid. */
 bool tiles_op_mode_owns_octave_buttons(void);
+
+/* Finer-grained than tiles_op_mode_owns_pad_grid() above: per-pad instead
+ * of all-or-nothing. Every mode except chord defers straight to
+ * tiles_op_mode_owns_pad_grid()'s own existing answer for every pad
+ * (identical behavior to before this accessor existed). Chord mode is
+ * the one exception -- it does NOT claim tiles_op_mode_owns_pad_grid()
+ * itself (its melody columns need normal expression.c play, same as
+ * guitar mode), but its 8 chord-strip pads (columns 1-2) DO need to be
+ * excluded from services/expression.c's normal touch pipeline, since
+ * services/op_mode.c drives them directly with multi-note chord MIDI
+ * instead (see services/note_map.h's own "Chord mode" section for why a
+ * single logical note can't represent a full chord). services/
+ * expression.c's PAD_STATE_IDLE gate calls this once per pad instead of
+ * the blanket accessor above for exactly that reason. */
+bool tiles_op_mode_owns_pad(uint8_t logical_pad);
 
 /* True whenever sequencer mode is the currently active mode, regardless
  * of which sequencer sub-view (pattern picker, pitch assign, normal step
