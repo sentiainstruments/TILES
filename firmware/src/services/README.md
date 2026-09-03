@@ -2969,5 +2969,83 @@ not its code.
   still SW3/GP16) -- only which of the two `op_mode.c` reads for which
   role moved. (This swap is also what confirmed the boot-LED bug above
   is software, not hardware -- see that entry's own updated text.)
+- **`game_mode.c` haptics/MIDI cleanup + a menu/game exit redesign** --
+  real feedback, three parts:
+  1. **Root cause found for "haptics randomly happening in game modes"
+     and unwanted MIDI from pads in game mode: `expression.c` never knew
+     game mode existed.** Real feedback: "no haptics except for
+     selecting game, no haptics if game doesnt requeire it... no midi
+     notes grom nimi game unless its slecual effedcs... but no midi from
+     pads in game mode." `expression.c`'s `PAD_STATE_IDLE` fresh-touch
+     gate already checked three other "who owns the grid" conditions
+     (`expression_control`'s sub-menu, `octave_control`'s transpose,
+     `op_mode`'s menu/sequencer) but never `tiles_game_mode_is_active()`
+     -- so every grid touch during a menu selection, or any incidental
+     contact mid-game, ran the completely normal note+haptic strike
+     pipeline the whole time, layered on top of whatever `game_mode.c`
+     itself was doing with that same touch (worst case, Simon Says: a
+     single correct press could produce its own confirmation kick PLUS
+     `expression.c`'s touch-pulse PLUS a real note-on and strike-kick).
+     Fixed with one added term, `!tiles_game_mode_is_active()`, matching
+     the exact style of the other three -- see `expression.c`'s own
+     comment there. Simon Says' own two haptic calls (`gsim_update()`'s
+     playback echo, `gsim_handle_input()`'s correct-press confirmation)
+     are deliberate, real game mechanic (its own original feature
+     request: "the haptics play a big part on this one") and were left
+     untouched -- they're read via Hall depth, not the capacitive-touch
+     pipeline this fix gates.
+  2. **New deliberate game-triggered notes, real feedback: "a short
+     melody for win or a three note melody for loose."** A small
+     non-blocking melody player (`gm_melody_start()`/`_update()`/
+     `_stop()`, same "elapsed_ms / STEP_MS" stepping `gsim_update()`'s
+     own pattern playback already uses) on a fixed, statically-reserved
+     MIDI channel (`GM_MELODY_CHANNEL` 11 -- one nibble below
+     `op_mode.c`'s own sequencer-reserved 12-15 range, same "reserve
+     from the top down, never through `expression.c`'s dynamic per-
+     strike allocator" pattern that file established). Win = a short
+     ascending C-E-G-C arpeggio; lose = a plain three-note descending
+     line, matching the quote exactly. Hooked into every real win/lose
+     point across all five games: `gm_start_round_end()` gained a second
+     `is_win` parameter (separate from its existing `red_only` visual
+     flag, since `red_only` doesn't reliably mean win/lose -- Tetris and
+     Simon Says are always a loss when they reach it, but snake and
+     brick breaker route BOTH outcomes through it with the same
+     `red_only=false`); Pong's match-win doesn't go through
+     `gm_start_round_end()` at all (see that game's own file-header
+     reasoning) so it calls `gm_melody_start(&GM_MELODY_WIN, ...)`
+     directly from `gp_point_scored()`. The "maybe a quick plucked note
+     for interactions" half of the same feedback was NOT built this
+     round -- scoped out given the demo-day time budget; flagged here as
+     a real, deliberately deferred follow-up, not an oversight.
+  3. **New deliberate menu-select haptic, real feedback: "no haptics
+     except for selecting game."** `gm_handle_menu_selection()` now
+     fires one `tiles_haptics_trigger_kick()` per launch -- the ONE
+     haptic this file fires outside Simon Says' own mechanic. Before
+     this fix, whatever haptic a menu selection produced was entirely
+     the bug in part 1 (an accidental touch-pulse from `expression.c`,
+     not a deliberate confirmation), so this is a genuinely new,
+     intentional call, not a restoration of something already there.
+  4. **New exit gesture, real feedback: "if cicle cliucked in game menu
+     it exxits to previuos mode and each othere function button
+     oversides gasme mode, exiting and taking to respective menu."**
+     `gm_override_button_pressed()`: triangle/diamond (never a live
+     control in any of the five games) now override game mode
+     unconditionally, menu or mid-game; circle/square (which Pong
+     legitimately uses as live paddle controls, SW5/SW6) only override
+     from the menu screen, matching the feedback's own "circle clicked
+     in game MENU" framing -- overriding them mid-game would break Pong
+     itself. Exiting needs no "restore the previous mode" step of its
+     own: `op_mode.c`'s `s_active_mode` was never touched while game
+     mode ran (the two are already mutually exclusive by design), so a
+     plain `gm_toggle()` off is already "back to previous mode." One
+     honest rough edge: the button that triggers the exit doesn't open
+     its OWN menu on that same press -- `op_mode.c`'s/
+     `expression_control.c`'s own "keep edge-tracking current while
+     suppressed" pattern (a deliberate anti-spurious-click safeguard
+     those files already document) means a release-then-press is needed
+     to actually open it, not a single seamless press. Not fixed this
+     round -- doing so would mean weakening that safeguard everywhere
+     else it's used too, which wasn't part of this ask and isn't
+     something to risk the night before a demo.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

@@ -8,6 +8,7 @@
 #include "midi_out.h"
 #include "haptics.h"
 #include "expression_control.h"
+#include "game_mode.h"
 #include "octave_control.h"
 #include "op_mode.h"
 
@@ -1007,18 +1008,25 @@ void tiles_expression_scan(void) {
             /* services/expression_control.h's sub-menu (circle+square
              * held) claims the pad grid for its own slider taps,
              * services/octave_control.h's transpose mode (SW1+SW2 held)
-             * claims it to display the current key, and services/op_mode.h's
+             * claims it to display the current key, services/op_mode.h's
              * mode-select menu/sequencer mode claims it for mode-picking/
-             * step-arming taps -- a fresh touch while any of these is
-             * showing must never also start a real strike underneath
-             * (real feedback on the transpose case: "playing the grid in
-             * transpose menu exits the menu" -- notes firing and haptics
-             * kicking in while the player is just trying to read/set the
-             * key). A pad already past IDLE when any of these opens is
-             * deliberately left alone (see the loop below), only a
-             * brand-new touch is suppressed here. */
+             * step-arming taps, and services/game_mode.h's minigames claim
+             * it for their own menu/gameplay grid -- a fresh touch while
+             * any of these is showing must never also start a real strike
+             * underneath (real feedback on the transpose case: "playing
+             * the grid in transpose menu exits the menu" -- notes firing
+             * and haptics kicking in while the player is just trying to
+             * read/set the key; the identical complaint later for game
+             * mode: "no midi from pads in game mode... fix haptics
+             * randomly happening in game modes" -- this file never had a
+             * game_mode.h check at all until now, so every grid touch
+             * during a menu selection or incidental contact mid-game ran
+             * this same real note+haptic pipeline completely unaware
+             * anything else owned the board). A pad already past IDLE
+             * when any of these opens is deliberately left alone (see the
+             * loop below), only a brand-new touch is suppressed here. */
             if (touched && !tiles_expression_control_owns_pad_grid() && !tiles_octave_control_is_transpose_active() &&
-                !tiles_op_mode_owns_pad_grid()) {
+                !tiles_op_mode_owns_pad_grid() && !tiles_game_mode_is_active()) {
                 begin_awaiting_strike(s, pad, now_ms);
                 /* Touch-only haptic acknowledgment, independent of
                  * whether this ever becomes a real press -- see

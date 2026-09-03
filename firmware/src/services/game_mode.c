@@ -7,6 +7,7 @@
 #include "hall.h"
 #include "haptics.h"
 #include "lighting.h"
+#include "midi_out.h"
 #include "op_mode.h"
 #include "touch.h"
 
@@ -38,6 +39,85 @@ static gm_state_t s_gm_state;
 static uint32_t s_gm_last_frame_ms;
 static uint32_t s_gm_round_end_ms;
 static bool s_gm_round_end_red_only;
+
+/* ---- Win/lose melodies + menu-select haptic ----------------------------
+ * Real feedback: "no haptics except for selecting game, no haptics if
+ * game doesnt requeire it. no midi notes grom nimi game unless its
+ * slecual effedcs like a short melody for win or a three note melody
+ * for loose... but no midi from pads in game mode." The actual bug
+ * behind unwanted haptics/notes wasn't in this file at all -- see
+ * services/expression.c's own PAD_STATE_IDLE gate, which never checked
+ * tiles_game_mode_is_active() and so ran its full normal note+haptic
+ * pipeline on every grid touch regardless of what this file was doing
+ * with that same touch. This section is the other half: deliberate,
+ * game-triggered notes/haptics to replace what that fix removes.
+ *
+ * Fixed MIDI channel, reserved the same way services/op_mode.c reserves
+ * its own sequencer-pattern channels (from the top of the MPE member
+ * range downward, statically at init, never through services/
+ * expression.c's dynamic per-strike allocator) -- one nibble below
+ * op_mode.c's own reserved range (12-15) so the two can never collide. */
+#define GM_MELODY_CHANNEL 11u
+#define GM_MELODY_STEP_MS 130u
+#define GM_MELODY_VELOCITY 100u
+#define GM_MELODY_MAX_STEPS 4u
+#define GM_MENU_SELECT_VELOCITY 90u
+
+typedef struct {
+    uint8_t notes[GM_MELODY_MAX_STEPS];
+    uint8_t length;
+} gm_melody_t;
+
+/* Short ascending major arpeggio (C4-E4-G4-C5) for a win; a plain
+ * three-note descending line (C4-A3-F3) for a loss, real feedback's own
+ * exact phrase: "a three note melody for loose." */
+static const gm_melody_t GM_MELODY_WIN = {{60u, 64u, 67u, 72u}, 4u};
+static const gm_melody_t GM_MELODY_LOSE = {{60u, 57u, 53u}, 3u};
+
+static bool s_gm_melody_active;
+static const gm_melody_t *s_gm_melody_current;
+static uint32_t s_gm_melody_start_ms;
+static uint8_t s_gm_melody_step;
+static uint8_t s_gm_melody_sounding_note;
+
+static void gm_melody_stop(void) {
+    if (s_gm_melody_active) {
+        tiles_midi_note_off(GM_MELODY_CHANNEL, s_gm_melody_sounding_note);
+        s_gm_melody_active = false;
+    }
+}
+
+static void gm_melody_start(const gm_melody_t *melody, uint32_t now_ms) {
+    gm_melody_stop();
+    s_gm_melody_current = melody;
+    s_gm_melody_start_ms = now_ms;
+    s_gm_melody_step = 0xFFu; /* sentinel: no step has sounded yet, forces step 0 to fire below */
+    s_gm_melody_active = true;
+}
+
+/* Call every scan while game mode owns the board -- advances the
+ * currently-playing melody (if any) by elapsed time, same non-blocking
+ * "elapsed_ms / STEP_MS" stepping this file's own gsim_update() playback
+ * already uses for Simon Says' pattern echo. A no-op once nothing is
+ * playing. */
+static void gm_melody_update(uint32_t now_ms) {
+    if (!s_gm_melody_active) {
+        return;
+    }
+    uint8_t step = (uint8_t)((now_ms - s_gm_melody_start_ms) / GM_MELODY_STEP_MS);
+    if (step >= s_gm_melody_current->length) {
+        gm_melody_stop();
+        return;
+    }
+    if (step != s_gm_melody_step) {
+        if (s_gm_melody_step != 0xFFu) {
+            tiles_midi_note_off(GM_MELODY_CHANNEL, s_gm_melody_sounding_note);
+        }
+        s_gm_melody_step = step;
+        s_gm_melody_sounding_note = s_gm_melody_current->notes[step];
+        tiles_midi_note_on(GM_MELODY_CHANNEL, s_gm_melody_sounding_note, GM_MELODY_VELOCITY);
+    }
+}
 
 static bool s_gm_combo_was_held;
 static bool s_gm_combo_fired;
@@ -127,11 +207,19 @@ static void gs_start(uint32_t now_ms) {
 
 /* red_only: Tetris topping out flashes plain red (real feedback: "when
  * game is lost it should flash red"), while snake/brick breaker keep
- * the original red/purple alternation -- see render_round_end() below. */
-static void gm_start_round_end(uint32_t now_ms, bool red_only) {
+ * the original red/purple alternation -- see render_round_end() below.
+ * is_win is a SEPARATE axis from red_only -- Tetris/Simon Says are
+ * always a loss when they reach this function (red_only=true both
+ * times), but snake and brick breaker route BOTH their win and lose
+ * outcomes through here with the same red_only=false, so red_only alone
+ * can't tell win from lose the way it happens to for the other two.
+ * Picks which melody gm_melody_start() plays -- see that section's own
+ * header comment. */
+static void gm_start_round_end(uint32_t now_ms, bool red_only, bool is_win) {
     s_gm_state = GM_STATE_ROUND_END;
     s_gm_round_end_ms = now_ms;
     s_gm_round_end_red_only = red_only;
+    gm_melody_start(is_win ? &GM_MELODY_WIN : &GM_MELODY_LOSE, now_ms);
 }
 
 static void gs_try_set_direction(int8_t dr, int8_t dc) {
@@ -195,7 +283,7 @@ static void gs_step(uint32_t now_ms) {
     }
 
     if (gs_cell_in_body(nr, nc)) {
-        gm_start_round_end(now_ms, false);
+        gm_start_round_end(now_ms, false, false);
         return;
     }
 
@@ -203,7 +291,7 @@ static void gs_step(uint32_t now_ms) {
     uint8_t new_length = ate ? (uint8_t)(s_gs_length + 1u) : s_gs_length;
     if (new_length > GS_MAX_LENGTH) {
         /* Board effectively full -- treat it as a win, same flash. */
-        gm_start_round_end(now_ms, false);
+        gm_start_round_end(now_ms, false, true);
         return;
     }
 
@@ -375,7 +463,7 @@ static void gb_step(uint32_t now_ms) {
             }
         }
         if (all_dead) {
-            gm_start_round_end(now_ms, false);
+            gm_start_round_end(now_ms, false, true);
         }
     } else if (new_row > (int8_t)GB_PADDLE_ROW) {
         int8_t paddle_min = (int8_t)(s_gb_paddle_center - 1);
@@ -387,7 +475,7 @@ static void gb_step(uint32_t now_ms) {
                 s_gb_ball_dcol = (int8_t)(-s_gb_ball_dcol);
             }
         } else {
-            gm_start_round_end(now_ms, false);
+            gm_start_round_end(now_ms, false, false);
         }
     }
 
@@ -618,7 +706,7 @@ static void gt_lock(uint32_t now_ms) {
         /* Nowhere for the next piece to go -- topped out. Plain red,
          * not the red/purple every other game's round-end uses -- real
          * feedback: "when game is lost it should flash red." */
-        gm_start_round_end(now_ms, true);
+        gm_start_round_end(now_ms, true, false);
     }
 }
 
@@ -872,6 +960,14 @@ static void gp_point_scored(uint32_t now_ms, bool left_missed) {
     if (s_gp_left_score >= GP_WIN_SCORE || s_gp_right_score >= GP_WIN_SCORE) {
         s_gp_match_over = true;
         s_gp_match_over_ms = now_ms;
+        /* Pong doesn't route through gm_start_round_end() (see this
+         * file's own header on why -- it freezes/glows locally instead),
+         * so the win melody needs its own direct trigger here. Always
+         * WIN, never LOSE -- local two-player Pong doesn't have a
+         * single "the player" to lose relative to, so a match ending is
+         * treated as a win event regardless of which side reached
+         * GP_WIN_SCORE first. */
+        gm_melody_start(&GM_MELODY_WIN, now_ms);
         return;
     }
     gp_serve(now_ms);
@@ -1151,7 +1247,7 @@ static void gsim_handle_input(uint32_t now_ms) {
         if (pad != expected_pad) {
             /* Wrong pad -- real feedback: "when game is lost it should
              * flash red" (Tetris's own precedent, same treatment here). */
-            gm_start_round_end(now_ms, true);
+            gm_start_round_end(now_ms, true, false);
             return;
         }
 
@@ -1302,15 +1398,24 @@ static void gm_handle_menu_selection(void) {
     bool pad5 = tiles_touch_is_touched(5u);
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
+    /* Real feedback: "no haptics except for selecting game." This is
+     * the ONE deliberate haptic this file fires outside Simon Says' own
+     * gameplay mechanic (see this file's own "Win/lose melodies" section
+     * header) -- a felt confirmation that a game actually launched. */
     if (pad1 && !s_gm_prev_pad1_touched) {
+        tiles_haptics_trigger_kick(1u, GM_MENU_SELECT_VELOCITY);
         gm_start_snake(now_ms);
     } else if (pad2 && !s_gm_prev_pad2_touched) {
+        tiles_haptics_trigger_kick(2u, GM_MENU_SELECT_VELOCITY);
         gm_start_brick(now_ms);
     } else if (pad3 && !s_gm_prev_pad3_touched) {
+        tiles_haptics_trigger_kick(3u, GM_MENU_SELECT_VELOCITY);
         gm_start_tetris(now_ms);
     } else if (pad4 && !s_gm_prev_pad4_touched) {
+        tiles_haptics_trigger_kick(4u, GM_MENU_SELECT_VELOCITY);
         gm_start_pong(now_ms);
     } else if (pad5 && !s_gm_prev_pad5_touched) {
+        tiles_haptics_trigger_kick(5u, GM_MENU_SELECT_VELOCITY);
         gm_start_simon(now_ms);
     }
     s_gm_prev_pad1_touched = pad1;
@@ -1368,6 +1473,40 @@ static void gm_check_toggle_gesture(uint32_t now_ms) {
     s_gm_combo_was_held = held;
 }
 
+/* Real feedback: "if cicle cliucked in game menu it exxits to previuos
+ * mode and each othere function button oversides gasme mode, exiting
+ * and taking to respective menu." Triangle/diamond are never a live
+ * control in ANY of the five games (see this file's own per-game input
+ * handlers), so they override game mode unconditionally, menu or mid-
+ * game alike. Circle/square ARE live Pong paddle controls (SW5/SW6,
+ * gp_handle_input()), so overriding them mid-game would break Pong
+ * itself -- they only override from the menu screen, matching the
+ * "circle clicked in game MENU" framing in the feedback itself. This
+ * function doesn't need to restore whatever mode was active before
+ * game mode -- op_mode.c's own s_active_mode was never touched while
+ * game mode ran (the two are already mutually exclusive by design), so
+ * simply exiting via gm_toggle() below is all "back to previous mode"
+ * needs. The button that triggered the exit doesn't fire its own
+ * action on this SAME press -- services/op_mode.c's/services/
+ * expression_control.c's own "keep edge-tracking current while
+ * suppressed" pattern (a deliberate anti-spurious-click safeguard, see
+ * their own comments) means a release-then-press is needed to actually
+ * open that button's menu, one extra motion rather than a seamless
+ * single press. */
+static bool gm_override_button_pressed(void) {
+    if (s_gm_state == GM_STATE_OFF) {
+        return false;
+    }
+    if (tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) || tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID)) {
+        return true;
+    }
+    if (s_gm_state == GM_STATE_MENU &&
+        (tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID) || tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID))) {
+        return true;
+    }
+    return false;
+}
+
 void tiles_game_mode_init(void) {
     s_gm_state = GM_STATE_OFF;
     s_gm_last_frame_ms = 0u;
@@ -1378,6 +1517,7 @@ void tiles_game_mode_init(void) {
     s_gm_prev_pad3_touched = false;
     s_gm_prev_pad4_touched = false;
     s_gm_prev_pad5_touched = false;
+    s_gm_melody_active = false;
 }
 
 void tiles_game_mode_scan(void) {
@@ -1386,6 +1526,13 @@ void tiles_game_mode_scan(void) {
     gm_check_toggle_gesture(now_ms);
 
     if (s_gm_state == GM_STATE_OFF) {
+        gm_melody_stop();
+        return;
+    }
+    gm_melody_update(now_ms);
+
+    if (gm_override_button_pressed()) {
+        gm_toggle(now_ms);
         return;
     }
 
