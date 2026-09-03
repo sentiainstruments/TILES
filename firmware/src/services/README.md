@@ -3137,5 +3137,31 @@ not its code.
   wobble -- it doesn't make four fingers land together any easier in the
   first place, so if entry is still hard after this, that's the
   remaining piece to chase.
+- **`expression.c`'s velocity model, replaced with a depth+time hybrid --
+  real feedback with a live capture showing why the pure-time model
+  couldn't work: "slow light press is still to hard velocity wise...
+  we need a way to measure light press with distance but we need some
+  of the bias of speed as well."** A serial capture caught a deliberately
+  light tap on pad 1 committing at `strike_time_ms=10` -- the MAX-
+  velocity floor. Elapsed-time-to-threshold measures *quickness*, not
+  *force*: a light but quick tap crosses `MIN_STRIKE_DEPTH_DELTA` just as
+  fast as a hard quick strike does, so time alone can't tell them apart.
+  Fixed by adding a second signal time can't provide: how far
+  `peak_depth` had already overshot the threshold at the exact sample
+  that crossed it (`depth_score_from_peak()`) -- free, no added latency,
+  since `peak_depth` is already tracked every sample before commit. This
+  works because Hall samples arrive at a roughly fixed rate: a hard
+  strike covers much more depth between two samples than a light one
+  does, so the sample that finally crosses 150 typically overshoots it
+  by a lot for a hard hit and barely clears it for a light one --
+  overshoot is a real proxy for force that was sitting right there,
+  unused. `velocity_from_strike()` now blends `depth_score_from_peak()`
+  (`STRIKE_DEPTH_WEIGHT`, 0.7 -- the dominant signal) with the existing
+  `time_score_from_strike_time()` (0.3, kept as a bias per "some of the
+  bias of speed as well," not dropped). `STRIKE_DEPTH_OVERSHOOT_FULL_SCALE`
+  (350) is a first-attempt guess, not measured -- there's no captured
+  peak-depth-at-commit data yet the way `MIN_STRIKE_DEPTH_DELTA` has;
+  revisit once a real light-vs-hard session records those numbers
+  directly instead of only `strike_time_ms`.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

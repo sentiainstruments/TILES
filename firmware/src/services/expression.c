@@ -211,10 +211,50 @@
  * counts as a genuinely fast strike (still <= 10ms for 127), but it
  * stretches ordinary-to-slow playing across double the window, giving
  * real dynamic range to press speeds that used to cluster near the top
- * instead of only ever separating out the most extreme soft touches. */
+ * instead of only ever separating out the most extreme soft touches.
+ *
+ * Still not enough, real feedback with a live serial capture showing why:
+ * a deliberately LIGHT tap on pad 1 committed at strike_time_ms=10 (the
+ * MAX-velocity floor) -- "slow light press is still to hard velocity
+ * wise... we need a way to measure light press with distance but we
+ * need some of the bias of speed as well." Elapsed-time-to-threshold
+ * fundamentally can't tell a light, quick tap from a hard, quick strike:
+ * both cross MIN_STRIKE_DEPTH_DELTA almost immediately if the touch
+ * itself is fast, however little force is behind it -- time-to-
+ * threshold measures *quickness*, not *how hard*, and those aren't the
+ * same thing for a fast-but-gentle touch.
+ *
+ * Fixed by adding a second signal that time alone can't provide: how far
+ * PAST the threshold peak_depth had already traveled at the exact
+ * sample that crossed it (see velocity_from_strike() below). This costs
+ * no added latency -- peak_depth is already tracked every sample before
+ * commit, so this reads whatever it already was, it doesn't wait for
+ * more. It works because Hall samples arrive at a roughly fixed rate: a
+ * fast/hard strike covers much more depth between two consecutive
+ * samples than a slow/light one does, so the sample that finally tips
+ * past 150 typically OVERSHOOTS it by a lot for a hard strike and barely
+ * clears it for a light one -- overshoot is a real, already-available
+ * proxy for force that time-to-threshold alone never captured. Depth is
+ * now the DOMINANT signal (STRIKE_DEPTH_WEIGHT, 0.7) with time kept as a
+ * smaller bias (0.3) per "we need some of the bias of speed as well" --
+ * not replaced, just no longer the only input. */
 #define STRIKE_TIME_MAX_VELOCITY_MS 10u
 #define STRIKE_TIME_MIN_VELOCITY_MS 300u
 #define VELOCITY_CURVE_EXPONENT 1.0f
+
+/* How much peak_depth can overshoot MIN_STRIKE_DEPTH_DELTA (at the exact
+ * sample that crossed it) before the depth signal itself maxes out.
+ * First attempt, not measured -- there's no captured data yet for "how
+ * much does a genuinely hard strike overshoot the threshold in one
+ * sample interval on this hardware," unlike MIN_STRIKE_DEPTH_DELTA's own
+ * real capture data above. Revisit once a real light-vs-hard capture
+ * session records actual peak_depth-at-commit numbers instead of only
+ * strike_time_ms. */
+#define STRIKE_DEPTH_OVERSHOOT_FULL_SCALE 350.0f
+
+/* Depth's share of the final blend -- see this section's own header for
+ * why depth now leads and time is the secondary bias, not the reverse. */
+#define STRIKE_DEPTH_WEIGHT 0.7f
 
 /* Even a strike weak enough to barely clear MIN_STRIKE_DEPTH_DELTA
  * should produce an audible note, not near-silence -- the curve above
@@ -900,27 +940,53 @@ static void begin_awaiting_strike(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
     s->strike_time_ms = 0;
 }
 
-/* Maps elapsed strike time (ms, touch_start_sample_ms to the moment
- * peak_depth crossed MIN_STRIKE_DEPTH_DELTA) to a MIDI velocity -- see
- * this file's "Velocity: elapsed-time-to-actuation" section for the
- * full reasoning. Faster (smaller ms) is a harder strike. */
-static uint8_t velocity_from_strike_time(uint32_t strike_time_ms) {
+/* Time-only sub-score, 0..1 -- "how much of the way from slow to fast,"
+ * curved by VELOCITY_CURVE_EXPONENT (see that constant's own comment;
+ * 1.0 is currently a plain linear response). Split out of
+ * velocity_from_strike() below so that function reads as "combine two
+ * scores" rather than one tangled formula. */
+static float time_score_from_strike_time(uint32_t strike_time_ms) {
     if (strike_time_ms <= STRIKE_TIME_MAX_VELOCITY_MS) {
-        return 127u;
+        return 1.0f;
     }
     if (strike_time_ms >= STRIKE_TIME_MIN_VELOCITY_MS) {
-        return (uint8_t)MIN_VELOCITY;
+        return 0.0f;
     }
-    /* powf() with VELOCITY_CURVE_EXPONENT == 1.0 is a plain linear
-     * response (see that constant's own comment for why) -- kept as a
-     * general power curve rather than hand-simplified to a straight
-     * multiply, so a future round can retune the exponent again without
-     * restructuring this function. normalized is in (0, 1) as "how much
-     * of the way from slow to fast." */
     float normalized = (float)(STRIKE_TIME_MIN_VELOCITY_MS - strike_time_ms) /
                         (float)(STRIKE_TIME_MIN_VELOCITY_MS - STRIKE_TIME_MAX_VELOCITY_MS);
-    float curved = powf(normalized, VELOCITY_CURVE_EXPONENT);
-    int vel = (int)((float)MIN_VELOCITY + (float)(127u - MIN_VELOCITY) * curved);
+    return powf(normalized, VELOCITY_CURVE_EXPONENT);
+}
+
+/* Depth-only sub-score, 0..1 -- how far peak_depth had already overshot
+ * MIN_STRIKE_DEPTH_DELTA at the exact sample that crossed it. See this
+ * file's "Velocity" section header for why this exists (time-to-
+ * threshold alone can't tell a light quick tap from a hard quick
+ * strike) and why it's now the dominant signal. */
+static float depth_score_from_peak(float peak_depth) {
+    float overshoot = peak_depth - MIN_STRIKE_DEPTH_DELTA;
+    if (overshoot < 0.0f) {
+        overshoot = 0.0f;
+    }
+    float score = overshoot / STRIKE_DEPTH_OVERSHOOT_FULL_SCALE;
+    if (score > 1.0f) {
+        score = 1.0f;
+    }
+    return score;
+}
+
+/* Maps a strike's elapsed time (touch_start_sample_ms to the moment
+ * peak_depth crossed MIN_STRIKE_DEPTH_DELTA) AND how far peak_depth had
+ * already overshot that threshold at that exact sample to a MIDI
+ * velocity -- see this file's "Velocity" section for the full
+ * reasoning. Depth leads (STRIKE_DEPTH_WEIGHT), time is the remaining
+ * bias -- faster and/or a bigger overshoot both push toward a harder
+ * strike. */
+static uint8_t velocity_from_strike(uint32_t strike_time_ms, float peak_depth) {
+    float time_score = time_score_from_strike_time(strike_time_ms);
+    float depth_score = depth_score_from_peak(peak_depth);
+    float combined = STRIKE_DEPTH_WEIGHT * depth_score + (1.0f - STRIKE_DEPTH_WEIGHT) * time_score;
+
+    int vel = (int)((float)MIN_VELOCITY + (float)(127u - MIN_VELOCITY) * combined);
     if (vel < (int)MIN_VELOCITY) {
         vel = (int)MIN_VELOCITY;
     }
@@ -1132,7 +1198,7 @@ void tiles_expression_scan(void) {
 
             if (ready || commit_on_release) {
                 s->active_note = tiles_note_map_get_note(pad);
-                uint8_t velocity = velocity_from_strike_time(s->strike_time_ms);
+                uint8_t velocity = velocity_from_strike(s->strike_time_ms, s->peak_depth);
                 /* Temporary bring-up visibility -- prints exactly what
                  * the commit decision was based on, so a real-hardware
                  * session can read off actual numbers instead of
