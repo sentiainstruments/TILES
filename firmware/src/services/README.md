@@ -3188,5 +3188,41 @@ not its code.
   Dropping 4 named scales freed 4 grid slots, filled with 3 new
   reserved custom placeholders (`TILES_SCALE_CUSTOM_7/8/9`, alongside
   the existing 6) to keep the grid a full 24 slots.
+- **`expression.c`'s velocity model, corrected again -- the depth+time
+  hybrid from the previous round still wasn't right, real feedback:
+  "light preasure taps do medium velocity when they should do minimum
+  velocity... gentil slow taps and fast light taps [need to be] low
+  velocity it cant be strong and strong and deep has to be consistently
+  strong like a piano. it shoul dfeel like a hammer action piano."**
+  The previous fix measured depth overshoot at the exact INSTANT
+  `MIN_STRIKE_DEPTH_DELTA` was crossed -- but a fast-but-light touch can
+  still produce a real-looking overshoot at that one instant if it
+  happened to be moving quickly right as it grazed the threshold, which
+  is exactly the "fast light tap reads as medium/strong" symptom. A
+  real piano hammer doesn't have this failure mode because its
+  mechanism can't physically cover full key travel fast without real
+  force behind it -- on a shallow Hall/capacitive pad, "fast" and
+  "light" genuinely can coexist at the same shallow travel distance, so
+  one instantaneous depth sample can't be trusted to mean "hard."
+  Fixed with a real, if small, architecture change: a new
+  `VELOCITY_FOLLOWTHROUGH_MS` (20ms) window after crossing, during which
+  `peak_depth` keeps being watched (it was already tracked every
+  sample regardless -- see `peak_depth`'s own struct comment -- so this
+  needed no new tracking, just a later commit point) before the note
+  actually fires. A gentle slow tap and a fast light tap both plateau
+  near the threshold during that window (neither has real force behind
+  it to carry depth further); a strong, deep press keeps climbing well
+  past it regardless of exactly how fast it started -- this is the
+  actual "hammer action" signal, depth over a real observation window,
+  not an instantaneous sample and not elapsed time to a shallow
+  threshold. Costs up to 20ms of onset latency for a touch that stays
+  down that long; a touch releasing sooner still commits immediately on
+  release with whatever depth it reached (`commit_on_release`,
+  unchanged), so a genuinely brief tap adds none. `STRIKE_DEPTH_WEIGHT`
+  raised 0.7 -> 0.85 (depth even more dominant now that it's measured
+  properly) and `STRIKE_DEPTH_OVERSHOOT_FULL_SCALE` raised 350 -> 550
+  (a hard strike has a real window to keep climbing in now, not one
+  sample, so it can plausibly overshoot further than before) -- both
+  still first-attempt guesses, not measured against real strikes.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

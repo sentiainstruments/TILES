@@ -224,37 +224,71 @@
  * threshold measures *quickness*, not *how hard*, and those aren't the
  * same thing for a fast-but-gentle touch.
  *
- * Fixed by adding a second signal that time alone can't provide: how far
- * PAST the threshold peak_depth had already traveled at the exact
- * sample that crossed it (see velocity_from_strike() below). This costs
- * no added latency -- peak_depth is already tracked every sample before
- * commit, so this reads whatever it already was, it doesn't wait for
- * more. It works because Hall samples arrive at a roughly fixed rate: a
- * fast/hard strike covers much more depth between two consecutive
- * samples than a slow/light one does, so the sample that finally tips
- * past 150 typically OVERSHOOTS it by a lot for a hard strike and barely
- * clears it for a light one -- overshoot is a real, already-available
- * proxy for force that time-to-threshold alone never captured. Depth is
- * now the DOMINANT signal (STRIKE_DEPTH_WEIGHT, 0.7) with time kept as a
- * smaller bias (0.3) per "we need some of the bias of speed as well" --
- * not replaced, just no longer the only input. */
+ * First attempt at fixing this added a depth signal (how far past the
+ * threshold peak_depth had already traveled AT THE EXACT SAMPLE that
+ * crossed it) blended 70/30 with time, with zero added latency -- but
+ * real feedback after trying it: "light preasure taps do medium
+ * velocity when they should do minimum velocity. we need to make
+ * gentil slow taps and fast light taps low velocity it cant be strong
+ * and strong and deep has to be consistently strong like a piano. it
+ * shoul dfeel like a hammer action piano." The zero-latency version's
+ * real flaw: measuring overshoot AT THE INSTANT of crossing still lets
+ * a fast-but-light touch fake a real overshoot, if the touch happened
+ * to be moving quickly right as it grazed the threshold -- exactly the
+ * "fast light tap reads as medium/strong" symptom. A real acoustic
+ * piano hammer doesn't have this problem because its mechanism
+ * physically can't cover full key travel fast without real force behind
+ * it -- "fast" and "light" can't coexist at the same travel distance on
+ * a piano the way they can on a shallow capacitive/Hall pad. The fix:
+ * don't judge depth from one instantaneous sample -- give the strike a
+ * short, fixed follow-through window (VELOCITY_FOLLOWTHROUGH_MS) AFTER
+ * crossing to keep revealing its true depth before committing (see
+ * tiles_expression_scan()'s own `ready` condition below). A gentle slow
+ * tap and a fast light tap both plateau near the threshold during that
+ * window (there's no real force behind either to carry depth further);
+ * a strong, deep press keeps climbing well past it regardless of
+ * exactly how fast it started. This is the ACTUAL "hammer action" fix
+ * -- depth over a real observation window is what correlates with
+ * force on this hardware, not an instantaneous depth reading, and not
+ * elapsed time to a shallow threshold. Costs a small, fixed amount of
+ * onset latency (up to VELOCITY_FOLLOWTHROUGH_MS) for any touch that
+ * stays down that long; a touch that releases sooner than that still
+ * commits immediately on release with whatever depth it reached (see
+ * commit_on_release below), so a genuinely brief tap adds no latency at
+ * all. Depth is now even more dominant (STRIKE_DEPTH_WEIGHT, 0.85) with
+ * only a small time-based bias left (0.15) -- enough to still slightly
+ * favor a faster hit at the SAME eventual depth, per "some of the bias
+ * of speed as well" from the previous round, but no longer enough on
+ * its own to read a shallow touch as anything but soft. */
 #define STRIKE_TIME_MAX_VELOCITY_MS 10u
 #define STRIKE_TIME_MIN_VELOCITY_MS 300u
 #define VELOCITY_CURVE_EXPONENT 1.0f
 
-/* How much peak_depth can overshoot MIN_STRIKE_DEPTH_DELTA (at the exact
- * sample that crossed it) before the depth signal itself maxes out.
- * First attempt, not measured -- there's no captured data yet for "how
- * much does a genuinely hard strike overshoot the threshold in one
- * sample interval on this hardware," unlike MIN_STRIKE_DEPTH_DELTA's own
- * real capture data above. Revisit once a real light-vs-hard capture
- * session records actual peak_depth-at-commit numbers instead of only
- * strike_time_ms. */
-#define STRIKE_DEPTH_OVERSHOOT_FULL_SCALE 350.0f
+/* How long after crossing MIN_STRIKE_DEPTH_DELTA to keep watching
+ * peak_depth climb before actually committing the note -- see this
+ * section's own header for why. First attempt, not measured against
+ * real strikes; long enough that a genuinely light/gentle touch has
+ * clearly plateaued by the end of it, short enough to stay well under
+ * perceptible note-onset latency (typically cited around 10-20ms for a
+ * percussive instrument). */
+#define VELOCITY_FOLLOWTHROUGH_MS 20u
+
+/* How much peak_depth can overshoot MIN_STRIKE_DEPTH_DELTA (by the end
+ * of the follow-through window above) before the depth signal itself
+ * maxes out. Raised alongside the follow-through window's introduction
+ * -- a hard strike now has a real window to keep climbing in, not just
+ * one instantaneous sample, so it can plausibly overshoot much further
+ * than before. First attempt, not measured -- there's no captured data
+ * yet for "how far does a genuinely hard strike get in
+ * VELOCITY_FOLLOWTHROUGH_MS beyond the threshold on this hardware,"
+ * unlike MIN_STRIKE_DEPTH_DELTA's own real capture data above. Revisit
+ * once a real light-vs-hard capture session records actual
+ * peak_depth-at-commit numbers instead of only strike_time_ms. */
+#define STRIKE_DEPTH_OVERSHOOT_FULL_SCALE 550.0f
 
 /* Depth's share of the final blend -- see this section's own header for
- * why depth now leads and time is the secondary bias, not the reverse. */
-#define STRIKE_DEPTH_WEIGHT 0.7f
+ * why depth so heavily dominates and time is only a small bias. */
+#define STRIKE_DEPTH_WEIGHT 0.85f
 
 /* Even a strike weak enough to barely clear MIN_STRIKE_DEPTH_DELTA
  * should produce an audible note, not near-silence -- the curve above
@@ -1184,16 +1218,20 @@ void tiles_expression_scan(void) {
              * ("strong hard presses don't trigger anything"). */
             bool pressed = s->threshold_crossed;
 
-            /* "ready": a real press has been measured -- fires the
-             * instant it's detected, however fast or slow that took, no
-             * fixed elapsed-ms floor and no waiting for more samples (see
-             * this file's velocity section for why that wait is gone).
-             * "commit_on_release": touch already ended, but a real press
-             * was measured before it did -- commit now rather than
-             * discarding a genuine hit just because contact happened to
-             * end first (a real, common shape for a fast percussive
-             * strike). */
-            bool ready = touched && pressed;
+            /* "ready": a real press has been measured AND
+             * VELOCITY_FOLLOWTHROUGH_MS has elapsed since crossing while
+             * still touched -- see that constant's own comment for why
+             * this short wait exists (measuring depth over a real window
+             * instead of one instantaneous sample is what makes a fast-
+             * but-light tap actually read as soft). "commit_on_release":
+             * touch ended before that window finished -- commit
+             * immediately with whatever peak_depth was reached by then,
+             * rather than discarding a genuine hit (or pointlessly
+             * delaying a note that's already known to be over) just
+             * because contact happened to end first. */
+            uint32_t crossed_at_ms = s->touch_start_sample_ms + s->strike_time_ms;
+            bool followthrough_elapsed = pressed && (now_ms - crossed_at_ms) >= VELOCITY_FOLLOWTHROUGH_MS;
+            bool ready = touched && followthrough_elapsed;
             bool commit_on_release = !touched && pressed;
 
             if (ready || commit_on_release) {
