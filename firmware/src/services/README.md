@@ -3366,5 +3366,10 @@ not its code.
   "last chord played" state it needs stays in `op_mode.c` alongside
   this file's other chord-playback bookkeeping -- `note_map.c`'s own
   note-mapping functions otherwise carry no sequential/temporal state.
+- **Chord octave, tuned back down -- real feedback: "chord are a bit
+  low so bring them up one octave."** Two octaves down (the previous
+  round's fix for "make chords an octave loower") overshot it.
+  `CHORD_OCTAVE_DOWN_SEMITONES` back to 12 -- exactly this feature's
+  original spec, "chords are one octave lower than melodic."
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

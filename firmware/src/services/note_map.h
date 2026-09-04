@@ -296,9 +296,11 @@ bool tiles_note_map_is_chord_region_pad(uint8_t logical_pad);
  * quality (major/minor/diminished) automatically matches whichever
  * diatonic scale is active, exactly like a real "auto-chord"/chord-organ
  * instrument harmonizes each scale degree) for a chord-region pad, each
- * ALREADY shifted two octaves down from where the equivalent melody note
+ * ALREADY shifted one octave down from where the equivalent melody note
  * would sit -- real feedback: "the main thing is chords are one octave
- * lower than melodic," then "make chords an octave loower." Uses the
+ * lower than melodic" (see note_map.c's own CHORD_OCTAVE_DOWN_SEMITONES
+ * for the two intermediate rounds real hardware needed to land back on
+ * that original spec). Uses the
  * globally selected scale if it's genuinely diatonic (7 notes), else
  * falls back to Ionian (major) -- real feedback, once heard on real
  * hardware: "chords are not structured propperly. they should all be

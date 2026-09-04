@@ -121,10 +121,13 @@ bool tiles_note_map_is_guitar_fret_marker_pad(uint8_t logical_pad, bool *out_is_
 #define CHORD_MELODY_NUM_COLS 4u
 /* Chord octave offset -- real feedback: "the main thing is chords are
  * one octave lower than melodic," then, once heard on real hardware,
- * "make chords an octave loower" -- one octave wasn't low enough to
- * read as a distinct "bass/pad" register from the melody grid, so this
- * is now two full octaves below the equivalent melody note. */
-#define CHORD_OCTAVE_DOWN_SEMITONES 24
+ * "make chords an octave loower" (one octave wasn't low enough to read
+ * as a distinct "bass/pad" register), then, once THAT was heard on real
+ * hardware, "chord are a bit low so bring them up one octave" -- back
+ * to one octave below the equivalent melody note, i.e. this file's
+ * original spec ("chords are one octave lower than melodic") turns out
+ * to have been correct all along; two octaves overshot it. */
+#define CHORD_OCTAVE_DOWN_SEMITONES 12
 /* Diatonic third and fifth, in SCALE-DEGREE space (not semitones) --
  * skip-one, skip-two through the scale's own interval table, same as
  * how a real chord-organ/autoharp harmonizes each scale degree. This is
