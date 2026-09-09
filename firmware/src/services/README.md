@@ -3371,5 +3371,23 @@ not its code.
   round's fix for "make chords an octave loower") overshot it.
   `CHORD_OCTAVE_DOWN_SEMITONES` back to 12 -- exactly this feature's
   original spec, "chords are one octave lower than melodic."
+- **Pitch bend temporarily narrowed to X ("side tilt") alone, Y
+  excluded -- real feedback: "lets debug side tilt and ignore other
+  tilt for now. we might onlu keep 2 axisx sensing so preassure and
+  side tilt for vibrato pitchbend."** An earlier round combined both
+  in-plane Hall axes into the bend magnitude (`sqrt(dx^2 + dy^2)`, see
+  this file's own history above for that reasoning), but with X and Y
+  mixed into one number there's no way to tell, while specifically
+  debugging the X/"side tilt" signal, whether a given reading is really
+  X or partly Y bleeding in. The tick loop in `expression.c` now uses
+  `delta_x` alone as the raw pitch-bend delta; the Y baseline/smoothing
+  fields (`pitch_bend_baseline_y`, `pitch_bend_smoothed_y`) are still
+  tracked exactly as before, just no longer folded into the bend
+  itself, so restoring the combined signal later (if side tilt alone
+  turns out not to be enough signal on its own once tuned) is a
+  one-line change, not a re-derivation. Matches a real possible
+  hardware direction floated in the same feedback: dropping to 2-axis
+  sensing entirely (pressure + one lateral tilt axis) for vibrato/pitch
+  bend, rather than the current 3-axis (X/Y/Z) Hall read.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

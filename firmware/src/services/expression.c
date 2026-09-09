@@ -1442,36 +1442,28 @@ void tiles_expression_scan(void) {
                      * need." pitch_bend_14bit_from_cosine_delta() itself
                      * is otherwise direction-agnostic.
                      *
-                     * Two axes combined here, not X alone -- real
-                     * feedback: "incorporate the 2 axis tilt onto the
-                     * pitch bend to provide a more strong reading of
-                     * tilt... more sable reeds... make vibratos." Y gets
-                     * the exact same same-magnitude compensation treatment
-                     * as X above (delta_y cancels to 0 for a pure depth
-                     * change, for the identical reason delta_x does).
-                     * MAGNITUDE combines both axes (sqrt(dx^2 + dy^2)) --
-                     * strictly >= either axis alone, so a real tilt or
-                     * wiggle that happens to land partly on Y (which the
-                     * old X-only signal simply discarded) now adds to the
-                     * reading instead of being lost, giving small/rapid
-                     * motion -- a vibrato wiggle, specifically -- a
-                     * stronger, more reliable signal to clear the
-                     * deadzone with. SIGN stays anchored to delta_x alone,
-                     * deliberately not a true 2D bend direction -- this
-                     * preserves the already-tuned left/right bend feel
-                     * the deadzone/sensitivity constants below were
-                     * calibrated against, rather than redefining what
-                     * "positive bend" means. */
+                     * X ALONE for now, Y deliberately excluded -- real
+                     * feedback: "lets debug side tilt and ignore other
+                     * tilt for now. we might onlu keep 2 axisx sensing so
+                     * preassure and side tilt for vibrato pitchbend." An
+                     * earlier round folded Y into the bend magnitude too
+                     * (sqrt(dx^2 + dy^2), see this section's own git
+                     * history for that reasoning), but that mixes X and Y
+                     * into one number, which makes it impossible to tell,
+                     * while debugging X/"side tilt" specifically, whether
+                     * a given reading is really X or partly Y bleeding
+                     * in. `y`/`pitch_bend_baseline_y`/`pitch_bend_
+                     * smoothed_y` are all still tracked below (nothing
+                     * about the baseline-capture/settle logic above
+                     * changed) so re-enabling the combined signal later is
+                     * a one-line change, not a re-derivation, if side
+                     * tilt alone turns out not to be enough signal on its
+                     * own once tuned. */
                     float predicted_baseline_cosine_x = direction_cosine_from(s->pitch_bend_baseline_x, magnitude);
                     float current_cosine_x = direction_cosine_from(x, magnitude);
                     float delta_x = predicted_baseline_cosine_x - current_cosine_x;
 
-                    float predicted_baseline_cosine_y = direction_cosine_from(s->pitch_bend_baseline_y, magnitude);
-                    float current_cosine_y = direction_cosine_from(y, magnitude);
-                    float delta_y = predicted_baseline_cosine_y - current_cosine_y;
-
-                    float combined_magnitude = sqrtf(delta_x * delta_x + delta_y * delta_y);
-                    float raw_delta_this_tick = (delta_x >= 0.0f) ? combined_magnitude : -combined_magnitude;
+                    float raw_delta_this_tick = delta_x;
                     s->pitch_bend_smoothed_delta +=
                         PITCH_BEND_SMOOTHING_ALPHA * (raw_delta_this_tick - s->pitch_bend_smoothed_delta);
                     float delta = s->pitch_bend_smoothed_delta;
