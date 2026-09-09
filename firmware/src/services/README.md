@@ -3389,5 +3389,70 @@ not its code.
   hardware direction floated in the same feedback: dropping to 2-axis
   sensing entirely (pressure + one lateral tilt axis) for vibrato/pitch
   bend, rather than the current 3-axis (X/Y/Z) Hall read.
+- **Pitch bend: two real bugs found debugging X alone, then X+Y
+  restored -- the full arc of a single real-hardware investigation.**
+  Isolating the signal to X (see the entry above) let two problems that
+  the combined X+Y magnitude had been partially masking get properly
+  diagnosed and fixed:
+
+  1. **Sign-flicker vs. genuine tilt.** A completely straight, non-
+     tilted hold still crossed `PITCH_BEND_DEADZONE_COSINE_DELTA` on 35%
+     of samples and `s_pitch_bend_max_cosine_deviation` on 11.5% (461
+     captured) -- real "give" under sustained pressure, not noise. Real
+     tilt sustains one sign for the length of the gesture; give flickers
+     back and forth within ~100-200ms. `PITCH_BEND_ARM_MS` raised 15 ->
+     120 to actually require a held direction before counting a
+     deviation -- see that constant's own comment.
+
+  2. **Baseline drift.** A dedicated ~9s straight hold showed something
+     the flicker fix couldn't touch: raw X sat consistently 32-112 away
+     from the baseline captured in the first `PITCH_BEND_SETTLE_MS` of
+     contact, for the ENTIRE hold, no flip-flopping at all -- a pad's
+     true resting position under sustained pressure genuinely differs
+     from its position in the first 25ms of contact, and a single fixed
+     baseline can't distinguish that from a real tilt held just as long.
+     Real feedback: "there is always some minor give in pressed mode
+     either way." Fixed with a new slow DC-blocking recenter
+     (`PITCH_BEND_BASELINE_RECENTER_ALPHA`, ~40x slower than the
+     existing smoothing, aiming for a multi-second re-center) --
+     baseline_x/y keep drifting toward the CURRENT reading, but freeze
+     the instant a real bend run is confirmed, so an actively-held
+     deliberate tilt doesn't fade back to center on its own. First
+     version recentered toward RAW X/Y directly and made things worse,
+     not better -- real feedback, after testing an explicit slow
+     deliberate lean held for a full ~10s: "the old thing was not
+     working we need to compensate for preassure depth and drift."
+     Averaging the raw samples by hand found the real signal WAS
+     there (~13-15 raw units of consistent offset) but individual
+     samples swing far more wildly around it than that (holding a pad
+     LEANED takes continuous muscle tension, naturally less steady than
+     a relaxed straight press -- real tremor rides on top of a real
+     lean) -- and the recenter step, chasing every noisy raw sample,
+     was itself erasing that real signal before a run could ever
+     confirm. Fixed by recentering toward `pitch_bend_smoothed_x/y`
+     (the existing medium EMA, ~100-200ms, already real-hardware-
+     validated as enough to reject fast noise) instead of raw X/Y --
+     that field now runs continuously every tick, not just before the
+     initial baseline settles.
+
+  With both fixes in place, X alone finally showed SOME real bend
+  response to a deliberate lean (previously zero), but still not a
+  clean, confident one -- individual samples still swing too much for
+  the existing ~100-200ms smoothing to fully separate signal from real
+  hand tremor on a single axis. Getting genuinely clean X-only bend
+  would need either meaningfully more smoothing (a from-scratch
+  estimate: doubling `PITCH_BEND_SMOOTHING_ALPHA`'s smoothing costs
+  roughly 300-400ms of onset latency, enough to flatten real fast
+  vibrato outright) or Y's noise-averaging back -- real feedback: "yes
+  go ahead with X+Y." X+Y combined restored (see this section's own
+  "Two axes combined" comment for the actual math, unchanged from
+  before this whole round), keeping both bugfixes above -- neither was
+  ever X-specific, and Y gets the identical treatment. This round's
+  practical takeaway for a possible 2-axis (pressure + one lateral tilt)
+  hardware simplification: X alone measurably doesn't have enough
+  noise-rejection margin for a clean sustained bend without adding real
+  latency, at least on this board's assembly -- averaging two
+  uncorrelated axes is what gets noise rejection without that
+  latency trade.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

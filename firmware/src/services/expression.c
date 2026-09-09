@@ -541,6 +541,81 @@ static float s_pitch_bend_max_cosine_deviation = 0.065f;
  * short enough nothing else notices the delay." */
 #define PITCH_BEND_SETTLE_MS 25u
 
+/* How fast the baseline slowly re-centers toward the CURRENT raw X/Y
+ * while no real bend run is active -- real feedback, this file's own
+ * X-only ("side tilt") debugging round: "there is always some minor
+ * give in pressed mode either way." A real-hardware capture of a
+ * straight, non-tilted hold found the problem wasn't (only) fast
+ * flickering noise -- PITCH_BEND_ARM_MS's sign-consistency requirement
+ * already handles that case (see that constant's own comment) -- it was
+ * a SUSTAINED, one-directional offset for the length of an entire ~9s
+ * hold: raw X sat consistently 32-112 away from the baseline captured
+ * in the first PITCH_BEND_SETTLE_MS of contact, for the whole hold, no
+ * flip-flopping at all. A single fixed baseline can never distinguish
+ * that from a genuine held tilt lasting just as long -- both look
+ * identical to it. Fixed with a slow high-pass/DC-blocking approach
+ * instead: baseline_x/baseline_y keep drifting toward whatever X/Y
+ * currently reads, but ONLY while pitch_bend_run_active is false (see
+ * that field's own comment) -- gated on the PREVIOUS tick's
+ * classification, one tick of lag, negligible against any real human
+ * gesture. This freezes recentering the instant a real bend run is
+ * confirmed, so an actively-held deliberate tilt doesn't fade back
+ * toward center on its own; recentering only ever happens while
+ * genuinely at rest (or inside noise too small to have confirmed a run
+ * at all), which is exactly when it's safe to treat "wherever the pad
+ * currently sits" as the new true center.
+ *
+ * Inherent tradeoff of any DC-blocking filter, not fully solved by the
+ * run-gate above: a single bend held continuously for MANY seconds
+ * (well past PITCH_BEND_ARM_MS's confirmation window, but the player
+ * never releases and re-strikes) will very slowly relax back toward
+ * center too, since pitch_bend_run_active would need to go false at
+ * some point for that specific held note to ever recenter -- in
+ * practice it doesn't (a continuously-held real run keeps run_active
+ * true, keeps recentering paused, matching real intent) -- but this is
+ * worth knowing about if a future round finds a very long sustained
+ * bend gradually fading. Extrapolated from PITCH_BEND_SMOOTHING_ALPHA's
+ * own already-observed real-hardware settling time (documented there as
+ * roughly 100-200ms) -- deliberately ~40x slower than that, aiming for
+ * a multi-second re-center rather than one fast enough to fight a real
+ * held expressive gesture. Unmeasured against real long-hold data;
+ * worth a fresh capture to confirm this doesn't recenter either too
+ * slowly (give still leaks through for the first few seconds of a long
+ * hold) or too fast (a deliberate multi-second hold starts drifting
+ * back toward center before the player releases it).
+ *
+ * Second real problem this exposed, once tested against an explicit,
+ * slow, deliberately-HELD single-direction lean (not just a straight
+ * press) -- real feedback: "the old thing was not working we need to
+ * compensate for preassure depth and drift." That capture sent ZERO
+ * bend for a full ~10s deliberate lean. Averaging the raw X samples by
+ * hand (not just eyeballing individual ones) found the real signal WAS
+ * there -- roughly 13-15 raw units consistently above whatever the
+ * baseline happened to be at the time, both early and late in the hold
+ * -- but individual samples swing far more wildly than that around it
+ * (holding a pad leaned to one side takes continuous muscle tension,
+ * which is naturally less steady than a relaxed straight press; real
+ * physiological tremor rides on top of the real lean). The recenter
+ * step was chasing RAW X directly, tick by tick -- exactly as noisy as
+ * any single sample -- which does two bad things at once: it makes
+ * baseline_x/y itself jumpy (defeating the point of a "true rest
+ * center"), and, more importantly, it keeps dragging the baseline
+ * toward wherever the noisy CURRENT sample happens to be, actively
+ * erasing the real ~13-15-unit average bias before it ever gets a
+ * chance to build up into a confirmed run. Fixed by recentering toward
+ * pitch_bend_smoothed_x/y (the existing PITCH_BEND_SMOOTHING_ALPHA
+ * medium EMA, ~100-200ms -- already real-hardware-validated as enough
+ * to reject fast noise, see that constant's own history) instead of raw
+ * X/Y -- the recenter target itself is now already tremor-filtered,
+ * so it can only chase a signal that's persisted for a meaningful
+ * stretch, not every individual noisy sample. Does NOT touch how the
+ * live bend delta itself is computed (current_cosine_x still uses RAW
+ * X paired with THIS SAME tick's magnitude -- see the main scan loop's
+ * own comment on why that same-tick pairing is load-bearing for the
+ * depth-compensation math specifically); this only changes what the
+ * SLOW baseline chases, a completely separate concern. */
+#define PITCH_BEND_BASELINE_RECENTER_ALPHA 0.002f
+
 /* Brief noise-transient filter -- real feedback wanted LESS tilt needed
  * to trigger a bend, and a big amplitude deadzone was the previous
  * round's way of also rejecting brief accidental wobbles, which fought
@@ -550,18 +625,42 @@ static float s_pitch_bend_max_cosine_deviation = 0.065f;
  * brief, noisy blip never reads as more than a fraction of its already-
  * small magnitude before the next real sample either confirms or
  * clears it, while a real held tilt reaches full weight almost
- * immediately (this is deliberately short, NOT the multi-hundred-ms
- * "hold to arm" gate a previous round tried -- that version could
- * itself make USTABLE things worse: something persistently a little off
- * -- like an unsettled baseline -- would ramp up right along with a
- * genuine tilt, since a fixed offset looks identical to real intent to
- * a pure time-based filter. PITCH_BEND_SETTLE_MS above is what's meant
- * to actually fix a bad baseline; this is only for genuinely transient,
- * self-clearing noise). No acceleration/growth past full weight either,
- * for the same reason -- see this constant's own history above.
- * Unmeasured -- a first attempt at "smooths a blip, doesn't add a
- * perceptible lag to a real tilt." */
-#define PITCH_BEND_ARM_MS 15u
+ * immediately. Reset to 0 (see pitch_bend_14bit_from_cosine_delta()'s
+ * own run-tracking) the instant the sign flips, so this only rewards a
+ * CONSISTENT direction, not just "past the deadzone."
+ *
+ * Raised 15 -> 120 after debugging X-only ("side tilt") specifically --
+ * real feedback: "there is always some minor give in pressed mode
+ * either way." A dedicated real-hardware capture of a completely
+ * straight, non-tilted hold (this file's own X-only round, prompted by
+ * "lets debug side tilt and ignore other tilt for now") found that
+ * ordinary mechanical give under sustained pressure alone -- no
+ * deliberate tilt at all -- crosses PITCH_BEND_DEADZONE_COSINE_DELTA on
+ * 35% of samples and crosses s_pitch_bend_max_cosine_deviation (i.e.
+ * would send close to FULL bend) on 11.5% of samples, out of 461
+ * captured. The old combined X+Y magnitude averaged out this kind of
+ * single-axis wobble reasonably well (uncorrelated noise on two axes
+ * partially cancels in a sum-of-squares); X alone doesn't get that
+ * benefit, so give-driven excursions and real deliberate tilt now
+ * overlap heavily in raw MAGNITUDE alone (give: median 0.030, p90
+ * 0.069, p95 0.081, max 0.106; real captured deliberate tilt from an
+ * earlier round: median 0.053, p90 0.063, max 0.085 -- see
+ * s_pitch_bend_max_cosine_deviation's own comment -- almost the same
+ * range). What DOES differ qualitatively: real tilt sustains one sign
+ * for the length of the gesture, while give flickers back and forth
+ * within roughly 100-200ms as the pad settles. 15ms was nowhere near
+ * long enough to exploit that difference; 120ms is a first attempt at
+ * actually requiring a held direction, still well short of the
+ * multi-hundred-ms "hold to arm" gate a much earlier round tried and
+ * reverted -- that version's problem was a persistently-wrong BASELINE
+ * (not noise) looking identical to real intent to a pure time filter,
+ * which PITCH_BEND_SETTLE_MS above already handles at the source; this
+ * constant only ever sees deviations from an already-settled baseline.
+ * Unmeasured whether 120ms fully separates give from a genuine fast
+ * vibrato wiggle -- worth a fresh live capture to confirm. No
+ * acceleration/growth past full weight either, for the same reason
+ * this constant's own history originally established. */
+#define PITCH_BEND_ARM_MS 120u
 
 /* EMA smoothing on the cosine signal itself. History: 0.35 -> 0.15 for
  * "very jittery" real feedback on the AT-REST case, which the deadzone
@@ -697,11 +796,29 @@ typedef struct {
      * expected baseline cosine from at the CURRENT depth every tick,
      * rather than comparing against one fixed baseline cosine the way
      * earlier rounds did -- see the main scan loop's own comment for the
-     * full reasoning, including why Y joined X here. */
+     * full reasoning, including why Y joined X here. NOT frozen once
+     * settled -- see PITCH_BEND_BASELINE_RECENTER_ALPHA's own comment:
+     * these slowly drift toward the CURRENT x/y for as long as no real
+     * bend run is active, so a pad's true resting position under
+     * sustained pressure (which real hardware shows can differ from its
+     * position in the first PITCH_BEND_SETTLE_MS of contact) doesn't
+     * read as permanent fake tilt for the rest of a long hold. */
     float pitch_bend_baseline_x;
     float pitch_bend_baseline_y;
-    /* Only used BEFORE baseline_settled, to arrive at a clean baseline
-     * capture (see PITCH_BEND_SETTLE_MS) -- not read again afterward. */
+    /* Used BEFORE baseline_settled to arrive at a clean initial baseline
+     * capture (see PITCH_BEND_SETTLE_MS) -- AND kept running every tick
+     * afterward too (real feedback: "we need to compensate for
+     * preassure depth and drift"), now doubling as the RECENTER target
+     * for PITCH_BEND_BASELINE_RECENTER_ALPHA below, instead of that
+     * recenter step chasing raw X/Y directly. Deliberately still
+     * separate from `pitch_bend_baseline_x/y` -- this is the medium-
+     * timescale "where does the pad seem to be settling right now"
+     * signal (PITCH_BEND_SMOOTHING_ALPHA, ~100-200ms), baseline_x/y is
+     * the much-slower "true rest center" signal (PITCH_BEND_BASELINE_
+     * RECENTER_ALPHA, several seconds) that chases THIS, not raw
+     * samples -- see that constant's own comment for why a raw-noise-
+     * chasing baseline was itself the actual problem a real deliberate,
+     * slowly-leaned hold exposed. */
     float pitch_bend_smoothed_x;
     float pitch_bend_smoothed_y;
     /* EMA of the already depth-compensated delta (real feedback: "you
@@ -1360,21 +1477,35 @@ void tiles_expression_scan(void) {
                 float x, y, magnitude;
                 hall_xy_and_magnitude(hs.x, hs.y, hs.z, &x, &y, &magnitude);
 
-                if ((now_ms - s_hall_calibration_print_ms) >= HALL_CALIBRATION_PRINT_INTERVAL_MS) {
+                /* Captured once per tick (not just when the throttle
+                 * below actually fires) so the debug print further down
+                 * -- added specifically to see the RAW delta_x this
+                 * "debug side tilt" round needs, same "capture real
+                 * numbers before guessing" precedent every other
+                 * constant in this section was calibrated from -- can
+                 * report on the exact same cadence without a second,
+                 * independent timer. */
+                bool print_diagnostics = (now_ms - s_hall_calibration_print_ms) >= HALL_CALIBRATION_PRINT_INTERVAL_MS;
+                if (print_diagnostics) {
                     s_hall_calibration_print_ms = now_ms;
                     printf("[hall-cal] pad %u x=%d y=%d z=%d depth=%.0f magnitude=%.1f\n", pad, (int)hs.x, (int)hs.y,
                            (int)hs.z, (double)s->smoothed_depth, (double)magnitude);
                 }
 
+                /* Medium EMA of raw X/Y -- see pitch_bend_smoothed_x/y's
+                 * own struct-field comment for why this now runs every
+                 * tick unconditionally (both before AND after baseline
+                 * settles), not just during the initial settle window. */
+                s->pitch_bend_smoothed_x += PITCH_BEND_SMOOTHING_ALPHA * (x - s->pitch_bend_smoothed_x);
+                s->pitch_bend_smoothed_y += PITCH_BEND_SMOOTHING_ALPHA * (y - s->pitch_bend_smoothed_y);
+
                 if (!s->pitch_bend_baseline_settled) {
                     /* See PITCH_BEND_SETTLE_MS's own comment -- stays
                      * centered (never even reaches the send-if-changed
-                     * check below) until the EMAs below have had a few
+                     * check below) until the EMA above has had a few
                      * ticks to settle, then captures baseline X/Y from
-                     * those settled values rather than one raw
+                     * that settled value rather than one raw
                      * instantaneous sample. */
-                    s->pitch_bend_smoothed_x += PITCH_BEND_SMOOTHING_ALPHA * (x - s->pitch_bend_smoothed_x);
-                    s->pitch_bend_smoothed_y += PITCH_BEND_SMOOTHING_ALPHA * (y - s->pitch_bend_smoothed_y);
                     if ((now_ms - s->pitch_bend_claim_ms) >= PITCH_BEND_SETTLE_MS) {
                         s->pitch_bend_baseline_x = s->pitch_bend_smoothed_x;
                         s->pitch_bend_baseline_y = s->pitch_bend_smoothed_y;
@@ -1382,6 +1513,28 @@ void tiles_expression_scan(void) {
                         s->pitch_bend_smoothed_delta = 0.0f;
                     }
                 } else {
+                    /* See PITCH_BEND_BASELINE_RECENTER_ALPHA's own
+                     * comment -- slowly chases the medium-smoothed
+                     * (tremor-filtered) X/Y above, NOT raw X/Y directly
+                     * -- chasing raw samples was itself the bug a real
+                     * deliberate held lean exposed (see that constant's
+                     * own comment). Only while no real bend run is
+                     * confirmed (gated on the PREVIOUS tick's
+                     * classification, since THIS tick's run state isn't
+                     * known yet -- it depends on delta_x, computed
+                     * below, which depends on baseline_x; the
+                     * alternative would be a circular dependency within
+                     * the same tick). Runs before delta_x/delta_y are
+                     * computed below, so the rest of this block already
+                     * sees the recentered baseline,
+                     * not last tick's. */
+                    if (!s->pitch_bend_run_active) {
+                        s->pitch_bend_baseline_x += PITCH_BEND_BASELINE_RECENTER_ALPHA *
+                                                     (s->pitch_bend_smoothed_x - s->pitch_bend_baseline_x);
+                        s->pitch_bend_baseline_y += PITCH_BEND_BASELINE_RECENTER_ALPHA *
+                                                     (s->pitch_bend_smoothed_y - s->pitch_bend_baseline_y);
+                    }
+
                     /* Vertical-pressure compensation -- real feedback:
                      * "the pitchbend seems to lean towards down bend not
                      * up bend regardless of tilt... it should compensate
@@ -1442,28 +1595,78 @@ void tiles_expression_scan(void) {
                      * need." pitch_bend_14bit_from_cosine_delta() itself
                      * is otherwise direction-agnostic.
                      *
-                     * X ALONE for now, Y deliberately excluded -- real
-                     * feedback: "lets debug side tilt and ignore other
-                     * tilt for now. we might onlu keep 2 axisx sensing so
-                     * preassure and side tilt for vibrato pitchbend." An
-                     * earlier round folded Y into the bend magnitude too
-                     * (sqrt(dx^2 + dy^2), see this section's own git
-                     * history for that reasoning), but that mixes X and Y
-                     * into one number, which makes it impossible to tell,
-                     * while debugging X/"side tilt" specifically, whether
-                     * a given reading is really X or partly Y bleeding
-                     * in. `y`/`pitch_bend_baseline_y`/`pitch_bend_
-                     * smoothed_y` are all still tracked below (nothing
-                     * about the baseline-capture/settle logic above
-                     * changed) so re-enabling the combined signal later is
-                     * a one-line change, not a re-derivation, if side
-                     * tilt alone turns out not to be enough signal on its
-                     * own once tuned. */
+                     * Two axes combined, not X alone -- real feedback:
+                     * "incorporate the 2 axis tilt onto the pitch bend to
+                     * provide a more strong reading of tilt... more sable
+                     * reeds... make vibratos." Y gets the exact same
+                     * same-magnitude compensation treatment as X above
+                     * (delta_y cancels to 0 for a pure depth change, for
+                     * the identical reason delta_x does). MAGNITUDE
+                     * combines both axes (sqrt(dx^2 + dy^2)) -- strictly
+                     * >= either axis alone, so a real tilt or wiggle that
+                     * happens to land partly on Y adds to the reading
+                     * instead of being lost. SIGN stays anchored to
+                     * delta_x alone, deliberately not a true 2D bend
+                     * direction -- preserves the already-tuned left/right
+                     * bend feel the deadzone/sensitivity constants below
+                     * were calibrated against.
+                     *
+                     * This file went through a whole dedicated round of
+                     * debugging X ALONE first -- real feedback: "lets
+                     * debug side tilt and ignore other tilt for now" --
+                     * to isolate and fix two real bugs that the combined
+                     * signal had been partially masking: baseline drift
+                     * (PITCH_BEND_BASELINE_RECENTER_ALPHA, needed because
+                     * a pad's true rest position under sustained pressure
+                     * measurably differs from its position in the first
+                     * PITCH_BEND_SETTLE_MS of contact) and a too-short
+                     * noise-transient window (PITCH_BEND_ARM_MS, raised
+                     * 15 -> 120). Real feedback after confirming X alone
+                     * still couldn't cleanly separate genuine held tilt
+                     * from ordinary hand tremor without adding real
+                     * latency (a from-scratch estimate: doubling
+                     * PITCH_BEND_SMOOTHING_ALPHA's smoothing would cost
+                     * roughly 300-400ms of onset latency, enough to kill
+                     * genuine fast vibrato outright): "the old thing was
+                     * not working we need to compensate for preassure
+                     * depth and drift... yes go ahead with X+Y." Both
+                     * bugfixes carry over unchanged -- they were never
+                     * X-specific, and Y gets the identical treatment
+                     * below. */
                     float predicted_baseline_cosine_x = direction_cosine_from(s->pitch_bend_baseline_x, magnitude);
                     float current_cosine_x = direction_cosine_from(x, magnitude);
                     float delta_x = predicted_baseline_cosine_x - current_cosine_x;
 
-                    float raw_delta_this_tick = delta_x;
+                    float predicted_baseline_cosine_y = direction_cosine_from(s->pitch_bend_baseline_y, magnitude);
+                    float current_cosine_y = direction_cosine_from(y, magnitude);
+                    float delta_y = predicted_baseline_cosine_y - current_cosine_y;
+
+                    float combined_magnitude = sqrtf(delta_x * delta_x + delta_y * delta_y);
+                    float raw_delta_this_tick = (delta_x >= 0.0f) ? combined_magnitude : -combined_magnitude;
+
+                    if (print_diagnostics) {
+                        /* Temporary bring-up visibility, same reasoning as
+                         * the "[expression] pitch bend sent" print further
+                         * below -- but THAT print only fires once bend
+                         * actually clears the deadzone and changes, so it
+                         * can't show whether a real tilt is producing a
+                         * small-but-nonzero raw delta that's simply not
+                         * reaching PITCH_BEND_DEADZONE_COSINE_DELTA/
+                         * s_pitch_bend_max_cosine_deviation versus a real
+                         * hardware/wiring fault where delta stays near
+                         * zero regardless of tilt. Prints both baselines
+                         * and both smoothed values too, so a baseline that
+                         * never actually settled near the pad's true rest
+                         * position is visible directly rather than
+                         * inferred. */
+                        printf("[expression] pad %u tilt raw: baseline_x=%.1f smoothed_x=%.1f x=%d "
+                               "baseline_y=%.1f smoothed_y=%.1f y=%d combined=%.4f deadzone=%.4f max=%.4f\n",
+                               pad, (double)s->pitch_bend_baseline_x, (double)s->pitch_bend_smoothed_x, (int)hs.x,
+                               (double)s->pitch_bend_baseline_y, (double)s->pitch_bend_smoothed_y, (int)hs.y,
+                               (double)raw_delta_this_tick, (double)PITCH_BEND_DEADZONE_COSINE_DELTA,
+                               (double)s_pitch_bend_max_cosine_deviation);
+                    }
+
                     s->pitch_bend_smoothed_delta +=
                         PITCH_BEND_SMOOTHING_ALPHA * (raw_delta_this_tick - s->pitch_bend_smoothed_delta);
                     float delta = s->pitch_bend_smoothed_delta;
