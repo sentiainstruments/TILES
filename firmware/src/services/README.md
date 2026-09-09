@@ -3454,5 +3454,115 @@ not its code.
   latency, at least on this board's assembly -- averaging two
   uncorrelated axes is what gets noise rejection without that
   latency trade.
+- **Pitch bend, hardened after real X+Y playtesting -- a firmware
+  freeze, a redundant filter stage, a broken baseline-settle window,
+  a failed self-learning depth model, and finally a properly-researched
+  depth calibration curve, all found from one continuous round of real
+  hardware use.**
+
+  **The freeze.** Extended real play (many pads, several minutes)
+  froze the instrument -- not a firmware logic bug, but this file's own
+  accumulated debug `printf()` calls: the Pico SDK's USB-CDC stdio
+  driver busy-waits internally for up to `PICO_STDIO_USB_STDOUT_TIMEOUT_
+  US` (500ms) every time its output buffer fills faster than the host
+  drains it, and does NOT return to the main loop while waiting --
+  confirmed by reading `pico-sdk/src/rp2_common/pico_stdio_usb/
+  stdio_usb.c` directly. With a per-pad diagnostic print firing every
+  ~40ms across many simultaneously-active pads, sustained heavy play
+  could stack up enough blocking writes to stall touch/Hall/MIDI/haptics
+  entirely for seconds. Fixed by deleting both high-frequency prints
+  (`[hall-cal]`, the X-only round's `[expression] ... tilt raw`) now
+  that they'd done their diagnostic job -- both were explicitly
+  "temporary bring-up visibility" from the start. A much lower-rate
+  (150ms, globally throttled) `[depth-cal]` print was added later, for
+  the depth-calibration capture below specifically, with this exact
+  history documented at its own declaration as a reminder of why it
+  must stay conservative and temporary.
+
+  **A redundant third filter stage + a broken settle window.** Once
+  X+Y was restored, `pitch_bend_smoothed_delta` (an EMA on the OUTPUT
+  delta) was still running on top of the newly-cascaded X/Y/magnitude
+  inputs -- an uncounted THIRD smoothing stage, on top of the two just
+  added, that the "cascading costs ~40% more latency, not 100%" math
+  never accounted for. Real feedback: "time before reacting is too
+  long." Removed -- the two-stage INPUT cascade already does this job.
+  Separately, `PITCH_BEND_SETTLE_MS` (25ms) was never revisited when
+  smoothing became a two-stage cascade: 25ms isn't remotely enough for
+  two cascaded stages to converge, so the baseline ended up captured
+  while the cascade was still sitting near its noisy, often-percussive
+  note-on seed -- then, over the next several hundred ms, the cascade's
+  own convergence toward the pad's TRUE position read as a large, fake,
+  growing "tilt." Real feedback pinned down two symptoms from this one
+  bug at once: "it definitely still triggers on full press without
+  bend" (the convergence transient firing on essentially every note)
+  and "bend reacts but not consistently" (its size depends on how far
+  the signal moved between the noisy seed and true convergence, which
+  varies note to note). Raised 25 -> 250 first (fully safe), then real
+  feedback ("bend takes too long to start... requires max tilt for it
+  to happen" -- the 250ms settle stacked with `PITCH_BEND_ARM_MS`'s own
+  120ms, ~370ms total before any tilt could reach full confidence)
+  pushed both back down -- settle to 120, arm to 60 -- reasoning that
+  the cleaner, properly-cascaded signal shouldn't need either constant
+  to work as hard as when they were fighting a noisier one.
+
+  **A failed self-learning depth-zone model.** Once genuinely stable,
+  real feedback surfaced the underlying physical issue directly:
+  "pressure chance also changes tilt. wich makes sence since all axxis
+  readings change with preassure." Correct -- and a real captured
+  slow, level, no-tilt press-and-release sweep confirmed raw Y
+  specifically has a large, repeatable, depth-correlated shift (see
+  `PITCH_BEND_DEPTH_Y_CURVE`'s own comment for the actual binned real
+  numbers). First attempt: two independently-recentering baselines
+  ("shallow" and "deep" depth zones), interpolated by current depth,
+  self-calibrating from ordinary play with no dedicated calibration
+  step. Real feedback: "preassure is generating crazy pitch bend" --
+  WORSE than before. Root cause: both zones are per-NOTE state, reset
+  at every note-on, and `PITCH_BEND_BASELINE_RECENTER_ALPHA`'s
+  multi-second time constant (correct for nudging an already-close
+  baseline) is far too slow to converge a whole new zone from scratch
+  within one note's realistic hold -- pressing deep mid-note
+  interpolated toward a "deep" baseline still essentially sitting at
+  the shallow value, a larger error than having no depth correction at
+  all. Reverted.
+
+  **Research before another guess.** Real feedback: "lets think of the
+  architecture the math and industry practices for this kind of
+  situations before we implement anything else." Real research (not
+  memory) found this is a known, named problem: 3-axis magnetic sensors
+  are documented to have "cross-axis sensitivity," and the standard
+  industry fix is the same technique used for 3-axis magnetometer
+  calibration (hard-iron/soft-iron correction) -- fit a correction from
+  REAL COLLECTED SAMPLES across the sensor's actual range of motion,
+  not a physics-idealized formula or a live-learned runtime model. Most
+  commercial Hall-effect joysticks avoid this entire class of problem
+  by mechanical design (a gimbal keeps the magnet at a constant distance
+  from the sensor, decoupling tilt from any pressure axis); TILES'
+  pad combines press-depth and tilt into the same physical mechanism
+  (one magnet, one compliant mount), so they're coupled by real
+  mechanics, and even purpose-built gimbal joysticks cite the same
+  category of error ("mechanical hysteresis" from friction/elasticity)
+  as a real, fought-over problem.
+
+  **The real fix: `PITCH_BEND_DEPTH_Y_CURVE`.** A slow, level, no-tilt
+  press-and-release sweep was captured on one pad (every raw x/y/depth
+  sample logged via the `[depth-cal]` print above), then averaged into
+  150-unit depth bins -- real numbers, documented in full at the
+  constant's own declaration. Y drops from ~0 near a shallow touch to a
+  ~-210 plateau by mid-to-deep press, NOT linearly -- most of the drop
+  happens early, then it flattens. X showed no comparably clean trend
+  and is left uncorrected. A small `{depth, y_offset}` table plus
+  piecewise-linear interpolation (`pitch_bend_y_drift_at_depth()`)
+  replaces the single straight-line constant from the previous round --
+  this is this file's scaled-down equivalent of hard-iron calibration:
+  a curve fit from real collected data, deliberately as simple as
+  piecewise-linear rather than a parametric curve fit, captured from
+  one representative pad rather than all 24 individually, matching this
+  project's own established "a few real numbers, not an over-built
+  model" calibration convention -- just extended from a single point to
+  enough points to capture the real curve's actual shape. The predicted
+  baseline at any depth is now `baseline_y + (curve(current_depth) -
+  curve(baseline_depth))` -- correct immediately from the moment
+  baseline settles, no learning period needed, unlike the reverted
+  two-zone attempt.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
