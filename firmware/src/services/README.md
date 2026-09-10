@@ -3564,5 +3564,63 @@ not its code.
   curve(baseline_depth))` -- correct immediately from the moment
   baseline settles, no learning period needed, unlike the reverted
   two-zone attempt.
+- **Pitch bend: the depth-vs-Y curve replaced by adaptive baseline
+  recentering, after real research into the actual signal-processing
+  problem.** Real feedback on the curve-based fix above: "preassure is
+  still doing pitch bend. and for pitch bend to actually work its
+  taking a lot of time and tilt for it to register. think about the
+  math for a bit first and how we could logically solve this while
+  retaining sensitivity or even emulate the feature with the readings
+  we have without affecting vertical preassure." A static calibration
+  -- whether one constant or a fitted curve -- can only ever be as good
+  as the single capture it came from, and does nothing about the noise
+  the deadzone/confirmation window still have to fight downstream,
+  which is exactly what made genuine tilt slow and insensitive: two
+  symptoms of two DIFFERENT causes (a spatial calibration problem and a
+  temporal noise-rejection problem) that were never actually separable
+  by tuning one static curve harder.
+
+  The real insight, worked through before writing any code (per the
+  explicit ask): the pressure-coupling artifact only happens WHILE
+  depth is actively changing -- holding steady at any depth doesn't
+  introduce it. So instead of predicting what X/Y SHOULD be at a given
+  depth (any static model), gate the baseline's own RECENTER RATE on
+  whether depth is CURRENTLY changing: `depth_activity` (0..1, driven by
+  how much `s->smoothed_depth` has moved since the previous tick,
+  normalized by `PITCH_BEND_DEPTH_ACTIVITY_FULL_SCALE`) blends between
+  `PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW` (the original 0.002, several
+  seconds -- used once depth holds steady, protecting a genuine held
+  tilt from fading, unchanged from every earlier round) and a new
+  `_FAST` (0.25, near-instant) used while depth is actively changing --
+  there's nothing to lose moving the baseline fast during a press ramp,
+  since a bend run is never confirmed during one anyway, and this is
+  exactly what stops pressure from reading as fake tilt without needing
+  to know in advance what the real X/Y-vs-depth relationship looks
+  like. A confirmed bend run still always wins regardless of
+  depth_activity (pressing harder while holding a deliberate bend can't
+  erase it).
+
+  This is the same underlying idea as the well-known **One Euro
+  Filter** (a simple, widely-used technique in gesture/HCI tracking:
+  adapt a filter's own rate based on the CURRENT speed of the signal it
+  tracks -- heavy smoothing at low speed for stability, light smoothing
+  at high speed for responsiveness) and, more directly, how biosignal
+  processing rejects a KNOWN motion confound: use an independent
+  detector of that confound (there, an accelerometer measuring motion
+  known to corrupt a heart-rate sensor; here, depth's own rate of
+  change, which is exactly what correlates with this mechanical drift)
+  to gate trust in the signal it corrupts, rather than modeling the
+  confound's effect directly. Removes `PITCH_BEND_DEPTH_Y_CURVE` and
+  `pitch_bend_y_drift_at_depth()` entirely -- this needs no calibration
+  capture at all, unlike either previous attempt (the reverted two-zone
+  self-learner, or the curve fit this replaces): it measures the real
+  depth/tilt relationship live, on every pad, continuously, so it can't
+  go stale or fail to generalize from whichever one pad a capture
+  happened to be taken from. `PITCH_BEND_DEADZONE_COSINE_DELTA`/
+  `PITCH_BEND_ARM_MS` deliberately left UNCHANGED this round (still 0.04
+  / 60ms) to isolate whether this mechanism alone fixes the pressure-
+  coupling complaint before ALSO retuning the noise-rejection constants
+  -- tightening those is the natural next step once this is confirmed
+  working, not bundled in blind.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

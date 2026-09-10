@@ -651,95 +651,70 @@ static float s_pitch_bend_max_cosine_deviation = 0.065f;
  * X/Y/magnitude, once real research (not another guessed constant)
  * showed a single EMA stage's rolloff genuinely wasn't steep enough on
  * its own; the "same magnitude for both terms" invariant this section
- * cares about was preserved throughout that change. */
-#define PITCH_BEND_BASELINE_RECENTER_ALPHA 0.002f
-
-/* Real, measured raw-Y-vs-depth calibration curve -- real feedback:
- * "preassure is generating crazy pitch bend... wich makes sence since
- * all axxis readings change with preassure," followed by "lets think of
- * the architecture the math and industry practices for this kind of
- * situations before we implement anything else." This is this file's
- * equivalent of "hard-iron" calibration for a 3-axis magnetic sensor
- * (the standard technique for exactly this class of problem: a magnetic
- * reading with a real, repeatable, position-dependent offset -- fit
- * from real collected samples across the sensor's actual range of
- * motion, not guessed from an idealized physics model). A single fixed
- * offset (an earlier version of this constant, -220 applied uniformly)
- * was a reasonable first approximation but doesn't capture the real
- * curve's actual SHAPE.
+ * cares about was preserved throughout that change.
  *
- * Real data: a slow, level, no-tilt press-and-release sweep on one pad,
- * with every raw (x, y, depth) sample logged, then averaged into 150-
- * unit depth bins:
- *   depth= 150: avg y=-72  (n=2)
- *   depth= 300: avg y=-75  (n=6)
- *   depth= 450: avg y=-101 (n=3)
- *   depth= 600: avg y=-64  (n=1 -- single noisy sample, an outlier
- *               breaking an otherwise monotonic trend; the curve below
- *               interpolates through this point instead of trusting it)
- *   depth= 750: avg y=-178 (n=8)
- *   depth= 900: avg y=-179 (n=5)
- *   depth=1050: avg y=-211 (n=15 -- the most heavily sampled bin)
- *   depth=1200: avg y=-211 (n=6)
- * Confirms the same shape hypothesized earlier: fast initial drop, then
- * a plateau around -210, NOT a straight line -- a single linear
- * constant necessarily over-corrects the shallow end and under-corrects
- * the deep end of that curve. X, from the same capture, showed no
- * comparably clean trend (bin averages wobbled between roughly -25 and
- * +67 with no consistent direction) -- real, but far smaller and less
- * conclusive than Y's; left uncorrected here rather than fit noise as
- * if it were signal, though the mild upward drift in the two deepest
- * bins is worth re-examining with a cleaner capture later.
- *
- * PIECEWISE-LINEAR interpolation between these points (see
- * pitch_bend_y_drift_at_depth() below) rather than a parametric curve
- * fit (e.g. an exponential/saturating model, which would need fewer
- * points but real curve-fitting math this MCU has no particular need
- * for) -- deliberately the simplest model that captures the real
- * measured SHAPE, matching this project's own established "a few real
- * numbers, not an over-built model" calibration convention, just
- * extended from a single point to enough points to represent a curve
- * instead of a straight line. Captured from ONE pad, applied board-wide
- * (not per-pad) -- same "few representative samples" convention this
- * project's own Hall depth calibration already established; worth
- * revisiting with multiple pads if real playing shows meaningful pad-
- * to-pad inconsistency. A two-zone, self-LEARNED version of this (see
- * pitch_bend_baseline_x's own struct comment) was tried and reverted
- * first -- it needed more real playing time to converge than a typical
- * note actually provides, so it was WRONG (not just imprecise) for a
- * meaningful stretch of ordinary play; a fixed curve from real data,
- * even an approximate one, is immediately correct from note-on instead. */
-typedef struct {
-    float depth;
-    float y_offset;
-} pitch_bend_depth_curve_point_t;
-
-static const pitch_bend_depth_curve_point_t PITCH_BEND_DEPTH_Y_CURVE[] = {
-    {0.0f, 0.0f},
-    {300.0f, -75.0f},
-    {600.0f, -140.0f},
-    {900.0f, -180.0f},
-    {1220.0f, -210.0f},
-};
-#define PITCH_BEND_DEPTH_Y_CURVE_LEN (sizeof(PITCH_BEND_DEPTH_Y_CURVE) / sizeof(PITCH_BEND_DEPTH_Y_CURVE[0]))
-
-/* Piecewise-linear lookup -- holds flat at the first/last point's own
- * value below/past the curve's own captured range, rather than
- * extrapolating a slope beyond real data. */
-static float pitch_bend_y_drift_at_depth(float depth) {
-    if (depth <= PITCH_BEND_DEPTH_Y_CURVE[0].depth) {
-        return PITCH_BEND_DEPTH_Y_CURVE[0].y_offset;
-    }
-    for (uint8_t i = 1; i < PITCH_BEND_DEPTH_Y_CURVE_LEN; i++) {
-        if (depth <= PITCH_BEND_DEPTH_Y_CURVE[i].depth) {
-            const pitch_bend_depth_curve_point_t *lo = &PITCH_BEND_DEPTH_Y_CURVE[i - 1u];
-            const pitch_bend_depth_curve_point_t *hi = &PITCH_BEND_DEPTH_Y_CURVE[i];
-            float t = (depth - lo->depth) / (hi->depth - lo->depth);
-            return lo->y_offset + (hi->y_offset - lo->y_offset) * t;
-        }
-    }
-    return PITCH_BEND_DEPTH_Y_CURVE[PITCH_BEND_DEPTH_Y_CURVE_LEN - 1u].y_offset;
-}
+ * This constant, and the whole idea of a SINGLE recenter rate, was
+ * replaced by an ADAPTIVE rate -- real feedback, after a real-data
+ * depth-vs-Y calibration curve (tried next, see git history for that
+ * whole round) still left "pressure is still doing pitch bend... for
+ * pitch bend to actually work its taking a lot of time and tilt": "lets
+ * think of the architecture the math and industry practices for this
+ * kind of situations." A static calibration -- whether one constant or
+ * a whole curve -- can only ever be as good as the one capture it came
+ * from, and does nothing to reduce the noise the deadzone/confirmation
+ * window downstream still have to fight, which is exactly what made
+ * genuine tilt slow and insensitive. Real insight: the pressure-
+ * coupling artifact only actually happens WHILE depth is changing --
+ * holding steady at any depth doesn't introduce it. So instead of
+ * predicting what X/Y SHOULD be at a given depth, gate the recenter
+ * RATE on whether depth is currently changing: fast (see
+ * PITCH_BEND_BASELINE_RECENTER_ALPHA_FAST below) while actively
+ * pressing/releasing, so the baseline snaps to reality in real time
+ * instead of lagging behind it (there's nothing to lose by moving fast
+ * here -- a run is never confirmed during a press ramp anyway); this
+ * SLOW rate, unchanged, once depth has settled and holds steady, which
+ * is when a real bend needs protecting from fading. This is the same
+ * underlying idea as the well-known "One Euro Filter" (adapt a filter's
+ * rate based on the speed of the thing it's tracking) and, more
+ * directly, how biosignal processing rejects a KNOWN motion confound:
+ * use an independent detector of that confound (there, an
+ * accelerometer; here, depth's own rate of change) to gate trust in the
+ * signal it corrupts, rather than modeling the corruption itself. See
+ * the main scan loop's own "depth_activity" comment for the actual
+ * blend. Needs no calibration capture at all -- unlike either previous
+ * attempt, it measures the real depth/tilt relationship live, on every
+ * pad, continuously, so it can't go stale or fail to generalize from
+ * whichever single pad a capture happened to be taken from. */
+#define PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW 0.002f
+/* How fast the baseline snaps to current X/Y while depth is actively
+ * changing (depth_activity near 1) -- see PITCH_BEND_BASELINE_RECENTER_
+ * ALPHA_SLOW's own comment for the full reasoning. Comparable to (a
+ * bit faster than) PITCH_BEND_SMOOTHING_ALPHA's own per-stage rate
+ * (0.08, ~100-200ms) -- fast enough that the baseline doesn't lag
+ * meaningfully behind even a quick strike's own depth ramp, not so fast
+ * it becomes as noisy as an unfiltered raw sample again. Unmeasured --
+ * a first attempt; worth a fresh capture to confirm this is fast enough
+ * to track a genuinely quick strike without leaving a residual gap. */
+#define PITCH_BEND_BASELINE_RECENTER_ALPHA_FAST 0.25f
+/* How many raw depth units of CHANGE since the previous tick (in
+ * s->smoothed_depth, not raw_depth) count as "depth is definitely
+ * actively changing right now" (depth_activity = 1.0) -- see the main
+ * scan loop's own comment for how this scales the blend between the two
+ * constants above. Extrapolated, not directly measured: the real
+ * depth-calibration sweep captured this session moved through roughly
+ * 1450 raw depth units over ~7.8 seconds of deliberately SLOW pressing,
+ * printed once every 150ms throttle interval showing deltas often in
+ * the 80-190 unit range PER PRINT INTERVAL -- since this file's real
+ * tick rate is meaningfully faster than that 150ms print throttle
+ * (many ticks happen between two printed samples), the corresponding
+ * PER-TICK delta during that same slow, deliberate press is plausibly
+ * an order of magnitude smaller. 8 is a first, reasoned guess at a
+ * per-tick threshold comfortably above ordinary tick-to-tick noise but
+ * still well below what even a slow, deliberate press should produce --
+ * unmeasured against a real tick-rate-aware capture; worth revisiting
+ * if depth_activity turns out to rarely reach 1.0 during genuine
+ * presses, or to false-trigger during a steady hold. */
+#define PITCH_BEND_DEPTH_ACTIVITY_FULL_SCALE 8.0f
 
 /* Brief noise-transient filter -- real feedback wanted LESS tilt needed
  * to trigger a bend, and a big amplitude deadzone was the previous
@@ -964,49 +939,55 @@ typedef struct {
      * rather than comparing against one fixed baseline cosine the way
      * earlier rounds did -- see the main scan loop's own comment for the
      * full reasoning, including why Y joined X here. NOT frozen once
-     * settled -- see PITCH_BEND_BASELINE_RECENTER_ALPHA's own comment:
-     * these slowly drift toward the CURRENT x/y for as long as no real
-     * bend run is active, so a pad's true resting position under
-     * sustained pressure (which real hardware shows can differ from its
-     * position in the first PITCH_BEND_SETTLE_MS of contact) doesn't
-     * read as permanent fake tilt for the rest of a long hold.
+     * settled -- see PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW's own
+     * comment: these keep drifting toward the CURRENT x/y for as long as
+     * no real bend run is active, at a rate that ADAPTS to how fast depth is
+     * currently changing (fast while actively pressing/releasing, slow
+     * while holding steady) -- see s->pitch_bend_prev_depth's own
+     * comment and the main scan loop's "depth_activity" comment for the
+     * full reasoning. This is what stops a pad's real, pressure-
+     * correlated mechanical drift from reading as fake tilt, without
+     * needing to know in advance what that drift curve looks like.
      *
-     * A real two-depth-zone version of this (separately learning "X/Y
-     * near a shallow touch" and "X/Y near a full press," interpolating
-     * between them) was tried and REVERTED -- real feedback: "preassure
-     * is generating crazy pitch bend." The deep zone only ever starts
-     * learning from the moment a note strikes, seeded equal to the
-     * shallow zone; PITCH_BEND_BASELINE_RECENTER_ALPHA's own multi-
-     * second time constant (correct for slowly correcting an already-
-     * close baseline, which is what it was designed for) is far too
-     * slow to ever converge a whole new zone from scratch within one
-     * note's realistic hold duration, so pressing deep mid-note
-     * interpolated toward a deep baseline that was still essentially
-     * sitting at the shallow value -- producing a LARGER error than no
-     * depth correction at all. Replaced by PITCH_BEND_DEPTH_Y_CURVE's
-     * own real-data curve lookup below instead of trying to learn the
-     * relationship live. */
+     * Two earlier, more complicated attempts at this were tried and
+     * REVERTED first: a two-depth-zone self-learning version ("pressure
+     * is generating crazy pitch bend" -- too slow to converge within a
+     * single note), then a fixed real-data-derived depth-vs-Y curve
+     * (better, but "pressure is still doing pitch bend... takes a lot
+     * of time and tilt" -- a STATIC calibration captured once can't
+     * track real dynamic behavior, and doesn't reduce the noise the
+     * deadzone/confirmation window still had to fight downstream). The
+     * adaptive-rate approach that replaced both needs no calibration
+     * capture at all -- it measures the depth/tilt relationship live,
+     * on every pad, continuously. */
     float pitch_bend_baseline_x;
     float pitch_bend_baseline_y;
-    /* Raw depth (same units as tiles_hall_get_depth(), s->smoothed_depth
-     * -- NOT a 0..1 fraction) at the exact moment pitch_bend_baseline_x/y
-     * above was last captured/recentered -- what pitch_bend_y_drift_at_
-     * depth()'s own curve-based correction is measured FROM, not a
-     * fixed 0. Updated alongside baseline_x/y every time they recenter,
-     * so the reference point and the value it's paired with never drift
-     * out of sync with each other. */
-    float pitch_bend_baseline_depth;
+    /* Previous tick's s->smoothed_depth -- the ONLY thing needed to
+     * compute depth_activity (see the main scan loop's own comment),
+     * the "is a real physical confound currently active" signal that
+     * drives the adaptive baseline-recenter rate above. Same underlying
+     * idea as the well-known "One Euro Filter" (adapt a filter's own
+     * rate based on how fast the tracked signal is CURRENTLY moving,
+     * not a fixed rate) and, more directly, how biosignal processing
+     * handles a KNOWN confound: use an independent detector of that
+     * confound (there, an accelerometer measuring motion that's known
+     * to corrupt a heart-rate sensor; here, depth's own rate of change,
+     * which is exactly what correlates with the mechanical drift this
+     * whole section exists to reject) to gate trust in the primary
+     * signal, rather than trying to model the confound's effect on that
+     * signal directly. */
+    float pitch_bend_prev_depth;
     /* Used BEFORE baseline_settled to arrive at a clean initial baseline
      * capture (see PITCH_BEND_SETTLE_MS) -- AND kept running every tick
      * afterward too (real feedback: "we need to compensate for
      * preassure depth and drift"), now doubling as the RECENTER target
-     * for PITCH_BEND_BASELINE_RECENTER_ALPHA below, instead of that
-     * recenter step chasing raw X/Y directly. Deliberately still
+     * for PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW/_FAST below, instead
+     * of that recenter step chasing raw X/Y directly. Deliberately still
      * separate from `pitch_bend_baseline_x/y` -- this is the medium-
      * timescale "where does the pad seem to be settling right now"
      * signal (PITCH_BEND_SMOOTHING_ALPHA, ~100-200ms), baseline_x/y is
-     * the much-slower "true rest center" signal (PITCH_BEND_BASELINE_
-     * RECENTER_ALPHA, several seconds) that chases THIS, not raw
+     * the slower "true rest center" signal (PITCH_BEND_BASELINE_
+     * RECENTER_ALPHA_SLOW/_FAST, adaptive) that chases THIS, not raw
      * samples -- see that constant's own comment for why a raw-noise-
      * chasing baseline was itself the actual problem a real deliberate,
      * slowly-leaned hold exposed. */
@@ -1435,6 +1416,13 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
     s->pitch_bend_smoothed_y2 = y;
     s->pitch_bend_smoothed_magnitude = magnitude;
     s->pitch_bend_smoothed_magnitude2 = magnitude;
+    /* Seeded from a fresh read here, NOT s->smoothed_depth -- at this
+     * exact point s->smoothed_depth still holds whatever this pad's
+     * PREVIOUS note last left it at (it isn't reseeded to the real
+     * current depth until a few lines after this call returns, see that
+     * field's own seeding comment) -- reading it here would prime the
+     * very first depth_activity computation with a fake, stale delta. */
+    s->pitch_bend_prev_depth = (float)tiles_hall_get_depth(pad);
     s->pitch_bend_smoothed_delta = 0.0f;
     s->pitch_bend_baseline_settled = false;
     s->pitch_bend_claim_ms = now_ms;
@@ -1762,69 +1750,67 @@ void tiles_expression_scan(void) {
                 s->pitch_bend_smoothed_magnitude2 +=
                     PITCH_BEND_SMOOTHING_ALPHA * (s->pitch_bend_smoothed_magnitude - s->pitch_bend_smoothed_magnitude2);
 
+                /* 0 (depth steady) .. 1 (depth changing fast), clamped --
+                 * see PITCH_BEND_DEPTH_ACTIVITY_FULL_SCALE's own comment
+                 * for where this threshold came from, and PITCH_BEND_
+                 * BASELINE_RECENTER_ALPHA_SLOW's for the full reasoning
+                 * on why this drives the baseline recenter rate below.
+                 * s->smoothed_depth, not raw_depth -- already-smoothed,
+                 * so this doesn't itself jitter with raw depth noise. */
+                float depth_activity =
+                    fabsf(s->smoothed_depth - s->pitch_bend_prev_depth) / PITCH_BEND_DEPTH_ACTIVITY_FULL_SCALE;
+                if (depth_activity > 1.0f) {
+                    depth_activity = 1.0f;
+                }
+                s->pitch_bend_prev_depth = s->smoothed_depth;
+
                 if (!s->pitch_bend_baseline_settled) {
                     /* See PITCH_BEND_SETTLE_MS's own comment -- stays
                      * centered (never even reaches the send-if-changed
                      * check below) until the cascade above has had a few
                      * ticks to settle, then captures baseline X/Y from
                      * the fully-cascaded (stage-2) value rather than one
-                     * raw instantaneous sample -- and records the RAW
-                     * depth this baseline was captured AT, since
-                     * PITCH_BEND_DEPTH_Y_CURVE's correction is measured
-                     * relative to THAT depth, not a fixed 0. */
+                     * raw instantaneous sample. */
                     if ((now_ms - s->pitch_bend_claim_ms) >= PITCH_BEND_SETTLE_MS) {
                         s->pitch_bend_baseline_x = s->pitch_bend_smoothed_x2;
                         s->pitch_bend_baseline_y = s->pitch_bend_smoothed_y2;
-                        s->pitch_bend_baseline_depth = s->smoothed_depth;
                         s->pitch_bend_baseline_settled = true;
                         s->pitch_bend_smoothed_delta = 0.0f;
                     }
                 } else {
-                    /* See PITCH_BEND_BASELINE_RECENTER_ALPHA's own
-                     * comment -- slowly chases the fully cascaded
-                     * (tremor-filtered) X/Y above, NOT raw X/Y directly
-                     * -- chasing raw samples was itself the bug a real
-                     * deliberate held lean exposed (see that constant's
-                     * own comment). Only while no real bend run is
-                     * confirmed (gated on the PREVIOUS tick's
-                     * classification, since THIS tick's run state isn't
-                     * known yet -- it depends on delta_x, computed
-                     * below, which depends on baseline_x; the
-                     * alternative would be a circular dependency within
-                     * the same tick). Runs before delta_x/delta_y are
-                     * computed below, so the rest of this block already
-                     * sees the recentered baseline, not last tick's.
-                     * baseline_depth recenters alongside the value it's
-                     * paired with, so the two never drift out of sync
-                     * with each other. */
+                    /* See PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW's own
+                     * comment -- chases the fully cascaded (tremor-
+                     * filtered) X/Y above, NOT raw X/Y directly -- chasing
+                     * raw samples was itself the bug a real deliberate
+                     * held lean exposed (see that constant's own
+                     * comment). Only while no real bend run is confirmed
+                     * (gated on the PREVIOUS tick's classification, since
+                     * THIS tick's run state isn't known yet -- it depends
+                     * on delta_x, computed below, which depends on
+                     * baseline_x; the alternative would be a circular
+                     * dependency within the same tick) -- a confirmed
+                     * run always wins regardless of depth_activity, so
+                     * pressing harder WHILE holding a deliberate bend
+                     * can't erase it. The RATE itself blends between the
+                     * SLOW and FAST constants by depth_activity: near-
+                     * instant while depth is actively changing (nothing
+                     * lost, since a run is never confirmed during a
+                     * press ramp anyway -- this is what stops pressure
+                     * from reading as fake tilt, without needing to know
+                     * in advance what the real X/Y-vs-depth relationship
+                     * looks like), slow once depth holds steady (so a
+                     * genuine held tilt doesn't fade). */
                     if (!s->pitch_bend_run_active) {
-                        s->pitch_bend_baseline_x += PITCH_BEND_BASELINE_RECENTER_ALPHA *
-                                                     (s->pitch_bend_smoothed_x2 - s->pitch_bend_baseline_x);
-                        s->pitch_bend_baseline_y += PITCH_BEND_BASELINE_RECENTER_ALPHA *
-                                                     (s->pitch_bend_smoothed_y2 - s->pitch_bend_baseline_y);
-                        s->pitch_bend_baseline_depth += PITCH_BEND_BASELINE_RECENTER_ALPHA *
-                                                         (s->smoothed_depth - s->pitch_bend_baseline_depth);
+                        float recenter_alpha = PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW +
+                                                (PITCH_BEND_BASELINE_RECENTER_ALPHA_FAST -
+                                                 PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW) *
+                                                    depth_activity;
+                        s->pitch_bend_baseline_x += recenter_alpha * (s->pitch_bend_smoothed_x2 - s->pitch_bend_baseline_x);
+                        s->pitch_bend_baseline_y += recenter_alpha * (s->pitch_bend_smoothed_y2 - s->pitch_bend_baseline_y);
                     }
 
-                    /* The predicted baseline AT THE CURRENT DEPTH -- the
-                     * settled/recentered baseline, PLUS the real-data
-                     * curve's own correction for how far current depth
-                     * has moved from the depth the baseline was actually
-                     * captured at (a DIFFERENCE of two curve lookups, not
-                     * one -- the curve gives an absolute "Y offset from
-                     * true zero-depth rest" at any given depth, so the
-                     * correction needed is how much that offset has
-                     * changed between the baseline's own depth and now).
-                     * See PITCH_BEND_DEPTH_Y_CURVE's own comment for
-                     * where this data came from and why X gets no such
-                     * correction. Immediately correct from the moment
-                     * baseline settles -- unlike the two-zone version
-                     * this replaced, it needs no learning period to
-                     * converge. */
                     float baseline_x_at_depth = s->pitch_bend_baseline_x;
-                    float baseline_y_at_depth =
-                        s->pitch_bend_baseline_y + (pitch_bend_y_drift_at_depth(s->smoothed_depth) -
-                                                     pitch_bend_y_drift_at_depth(s->pitch_bend_baseline_depth));
+                    float baseline_y_at_depth = s->pitch_bend_baseline_y;
 
                     /* Vertical-pressure compensation -- real feedback:
                      * "the pitchbend seems to lean towards down bend not
@@ -1912,8 +1898,8 @@ void tiles_expression_scan(void) {
                      * debug side tilt and ignore other tilt for now" --
                      * to isolate and fix two real bugs that the combined
                      * signal had been partially masking: baseline drift
-                     * (PITCH_BEND_BASELINE_RECENTER_ALPHA, needed because
-                     * a pad's true rest position under sustained pressure
+                     * (PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW/_FAST,
+                     * needed because a pad's true rest position under sustained pressure
                      * measurably differs from its position in the first
                      * PITCH_BEND_SETTLE_MS of contact) and a too-short
                      * noise-transient window (PITCH_BEND_ARM_MS, raised
