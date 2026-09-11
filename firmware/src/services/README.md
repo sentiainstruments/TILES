@@ -3694,5 +3694,43 @@ not its code.
      hand tremor back into the live signal than the two-stage version
      did -- worth a fresh capture to confirm this doesn't reintroduce
      jitter during a plain, non-wiggling hold.
+- **The fast-wiggle fix above reintroduced pressure-coupled false tilt
+  on the very next boot -- found, explained, and reverted to a single
+  shared cascade stage.** Real feedback: "the last boot re introduced
+  the pitch bend issues with preassure." Splitting `current_cosine_x/y`
+  onto the lighter first cascade stage while the baseline recenter
+  target (`pitch_bend_smoothed_x2/y2`) stayed on the heavier second
+  stage reintroduced exactly the "mismatched lag between the two terms"
+  failure this file has hit more than once before (see
+  `PITCH_BEND_SMOOTHING_ALPHA`'s own history): during a genuine press,
+  the faster-reacting live signal moved ahead of the slower-reacting
+  baseline before the baseline's own recenter (even in its FAST regime)
+  could catch up, and that transient gap read as fake tilt again.
+  `pitch_bend_smoothed_x2/y2` removed entirely; both the live delta and
+  the baseline recenter target now read the SAME single EMA stage
+  (`pitch_bend_smoothed_x/y`), eliminating the mismatch by construction
+  -- there's only one lag now, so nothing can race ahead of anything
+  else. Costs back some of the fast-wiggle amplitude the two-stage
+  split was preserving; worth a fresh capture to see whether a single
+  stage is still enough for genuine wiggles now that the adaptive
+  recenter (not raw filtering) carries most of the pressure-rejection
+  burden, rather than re-splitting the cascade again blind.
+- **MPE pitch bend range: real feedback found the configured value
+  wasn't reliably reaching the receiver.** "reduce the range of pitch
+  bend, rn we can bend 4 octave" -- reported with
+  `TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES` already set to 12 (one
+  octave) in firmware, not 48. "4 octaves" is EXACTLY the MPE
+  specification's own recommended default -- what a receiver falls back
+  to if it never gets an explicit override on the channel it's actually
+  reading pitch bend from. The Pitch Bend Sensitivity RPN was only ever
+  sent once, on the Zone Master Channel, relying on every receiver
+  correctly generalizing that to the whole zone per the MPE spec's own
+  convention -- not every real MPE implementation does. Fixed by also
+  sending the identical RPN on every Member Channel individually in
+  `tiles_midi_mpe_init()` -- redundant on a receiver that already
+  handles the Master-Channel version correctly, a real fix for one that
+  doesn't. The semitone VALUE itself (12) was deliberately left
+  unchanged this round so a fresh test can tell whether the interop fix
+  alone resolves it before also re-tuning the value.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

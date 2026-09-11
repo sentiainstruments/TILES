@@ -69,15 +69,28 @@
  * pipeline. */
 #define TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES 12u
 
-/* Sends this Lower Zone's required setup on the Zone Master Channel:
- * the MPE Configuration Message (RPN 6, "MCM" -- declares
- * TILES_MIDI_MPE_NUM_MEMBER_CHANNELS Member Channels in the zone, the
- * message an MPE-aware DAW/synth uses to auto-detect this is an MPE
- * controller at all) followed by the zone's Pitch Bend Sensitivity RPN
- * (RPN 0, TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES). Call once, from
- * main.c after USB MIDI is expected to be reachable -- harmless to call
- * before a host has actually enumerated, every send in this file is
- * already gated on tud_midi_mounted(). */
+/* Sends this Lower Zone's required setup: the MPE Configuration Message
+ * (RPN 6, "MCM" -- declares TILES_MIDI_MPE_NUM_MEMBER_CHANNELS Member
+ * Channels in the zone, the message an MPE-aware DAW/synth uses to
+ * auto-detect this is an MPE controller at all), sent once on the Zone
+ * Master Channel per spec, followed by the Pitch Bend Sensitivity RPN
+ * (RPN 0, TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES) -- sent on the
+ * Master Channel (the spec's own "applies zone-wide" convention) AND
+ * redundantly on EVERY Member Channel individually. Real feedback:
+ * "reduce the range of pitch bend, rn we can bend 4 octave" -- reported
+ * with TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES already set to 12 (one
+ * octave) in firmware, not 48 -- "4 octaves" is EXACTLY the MPE spec's
+ * own recommended default a receiver would fall back to if it never
+ * received an explicit override on the channel it's actually reading
+ * pitch bend from. Not every real MPE receiver fully generalizes a
+ * Master-Channel-only Pitch Bend Sensitivity to the whole zone despite
+ * what the spec says should happen; sending the same RPN on each
+ * Member Channel too is a well-known, low-risk robustness workaround
+ * for exactly that gap -- redundant on a receiver that already handles
+ * the Master-Channel version correctly, but a real fix for one that
+ * doesn't. Call once, from main.c after USB MIDI is expected to be
+ * reachable -- harmless to call before a host has actually enumerated,
+ * every send in this file is already gated on tud_midi_mounted(). */
 void tiles_midi_mpe_init(void);
 
 /* Note on/off, on a specific MPE Member Channel (status-byte nibble --

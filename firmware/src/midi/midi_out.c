@@ -74,7 +74,16 @@ void tiles_midi_mpe_init(void) {
 
     /* Pitch Bend Sensitivity: RPN 0 (param MSB=0x00, LSB=0x00), value
      * MSB = semitones, LSB = cents (0 here -- whole-semitone range).
-     * Sent on the Zone Master Channel, applying zone-wide per the MPE
-     * specification's own convention. */
+     * Sent on the Zone Master Channel (applying zone-wide per the MPE
+     * specification's own convention) AND redundantly on every Member
+     * Channel individually -- see this function's own declaration in
+     * midi_out.h for why: real feedback found the Master-Channel-only
+     * send wasn't taking effect on whatever was actually receiving
+     * pitch bend, which only ever reads it from the Member Channel a
+     * note is actually on. */
     send_rpn(TILES_MIDI_MPE_MASTER_CHANNEL, 0x00u, 0x00u, (uint8_t)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES, 0x00u);
+    for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
+        send_rpn((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i), 0x00u, 0x00u,
+                 (uint8_t)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES, 0x00u);
+    }
 }
