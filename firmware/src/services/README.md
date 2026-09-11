@@ -3622,5 +3622,77 @@ not its code.
   coupling complaint before ALSO retuning the noise-rejection constants
   -- tightening those is the natural next step once this is confirmed
   working, not bundled in blind.
+- **Pitch bend: the adaptive-recenter idea was right, its first
+  implementation had a real bug -- found and fixed with two more rounds
+  of real data, then tuned to "feels good," then extended for fast
+  wiggles.** Four real-hardware rounds in one continuous arc:
+
+  1. **Depth-activity gating alone wasn't enough.** Real feedback: "no
+     tilt detected ever but preassure is very stable and good." A live
+     capture (`depth_activity` added to the `[depth-cal]` print) showed
+     WHY: tilting a pad, even trying to hold pressure steady, genuinely
+     moves `depth` by a lot (cross-axis coupling running the OTHER
+     direction -- tilt bleeding into depth, not just depth bleeding into
+     X/Y). With `depth_activity` gated on the raw per-tick delta's
+     magnitude, this read as "depth is always actively changing,"
+     keeping the baseline in fast-snap mode almost constantly and
+     swallowing tilt right along with pressure. Fixed by smoothing the
+     SIGNED delta first, then taking ITS magnitude
+     (`pitch_bend_smoothed_depth_rate`) -- a genuine sustained press
+     keeps a consistent sign tick after tick and stays visible; depth
+     wobbling both ways during a tilt (no consistent direction)
+     partially cancels instead of accumulating. Same "sign consistency
+     separates real motion from noise" principle this file's own
+     pitch-bend run-tracking already used for X/Y, applied to depth.
+
+  2. **The activity-to-alpha blend itself was still wrong.** Real
+     feedback: "still no pitch bend on tilt but preassure works." A
+     second capture (this time printing `baseline_x`/`x2` alongside
+     `activity`) showed the baseline STILL tracking the live signal far
+     too closely throughout an entire tilt gesture, despite `activity`
+     reading only 0.05-0.32 (nowhere near 1.0). Root cause: `_FAST`
+     (0.25) is roughly 125x `_SLOW` (0.002) -- a plain LINEAR blend
+     means even modest, near-constant background activity already pulls
+     the effective rate to 10-40x pure SLOW, defeating the "stay slow
+     unless clearly, unambiguously pressing" intent for anything short
+     of activity being almost exactly 1.0. Fixed by CUBING
+     `depth_activity` before blending (0.3 -> 0.027, 0.1 -> 0.001,
+     1.0 -> 1.0 unchanged) -- shifts the whole curve toward "stay near
+     SLOW" without moving either endpoint. Real feedback immediately
+     after: "wow it feels good."
+
+  3. **Fine sensitivity/latency tuning, once the mechanism actually
+     worked.** Real feedback: "it need a tiny bit more sensitivity and
+     less trigger time... minimum trigger time and max ease of tilt but
+     without loosing precision for regular press." With pressure-
+     coupling now suppressed at its actual source instead of fought
+     downstream, `PITCH_BEND_ARM_MS` (60 -> 30) and
+     `PITCH_BEND_DEADZONE_COSINE_DELTA` (0.04 -> 0.025) shouldn't need
+     to work as hard rejecting noise that's mostly already gone --
+     changed one round apart from each other (not stacked with the
+     mechanism change above) so a regression, if any, is traceable to a
+     specific constant.
+
+  4. **Fast wiggles/vibrato weren't registering.** Real feedback: "i
+     just need fast wiggles of the keys to activate bend as well." The
+     two-stage cascade (see `PITCH_BEND_SMOOTHING_ALPHA`'s own tremor-
+     research comment) was applied to BOTH the baseline recenter target
+     AND the live signal being compared against it -- but real vibrato
+     and hand tremor sit in overlapping frequency bands, so a filter
+     steep enough to fully reject tremor necessarily damps a genuine
+     fast wiggle too. Split the cascade's two jobs across its two
+     stages instead of using both stages for everything: the baseline
+     reference stays on the fully-cascaded stage 2 (maximum stability --
+     that's what the earlier convergence-transient and false-tilt bugs
+     actually needed), while the LIVE signal (`current_cosine_x/y`) now
+     reads the lighter, faster-responding stage 1, preserving more of a
+     fast wiggle's real amplitude. `pitch_bend_smoothed_magnitude2`
+     removed entirely -- once nothing read it anymore (the live
+     computation moved to stage-1 magnitude, the recenter target never
+     needed a magnitude at all), it was dead weight, not kept for
+     symmetry. Real, not fully solved tradeoff: this also lets more raw
+     hand tremor back into the live signal than the two-stage version
+     did -- worth a fresh capture to confirm this doesn't reintroduce
+     jitter during a plain, non-wiggling hold.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

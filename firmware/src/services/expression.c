@@ -519,8 +519,24 @@ static float s_pitch_bend_max_cosine_deviation = 0.065f;
  * only 0.6% of real deliberate-tilt samples are lost; the previous 0.045
  * only gained 3 more points of rest-noise rejection (97%) at the cost of
  * losing 5.6% of real tilt signal -- a bad trade once both sides of the
- * tradeoff were actually visible together. Lowered to 0.04 accordingly. */
-#define PITCH_BEND_DEADZONE_COSINE_DELTA 0.04f
+ * tradeoff were actually visible together. Lowered to 0.04 accordingly.
+ *
+ * That whole capture predates the adaptive depth-rate-gated recentering
+ * fix (see PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW's own comment) --
+ * its at-rest noise floor was dominated by pressure-coupling this
+ * constant had no way to address except by sitting high enough to
+ * reject it, which is exactly why it also cost some real tilt
+ * sensitivity. With that noise now suppressed at its actual source
+ * instead, the true remaining noise floor is very likely meaningfully
+ * SMALLER than that old data suggests, but this hasn't been re-measured
+ * yet. Lowered 0.04 -> 0.025 as a first, deliberately modest step (not
+ * a re-guess to something tiny) -- real feedback: "wow it feels good...
+ * a tiny bit more sensitivity... max ease of tilt but without loosing
+ * precision for regular press." Changed alone this round, not stacked
+ * with a big PITCH_BEND_ARM_MS cut too, so a fresh capture can tell
+ * which constant (if either) needs correcting if regular-press
+ * precision regresses. */
+#define PITCH_BEND_DEADZONE_COSINE_DELTA 0.025f
 
 /* How long AFTER claiming ownership before the baseline cosine is
  * actually captured, letting PITCH_BEND_SMOOTHING_ALPHA's cascade settle
@@ -696,24 +712,22 @@ static float s_pitch_bend_max_cosine_deviation = 0.065f;
  * a first attempt; worth a fresh capture to confirm this is fast enough
  * to track a genuinely quick strike without leaving a residual gap. */
 #define PITCH_BEND_BASELINE_RECENTER_ALPHA_FAST 0.25f
-/* How many raw depth units of CHANGE since the previous tick (in
- * s->smoothed_depth, not raw_depth) count as "depth is definitely
- * actively changing right now" (depth_activity = 1.0) -- see the main
- * scan loop's own comment for how this scales the blend between the two
- * constants above. Extrapolated, not directly measured: the real
- * depth-calibration sweep captured this session moved through roughly
- * 1450 raw depth units over ~7.8 seconds of deliberately SLOW pressing,
- * printed once every 150ms throttle interval showing deltas often in
- * the 80-190 unit range PER PRINT INTERVAL -- since this file's real
- * tick rate is meaningfully faster than that 150ms print throttle
- * (many ticks happen between two printed samples), the corresponding
- * PER-TICK delta during that same slow, deliberate press is plausibly
- * an order of magnitude smaller. 8 is a first, reasoned guess at a
- * per-tick threshold comfortably above ordinary tick-to-tick noise but
- * still well below what even a slow, deliberate press should produce --
- * unmeasured against a real tick-rate-aware capture; worth revisiting
- * if depth_activity turns out to rarely reach 1.0 during genuine
- * presses, or to false-trigger during a steady hold. */
+/* How large pitch_bend_smoothed_depth_rate's own magnitude needs to be
+ * to count as "depth is definitely actively changing right now"
+ * (depth_activity = 1.0) -- see the main scan loop's own comment for
+ * how this scales the blend between the two constants above, and
+ * pitch_bend_smoothed_depth_rate's own struct comment for why this is
+ * measured against a SMOOTHED SIGNED rate, not a raw per-tick delta (the
+ * first version of this constant, 8.0 against the raw delta, saturated
+ * to 1.0 almost constantly during real tilting -- real feedback: "still
+ * no pitch bend on tilt but preassure works" -- because depth itself
+ * wobbles by a lot DURING a real tilt, not just during a deliberate
+ * press; only sign-CONSISTENT movement should count as "pressing," and
+ * the smoothed-signed-rate fixes that, but the right threshold against
+ * THAT smoothed signal is a fresh unknown, not a simple rescale of the
+ * old one). Unmeasured -- a first attempt pending a real capture of
+ * pitch_bend_smoothed_depth_rate's own values during both a genuine
+ * press and a genuine tilt, to see where they actually separate. */
 #define PITCH_BEND_DEPTH_ACTIVITY_FULL_SCALE 8.0f
 
 /* Brief noise-transient filter -- real feedback wanted LESS tilt needed
@@ -777,8 +791,25 @@ static float s_pitch_bend_max_cosine_deviation = 0.065f;
  * reclaiming some of that stacked latency without re-guessing all the
  * way back to the original (pre-X-only-round) 15ms; still needs a fresh
  * live capture to confirm real give doesn't leak back through at this
- * shorter window now that the signal feeding it is cleaner. */
-#define PITCH_BEND_ARM_MS 60u
+ * shorter window now that the signal feeding it is cleaner.
+ *
+ * Lowered again, 60 -> 30, once the adaptive depth-rate-gated
+ * recentering (see PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW's own
+ * comment) actually fixed pressure-coupling at its source rather than
+ * fighting it downstream -- real feedback, once that worked: "wow it
+ * feels good. it need a tiny bit more sensitivity and less trigger
+ * time... minimum trigger time and max ease of tilt but without loosing
+ * precision for regular press." With the dominant noise source (real
+ * hardware "give"/pressure-coupling) now suppressed before it ever
+ * reaches this confirmation window, what's left for this constant to
+ * reject is mostly genuine hand tremor already reduced by the two-stage
+ * cascade -- shouldn't need as long a hold to confirm as it did while
+ * still fighting a noisier signal. Deliberately not lower still in this
+ * same round as PITCH_BEND_DEADZONE_COSINE_DELTA's own reduction --
+ * changing both at once and by a lot risks not knowing which one to
+ * revert if "regular press precision" comes back regressed; a fresh
+ * live capture should confirm this before either goes lower again. */
+#define PITCH_BEND_ARM_MS 30u
 
 /* EMA smoothing on the cosine signal itself. History: 0.35 -> 0.15 for
  * "very jittery" real feedback on the AT-REST case, which the deadzone
@@ -962,21 +993,44 @@ typedef struct {
      * on every pad, continuously. */
     float pitch_bend_baseline_x;
     float pitch_bend_baseline_y;
-    /* Previous tick's s->smoothed_depth -- the ONLY thing needed to
-     * compute depth_activity (see the main scan loop's own comment),
-     * the "is a real physical confound currently active" signal that
-     * drives the adaptive baseline-recenter rate above. Same underlying
-     * idea as the well-known "One Euro Filter" (adapt a filter's own
-     * rate based on how fast the tracked signal is CURRENTLY moving,
-     * not a fixed rate) and, more directly, how biosignal processing
-     * handles a KNOWN confound: use an independent detector of that
-     * confound (there, an accelerometer measuring motion that's known
-     * to corrupt a heart-rate sensor; here, depth's own rate of change,
-     * which is exactly what correlates with the mechanical drift this
-     * whole section exists to reject) to gate trust in the primary
-     * signal, rather than trying to model the confound's effect on that
-     * signal directly. */
+    /* Previous tick's s->smoothed_depth -- feeds pitch_bend_smoothed_
+     * depth_rate below, which is what actually computes depth_activity
+     * (see the main scan loop's own comment), the "is a real physical
+     * confound currently active" signal that drives the adaptive
+     * baseline-recenter rate above. Same underlying idea as the well-
+     * known "One Euro Filter" (adapt a filter's own rate based on how
+     * fast the tracked signal is CURRENTLY moving, not a fixed rate)
+     * and, more directly, how biosignal processing handles a KNOWN
+     * confound: use an independent detector of that confound (there, an
+     * accelerometer measuring motion known to corrupt a heart-rate
+     * sensor; here, depth's own rate of change, which correlates with
+     * the mechanical drift this whole section exists to reject) to gate
+     * trust in the primary signal, rather than modeling the confound's
+     * effect directly. */
     float pitch_bend_prev_depth;
+    /* EMA of the SIGNED tick-to-tick depth delta (not its magnitude) --
+     * real feedback: "still no pitch bend on tilt but preassure works."
+     * A real capture of an actual tilt gesture found depth itself
+     * swinging by hundreds of raw units DURING the tilt, not just during
+     * a deliberate press -- physically real: tilting a small pad with
+     * one fingertip naturally shifts pressure unevenly across it, so
+     * depth isn't a pure press-only signal either (the SAME cross-axis
+     * coupling this whole section already fights, just running in the
+     * other direction: tilt bleeding into depth, not depth bleeding into
+     * X/Y). Gating the recenter rate on the RAW per-tick depth delta's
+     * magnitude made this read as "depth is always actively changing,"
+     * keeping the baseline in fast-snap mode almost constantly and
+     * swallowing real tilt right along with real pressure changes. Fix:
+     * smooth the SIGNED delta first, THEN take ITS magnitude for
+     * depth_activity (see the main scan loop's own comment) -- a genuine
+     * sustained press/release ramp keeps a consistent sign tick after
+     * tick, so its smoothed value stays substantial; depth wobbling both
+     * up and down during a tilt (no consistent direction) partially
+     * cancels in a signed average instead of accumulating, reading as
+     * LOWER activity. The exact same "sign consistency separates real
+     * motion from noise" principle this file's own pitch-bend run-
+     * tracking already uses for X/Y, applied here to depth instead. */
+    float pitch_bend_smoothed_depth_rate;
     /* Used BEFORE baseline_settled to arrive at a clean initial baseline
      * capture (see PITCH_BEND_SETTLE_MS) -- AND kept running every tick
      * afterward too (real feedback: "we need to compensate for
@@ -995,25 +1049,31 @@ typedef struct {
     float pitch_bend_smoothed_y;
     /* Second cascade stage -- see PITCH_BEND_SMOOTHING_ALPHA's own
      * comment on why a single EMA stage's rolloff wasn't steep enough
-     * to reject real hand tremor without adding excessive latency. This
-     * is what current_cosine_x/y and the baseline recenter target
-     * actually read now -- the FULLY cascaded, lowest-noise estimate
-     * of "where is X/Y right now." `pitch_bend_smoothed_x/y` above is
-     * kept as the intermediate first-stage value, not dead state -- the
-     * second stage's own EMA needs a running input to filter. */
+     * to reject real hand tremor without adding excessive latency. Only
+     * the BASELINE recenter target reads this fully-cascaded, lowest-
+     * noise value now -- real feedback ("i just need fast wiggles of the
+     * keys to activate bend as well") moved current_cosine_x/y back onto
+     * the lighter first-stage value above instead, since tremor and
+     * genuine fast vibrato overlap in frequency and a filter steep
+     * enough to fully reject one damps the other -- see the main scan
+     * loop's own comment at the delta computation for the full
+     * reasoning. The baseline reference stays on this stage specifically
+     * because ITS stability is what the earlier convergence-transient
+     * and false-tilt bugs actually needed, not the live signal's. */
     float pitch_bend_smoothed_x2;
     float pitch_bend_smoothed_y2;
-    /* Same two-stage cascade applied to `magnitude`, not just X/Y --
-     * needed so current_cosine_x/y (smoothed_x2/y2 divided by this)
-     * and predicted_baseline_cosine_x/y (baseline_x/y divided by this)
-     * both divide by the SAME already-smoothed magnitude, preserving
-     * the "both terms use the identical magnitude" invariant real
-     * hardware testing already showed is load-bearing (see the main
-     * scan loop's own comment on the historical "smoothed current vs.
-     * raw baseline" lag bug) -- just now applied to a smoothed magnitude
-     * stream instead of a raw instantaneous one. */
+    /* Single-stage only -- unlike X/Y above, magnitude never needed a
+     * second cascade stage of its own: the baseline recenter target
+     * (smoothed_x2/y2) chases raw X/Y directly with no division
+     * involved, so there's nothing downstream that ever wants a more-
+     * cascaded magnitude to pair with it. This is what the live delta
+     * computation actually uses, paired with the matching first-stage
+     * X/Y above -- see that computation's own comment for why matching
+     * stages matters (the "both terms use the identical magnitude"
+     * invariant real hardware testing showed is load-bearing cares
+     * about using ONE consistent magnitude, not about which stage it's
+     * drawn from). */
     float pitch_bend_smoothed_magnitude;
-    float pitch_bend_smoothed_magnitude2;
     /* EMA of the already depth-compensated delta (real feedback: "you
      * broke mpe preassure... biased towards down it never goes up" --
      * see the main scan loop's own comment on why this replaced
@@ -1415,7 +1475,6 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
     s->pitch_bend_smoothed_y = y;
     s->pitch_bend_smoothed_y2 = y;
     s->pitch_bend_smoothed_magnitude = magnitude;
-    s->pitch_bend_smoothed_magnitude2 = magnitude;
     /* Seeded from a fresh read here, NOT s->smoothed_depth -- at this
      * exact point s->smoothed_depth still holds whatever this pad's
      * PREVIOUS note last left it at (it isn't reseeded to the real
@@ -1423,6 +1482,11 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
      * field's own seeding comment) -- reading it here would prime the
      * very first depth_activity computation with a fake, stale delta. */
     s->pitch_bend_prev_depth = (float)tiles_hall_get_depth(pad);
+    /* Zeroed, not carried over -- a stale nonzero rate left over from
+     * this pad's PREVIOUS note would otherwise bias depth_activity (and
+     * so the adaptive recenter rate) for the first few ticks of a brand
+     * new note, before real samples have a chance to overwrite it. */
+    s->pitch_bend_smoothed_depth_rate = 0.0f;
     s->pitch_bend_smoothed_delta = 0.0f;
     s->pitch_bend_baseline_settled = false;
     s->pitch_bend_claim_ms = now_ms;
@@ -1729,12 +1793,6 @@ void tiles_expression_scan(void) {
                 float x, y, magnitude;
                 hall_xy_and_magnitude(hs.x, hs.y, hs.z, &x, &y, &magnitude);
 
-                if ((now_ms - s_depth_calibration_print_ms) >= DEPTH_CALIBRATION_PRINT_INTERVAL_MS) {
-                    s_depth_calibration_print_ms = now_ms;
-                    printf("[depth-cal] pad %u x=%d y=%d depth=%.0f\n", pad, (int)hs.x, (int)hs.y,
-                           (double)s->smoothed_depth);
-                }
-
                 /* Two-stage cascaded EMA of raw X/Y/magnitude -- see
                  * PITCH_BEND_SMOOTHING_ALPHA's own comment for the real-
                  * tremor-research math behind cascading instead of just
@@ -1747,21 +1805,38 @@ void tiles_expression_scan(void) {
                 s->pitch_bend_smoothed_y += PITCH_BEND_SMOOTHING_ALPHA * (y - s->pitch_bend_smoothed_y);
                 s->pitch_bend_smoothed_y2 += PITCH_BEND_SMOOTHING_ALPHA * (s->pitch_bend_smoothed_y - s->pitch_bend_smoothed_y2);
                 s->pitch_bend_smoothed_magnitude += PITCH_BEND_SMOOTHING_ALPHA * (magnitude - s->pitch_bend_smoothed_magnitude);
-                s->pitch_bend_smoothed_magnitude2 +=
-                    PITCH_BEND_SMOOTHING_ALPHA * (s->pitch_bend_smoothed_magnitude - s->pitch_bend_smoothed_magnitude2);
+
+                /* Signed tick-to-tick depth delta, smoothed -- see
+                 * pitch_bend_smoothed_depth_rate's own struct comment for
+                 * why SIGNED-then-smoothed (sign-consistent real presses
+                 * survive, sign-flipping wobble during a tilt cancels
+                 * out), not smoothed-then-absolute. Reuses PITCH_BEND_
+                 * SMOOTHING_ALPHA rather than inventing a third tuning
+                 * constant for what's the same underlying tremor-
+                 * rejection problem this file already solved for X/Y. */
+                s->pitch_bend_smoothed_depth_rate +=
+                    PITCH_BEND_SMOOTHING_ALPHA * ((s->smoothed_depth - s->pitch_bend_prev_depth) -
+                                                   s->pitch_bend_smoothed_depth_rate);
 
                 /* 0 (depth steady) .. 1 (depth changing fast), clamped --
                  * see PITCH_BEND_DEPTH_ACTIVITY_FULL_SCALE's own comment
                  * for where this threshold came from, and PITCH_BEND_
                  * BASELINE_RECENTER_ALPHA_SLOW's for the full reasoning
-                 * on why this drives the baseline recenter rate below.
-                 * s->smoothed_depth, not raw_depth -- already-smoothed,
-                 * so this doesn't itself jitter with raw depth noise. */
-                float depth_activity =
-                    fabsf(s->smoothed_depth - s->pitch_bend_prev_depth) / PITCH_BEND_DEPTH_ACTIVITY_FULL_SCALE;
+                 * on why this drives the baseline recenter rate below. */
+                float depth_activity = fabsf(s->pitch_bend_smoothed_depth_rate) / PITCH_BEND_DEPTH_ACTIVITY_FULL_SCALE;
                 if (depth_activity > 1.0f) {
                     depth_activity = 1.0f;
                 }
+
+                /* Captured here (not printed yet) so the print further
+                 * below -- once delta_x/delta_y/combined_magnitude exist
+                 * -- can report on the exact same throttled cadence
+                 * without a second timer or doubling total print volume
+                 * (the same conservative-frequency discipline this
+                 * print's own history already established after the
+                 * earlier firmware freeze). */
+                bool print_depth_diagnostics = (now_ms - s_depth_calibration_print_ms) >= DEPTH_CALIBRATION_PRINT_INTERVAL_MS;
+
                 s->pitch_bend_prev_depth = s->smoothed_depth;
 
                 if (!s->pitch_bend_baseline_settled) {
@@ -1801,10 +1876,31 @@ void tiles_expression_scan(void) {
                      * looks like), slow once depth holds steady (so a
                      * genuine held tilt doesn't fade). */
                     if (!s->pitch_bend_run_active) {
+                        /* CUBED, not blended linearly against depth_
+                         * activity directly -- real feedback: "still no
+                         * pitch bend on tilt but preassure works," traced
+                         * with a real capture to FAST (0.25) being ~125x
+                         * SLOW (0.002): a plain linear blend means even
+                         * modest activity (0.1-0.3, which ordinary sensor
+                         * noise produces almost continuously, real tilt
+                         * gesture or not) already pulls the effective
+                         * rate to 10-30% of that huge range -- 10-40x
+                         * bigger than pure SLOW -- defeating the whole
+                         * point of a "slow, protective" regime for
+                         * anything short of activity being almost exactly
+                         * 1.0. Cubing keeps LOW-to-moderate activity's
+                         * contribution proportionally much smaller
+                         * (0.3 -> 0.027, 0.1 -> 0.001) while leaving
+                         * activity=1.0 (a genuinely fast, unambiguous
+                         * press) still mapping to the full FAST rate --
+                         * shifts the whole curve toward "stay slow unless
+                         * activity is clearly, unambiguously high"
+                         * without changing either endpoint. */
+                        float activity_shaped = depth_activity * depth_activity * depth_activity;
                         float recenter_alpha = PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW +
                                                 (PITCH_BEND_BASELINE_RECENTER_ALPHA_FAST -
                                                  PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW) *
-                                                    depth_activity;
+                                                    activity_shaped;
                         s->pitch_bend_baseline_x += recenter_alpha * (s->pitch_bend_smoothed_x2 - s->pitch_bend_baseline_x);
                         s->pitch_bend_baseline_y += recenter_alpha * (s->pitch_bend_smoothed_y2 - s->pitch_bend_baseline_y);
                     }
@@ -1842,7 +1938,7 @@ void tiles_expression_scan(void) {
                      * nonzero delta.
                      *
                      * Both terms below use THIS SAME tick's
-                     * `pitch_bend_smoothed_magnitude2` -- critically, the
+                     * `pitch_bend_smoothed_magnitude` -- critically, the
                      * SAME one, not two independently-lagging values. A
                      * first version of this fix smoothed the "current"
                      * cosine (an EMA, lagging by construction) but
@@ -1914,21 +2010,71 @@ void tiles_expression_scan(void) {
                      * depth and drift... yes go ahead with X+Y." Both
                      * bugfixes carry over unchanged -- they were never
                      * X-specific, and Y gets the identical treatment
-                     * below. */
+                     * below.
+                     *
+                     * CURRENT cosine reads the FIRST cascade stage
+                     * (pitch_bend_smoothed_x/y, ~100-200ms), not the
+                     * fully-cascaded second stage -- real feedback: "i
+                     * just need fast wiggles of the keys to activate bend
+                     * as well." The two-stage cascade was originally
+                     * applied everywhere (see PITCH_BEND_SMOOTHING_
+                     * ALPHA's own comment) to reject hand tremor before
+                     * it ever reached the deadzone -- but real musical
+                     * vibrato and hand tremor sit in overlapping
+                     * frequency bands (this file's own research
+                     * summary), so a filter steep enough to reject one
+                     * necessarily damps the other too; a deliberate fast
+                     * wiggle was getting smoothed down below the
+                     * deadzone right along with genuine tremor. Splits
+                     * the two jobs the cascade was doing across its two
+                     * stages instead of using both for everything: the
+                     * BASELINE reference (baseline_x/y_at_depth, still
+                     * recentered from the fully-cascaded stage 2) stays
+                     * maximally stable, since that's what the earlier
+                     * convergence-transient and false-tilt bugs actually
+                     * needed; the LIVE signal being compared against it
+                     * only needs the lighter, faster-responding first
+                     * stage, preserving more of a fast wiggle's real
+                     * amplitude. Magnitude also drops to the matching
+                     * first-stage value (pitch_bend_smoothed_magnitude,
+                     * not _magnitude2) for both terms -- the "same
+                     * magnitude for both terms" invariant this section's
+                     * own history cares about is about using ONE
+                     * consistent magnitude, not about which cascade stage
+                     * it comes from, and pairing a less-lagged X/Y with a
+                     * more-lagged magnitude would reintroduce exactly the
+                     * kind of mismatched-lag artifact that invariant
+                     * exists to prevent. Real tradeoff, not fully solved
+                     * (per this file's own tremor-vs-vibrato research):
+                     * this also lets more raw hand tremor back into the
+                     * live signal than the two-stage version did; worth a
+                     * fresh capture to confirm this doesn't reintroduce
+                     * jitter during a plain, non-wiggling hold. */
                     float predicted_baseline_cosine_x =
-                        direction_cosine_from(baseline_x_at_depth, s->pitch_bend_smoothed_magnitude2);
+                        direction_cosine_from(baseline_x_at_depth, s->pitch_bend_smoothed_magnitude);
                     float current_cosine_x =
-                        direction_cosine_from(s->pitch_bend_smoothed_x2, s->pitch_bend_smoothed_magnitude2);
+                        direction_cosine_from(s->pitch_bend_smoothed_x, s->pitch_bend_smoothed_magnitude);
                     float delta_x = predicted_baseline_cosine_x - current_cosine_x;
 
                     float predicted_baseline_cosine_y =
-                        direction_cosine_from(baseline_y_at_depth, s->pitch_bend_smoothed_magnitude2);
+                        direction_cosine_from(baseline_y_at_depth, s->pitch_bend_smoothed_magnitude);
                     float current_cosine_y =
-                        direction_cosine_from(s->pitch_bend_smoothed_y2, s->pitch_bend_smoothed_magnitude2);
+                        direction_cosine_from(s->pitch_bend_smoothed_y, s->pitch_bend_smoothed_magnitude);
                     float delta_y = predicted_baseline_cosine_y - current_cosine_y;
 
                     float combined_magnitude = sqrtf(delta_x * delta_x + delta_y * delta_y);
                     float raw_delta_this_tick = (delta_x >= 0.0f) ? combined_magnitude : -combined_magnitude;
+
+                    if (print_depth_diagnostics) {
+                        s_depth_calibration_print_ms = now_ms;
+                        printf("[depth-cal] pad %u depth=%.0f rate=%.2f activity=%.2f baseline_x=%.1f x2=%.1f "
+                               "baseline_y=%.1f y2=%.1f combined=%.4f deadzone=%.4f\n",
+                               pad, (double)s->smoothed_depth, (double)s->pitch_bend_smoothed_depth_rate,
+                               (double)depth_activity, (double)s->pitch_bend_baseline_x,
+                               (double)s->pitch_bend_smoothed_x2, (double)s->pitch_bend_baseline_y,
+                               (double)s->pitch_bend_smoothed_y2, (double)raw_delta_this_tick,
+                               (double)PITCH_BEND_DEADZONE_COSINE_DELTA);
+                    }
 
                     /* No further smoothing here -- X/Y/magnitude are
                      * already TWO-STAGE cascaded above before this point
