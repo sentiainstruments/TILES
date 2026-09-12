@@ -3777,5 +3777,38 @@ not its code.
   frequency), so a future attempt at that feature needs an INDEPENDENT
   wiggle detector layered on top of a stable bend path, not a lighter
   filter substituted into this one.
+- **MPE pitch bend range, take two: RPN negotiation alone doesn't hold
+  up on real receivers.** After sending the Pitch Bend Sensitivity RPN
+  on every Member Channel (previous entry above), real feedback: "even
+  tho you say that its reduced to one octave it still does more in
+  Equator mpe mode." Researched ROLI's own documentation first rather
+  than guessing again -- confirmed Equator's Pitch Bend Range is a
+  value the USER sets manually in its MIDI/MPE settings to match the
+  controller, not one it negotiates automatically from incoming RPN, so
+  this looked like a ROLI-specific UI quirk rather than a firmware bug.
+  Then: "tried serum and also is bending too far. so its not roli. the
+  tilt pushes too far." A second real synth, from a completely different
+  vendor, showing the identical symptom rules out "one plugin's
+  particular settings quirk" as the explanation -- the real pattern is
+  that dynamically honoring a third-party controller's Pitch Bend
+  Sensitivity RPN just isn't something real-world MPE hosts/plugins
+  reliably do, spec-legal or not.
+  Fix: stopped trusting RPN negotiation to control the actual musical
+  range at all, and instead compensate defensively at the WIRE value
+  itself in `pitch_bend_14bit_from_cosine_delta()`. New constant
+  `PITCH_BEND_WIRE_RANGE_COMPENSATION` = `TILES_MIDI_MPE_PITCH_BEND_
+  RANGE_SEMITONES / 48` (48 = the MPE spec's own recommended default,
+  i.e. the worst-case assumption: a receiver that ignores the RPN
+  entirely) -- scales the final +/-8191 wire deviation down to 25% of
+  full scale, so that even a receiver stuck at the 48-semitone default
+  still produces the intended ~12-semitone swing at max tilt, with zero
+  dependency on whether that receiver ever reads RPN 0 correctly. The
+  RPN sends themselves stay in place (still correct, still harmless for
+  a receiver that DOES honor them), but are no longer load-bearing for
+  the actual musical range. Documented, real tradeoff: a receiver that
+  DOES correctly honor the RPN (none confirmed yet, out of two tested)
+  would now see a narrower ~3-semitone actual range instead of the full
+  12 -- worth revisiting if one is ever found; until then, matching the
+  two real receivers actually tested is the right default.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

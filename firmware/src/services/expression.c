@@ -1223,6 +1223,53 @@ static float pitch_bend_confidence_multiplier(uint32_t hold_ms) {
     return (float)hold_ms / (float)PITCH_BEND_ARM_MS;
 }
 
+/* The MPE specification's own recommended Pitch Bend Sensitivity default
+ * -- what a receiver falls back to if it never honors an incoming RPN 0
+ * override (see TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES's own comment
+ * in midi_out.h for the full history of trying to fix that via RPN).
+ * Used below to defensively compensate the WIRE value itself, independent
+ * of whether any given receiver actually listens to that RPN. */
+#define PITCH_BEND_MPE_SPEC_DEFAULT_RANGE_SEMITONES 48.0f
+
+/* How much of the full +/-8191 wire range this device ever actually
+ * sends, at maximum tilt -- real feedback found sending RPN 0 (Pitch
+ * Bend Sensitivity = TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES, 12) is
+ * NOT enough on its own: "tried serum and also is bending too far. so
+ * its not roli. the tilt pushes too far" -- reported on Xfer Serum,
+ * confirming the earlier ROLI Equator report ("still does more in
+ * Equator mpe mode" even with the RPN sent on every Member Channel) was
+ * never a ROLI-specific quirk. Two unrelated synths from two unrelated
+ * vendors, both still swinging like a full 48-semitone (4-octave) range
+ * at max tilt despite this device declaring 12 -- the common factor
+ * isn't either receiver's own quirks, it's that dynamically honoring a
+ * THIRD-PARTY controller's Pitch Bend Sensitivity RPN is, in practice,
+ * not something real-world MPE hosts/plugins reliably do, even though
+ * it's spec-legal; ROLI's own docs confirm Equator treats its Pitch Bend
+ * Range as a value the USER manually sets to match the controller, not
+ * one it negotiates automatically, and Serum showing the identical
+ * symptom suggests the same is true there too.
+ *
+ * Rather than keep trusting RPN negotiation (already tried twice: once
+ * on the Master Channel only, once redundantly on every Member Channel
+ * too -- both left in place, since they're correct and harmless for any
+ * receiver that DOES honor them), compensate defensively at the actual
+ * wire value instead: assume the worst realistic case -- a receiver
+ * that ignores the RPN entirely and uses the spec's own 48-semitone
+ * default -- and scale this device's own max output down to whatever
+ * fraction of 48 semitones its declared TILES_MIDI_MPE_PITCH_BEND_RANGE_
+ * SEMITONES (12) actually is. At max tilt, the wire value now only ever
+ * reaches 12/48 = 25% of full scale, so even a receiver stuck at the
+ * 48-semitone default still produces the intended ~12-semitone swing.
+ *
+ * Real, documented tradeoff: a receiver that DOES correctly honor the
+ * RPN (none confirmed yet, out of two tested) would now see a much
+ * narrower ~3-semitone actual range (12 * 0.25), not the full 12 --
+ * worth revisiting if such a receiver is ever found and this then reads
+ * as needing MORE tilt for a full bend specifically there. Until then,
+ * matching the two real receivers actually tested is the right default. */
+#define PITCH_BEND_WIRE_RANGE_COMPENSATION \
+    ((float)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES / PITCH_BEND_MPE_SPEC_DEFAULT_RANGE_SEMITONES)
+
 /* Maps a cosine delta (already vertical-pressure-compensated and
  * sign-flipped by the caller -- see this file's "Pitch bend from
  * sideways motion" section for why) to the 14-bit MIDI pitch bend wire
@@ -1306,7 +1353,8 @@ static uint16_t pitch_bend_14bit_from_cosine_delta(pad_expr_t *s, float delta, u
     if (normalized < -1.0f) {
         normalized = -1.0f;
     }
-    int32_t bend = (int32_t)PITCH_BEND_CENTER + (int32_t)(normalized * 8191.0f);
+    int32_t bend = (int32_t)PITCH_BEND_CENTER +
+                   (int32_t)(normalized * 8191.0f * PITCH_BEND_WIRE_RANGE_COMPENSATION);
     if (bend < 0) {
         bend = 0;
     }

@@ -47,11 +47,13 @@
 
 /* This Lower Zone's declared per-Member-Channel pitch bend range, in
  * semitones, sent via RPN 0 as part of tiles_midi_mpe_init() below. This
- * is purely a RECEIVER-side interpretation setting -- it does not change
- * what 14-bit wire value tiles_midi_send_pitch_bend() computes/sends for
- * a given tilt (that's services/expression.c's own sensitivity tuning,
- * an entirely separate concern); it only tells an MPE-aware receiver how
- * many semitones that +/-8191 wire range should musically span.
+ * NAME is a RECEIVER-side interpretation setting -- it doesn't directly
+ * determine what tiles_midi_send_pitch_bend() puts on the wire -- but as
+ * of services/expression.c's PITCH_BEND_WIRE_RANGE_COMPENSATION, this
+ * constant's VALUE is also read there to derive that wire-level scaling,
+ * so it is no longer safe to change this number alone expecting only the
+ * RPN to change; see that constant's own comment for why both now have
+ * to move together.
  *
  * History: 48 (the MPE specification's own recommended default, and what
  * a real ROLI Seaboard ships with) -- real feedback after trying it:
@@ -63,10 +65,28 @@
  * per-note "glide" a Seaboard is normally played with. Lowered to 12 (one
  * octave full-scale) as a more reasonable middle ground between the
  * legacy single-channel MIDI default (2, far too tight for an expressive
- * per-note glide) and the MPE spec's own wide default -- a musical/design
- * choice, not something a hardware capture could measure; worth further
- * tuning against real feedback like every other constant in this
- * pipeline. */
+ * per-note glide) and the MPE spec's own wide default.
+ *
+ * That alone didn't hold up under real testing: "reduce the range of
+ * pitch bend, rn we can bend 4 ocvave" came back even with this already
+ * at 12, traced (see tiles_midi_mpe_init()'s own comment) to the RPN
+ * only being sent on the Zone Master Channel and not every receiver
+ * generalizing that zone-wide -- fixed by also sending it on every
+ * Member Channel. Still didn't hold up: "even tho you say that its
+ * reduced to one octave it still does more in Equator mpe mode," then,
+ * after trying a completely different synth from a different vendor,
+ * "tried serum and also is bending too far. so its not roli. the tilt
+ * pushes too far." Two unrelated receivers both still swinging at
+ * roughly the spec's 48-semitone default regardless of the RPN sent on
+ * every channel means dynamically honoring a third-party controller's
+ * Pitch Bend Sensitivity RPN just isn't something real-world MPE hosts/
+ * plugins reliably do in practice, spec-legal or not -- ROLI's own docs
+ * confirm Equator's range is a value the user sets manually to match the
+ * controller, not one it negotiates automatically. The RPN sends here
+ * stay (correct and harmless for any receiver that does honor them), but
+ * services/expression.c no longer trusts them alone -- see PITCH_BEND_
+ * WIRE_RANGE_COMPENSATION's own comment for the defensive fix that
+ * doesn't depend on receiver cooperation at all. */
 #define TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES 12u
 
 /* Sends this Lower Zone's required setup: the MPE Configuration Message
