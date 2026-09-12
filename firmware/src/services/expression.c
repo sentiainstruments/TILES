@@ -1143,6 +1143,29 @@ static bool s_pitch_bend_enabled;
 static uint32_t s_depth_calibration_print_ms;
 #define DEPTH_CALIBRATION_PRINT_INTERVAL_MS 150u
 
+/* Temporary bring-up visibility, same family/safety reasoning as
+ * s_depth_calibration_print_ms above (see that constant's own freeze
+ * history) -- a second, more targeted round of the same "[wiggle-cap]"
+ * idea, replaced after the first round's capture showed raw-minus-
+ * cascaded residual energy doesn't cleanly separate a real wiggle from
+ * ordinary sensor noise (mean residual 56 during a real held tilt vs.
+ * 63 during a real wiggle -- basically the same, since raw X is
+ * dominated by quantization noise at a similar level regardless of the
+ * real gesture underneath it). This round logs BOTH cascade stages
+ * (pitch_bend_smoothed_x/y, the lighter stage 1, alongside x2/y2, the
+ * fully-cascaded stage 2) instead of raw -- stage 1 already rejects some
+ * quantization noise while still tracking a real fast wiggle, so the
+ * GAP between the two stages should be a cleaner "is something moving
+ * faster than the stable path thinks" signal than raw ever could be.
+ * Meant for a three-gesture capture (hold still, deliberate tilt, fast
+ * wiggle) to test whether that gap's AMPLITUDE reliably separates
+ * deliberate wiggle from passive tremor even where their frequency
+ * content overlaps (this file's own research). Remove once that
+ * capture has actually informed a real wiggle-detector mechanism, same
+ * as every other "temporary bring-up visibility" print in this file. */
+static uint32_t s_vibrato_capture_print_ms;
+#define VIBRATO_CAPTURE_PRINT_INTERVAL_MS 25u
+
 /* MPE Member Channel allocator -- one slot per Member Channel
  * (TILES_MIDI_MPE_NUM_MEMBER_CHANNELS of them), mirroring
  * services/haptics.c's own voice-stealing policy almost exactly
@@ -1865,6 +1888,14 @@ void tiles_expression_scan(void) {
                 s->pitch_bend_smoothed_y += PITCH_BEND_SMOOTHING_ALPHA * (y - s->pitch_bend_smoothed_y);
                 s->pitch_bend_smoothed_y2 += PITCH_BEND_SMOOTHING_ALPHA * (s->pitch_bend_smoothed_y - s->pitch_bend_smoothed_y2);
                 s->pitch_bend_smoothed_magnitude += PITCH_BEND_SMOOTHING_ALPHA * (magnitude - s->pitch_bend_smoothed_magnitude);
+
+                if ((now_ms - s_vibrato_capture_print_ms) >= VIBRATO_CAPTURE_PRINT_INTERVAL_MS) {
+                    s_vibrato_capture_print_ms = now_ms;
+                    printf("[vib-cap] pad %u t=%u x1=%.1f y1=%.1f x2=%.1f y2=%.1f depth=%.0f\n", pad, now_ms,
+                           (double)s->pitch_bend_smoothed_x, (double)s->pitch_bend_smoothed_y,
+                           (double)s->pitch_bend_smoothed_x2, (double)s->pitch_bend_smoothed_y2,
+                           (double)s->smoothed_depth);
+                }
 
                 /* Signed tick-to-tick depth delta, smoothed -- see
                  * pitch_bend_smoothed_depth_rate's own struct comment for
