@@ -4035,5 +4035,102 @@ not its code.
   3. **`EXPRESSION_MUTE_HOLD_MS` 3000 -> 2000.** Real feedback: "when we
      hold for haptic mute its too long so that combo hast to be reduced
      to 2 secodns."
+- **Six fixes/changes in one round, following the first real hands-on
+  test of the diamond/triangle rework above:**
+  1. **Triangle LED stuck on after picking a scale.** Real feedback:
+     "the light behabes weird for triangle, when scale is selected the
+     light stays on." Root cause found by reading `services/buttons.c`
+     directly (this exact bug, and its fix, already happened once before
+     for the top-level menu -- see `menu_exit()`'s own comment): triangle
+     has a PERMANENT LED override claimed, and `tiles_buttons_set_
+     standby_led()` doesn't check per-button override state at all, only
+     the global standby-active flag -- when `tiles_buttons_set_standby_
+     active(false)` fires, `buttons.c`'s `refresh_all_button_leds()`
+     deliberately skips override-active buttons ("that controller's own
+     next scan repaints it correctly"), but nothing was doing that
+     repaint for `scale_menu_exit()`/`pattern_menu_exit()` specifically,
+     since triangle only just started owning those LED columns this
+     round. Fixed by adding the identical `tiles_buttons_set_override_
+     led(TILES_TRIANGLE_BUTTON_ID, 0.0f)` call `menu_exit()` already
+     has, to both.
+  2. **"why does a click of triangle send to melodic mode? in other
+     modes? it should just bring menu up."** Removed the special case
+     that force-jumped straight to melodic from any other active mode;
+     a plain triangle click now always just opens/closes the mode
+     picker, which already correctly pulses whichever mode is ACTUALLY
+     active regardless of what it is -- there was never a real need for
+     the shortcut.
+  3. **"sequencer should not stop if mode is changed. it should be able
+     to run in the background."** `seq_advance_clock()` (the actual
+     step-advance/note-fire engine) moved outside the `s_active_mode ==
+     OP_MODE_SEQUENCER` gate in `tiles_op_mode_scan()` -- it now runs
+     every scan regardless of which TOP-LEVEL mode is currently
+     displayed (still gated behind the same pre-existing pauses while
+     the mode picker, scale menu, pattern menu, or a per-step edit is
+     actually open -- unrelated to this fix, not something real feedback
+     asked to change). `set_active_mode()` no longer calls `seq_end_
+     current_note()` when leaving sequencer mode -- the currently-
+     sounding note now keeps sounding and gets ended by the sequencer's
+     own engine on its own schedule, not cut off by the display switch.
+     `seq_start()` itself also had to change: it used to unconditionally
+     reset the playhead to step 0 and arm a quantized restart every time
+     sequencer mode was (re-)entered, which would have audibly restarted
+     the pattern every time the player just glanced back at it while it
+     was already correctly running in the background -- now skips that
+     reset entirely when `tiles_midi_clock_is_running()` is already
+     true, only refreshing view-level touch-tracking state.
+     Known, accepted limitation worth watching for in practice, not yet
+     hit: `services/expression.c`'s live-touch MPE channel allocator and
+     the sequencer's own per-pattern channel claims are still two
+     independent systems (see this file's own "Multi-pattern bank"
+     section) -- this was already a theoretical edge case before, but a
+     background sequencer running WHILE melodic notes are ALSO being
+     played live is now the primary intended workflow this enables,
+     not a rare corner case, so a real channel collision is more likely
+     to actually surface than it used to be. No capture of one yet;
+     worth a dedicated fix if real playing finds one.
+  4. **Diamond transport not doing anything in Ableton.** Verified the
+     firmware side directly rather than assuming: read TinyUSB's own
+     `tud_midi_n_stream_write()` (`lib/tinyusb/src/class/midi/midi_
+     device.c`) and traced a single 0xFA/0xFC byte through its packet-
+     framing state machine by hand -- it correctly forms a complete
+     `MIDI_CIN_SYSEX_END_1BYTE` USB-MIDI packet immediately, exactly the
+     right encoding for a lone System Realtime byte. The firmware side
+     was not the bug. Likely cause: Ableton needs TWO separate things
+     enabled, not one -- (a) Preferences -> Link/MIDI -> tick "Sync" for
+     this device's input port, AND (b) click the "Ext" button in
+     Live's OWN transport toolbar to actually engage external sync (the
+     Preferences checkbox alone does nothing until Ext is also on).
+     Easy to do just one and assume it's enough. Restated clearly for
+     the next test rather than left implicit.
+  5. **LED behavior, fully specified.** Real feedback: "armed record and
+     stopped is blik twice and pause then again, play is on, stopped is
+     off. record is pulsing in the same fashon as the deep sleep for
+     shift button." Four states, checked most-specific-first: **armed**
+     (a 2-second hold in progress) is two quick flashes then a pause,
+     repeating (860ms cycle: 120/120/120 on-gap-on then 500ms pause) --
+     a real-hardware "about to record" convention; **recording** (armed,
+     then released) is the exact same sine-breathing shape `services/
+     standby.c`'s `render_deep_sleep_frame()` uses for circle's deep-
+     sleep pulse (same period/min/max, duplicated since standby.c's own
+     constants are file-local) -- real feedback pointed at that specific
+     animation as the reference, not a new one invented here; **playing**
+     is solid on; **stopped** is fully off (changed from a dim idle glow
+     this round, per explicit "stopped is off"). A plain click now always
+     means "stop everything" regardless of whether it was playing or
+     recording, matching a real transport's single Stop control, rather
+     than leaving recording somehow still armed underneath.
+  6. **"when we do shift plus modifiers -+ for changiong length of
+     sequencer mode we should have a flash indicating which length we
+     made the sequence to make that a color sentia magenta."** The
+     circle+minus/plus length-adjust gesture now sets a timestamp;
+     `render_sequencer()` checks it every frame and, for
+     `OP_SEQ_LENGTH_FLASH_DURATION_MS` (400ms) after a change, replaces
+     the ENTIRE grid's normal step coloring with a direct read of the
+     new length -- pads `0..length-1` in Sentia magenta (`OP_MENU_
+     MELODIC_R/G/B`, this file's own established brand-color constants,
+     not a new color guessed here), everything else off -- so the new
+     value reads clearly instead of blending into whatever armed/cursor
+     state those same pads already had.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

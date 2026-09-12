@@ -113,17 +113,34 @@ typedef enum {
 /* Diamond, freed from every menu-related duty (its per-mode sub-menu
  * role moved to triangle+shift -- see handle_triangle_click()'s own
  * comment) to be a persistent Ableton transport remote instead -- see
- * handle_diamond_transport()'s own comment for the full feature. These
- * three levels are its LED language: dim while stopped (a quiet "here"
- * marker, not fully off, so the button doesn't look dead), solid bright
- * while playing, and a fast blink once a 2-second hold has armed record
- * -- a real-hardware "recording is about to start" convention, chosen
- * because these buttons are monochrome PWM (no color to distinguish
- * "armed" from "playing" with otherwise). Unmeasured against real use;
- * worth tuning like every other LED level in this file. */
-#define OP_TRANSPORT_LED_STOPPED_LEVEL 0.15f
+ * handle_diamond_transport()'s own comment for the full feature. Real
+ * feedback gave this an explicit, four-state LED language (these
+ * buttons are monochrome PWM, no color to distinguish states with
+ * otherwise): "armed record ... is blink twice and pause then again,
+ * ... stopped is off. play is on. record is pulsing in the same
+ * fashion as the deep sleep for shift button." */
+#define OP_TRANSPORT_LED_STOPPED_LEVEL 0.0f
 #define OP_TRANSPORT_LED_PLAYING_LEVEL 1.0f
-#define OP_TRANSPORT_LED_ARMED_BLINK_MS 150u
+/* Armed: two quick flashes, then a pause, repeating -- a real-hardware
+ * "recording is about to start" convention. Cycle = on, gap, on, pause
+ * (120+120+120+500 = 860ms total); unmeasured against real use, worth
+ * tuning like every other LED timing in this file. */
+#define OP_TRANSPORT_ARMED_BLINK_ON_MS 120u
+#define OP_TRANSPORT_ARMED_BLINK_GAP_MS 120u
+#define OP_TRANSPORT_ARMED_PAUSE_MS 500u
+/* Recording: the exact same sine-breathing shape services/standby.c's
+ * own render_deep_sleep_frame() uses for circle's deep-sleep pulse
+ * (DEEP_SLEEP_PULSE_PERIOD_MS/_MIN/_MAX there) -- real feedback pointed
+ * at that specific animation as the reference, not a new one invented
+ * here. Duplicated rather than shared because standby.c's constants are
+ * static to that file and this is a different button/context; kept
+ * numerically identical on purpose. */
+#define OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS 3000.0f
+#define OP_TRANSPORT_RECORDING_PULSE_MIN 0.03f
+#define OP_TRANSPORT_RECORDING_PULSE_MAX 0.35f
+/* Not shared with services/standby.c's own TILES_STANDBY_PI -- that one
+ * is file-local (not exported via standby.h), same numeric value. */
+#define OP_TRANSPORT_PI 3.14159265358979323846f
 /* Real feedback: "the led for start and top shoukld light up as toggles
  * respectively" -- SW1 "-"/SW2 "+" light up as a two-state transport
  * indicator (see render_sequencer()'s own use) rather than sitting dark
@@ -271,13 +288,16 @@ static bool s_scale_menu_prev_pad_touched[TILES_NUM_PADS];
  * s_diamond_press_start_ms is when the CURRENT diamond press began (for
  * the 2-second arm-hold check); s_diamond_record_armed is edge-latched
  * true once that threshold is crossed, so it only fires once per hold;
- * s_transport_playing is this device's own belief about Ableton's
- * transport state (MIDI has no way to query it back, so this is tracked
- * locally and assumed to stay in sync with whatever this device itself
- * last sent). */
+ * s_transport_playing/s_transport_recording are this device's own
+ * belief about Ableton's transport state (MIDI has no way to query it
+ * back, so this is tracked locally and assumed to stay in sync with
+ * whatever this device itself last sent) -- recording implies playing,
+ * so s_transport_recording true always has s_transport_playing true
+ * too, but not the reverse. */
 static uint32_t s_diamond_press_start_ms;
 static bool s_diamond_record_armed;
 static bool s_transport_playing;
+static bool s_transport_recording;
 
 /* Tap-tempo press tracking -- see this file's own "Master tap tempo"
  * section above. No conflict flag like diamond/triangle's own: a tap
@@ -354,6 +374,13 @@ static uint32_t s_beat_flash_start_ms;
 #define OP_SEQ_NUM_PATTERNS 4u
 #define OP_SEQ_MIN_LENGTH 1u
 #define OP_SEQ_MAX_LENGTH OP_SEQ_NUM_STEPS
+/* Real feedback: "when we do shift plus modifiers -+ for changiong
+ * length of sequencer mode we should have a flash indicating which
+ * length we made the sequence to make that a color sentia magenta."
+ * render_sequencer() checks this against s_seq_length_flash_ms every
+ * frame it draws (see that function's own flash branch) -- brief enough
+ * to read as a confirmation flash, not a lingering mode change. */
+#define OP_SEQ_LENGTH_FLASH_DURATION_MS 400u
 /* Real feedback: "2 retrigger yess but we need to be able to control that
  * feature." Capped at OP_SEQ_CLOCKS_PER_STEP (6) since a ratchet can't
  * usefully subdivide a step finer than the step's own pulse resolution --
@@ -380,6 +407,10 @@ typedef struct {
 
 static op_seq_pattern_t s_seq_pattern[OP_SEQ_NUM_PATTERNS];
 static uint8_t s_seq_active_pattern;
+/* See OP_SEQ_LENGTH_FLASH_DURATION_MS's own comment. 0 at boot/pattern
+ * init is indistinguishable from "just flashed at boot time" for a
+ * single frame at most -- not worth a separate bool for. */
+static uint32_t s_seq_length_flash_ms;
 
 static uint8_t s_seq_current_step; /* 0..23 */
 static bool s_seq_note_sounding;
@@ -777,11 +808,26 @@ static void seq_resume_current_step(uint32_t now_pulse) {
  * this is what fixes entering sequencer mode while an external clock is
  * already mid-phrase landing on an essentially random step. */
 static void seq_start(void) {
-    s_seq_current_step = 0u;
-    s_seq_note_sounding = false;
-    s_seq_step_started_at_pulse = 0u;
-    s_seq_pending_start = true;
-    s_seq_pending_restart = true; /* fresh entry always starts from step 0 */
+    /* Real feedback: "sequencer should not stop if mode is changed. it
+     * should be able to run in the background." seq_advance_clock() now
+     * runs every scan regardless of s_active_mode (see tiles_op_mode_
+     * scan()'s own comment), so re-entering sequencer mode no longer
+     * means "the sequencer was paused the whole time I was away" -- it
+     * may already be genuinely running. Forcing the transport reset
+     * below unconditionally, like this function always used to, would
+     * audibly restart the pattern from step 0 every time the player
+     * just glances back at sequencer mode to check on it, exactly the
+     * "stop if mode is changed" symptom this fix removes elsewhere --
+     * skip the transport reset entirely when it's already running, only
+     * touching the view-level state that's actually about THIS mode
+     * becoming visible again, not about the pattern's own playback. */
+    if (!tiles_midi_clock_is_running()) {
+        s_seq_current_step = 0u;
+        s_seq_note_sounding = false;
+        s_seq_step_started_at_pulse = 0u;
+        s_seq_pending_start = true;
+        s_seq_pending_restart = true; /* fresh entry always starts from step 0 */
+    }
     s_seq_edit_mode = OP_SEQ_EDIT_NONE;
     s_pattern_menu_visible = false;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
@@ -912,11 +958,26 @@ static void seq_advance_clock(tiles_midi_clock_state_t clock) {
 
 static void render_sequencer(float beat_flash_level, bool transport_running) {
     op_seq_pattern_t *pat = active_pattern();
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    bool length_flashing = (now_ms - s_seq_length_flash_ms) < OP_SEQ_LENGTH_FLASH_DURATION_MS;
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             uint8_t pad = board_pad_for_row_col(row, col);
             uint8_t step = (uint8_t)(pad - 1u);
             bool is_current = (step == s_seq_current_step);
+            if (length_flashing) {
+                /* See OP_SEQ_LENGTH_FLASH_DURATION_MS's own comment --
+                 * briefly replaces the normal step coloring entirely so
+                 * the new length reads clearly, not blended with
+                 * whatever armed/cursor state those same pads also
+                 * happen to have right now. */
+                if (step < pat->length) {
+                    tiles_lighting_set_standby_pad_rgb(pad, OP_MENU_MELODIC_R, OP_MENU_MELODIC_G, OP_MENU_MELODIC_B);
+                } else {
+                    tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
+                }
+                continue;
+            }
             if (step >= pat->length) {
                 /* Out of the current loop -- "unavailable are off," this
                  * codebase's own established rule, unchanged. */
@@ -1338,6 +1399,20 @@ static void pattern_menu_enter(void) {
 
 static void pattern_menu_exit(void) {
     s_pattern_menu_visible = false;
+    /* Unlike scale_menu_exit()/menu_exit(), standby doesn't turn off
+     * here -- sequencer mode keeps buttons/lighting standby-active for
+     * its ENTIRE duration (see set_active_mode()'s own OP_MODE_SEQUENCER
+     * branch), not just while this sub-menu specifically is open, so
+     * refresh_all_button_leds() doesn't run at this exact moment either.
+     * Still writing this unconditionally: returning to the normal step
+     * view should make triangle's LED go off regardless of the standby
+     * mechanics, and it's a harmless no-op-then-correct once standby
+     * genuinely does end later (leaving sequencer mode entirely). Same
+     * bug family as menu_exit()'s own comment -- real feedback: "the
+     * light behabes weird for triangle, when scale is selected the
+     * light stays on" (scale menu specifically, but the identical
+     * override-vs-standby interaction applies here too). */
+    tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
 }
 
 /* ---- Menu -------------------------------------------------------------- */
@@ -1594,12 +1669,27 @@ static void scale_menu_exit(void) {
     s_scale_menu_visible = false;
     tiles_lighting_set_standby_active(false);
     tiles_buttons_set_standby_active(false);
+    /* See menu_exit()'s own comment (same bug, same fix, same root
+     * cause) -- real feedback: "the light behabes weird for triangle,
+     * when scale is selected the light stays on." Triangle now owns
+     * this sub-menu's LED column too (see handle_triangle_click()'s
+     * shift branch) and has a PERMANENT override claimed, so buttons.c's
+     * refresh_all_button_leds() (run by tiles_buttons_set_standby_
+     * active(false) just above) deliberately skips it -- nothing else
+     * repaints it back to off without this explicit write. */
+    tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
 }
 
 static void set_active_mode(tiles_op_mode_t mode) {
-    if (s_active_mode == OP_MODE_SEQUENCER && mode != OP_MODE_SEQUENCER) {
-        seq_end_current_note();
-    }
+    /* Deliberately does NOT seq_end_current_note() on leaving sequencer
+     * mode anymore -- real feedback: "sequencer should not stop if mode
+     * is changed. it should be able to run in the background." Whatever
+     * note is currently sounding keeps sounding, and seq_advance_clock()
+     * (now called every scan regardless of s_active_mode -- see
+     * tiles_op_mode_scan()'s own comment) keeps ending/firing notes on
+     * its own schedule exactly as if sequencer mode were still the one
+     * displayed; switching the DISPLAY away from it no longer implies
+     * stopping its PLAYBACK. */
     if (s_active_mode == OP_MODE_CHORD && mode != OP_MODE_CHORD) {
         chord_end_all_notes();
     }
@@ -1793,9 +1883,17 @@ static void handle_triangle_click(void) {
                 }
             } else if (s_menu_visible) {
                 menu_exit();
-            } else if (s_active_mode != OP_MODE_MELODIC) {
-                set_active_mode(OP_MODE_MELODIC);
             } else {
+                /* Real feedback: "why does a click of triangle send to
+                 * melodic mode? in other modes? it should just bring
+                 * menu up." This used to force-jump straight back to
+                 * melodic from any other active mode instead of opening
+                 * the picker -- render_menu()'s own col_is_current_mode()
+                 * check already correctly pulses whichever mode is
+                 * ACTUALLY active right now regardless of what it is, so
+                 * opening the menu from sequencer/chord/guitar works the
+                 * identical way it always has from melodic; there was
+                 * never a real need for the special case. */
                 menu_enter();
             }
         }
@@ -1865,9 +1963,15 @@ static void handle_diamond_transport(uint32_t now_ms) {
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 127u);
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 0u);
                 s_transport_playing = true;
-            } else if (s_transport_playing) {
+                s_transport_recording = true;
+            } else if (s_transport_playing || s_transport_recording) {
+                /* A plain click always means "stop everything," matching
+                 * a real transport's single Stop control -- stopping
+                 * while recording doesn't leave recording somehow still
+                 * armed in the background. */
                 tiles_midi_send_stop();
                 s_transport_playing = false;
+                s_transport_recording = false;
             } else {
                 tiles_midi_send_start();
                 s_transport_playing = true;
@@ -1876,9 +1980,27 @@ static void handle_diamond_transport(uint32_t now_ms) {
         s_diamond_record_armed = false;
     }
 
+    /* Four-state LED language -- real feedback: "armed record and
+     * stopped is blik twice and pause then again, play is on, stopped
+     * is off. record is pulsing in the same fashon as the deep sleep
+     * for shift button." Checked most-specific-state-first: armed (a
+     * transient hold-in-progress state) overrides recording/playing,
+     * recording overrides playing (both can be true at once --
+     * recording implies playing, see s_transport_recording's own
+     * comment -- and recording's own pulse is what should show). */
     float led_level;
     if (s_diamond_record_armed) {
-        led_level = ((now_ms / OP_TRANSPORT_LED_ARMED_BLINK_MS) % 2u == 0u) ? 1.0f : 0.0f;
+        uint32_t cycle_ms =
+            OP_TRANSPORT_ARMED_BLINK_ON_MS * 2u + OP_TRANSPORT_ARMED_BLINK_GAP_MS + OP_TRANSPORT_ARMED_PAUSE_MS;
+        uint32_t t = now_ms % cycle_ms;
+        bool on = (t < OP_TRANSPORT_ARMED_BLINK_ON_MS) ||
+                  (t >= OP_TRANSPORT_ARMED_BLINK_ON_MS + OP_TRANSPORT_ARMED_BLINK_GAP_MS &&
+                   t < OP_TRANSPORT_ARMED_BLINK_ON_MS * 2u + OP_TRANSPORT_ARMED_BLINK_GAP_MS);
+        led_level = on ? 1.0f : 0.0f;
+    } else if (s_transport_recording) {
+        float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
+        float raw = 0.5f + 0.5f * sinf(2.0f * OP_TRANSPORT_PI * phase);
+        led_level = OP_TRANSPORT_RECORDING_PULSE_MIN + (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
     } else if (s_transport_playing) {
         led_level = OP_TRANSPORT_LED_PLAYING_LEVEL;
     } else {
@@ -2001,6 +2123,7 @@ static void handle_transport_and_length(uint32_t now_ms) {
             pat->length--;
         }
         s_minus_used_as_combo = true;
+        s_seq_length_flash_ms = now_ms;
     }
     if (active && plus_held && !s_plus_was_held && circle_held) {
         op_seq_pattern_t *pat = active_pattern();
@@ -2008,6 +2131,7 @@ static void handle_transport_and_length(uint32_t now_ms) {
             pat->length++;
         }
         s_plus_used_as_combo = true;
+        s_seq_length_flash_ms = now_ms;
     }
 
     if (!minus_held && s_minus_was_held) {
@@ -2116,6 +2240,7 @@ void tiles_op_mode_init(void) {
     s_diamond_press_had_conflict = false;
     s_diamond_record_armed = false;
     s_transport_playing = false;
+    s_transport_recording = false;
     for (uint8_t p = 0; p < OP_SEQ_NUM_PATTERNS; p++) {
         for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
             s_seq_pattern[p].step_armed[i] = false;
@@ -2251,9 +2376,18 @@ void tiles_op_mode_scan(void) {
         return;
     }
 
+    /* Unconditional on s_active_mode (unlike the two calls below) --
+     * real feedback: "sequencer should not stop if mode is changed. it
+     * should be able to run in the background." Still gated behind the
+     * four `return`s above (top-level menu, scale menu, pattern menu,
+     * per-step edit) exactly as before -- those are pre-existing,
+     * deliberate pauses for a sub-view that's actively being browsed/
+     * edited, unrelated to this fix and not something real feedback
+     * asked to change; only "a genuinely different TOP-LEVEL MODE is
+     * simply the one currently displayed" no longer implies "stopped." */
+    seq_advance_clock(clock);
     if (s_active_mode == OP_MODE_SEQUENCER) {
         seq_handle_step_taps(now_ms);
-        seq_advance_clock(clock);
         render_sequencer(beat_flash_level, clock.running);
     }
     if (s_active_mode == OP_MODE_CHORD) {
