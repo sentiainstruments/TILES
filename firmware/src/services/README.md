@@ -3937,5 +3937,32 @@ not its code.
   `PITCH_BEND_ARM_MS`'s own temporal confidence multiplier (an
   orthogonal, time-based ramp) but before the sign is reapplied, so
   both bend directions get the identical shape.
+- **The exponential curve above was REVERTED on the very next boot --
+  real feedback: "you made the tilt still weird and also preaqssure
+  change is affecting tilt."** Two real problems, not one:
+  1. **Implementation bug.** The curve was applied to `ratio` AFTER
+     `PITCH_BEND_ARM_MS`'s confidence multiplier was already folded in
+     -- since the curve's slope is steepest near 0, this amplified the
+     temporal ramp-in itself (a tilt only 10% into its 30ms
+     confirmation window got curved to ~27% of full output, not 10%),
+     distorting exactly the first 30ms of every gesture, which is also
+     when residual noise is most present before a hold settles.
+  2. **More fundamental.** Any curve with y(0)=0 and y(1)=1 has average
+     slope exactly 1 over [0,1] (mean value theorem) -- reducing
+     sensitivity near x=1 to fight top-of-range jitter mathematically
+     REQUIRES increasing it somewhere else, which this curve's own
+     steep near-zero slope did. That's not a bug, it's what this whole
+     class of fix does by construction: it redistributes where noise is
+     visible across the range rather than reducing the noise itself.
+     Bug (1) made it worse than the tradeoff alone would have, but the
+     tradeoff itself meant ordinary small-to-moderate tilts (where real
+     playing spends most of its time) got MORE sensitive in exchange
+     for a calmer arrival at an extreme that's rarely reached.
+  Reverted to the plain linear mapping this file already had tuned
+  and confirmed reasonably stable before this round. A future attempt
+  at smoothing specifically the top of the range should restrict any
+  reshaping to a narrow region near the clamp (identity below some knee
+  point, eased only above it) rather than reshaping the whole [0,1]
+  domain, so ordinary playing is never touched by it.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
