@@ -109,9 +109,21 @@ typedef enum {
  * triangle/diamond functionality swap for why the mode-picker LED is
  * named for triangle now instead.) */
 #define OP_TRIANGLE_LED_MENU_LEVEL 1.0f
-/* Same idea, diamond's own LED, lit while its per-mode sub-menu (e.g.
- * melodic's scale picker) is showing. */
-#define OP_DIAMOND_LED_SUBMENU_LEVEL 1.0f
+
+/* Diamond, freed from every menu-related duty (its per-mode sub-menu
+ * role moved to triangle+shift -- see handle_triangle_click()'s own
+ * comment) to be a persistent Ableton transport remote instead -- see
+ * handle_diamond_transport()'s own comment for the full feature. These
+ * three levels are its LED language: dim while stopped (a quiet "here"
+ * marker, not fully off, so the button doesn't look dead), solid bright
+ * while playing, and a fast blink once a 2-second hold has armed record
+ * -- a real-hardware "recording is about to start" convention, chosen
+ * because these buttons are monochrome PWM (no color to distinguish
+ * "armed" from "playing" with otherwise). Unmeasured against real use;
+ * worth tuning like every other LED level in this file. */
+#define OP_TRANSPORT_LED_STOPPED_LEVEL 0.15f
+#define OP_TRANSPORT_LED_PLAYING_LEVEL 1.0f
+#define OP_TRANSPORT_LED_ARMED_BLINK_MS 150u
 /* Real feedback: "the led for start and top shoukld light up as toggles
  * respectively" -- SW1 "-"/SW2 "+" light up as a two-state transport
  * indicator (see render_sequencer()'s own use) rather than sitting dark
@@ -225,21 +237,47 @@ static bool s_triangle_was_held;
  * press, same "can't know it's a genuine click until it's over" reasoning
  * services/standby.c's own circle-short-tap wake fix uses. */
 static bool s_triangle_press_had_conflict;
+/* True if SW6/circle was ALSO seen held during the current triangle
+ * press -- see handle_triangle_click()'s own comment for the "shift"
+ * gesture this distinguishes from a plain solo click. Edge-latched
+ * (sticky once observed) for the identical reason s_triangle_press_had_
+ * conflict is: circle and triangle won't always release in the same
+ * tick, so a fresh re-check of circle's state AT release could miss a
+ * genuine shift-hold that happened to release circle first. */
+static bool s_triangle_press_was_shift;
 
 static bool s_menu_prev_pad_touched[TILES_NUM_PADS];
 
-/* ---- Per-mode sub-menu (SW4/diamond, SW3/triangle at the time of the
- * quote below -- see this file's own swap note in op_mode.h) -----------
+/* ---- Per-mode sub-menu (SW3/triangle + SW6/circle "shift") -------------
  * Real feedback: "the triangle is sub menues per each mode so that
  * button toggles its onw menue in each mode. for melodic it toggles
- * different scale modes." Only melodic's sub-menu (the scale picker) is
- * built -- other modes don't have one yet, same "selectable but not
- * implemented" spirit as chord/arp themselves; handle_diamond_click()
- * below is the extension point once they do. */
+ * different scale modes," later: "lets put the scale menu into the mode
+ * menu when triangle plus shift pressed. freeing up diamond from
+ * everything for now" -- moved off diamond (which used to own this,
+ * see op_mode.h's own swap note for the SW3/SW4 history before THIS
+ * move) once diamond was needed as a dedicated Ableton transport remote
+ * instead (see handle_diamond_transport()). Only melodic's sub-menu (the
+ * scale picker) is built -- other modes don't have one yet, same
+ * "selectable but not implemented" spirit as chord/arp themselves;
+ * handle_triangle_click()'s shift branch is the extension point once
+ * they do. */
 static bool s_scale_menu_visible;
 static bool s_diamond_was_held;
-static bool s_diamond_press_had_conflict; /* see s_triangle_press_had_conflict's own comment -- same reasoning, watches diamond instead of triangle */
+static bool s_diamond_press_had_conflict; /* see s_triangle_press_had_conflict's own comment -- same reasoning, watches diamond instead of triangle, guards against game_mode.h's 4-button combo */
 static bool s_scale_menu_prev_pad_touched[TILES_NUM_PADS];
+
+/* ---- Diamond: Ableton transport remote ---------------------------------
+ * See handle_diamond_transport()'s own comment for the full feature.
+ * s_diamond_press_start_ms is when the CURRENT diamond press began (for
+ * the 2-second arm-hold check); s_diamond_record_armed is edge-latched
+ * true once that threshold is crossed, so it only fires once per hold;
+ * s_transport_playing is this device's own belief about Ableton's
+ * transport state (MIDI has no way to query it back, so this is tracked
+ * locally and assumed to stay in sync with whatever this device itself
+ * last sent). */
+static uint32_t s_diamond_press_start_ms;
+static bool s_diamond_record_armed;
+static bool s_transport_playing;
 
 /* Tap-tempo press tracking -- see this file's own "Master tap tempo"
  * section above. No conflict flag like diamond/triangle's own: a tap
@@ -406,8 +444,9 @@ static uint32_t s_seq_next_ratchet_pulse;
  * stood at release) -- a fundamentally different shape from pitch's
  * discrete pick-from-24, and one that doesn't have pitch's "had to keep
  * two fingers down" problem since only the one held pad is ever needed.
- * Diamond cancels out of any of the three with no change
- * (handle_diamond_click()'s own branch).
+ * Triangle+shift cancels out of any of the three with no change
+ * (handle_triangle_click()'s own shift branch -- this used to be
+ * diamond's job before diamond became a dedicated transport remote).
  * A plain tap's own armed-toggle resolves on RELEASE, not press -- real
  * feedback: "when setting the pitch of pad we are still affecting note
  * on." Toggling on press couldn't yet tell a tap from the start of a
@@ -467,9 +506,10 @@ static bool s_pitch_edit_prev_pad_touched[TILES_NUM_PADS]; /* only meaningful du
  * conversely still letting the release motion sneak in a bad write. */
 #define OP_SEQ_EDIT_RELEASE_GUARD_DEPTH 60u
 
-/* ---- Pattern/channel picker (SW4/diamond, sequencer mode) --------------
- * Same role diamond already plays in melodic mode (the scale picker) --
- * see handle_diamond_click()'s own branch on s_active_mode. Row colors
+/* ---- Pattern/channel picker (SW3/triangle+shift, sequencer mode) -------
+ * Same role triangle+shift already plays in melodic mode (the scale
+ * picker) -- see handle_triangle_click()'s own shift branch on
+ * s_active_mode. Row colors
  * are shades within sequencer's own red identity (the mode-picker's
  * "sequencer = red" real feedback) rather than melodic/chord/arp's own
  * colors, so picking a pattern never reads as switching modes. */
@@ -926,12 +966,16 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
             }
         }
     }
-    /* Diamond deliberately left at its default 0.0f here -- real
-     * feedback: "the led for modes should light up on menu on not
-     * alwayus." It used to glow continuously (OP_DIAMOND_LED_MODE_
-     * ACTIVE_LEVEL) for the whole time any non-melodic mode was active;
-     * now it only ever lights while the top-level mode picker itself is
-     * actually open (render_menu()'s own OP_TRIANGLE_LED_MENU_LEVEL). */
+    /* Diamond isn't touched by this standby-LED loop at all anymore (a
+     * no-op regardless, since s_standby_active is false by the time this
+     * normal-play render runs) -- its LED is now handle_diamond_
+     * transport()'s own persistent override, showing Ableton transport
+     * state continuously rather than anything menu-related. Historical:
+     * real feedback "the led for modes should light up on menu on not
+     * alwayus" once applied to diamond back when it glowed continuously
+     * for the whole time any non-melodic mode was active; that's now
+     * triangle's own OP_TRIANGLE_LED_MENU_LEVEL, lit only while the
+     * top-level mode picker is actually open. */
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         float level = 0.0f;
         if (col == TILES_CIRCLE_BUTTON_COL) {
@@ -1031,8 +1075,10 @@ static uint8_t ratchet_count_from_depth(uint16_t depth) {
  * current note, a harmless no-op unless it had a different override
  * before, in which case it resets to default) commits that pad's current
  * note and closes, same "closes on selection" rule this file's other
- * pickers use. Diamond is the escape hatch for "back out with no change
- * at all" (handle_diamond_click()'s own branch).
+ * pickers use. Triangle+shift is the escape hatch for "back out with no
+ * change at all" (handle_triangle_click()'s own shift branch -- this
+ * used to be diamond's job before diamond became a dedicated transport
+ * remote).
  * Probability/ratchet: the OPPOSITE shape, a live DIAL -- Hall depth of
  * the SAME held pad maps continuously to the value while still held
  * (see probability_percent_from_depth()/ratchet_count_from_depth()
@@ -1182,7 +1228,7 @@ static void render_edit_mode(uint32_t now_ms, bool transport_running) {
     }
 }
 
-/* ---- Pattern/channel picker (SW4/diamond, sequencer mode) --------------- */
+/* ---- Pattern/channel picker (SW3/triangle+shift, sequencer mode) ------- */
 
 static void pattern_row_color(uint8_t pattern_index, float *r, float *g, float *b) {
     switch (pattern_index) {
@@ -1227,8 +1273,10 @@ static void render_pattern_menu(uint32_t now_ms, bool transport_running) {
     }
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         float level = 0.0f;
-        if (col == TILES_DIAMOND_BUTTON_COL) {
-            level = OP_DIAMOND_LED_SUBMENU_LEVEL;
+        if (col == TILES_TRIANGLE_BUTTON_COL) {
+            /* Triangle, not diamond -- this sub-menu now opens via
+             * triangle+shift, see handle_triangle_click()'s own comment. */
+            level = OP_TRIANGLE_LED_MENU_LEVEL;
         } else if (col == TILES_MINUS_BUTTON_COL) {
             level = transport_running ? 0.0f : OP_TRANSPORT_LED_LEVEL;
         } else if (col == TILES_PLUS_BUTTON_COL) {
@@ -1482,7 +1530,9 @@ static void render_scale_menu(uint32_t now_ms) {
         tiles_haptics_trigger_touch_pulse(selected_pad);
     }
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        float level = (col == TILES_DIAMOND_BUTTON_COL) ? OP_DIAMOND_LED_SUBMENU_LEVEL : 0.0f;
+        /* Triangle, not diamond -- this sub-menu now opens via
+         * triangle+shift, see handle_triangle_click()'s own comment. */
+        float level = (col == TILES_TRIANGLE_BUTTON_COL) ? OP_TRIANGLE_LED_MENU_LEVEL : 0.0f;
         tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
@@ -1671,13 +1721,41 @@ static void handle_menu_taps(void) {
     }
 }
 
-/* ---- Diamond click + top-level scan -------------------------------------- */
+/* ---- Triangle (+ shift) click, diamond transport, top-level scan ------- */
 
+/* Real feedback: "lets put the scale menu into the mode menu when
+ * triangle plus shift pressed. freeing up diamond from everything for
+ * now." A plain solo click keeps its existing meaning (toggle the
+ * top-level mode picker, or jump straight back to melodic from any
+ * other mode); triangle+shift (circle held too) instead toggles
+ * whichever per-mode sub-menu the CURRENT mode has -- melodic's is the
+ * scale picker, sequencer's is the pattern/channel picker (real
+ * feedback that originally put this on its own button: "sub menu
+ * triangle is reserved for other stuff... maybe in triangle we can
+ * select midi channels for multiple patterns" -- now folded back onto
+ * triangle itself, modified, once diamond needed to move on). While any
+ * per-step edit (pitch/probability/ratchet) owns the grid, the shift
+ * gesture instead cancels it with no change -- the escape hatch a
+ * toggle-style gesture needs (real feedback: "it should be a toggle to
+ * set pitch of sequencer note, not a momentary thing").
+ *
+ * s_triangle_press_was_shift is edge-latched true the first time circle
+ * is seen held during this triangle press (not re-checked fresh at
+ * release) -- same "won't always release in the same tick" reasoning
+ * s_triangle_press_had_conflict already relies on. Square joining too
+ * escalates to a full conflict instead (game_mode.h's reserved 4-button
+ * combo is SW3+SW4+SW5+SW6; triangle+circle+square held together is
+ * three of those four, clearly progressing toward the secret combo, not
+ * a genuine 2-button shift gesture) -- diamond joining already sets
+ * s_triangle_press_had_conflict via the existing check below regardless
+ * of shift, for the identical reason. */
 static void handle_triangle_click(void) {
     bool held = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
+    bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
 
     if (held && !s_triangle_was_held) {
         s_triangle_press_had_conflict = false;
+        s_triangle_press_was_shift = false;
     }
     if (held && tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID)) {
         /* See this file's header + s_triangle_press_had_conflict's own
@@ -1685,10 +1763,35 @@ static void handle_triangle_click(void) {
          * a genuine solo triangle press. */
         s_triangle_press_had_conflict = true;
     }
+    if (held && circle_held) {
+        if (tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID)) {
+            s_triangle_press_had_conflict = true;
+        } else {
+            s_triangle_press_was_shift = true;
+        }
+    }
 
     if (!held && s_triangle_was_held) {
         if (!s_triangle_press_had_conflict) {
-            if (s_menu_visible) {
+            if (s_triangle_press_was_shift) {
+                if (!s_menu_visible) {
+                    if (s_active_mode == OP_MODE_MELODIC) {
+                        if (s_scale_menu_visible) {
+                            scale_menu_exit();
+                        } else {
+                            scale_menu_enter();
+                        }
+                    } else if (s_active_mode == OP_MODE_SEQUENCER) {
+                        if (s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
+                            edit_exit();
+                        } else if (s_pattern_menu_visible) {
+                            pattern_menu_exit();
+                        } else {
+                            pattern_menu_enter();
+                        }
+                    }
+                }
+            } else if (s_menu_visible) {
                 menu_exit();
             } else if (s_active_mode != OP_MODE_MELODIC) {
                 set_active_mode(OP_MODE_MELODIC);
@@ -1701,48 +1804,87 @@ static void handle_triangle_click(void) {
     s_triangle_was_held = held;
 }
 
-/* Same shape as handle_triangle_click() above, one level down: toggles
- * whichever per-mode sub-menu the CURRENT mode has -- melodic's is the
- * scale picker, sequencer's is the pattern/channel picker (real feedback:
- * "sub menu triangle is reserved for other stuff... maybe in triangle we
- * can select midi channels for multiple patterns"). Guarded against the
- * mode-picker also being open (a sub-menu click while picking a top-level
- * mode would be ambiguous/unwanted) the same way the mode-picker itself is
- * guarded against other_feature_owns_input().
- * While any per-step edit (pitch/probability/ratchet) owns the grid,
- * diamond instead cancels it with no change -- the escape hatch a
- * toggle-style gesture needs (real feedback: "it should be a toggle to
- * set pitch of sequencer note, not a momentary thing" -- see this file's
- * own "Per-step editing" section for the rest of that change). */
-static void handle_diamond_click(void) {
+/* Diamond, freed from every menu-related duty above, as a dedicated
+ * Ableton transport remote instead -- real feedback: "the diamond for
+ * now will play and stop in ableton like a toggle and stop brings back
+ * to the start always. if we hold it for 2 sec it arms record and when
+ * we let go it counts down metronome into record play."
+ *
+ * Short click: toggles s_transport_playing, sending MIDI Start (never
+ * Continue) to go stopped->playing and Stop the other way -- see
+ * tiles_midi_send_start()'s own comment in midi_out.h for why never
+ * sending Continue is exactly what makes "stop brings back to the start
+ * always" true, for free, rather than something this file has to
+ * implement.
+ *
+ * Held >= OP_TRANSPORT_RECORD_ARM_HOLD_MS: arms (s_diamond_record_armed,
+ * edge-latched so it can only fire once per hold) -- LED starts
+ * blinking (see render below), nothing sent yet. On release while
+ * armed, instead of the short-click toggle: sends OP_TRANSPORT_RECORD_CC
+ * once as a momentary trigger (see that constant's own comment for why
+ * a CC, not a Note-On, and the one-time manual step this needs in
+ * Ableton itself). Recording implies playing, so s_transport_playing is
+ * set true here too, same as a plain Start would leave it. */
+#define OP_TRANSPORT_RECORD_ARM_HOLD_MS 2000u
+/* Momentary CC trigger for "start recording," sent on the Zone Master
+ * Channel. Unlike Start/Stop (universal, spec-defined System Realtime
+ * bytes every synced DAW already understands), MIDI has no standard
+ * message for "begin recording" -- this needs the user to MIDI-Map it
+ * once, in Ableton: Key/MIDI Map Mode (Cmd/Ctrl+M), click Live's own
+ * Record button, then do this exact hold-2s-and-release gesture on the
+ * hardware to complete the mapping. Live's own Count-In preference
+ * (Preferences -> Record/Warp/Launch) then handles "counts down
+ * metronome into record play" automatically once Record engages --
+ * nothing about counting beats needs to happen in firmware at all. A
+ * CC, not a Note-On, specifically so a stray/unmapped receive can never
+ * sound an actual note the way a Note-On on the Zone Master Channel
+ * might on a receiver that isn't strictly MPE-aware. 3 (Undefined,
+ * generic controller #2 in the MIDI spec) isn't used anywhere else in
+ * this file. */
+#define OP_TRANSPORT_RECORD_CC 3u
+
+static void handle_diamond_transport(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
 
     if (held && !s_diamond_was_held) {
         s_diamond_press_had_conflict = false;
+        s_diamond_press_start_ms = now_ms;
+        s_diamond_record_armed = false;
     }
     if (held && tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID)) {
         s_diamond_press_had_conflict = true;
     }
+    if (held && !s_diamond_press_had_conflict && !s_diamond_record_armed &&
+        (now_ms - s_diamond_press_start_ms) >= OP_TRANSPORT_RECORD_ARM_HOLD_MS) {
+        s_diamond_record_armed = true;
+    }
 
     if (!held && s_diamond_was_held) {
-        if (!s_diamond_press_had_conflict && !s_menu_visible) {
-            if (s_active_mode == OP_MODE_MELODIC) {
-                if (s_scale_menu_visible) {
-                    scale_menu_exit();
-                } else {
-                    scale_menu_enter();
-                }
-            } else if (s_active_mode == OP_MODE_SEQUENCER) {
-                if (s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
-                    edit_exit();
-                } else if (s_pattern_menu_visible) {
-                    pattern_menu_exit();
-                } else {
-                    pattern_menu_enter();
-                }
+        if (!s_diamond_press_had_conflict) {
+            if (s_diamond_record_armed) {
+                tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 127u);
+                tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 0u);
+                s_transport_playing = true;
+            } else if (s_transport_playing) {
+                tiles_midi_send_stop();
+                s_transport_playing = false;
+            } else {
+                tiles_midi_send_start();
+                s_transport_playing = true;
             }
         }
+        s_diamond_record_armed = false;
     }
+
+    float led_level;
+    if (s_diamond_record_armed) {
+        led_level = ((now_ms / OP_TRANSPORT_LED_ARMED_BLINK_MS) % 2u == 0u) ? 1.0f : 0.0f;
+    } else if (s_transport_playing) {
+        led_level = OP_TRANSPORT_LED_PLAYING_LEVEL;
+    } else {
+        led_level = OP_TRANSPORT_LED_STOPPED_LEVEL;
+    }
+    tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, led_level);
 
     s_diamond_was_held = held;
 }
@@ -1968,9 +2110,12 @@ void tiles_op_mode_init(void) {
     s_menu_visible = false;
     s_triangle_was_held = false;
     s_triangle_press_had_conflict = false;
+    s_triangle_press_was_shift = false;
     s_scale_menu_visible = false;
     s_diamond_was_held = false;
     s_diamond_press_had_conflict = false;
+    s_diamond_record_armed = false;
+    s_transport_playing = false;
     for (uint8_t p = 0; p < OP_SEQ_NUM_PATTERNS; p++) {
         for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
             s_seq_pattern[p].step_armed[i] = false;
@@ -2005,6 +2150,11 @@ void tiles_op_mode_init(void) {
     s_beat_flash_start_ms = 0u;
     tiles_buttons_set_override_active(TILES_TRIANGLE_BUTTON_ID, true);
     tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
+    /* See handle_diamond_transport()'s own comment -- diamond's LED is
+     * now a persistent transport-state indicator, not a "follows press"
+     * default, same override mechanism triangle already uses above. */
+    tiles_buttons_set_override_active(TILES_DIAMOND_BUTTON_ID, true);
+    tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, OP_TRANSPORT_LED_STOPPED_LEVEL);
     s_boot_relight_guard_until_ms = to_ms_since_boot(get_absolute_time()) + OP_BOOT_RELIGHT_GUARD_MS;
 }
 
@@ -2066,7 +2216,7 @@ void tiles_op_mode_scan(void) {
     }
 
     handle_triangle_click();
-    handle_diamond_click();
+    handle_diamond_transport(now_ms);
     handle_circle_tap(now_ms);
     handle_transport_and_length(now_ms);
 

@@ -3964,5 +3964,76 @@ not its code.
   reshaping to a narrow region near the clamp (identity below some knee
   point, eased only above it) rather than reshaping the whole [0,1]
   domain, so ordinary playing is never touched by it.
+- **Diamond freed entirely; scale/pattern sub-menu moves to triangle+
+  shift; diamond becomes an Ableton transport remote; mute-hold
+  shortened.** Real feedback, four related changes in one round:
+  1. **"lets put the scale menu into the mode menu when triangle plus
+     shift pressed. freeing up diamond from everything for now."**
+     `handle_diamond_click()` (melodic's scale picker / sequencer's
+     pattern picker / per-step-edit cancel, depending on
+     `s_active_mode`) is gone; that exact branching moved into
+     `handle_triangle_click()`'s new shift path, firing only when
+     circle ("shift" -- see `services/midi_clock.h`'s own naming
+     precedent) was ALSO held during the press. A plain solo triangle
+     click keeps its existing meaning (mode-select) unchanged.
+     `s_triangle_press_was_shift` is edge-latched the same way
+     `s_triangle_press_had_conflict` already is (circle and triangle
+     won't always release in the same tick), and square joining too
+     escalates to a full conflict instead of a shift -- three of
+     `game_mode.h`'s reserved SW3+SW4+SW5+SW6 four buttons held
+     together is clearly progressing toward that secret combo, not a
+     genuine 2-button gesture. Both menu render functions' diamond-
+     column LED moved to triangle's own `OP_TRIANGLE_LED_MENU_LEVEL`
+     accordingly (the "which button got you here" indicator now points
+     at the right button in both cases).
+  2. **Diamond -> dedicated Ableton transport remote.** Real feedback:
+     "the diamond for now will play and stop in ableton like a toggle
+     and stop brings back to the start always. if we hold it for 2 sec
+     it arms record and when we let go it counts down metronome into
+     record play." Researched Ableton's actual MIDI behavior first
+     rather than guessing: with a MIDI input's own "Sync"/"Ext" enabled
+     in Ableton (Preferences -> Link/MIDI), incoming System Realtime
+     Start/Stop messages fully drive its transport, and Start is
+     spec-defined to always begin from position 0 -- never resumes like
+     Continue would. New `tiles_midi_send_start()`/`tiles_midi_send_
+     stop()` in `midi/midi_out.c` (a new `send1()` helper, single-byte
+     System Realtime messages have no channel nibble at all) are the
+     only two this file ever sends -- deliberately never joined by a
+     Continue sender anywhere in this codebase, which is what makes
+     "stop brings back to the start always" true for free, not
+     something built by hand.
+     A short diamond click toggles `s_transport_playing` between the
+     two. Held >= `OP_TRANSPORT_RECORD_ARM_HOLD_MS` (2000ms, edge-
+     latched so it only arms once per hold): on release, instead of the
+     toggle, sends `OP_TRANSPORT_RECORD_CC` (CC 3, an Undefined generic
+     controller number not used elsewhere in this file) once as a
+     momentary trigger. Unlike Start/Stop, MIDI has no standard "begin
+     recording" message -- confirmed via Ableton's own documented
+     workflow (Key/MIDI Map Mode, map any CC/Note to the Record
+     button), this needs a ONE-TIME manual mapping step in Ableton:
+     Cmd/Ctrl+M, click Live's Record button, then do the hold-2s-and-
+     release gesture on the hardware once. Live's own Count-In
+     preference then handles "counts down metronome into record play"
+     automatically once Record engages -- nothing about counting beats
+     needed to be built in firmware at all. A CC rather than a Note-On
+     specifically so a stray/unmapped receive can never sound an actual
+     note the way a Note-On on the Zone Master Channel might on a
+     receiver that isn't strictly MPE-aware.
+     Diamond's LED is now a persistent `tiles_buttons_set_override_led()`
+     indicator (same mechanism `services/octave_control.c` already uses
+     for SW1/SW2) rather than anything menu-related: dim while stopped,
+     solid while playing, fast-blinking once armed -- these buttons are
+     monochrome PWM, so a blink pattern (a real-hardware "about to
+     record" convention) stands in for the color distinction an RGB LED
+     would give. Like every other override-LED button, it goes dark
+     while any of this file's own full-grid menu views are open
+     (`tiles_buttons_set_standby_led()` doesn't check per-button
+     override state, only the global standby-active flag -- confirmed
+     by reading `services/buttons.c` directly rather than assuming) and
+     resumes correctly the instant one closes; accepted as consistent
+     with existing behavior, not a new problem.
+  3. **`EXPRESSION_MUTE_HOLD_MS` 3000 -> 2000.** Real feedback: "when we
+     hold for haptic mute its too long so that combo hast to be reduced
+     to 2 secodns."
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

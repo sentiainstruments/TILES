@@ -155,3 +155,20 @@ void tiles_midi_send_cc_broadcast(uint8_t controller, uint8_t value);
  * themselves. Genuinely per-note now that every held note has its own
  * channel -- see this file's header for the full MPE reasoning. */
 void tiles_midi_send_pitch_bend(uint8_t channel, uint16_t bend_14bit);
+
+/* MIDI System Realtime Start (0xFA) / Stop (0xFC) -- single status byte,
+ * no channel nibble at all (these apply to the whole MIDI stream, not
+ * one channel), used by services/op_mode.c's diamond transport toggle to
+ * remote-control a DAW's transport. Real feedback: "the diamond for now
+ * will play and stop in ableton like a toggle and stop brings back to
+ * the start always." With a DAW's MIDI input "Sync"/"Ext" enabled (in
+ * Ableton Live: Preferences -> Link/MIDI, Sync column on the relevant
+ * input port, then the transport's own Ext button), these two messages
+ * fully drive its transport, and Start is spec-defined to always begin
+ * from position 0 -- never resumes from wherever a Continue message
+ * would. That's what makes "stop brings back to the start always" true
+ * for free: this pair is deliberately never joined by a Continue sender
+ * anywhere in this codebase, so every "play" is a Start, never a
+ * resume. */
+void tiles_midi_send_start(void);
+void tiles_midi_send_stop(void);

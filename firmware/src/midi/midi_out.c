@@ -4,6 +4,14 @@
 
 #define TILES_MIDI_CABLE_NUM 0u
 
+static void send1(uint8_t status) {
+    if (!tud_midi_mounted()) {
+        return;
+    }
+    uint8_t msg[1] = {status};
+    tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg));
+}
+
 static void send2(uint8_t status, uint8_t data1) {
     if (!tud_midi_mounted()) {
         return;
@@ -86,4 +94,12 @@ void tiles_midi_mpe_init(void) {
         send_rpn((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i), 0x00u, 0x00u,
                  (uint8_t)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES, 0x00u);
     }
+}
+
+void tiles_midi_send_start(void) {
+    send1(0xFAu);
+}
+
+void tiles_midi_send_stop(void) {
+    send1(0xFCu);
 }

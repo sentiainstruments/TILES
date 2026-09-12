@@ -33,10 +33,12 @@
  * toggles -- edge-latched (s_mute_fired below) so a single long hold
  * can't re-fire, mirroring services/standby.h's own
  * TILES_CIRCLE_SCREENSAVER_HOLD_MS/_DEEP_SLEEP_HOLD_MS pattern. Real
- * feedback: "hold shift and sentia together for 3 seconds." Independent
- * of EXPRESSION_SUBMENU_TOGGLE_HOLD_MS below -- same numeric value, but
- * a completely separate gesture (this needs circle too, that doesn't). */
-#define EXPRESSION_MUTE_HOLD_MS 3000u
+ * feedback: "hold shift and sentia together for 3 seconds" -- lowered
+ * 3000 -> 2000 after further real feedback found 3s "too long" in
+ * practice. Independent of EXPRESSION_SUBMENU_TOGGLE_HOLD_MS below --
+ * different numeric value now, and a completely separate gesture (this
+ * needs circle too, that doesn't). */
+#define EXPRESSION_MUTE_HOLD_MS 2000u
 
 /* How long square must be held ALONE (circle NOT also held) before the
  * sub-menu's momentary preview LOCKS open (sticky) -- real feedback:

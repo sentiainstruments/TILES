@@ -13,18 +13,32 @@
  *
  * ---- SW3 (triangle) <-> SW4 (diamond): functionality swapped -----------
  * Real feedback: "switch triangle and diamond functionality swapp them
- * fully." Everything below describes CURRENT behavior post-swap: SW3/
- * triangle is now the top-level mode-select click (was SW4/diamond), and
- * SW4/diamond is now each mode's own per-mode sub-menu click (was SW3/
- * triangle) -- a full, symmetric reversal of the two buttons' roles, not
- * a partial remap. Every identifier in op_mode.c reflects this (e.g.
- * `handle_triangle_click()` is the mode-picker handler, `handle_diamond_
- * click()` is the sub-menu handler -- exactly backwards from what their
- * names alone would suggest before you know about this swap). Quotes
- * elsewhere in this file that predate the swap and still say "diamond"
- * for mode-select or "triangle" for sub-menu (like the one just above)
- * are left verbatim as accurate historical record of what was actually
- * said at the time, not stale documentation of current behavior.
+ * fully." SW3/triangle became the top-level mode-select click (was SW4/
+ * diamond), and SW4/diamond became each mode's own per-mode sub-menu
+ * click (was SW3/triangle) -- a full, symmetric reversal of the two
+ * buttons' roles, not a partial remap. Quotes elsewhere in this file
+ * that predate the swap and still say "diamond" for mode-select or
+ * "triangle" for sub-menu (like the one just above) are left verbatim as
+ * accurate historical record of what was actually said at the time, not
+ * stale documentation of current behavior.
+ *
+ * ---- Diamond freed entirely: sub-menu folded onto triangle+shift -------
+ * Real feedback: "lets put the scale menu into the mode menu when
+ * triangle plus shift pressed. freeing up diamond from everything for
+ * now." SW4/diamond's per-mode sub-menu role from the swap above moved
+ * again, onto SW3/triangle held together with SW6/circle ("shift" --
+ * see services/midi_clock.h's own naming precedent) -- a plain solo
+ * triangle click keeps meaning mode-select, unchanged. SW4/diamond
+ * itself became a dedicated Ableton transport remote instead (see
+ * op_mode.c's own handle_diamond_transport()) -- fully unrelated to
+ * modes or menus now, not a third stop on the same swap. Every
+ * identifier in op_mode.c reflects this current state (e.g.
+ * `handle_triangle_click()` handles BOTH mode-select and, in its shift
+ * branch, the sub-menu that predecessor `handle_diamond_click()` used to
+ * own; `handle_diamond_transport()` replaced it). Quotes that predate
+ * THIS move and still describe diamond as the sub-menu button (like the
+ * "SW4 (diamond)'s own sub-menu" one further below) are, again, left
+ * verbatim as historical record.
  *
  * ---- Mode select: SW3 (triangle), single click -------------------------
  * A single click (press then release, not a hold) toggles between three
@@ -122,11 +136,12 @@
  * step sequencers, resulting in four new pieces beyond the original
  * single-pattern build:
  *
- * - **4 patterns**, one per pad row, picked via SW4 (diamond)'s own
- *   sub-menu while sequencer mode is active (SW3/triangle at the time of
- *   the quote below -- see this file's own swap note above) -- real
- *   feedback: "sub menu triangle is reserved for other stuff... maybe in
- *   triangle we can select midi channels for multiple patterns." Each
+ * - **4 patterns**, one per pad row, picked via SW3/triangle+shift's own
+ *   sub-menu while sequencer mode is active (SW4/diamond, then SW3/
+ *   triangle alone at the time of the quote below -- see this file's own
+ *   swap notes above for both moves) -- real feedback: "sub menu
+ *   triangle is reserved for other stuff... maybe in triangle we can
+ *   select midi channels for multiple patterns." Each
  *   pattern keeps its own armed steps, per-step pitch overrides, length,
  *   and MIDI output channel; switching patterns is immediate (no
  *   quantizing), always silencing whatever was sounding on the old
@@ -209,9 +224,11 @@
 
 void tiles_op_mode_init(void);
 
-/* Handles the triangle click (mode-select), the diamond click (each
- * mode's own sub-menu), menu pad taps, and (while sequencer mode is
- * active) step-arm taps + clock-driven playback. Call every main-loop
+/* Handles the triangle click (mode-select, or each mode's own sub-menu
+ * when circle/"shift" is also held), the diamond click (Ableton
+ * transport remote -- see op_mode.c's own handle_diamond_transport()),
+ * menu pad taps, and (while sequencer mode is active) step-arm taps +
+ * clock-driven playback. Call every main-loop
  * iteration, after tiles_buttons_scan()/tiles_touch_scan() (fresh input)
  * and services/midi_clock.h's tiles_midi_clock_scan() (fresh clock
  * state), before anything that reads tiles_op_mode_owns_pad_grid()
