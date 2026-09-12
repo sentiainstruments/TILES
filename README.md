@@ -32,6 +32,11 @@ the shared definitions that keep them in sync.
   belong to firmware or companion-app alone.
 - **`tools/`** — Codegen and build helper scripts (e.g. board-map JSON →
   generated `PadConfig[24]` C header + companion-app TypeScript types).
+- **`daw-integration/`** — Companion software that runs on the computer to
+  let TILES's transport remote (diamond button) control a DAW's own
+  transport directly, the way a factory-recognized controller does,
+  instead of needing a manual per-button MIDI Map. Currently: an Ableton
+  Live Control Surface script. See `daw-integration/README.md`.
 
 ## Core principle
 
@@ -44,9 +49,10 @@ companion-app UI, diagnostics — hand-rolls its own copy of either.
 
 `firmware/` is real, under active iterative development against real
 Rev A0 hardware — see `firmware/README.md`'s own Status section and
-`firmware/src/services/README.md` for the full history. `companion-app/`,
-`shared/`, and `tools/` are still scaffolding: placeholder READMEs
-describing intent, implementation not yet started.
+`firmware/src/services/README.md` for the full history. `daw-integration/`
+has one real, working piece (the Ableton Live Control Surface script).
+`companion-app/`, `shared/`, and `tools/` are still scaffolding:
+placeholder READMEs describing intent, implementation not yet started.
 
 ## For agents
 
