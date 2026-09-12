@@ -40,11 +40,38 @@
  * "SW4 (diamond)'s own sub-menu" one further below) are, again, left
  * verbatim as historical record.
  *
+ * ---- Sub-menu made universal; sequencer's own picker removed -----------
+ * Real feedback: "make sure the shift scasle works on chord melodic mode
+ * and on sequewndcer as well measning remove whatever aux menu we had in
+ * sequencer mode." Triangle+shift's sub-menu, introduced by the move just
+ * above with per-mode branching (melodic got the scale picker, sequencer
+ * got a DIFFERENT sub-menu, a pattern/channel picker), is now just the
+ * scale picker, unconditionally, in every mode that has one -- no branch
+ * on s_active_mode at all anymore. The pattern/channel picker is REMOVED
+ * outright, not replaced: its underlying multi-pattern data (4 patterns,
+ * per-pattern MIDI channel -- see this file's own "Sequencer" section
+ * below) is left in the code, but s_seq_active_pattern now stays
+ * permanently 0 with no UI left to change it, until/unless a future round
+ * gives pattern-switching a new access point. Chord mode's own melody
+ * columns and sequencer's own note mapping both already read note_map.c's
+ * global scale setting the identical way melodic mode's own idle grid
+ * does, so opening the scale picker from either is exactly as meaningful
+ * as it always was from melodic -- there was never a real reason for the
+ * per-mode split once diamond had already taken the pattern picker's
+ * original button away.
+ *
  * ---- Mode select: SW3 (triangle), single click -------------------------
- * A single click (press then release, not a hold) toggles between three
- * things: MELODIC + no menu -> opens the menu; the MENU -> cancels back
- * to melodic; any other active mode (chord/sequencer/guitar) -> exits
- * back to melodic. To actually CHANGE modes, click to open the menu, then
+ * A single click (press then release, not a hold) is a plain toggle: menu
+ * closed -> opens it; menu open -> closes it (no mode change) -- the SAME
+ * two outcomes regardless of which mode happens to be active right now.
+ * Real feedback: "why does a click of triangle send to melodic mode? in
+ * other modes? it should just bring menu up" -- an earlier version instead
+ * jumped straight back to melodic from any other active mode without
+ * opening the picker at all; removed once real feedback called it out,
+ * since render_menu()'s own col_is_current_mode() check already correctly
+ * pulses whichever mode is ACTUALLY active regardless of what it is, so
+ * opening the menu works identically from every mode and the special case
+ * was never actually needed. To CHANGE modes, click to open the menu, then
  * tap a pad in the mode's row. Deliberately the simplest possible gesture
  * -- real feedback compared this to game_mode.h's own menu trigger, but
  * that one is a 700ms hold of 4 buttons together; this is a plain click
@@ -82,7 +109,8 @@
  * availabkle modes shouyld be on meaning for now only sequencer, and the
  * note mode" (now joined by guitar). Chord's slot renders fully off and
  * is a no-op to tap, the same "unavailable" language this file's own
- * scale/pattern pickers already use for their own reserved slots. The
+ * scale picker already uses for its own reserved (undefined-scale)
+ * slots. The
  * current mode's own slot pulses white rather than showing its plain
  * hue, this file's one "selected" language, matching the same rule
  * services/expression_control.h's sub-menu uses.
@@ -136,16 +164,19 @@
  * step sequencers, resulting in four new pieces beyond the original
  * single-pattern build:
  *
- * - **4 patterns**, one per pad row, picked via SW3/triangle+shift's own
- *   sub-menu while sequencer mode is active (SW4/diamond, then SW3/
- *   triangle alone at the time of the quote below -- see this file's own
- *   swap notes above for both moves) -- real feedback: "sub menu
+ * - **4 patterns**, originally picked via a dedicated sub-menu (SW4/
+ *   diamond, then SW3/triangle+shift -- see this file's own swap notes
+ *   above), REMOVED since (see the "Sub-menu made universal" section
+ *   above) -- real feedback that first asked for the picker: "sub menu
  *   triangle is reserved for other stuff... maybe in triangle we can
- *   select midi channels for multiple patterns." Each
- *   pattern keeps its own armed steps, per-step pitch overrides, length,
- *   and MIDI output channel; switching patterns is immediate (no
+ *   select midi channels for multiple patterns." The underlying data
+ *   model is unchanged: each pattern still keeps its own armed steps,
+ *   per-step pitch overrides, length, and MIDI output channel, and
+ *   switching (when something could still trigger it) is immediate (no
  *   quantizing), always silencing whatever was sounding on the old
- *   pattern's channel first.
+ *   pattern's channel first -- there is just no UI left that can
+ *   actually trigger a switch right now, so s_seq_active_pattern stays
+ *   permanently 0 in practice.
  * - **Pitch assignment**: holding a step opens a note-picker view of the
  *   whole grid (the same root/natural/sharp coloring melodic idle uses)
  *   -- tapping any pad sets that step's pitch to that pad's current
@@ -224,8 +255,9 @@
 
 void tiles_op_mode_init(void);
 
-/* Handles the triangle click (mode-select, or each mode's own sub-menu
- * when circle/"shift" is also held), the diamond click (Ableton
+/* Handles the triangle click (mode-select, or the scale picker -- now
+ * universal, not per-mode -- when circle/"shift" is also held), the
+ * diamond click (Ableton
  * transport remote -- see op_mode.c's own handle_diamond_transport()),
  * menu pad taps, and (while sequencer mode is active) step-arm taps +
  * clock-driven playback. Call every main-loop
@@ -276,15 +308,17 @@ bool tiles_op_mode_owns_octave_buttons(void);
 bool tiles_op_mode_owns_pad(uint8_t logical_pad);
 
 /* True whenever sequencer mode is the currently active mode, regardless
- * of which sequencer sub-view (pattern picker, pitch assign, normal step
- * view) is showing. Used by services/standby.h to give sequencer mode a
+ * of which sequencer sub-view (pitch assign, normal step view -- the
+ * pattern picker that used to be a third option here is gone, see this
+ * file's own "Sub-menu made universal" section) is showing. Used by
+ * services/standby.h to give sequencer mode a
  * longer idle timeout before screensaver/deep sleep than plain melodic
  * idle gets -- real feedback: "sleep screensaver should be set to 20
  * minute in sequencer mode since its a more stratic thing." */
 bool tiles_op_mode_is_sequencer_active(void);
 
 /* True while any of this module's own sub-views is open: the top-level
- * mode picker, melodic's scale picker, sequencer's pattern picker, or a
+ * mode picker, the (now-universal, not melodic-only) scale picker, or a
  * sequencer per-step pitch/probability/ratchet editor. Used by
  * services/standby.h to hold off its own automatic idle timeout while
  * one of these is showing -- real feedback: "something triggering

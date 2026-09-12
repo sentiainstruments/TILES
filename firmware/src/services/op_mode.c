@@ -398,8 +398,11 @@ typedef struct {
      * every step behaves as if its own probability were 100% regardless
      * of what's stored, so a performer can flip a whole pattern back to
      * fully deterministic without having to remember/reset every
-     * individually-dialed step. Toggled via a plain circle click while
-     * the pattern picker (below) is open -- see handle_circle_tap(). */
+     * individually-dialed step. Used to be toggled via a plain circle
+     * click while the (now-removed) pattern picker was open -- see this
+     * file's own "Pattern/channel picker: REMOVED" section -- currently
+     * has no access point at all, so this stays whatever it was last
+     * left at (false by default, never set anywhere reachable now). */
     bool probability_enabled;
     uint8_t length;  /* 1..24 active steps -- see OP_SEQ_MIN/MAX_LENGTH */
     uint8_t channel; /* raw 0-15 status-nibble MPE channel */
@@ -537,27 +540,24 @@ static bool s_pitch_edit_prev_pad_touched[TILES_NUM_PADS]; /* only meaningful du
  * conversely still letting the release motion sneak in a bad write. */
 #define OP_SEQ_EDIT_RELEASE_GUARD_DEPTH 60u
 
-/* ---- Pattern/channel picker (SW3/triangle+shift, sequencer mode) -------
- * Same role triangle+shift already plays in melodic mode (the scale
- * picker) -- see handle_triangle_click()'s own shift branch on
- * s_active_mode. Row colors
- * are shades within sequencer's own red identity (the mode-picker's
- * "sequencer = red" real feedback) rather than melodic/chord/arp's own
- * colors, so picking a pattern never reads as switching modes. */
-#define OP_PATTERN_1_R 1.0f
-#define OP_PATTERN_1_G 0.0f
-#define OP_PATTERN_1_B 0.0f
-#define OP_PATTERN_2_R 1.0f
-#define OP_PATTERN_2_G 0.5f
-#define OP_PATTERN_2_B 0.0f
-#define OP_PATTERN_3_R 1.0f
-#define OP_PATTERN_3_G 1.0f
-#define OP_PATTERN_3_B 0.0f
-#define OP_PATTERN_4_R 1.0f
-#define OP_PATTERN_4_G 0.0f
-#define OP_PATTERN_4_B 0.5f
-static bool s_pattern_menu_visible;
-static bool s_pattern_menu_prev_pad_touched[TILES_NUM_PADS];
+/* ---- Pattern/channel picker: REMOVED -----------------------------------
+ * Real feedback: "make sure the shift scasle works on chord melodic mode
+ * and on sequewndcer as well measning remove whatever aux menu we had in
+ * sequencer mode." Triangle+shift now universally opens the scale picker
+ * in every mode that has one (melodic, chord, sequencer -- see
+ * handle_triangle_click()'s own shift branch), no per-mode branching to a
+ * different sub-menu anymore. The underlying multi-pattern DATA MODEL
+ * (s_seq_pattern[OP_SEQ_NUM_PATTERNS], active_pattern(), per-pattern MIDI
+ * channel) is deliberately left in place, not reverted -- only its
+ * switching UI is gone, so s_seq_active_pattern now stays permanently 0
+ * (pattern 0's own channel, at the TOP of the 15 MPE Member Channels,
+ * per this file's own "Multi-pattern bank" section) until/unless a
+ * future round gives pattern-switching a new access point. Also removed
+ * with it: the plain-circle-click-while-the-picker-was-open gesture that
+ * toggled a pattern's probability_enabled master switch (see this file's
+ * git history for handle_circle_tap()'s own removed branch) -- that
+ * setting has no other access point right now and is effectively inert
+ * until pattern-switching (or some replacement UI for it) comes back. */
 
 /* ---- Transport + length (SW1 "-"/SW2 "+", sequencer mode only) ---------
  * Real feedback: "we need a button that starts and stops sequencer... we
@@ -716,10 +716,11 @@ static void edit_enter(uint8_t step, uint32_t started_ms); /* defined below, use
 static void edit_enter_ratchet(uint8_t step); /* defined below, used by seq_handle_step_taps()'s own circle+touch detection */
 
 /* Uses the channel/note captured at note-on time (below), not whatever
- * active_pattern() currently resolves to -- a pattern switch mid-note
- * (handle_pattern_menu_taps()) always calls this FIRST, but capturing the
- * actual sounding values independently means correctness never depends on
- * that ordering being preserved everywhere this gets called from. */
+ * active_pattern() currently resolves to -- correctness never depends on
+ * s_seq_active_pattern staying the same between a note firing and this
+ * ending it (moot while pattern-switching has no UI at all -- see this
+ * file's own "Pattern/channel picker: REMOVED" section -- but a robust
+ * invariant worth keeping regardless, in case that changes again). */
 static void seq_end_current_note(void) {
     if (!s_seq_note_sounding) {
         return;
@@ -829,7 +830,6 @@ static void seq_start(void) {
         s_seq_pending_restart = true; /* fresh entry always starts from step 0 */
     }
     s_seq_edit_mode = OP_SEQ_EDIT_NONE;
-    s_pattern_menu_visible = false;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_seq_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
         s_seq_step_touch_started_ms[i] = 0u;
@@ -1289,132 +1289,6 @@ static void render_edit_mode(uint32_t now_ms, bool transport_running) {
     }
 }
 
-/* ---- Pattern/channel picker (SW3/triangle+shift, sequencer mode) ------- */
-
-static void pattern_row_color(uint8_t pattern_index, float *r, float *g, float *b) {
-    switch (pattern_index) {
-    case 0u:
-        *r = OP_PATTERN_1_R;
-        *g = OP_PATTERN_1_G;
-        *b = OP_PATTERN_1_B;
-        break;
-    case 1u:
-        *r = OP_PATTERN_2_R;
-        *g = OP_PATTERN_2_G;
-        *b = OP_PATTERN_2_B;
-        break;
-    case 2u:
-        *r = OP_PATTERN_3_R;
-        *g = OP_PATTERN_3_G;
-        *b = OP_PATTERN_3_B;
-        break;
-    default: /* pattern 3 */
-        *r = OP_PATTERN_4_R;
-        *g = OP_PATTERN_4_G;
-        *b = OP_PATTERN_4_B;
-        break;
-    }
-}
-
-static void render_pattern_menu(uint32_t now_ms, bool transport_running) {
-    float pulse = menu_selected_pulse_level(now_ms);
-    for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
-        uint8_t pattern_index = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
-        bool selected = (pattern_index == s_seq_active_pattern);
-        float r, g, b;
-        pattern_row_color(pattern_index, &r, &g, &b);
-        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-            if (selected) {
-                tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), pulse, pulse, pulse);
-            } else {
-                tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), r * OP_SCALE_AVAILABLE_LEVEL,
-                                                    g * OP_SCALE_AVAILABLE_LEVEL, b * OP_SCALE_AVAILABLE_LEVEL);
-            }
-        }
-    }
-    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        float level = 0.0f;
-        if (col == TILES_TRIANGLE_BUTTON_COL) {
-            /* Triangle, not diamond -- this sub-menu now opens via
-             * triangle+shift, see handle_triangle_click()'s own comment. */
-            level = OP_TRIANGLE_LED_MENU_LEVEL;
-        } else if (col == TILES_MINUS_BUTTON_COL) {
-            level = transport_running ? 0.0f : OP_TRANSPORT_LED_LEVEL;
-        } else if (col == TILES_PLUS_BUTTON_COL) {
-            level = transport_running ? OP_TRANSPORT_LED_LEVEL : 0.0f;
-        } else if (col == TILES_CIRCLE_BUTTON_COL) {
-            /* A plain circle click here toggles this -- see
-             * handle_circle_tap()'s own release branch. */
-            level = active_pattern()->probability_enabled ? 1.0f : 0.0f;
-        }
-        tiles_buttons_set_standby_led(board_button_for_col(col), level);
-    }
-    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
-        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
-    }
-}
-
-static void pattern_menu_exit(void);
-
-/* Same touch-click + push-past-50%-selects gesture as handle_menu_taps()
- * (the top-level mode picker), reused verbatim since 4 patterns mapping
- * onto 4 rows is the same shape as 4 modes mapping onto 4 rows. */
-static void handle_pattern_menu_taps(void) {
-    for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
-        uint8_t pattern_index = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
-        for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-            uint8_t pad = board_pad_for_row_col(row, col);
-            bool touched = tiles_touch_is_touched(pad);
-            if (touched && !s_pattern_menu_prev_pad_touched[pad - 1u]) {
-                tiles_haptics_trigger_touch_pulse(pad);
-            }
-            if (touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD) {
-                if (pattern_index != s_seq_active_pattern) {
-                    seq_end_current_note();
-                    /* A ratchet mid-sequence when switching would
-                     * otherwise fire its remaining hits against the NEW
-                     * pattern's data at the same step index once
-                     * seq_advance_clock() next checks -- a cross-pattern
-                     * mix-up seq_enter_step()'s own reset doesn't reach
-                     * here since this path doesn't go through it. */
-                    s_seq_ratchet_remaining = 0u;
-                    s_seq_active_pattern = pattern_index;
-                    printf("[op_mode] sequencer pattern -> %u\n", (unsigned)pattern_index);
-                }
-                pattern_menu_exit();
-                return; /* grid ownership just changed under this loop -- stop iterating it */
-            }
-            s_pattern_menu_prev_pad_touched[pad - 1u] = touched;
-        }
-    }
-}
-
-static void pattern_menu_enter(void) {
-    seq_end_current_note();
-    s_pattern_menu_visible = true;
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        s_pattern_menu_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
-    }
-}
-
-static void pattern_menu_exit(void) {
-    s_pattern_menu_visible = false;
-    /* Unlike scale_menu_exit()/menu_exit(), standby doesn't turn off
-     * here -- sequencer mode keeps buttons/lighting standby-active for
-     * its ENTIRE duration (see set_active_mode()'s own OP_MODE_SEQUENCER
-     * branch), not just while this sub-menu specifically is open, so
-     * refresh_all_button_leds() doesn't run at this exact moment either.
-     * Still writing this unconditionally: returning to the normal step
-     * view should make triangle's LED go off regardless of the standby
-     * mechanics, and it's a harmless no-op-then-correct once standby
-     * genuinely does end later (leaving sequencer mode entirely). Same
-     * bug family as menu_exit()'s own comment -- real feedback: "the
-     * light behabes weird for triangle, when scale is selected the
-     * light stays on" (scale menu specifically, but the identical
-     * override-vs-standby interaction applies here too). */
-    tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
-}
-
 /* ---- Menu -------------------------------------------------------------- */
 
 static void menu_enter(void) {
@@ -1460,8 +1334,8 @@ static void menu_exit(void) {
  * note mode" (plus, with this round's guitar mode added, guitar itself,
  * and now chord mode too -- "so this would go as our 4th play mode").
  * Matches the "unavailable = off and not selectable" language this file
- * already established for the scale/pattern pickers' own reserved slots
- * -- see handle_menu_taps() below for the "not selectable" half. */
+ * already established for the scale picker's own reserved slots -- see
+ * handle_menu_taps() below for the "not selectable" half. */
 static bool col_is_available(uint8_t col) {
     switch (col) {
     case OP_MENU_COL_MELODIC:
@@ -1699,8 +1573,9 @@ static void set_active_mode(tiles_op_mode_t mode) {
         s_scale_menu_visible = false;
     }
     if (mode != OP_MODE_SEQUENCER) {
-        /* Same reasoning, sequencer's own two sub-views. */
-        s_pattern_menu_visible = false;
+        /* Same reasoning, sequencer's own per-step edit view (its other
+         * sub-view, the pattern/channel picker, is gone -- see this
+         * file's own "Pattern/channel picker: REMOVED" section). */
         s_seq_edit_mode = OP_SEQ_EDIT_NONE;
     }
     s_active_mode = mode;
@@ -1815,19 +1690,24 @@ static void handle_menu_taps(void) {
 
 /* Real feedback: "lets put the scale menu into the mode menu when
  * triangle plus shift pressed. freeing up diamond from everything for
- * now." A plain solo click keeps its existing meaning (toggle the
- * top-level mode picker, or jump straight back to melodic from any
- * other mode); triangle+shift (circle held too) instead toggles
- * whichever per-mode sub-menu the CURRENT mode has -- melodic's is the
- * scale picker, sequencer's is the pattern/channel picker (real
- * feedback that originally put this on its own button: "sub menu
- * triangle is reserved for other stuff... maybe in triangle we can
- * select midi channels for multiple patterns" -- now folded back onto
- * triangle itself, modified, once diamond needed to move on). While any
- * per-step edit (pitch/probability/ratchet) owns the grid, the shift
- * gesture instead cancels it with no change -- the escape hatch a
- * toggle-style gesture needs (real feedback: "it should be a toggle to
- * set pitch of sequencer note, not a momentary thing").
+ * now," later made universal: "make sure the shift scasle works on
+ * chord melodic mode and on sequewndcer as well measning remove
+ * whatever aux menu we had in sequencer mode." A plain solo click keeps
+ * its existing meaning (toggle the top-level mode picker); triangle+
+ * shift (circle held too) toggles the scale picker, in every mode that
+ * has one -- no per-mode branch, always the same sub-menu regardless of
+ * s_active_mode. Sequencer mode used to get a DIFFERENT sub-menu here
+ * (a pattern/channel picker, real feedback that originally put this on
+ * its own button: "sub menu triangle is reserved for other stuff...
+ * maybe in triangle we can select midi channels for multiple patterns")
+ * -- removed outright per the quote above, not replaced; see this
+ * file's own "Pattern/channel picker: REMOVED" section for what that
+ * takes with it. While any per-step edit (pitch/probability/ratchet)
+ * owns the grid, the shift gesture still cancels it with no change
+ * instead of opening the scale picker on top of it -- the escape hatch
+ * a toggle-style gesture needs (real feedback: "it should be a toggle
+ * to set pitch of sequencer note, not a momentary thing") and the one
+ * piece of the old sequencer-specific branching that's still needed.
  *
  * s_triangle_press_was_shift is edge-latched true the first time circle
  * is seen held during this triangle press (not re-checked fresh at
@@ -1865,20 +1745,29 @@ static void handle_triangle_click(void) {
         if (!s_triangle_press_had_conflict) {
             if (s_triangle_press_was_shift) {
                 if (!s_menu_visible) {
-                    if (s_active_mode == OP_MODE_MELODIC) {
-                        if (s_scale_menu_visible) {
-                            scale_menu_exit();
-                        } else {
-                            scale_menu_enter();
-                        }
-                    } else if (s_active_mode == OP_MODE_SEQUENCER) {
-                        if (s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
-                            edit_exit();
-                        } else if (s_pattern_menu_visible) {
-                            pattern_menu_exit();
-                        } else {
-                            pattern_menu_enter();
-                        }
+                    if (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
+                        /* Still needs its own escape hatch -- real
+                         * feedback: "it should be a toggle to set pitch
+                         * of sequencer note, not a momentary thing."
+                         * Checked first since a per-step edit owns the
+                         * grid exclusively; opening the scale picker on
+                         * top of it would be ambiguous. */
+                        edit_exit();
+                    } else if (s_scale_menu_visible) {
+                        scale_menu_exit();
+                    } else {
+                        /* Real feedback: "make sure the shift scasle
+                         * works on chord melodic mode and on
+                         * sequewndcer as well" -- the scale picker is
+                         * now UNIVERSAL, not melodic-only: chord mode's
+                         * own melody columns and sequencer's own note
+                         * mapping both already read note_map.c's global
+                         * scale setting (see this file's own "Chord
+                         * mode" and "Sequencer" sections), so picking a
+                         * scale is exactly as meaningful from either as
+                         * it always was from melodic. No per-mode
+                         * branch needed -- just always open it. */
+                        scale_menu_enter();
                     }
                 }
             } else if (s_menu_visible) {
@@ -2032,11 +1921,12 @@ static void handle_diamond_transport(uint32_t now_ms) {
  * this while still using the ORIGINAL press timestamp for the actual
  * registered tap time, so tap-tempo accuracy is unaffected by the small
  * press-to-release latency of a real tap.
- * Also excludes the pattern picker and any per-step edit view from
- * `mode_ok` -- tapping a tempo while mid-edit doesn't make sense anyway,
- * and it frees up a plain circle CLICK while the pattern picker is open
- * to mean something else instead: toggling that pattern's probability_
- * enabled (see the release branch below).
+ * Also excludes any per-step edit view from `mode_ok` -- tapping a tempo
+ * while mid-edit doesn't make sense anyway. (Used to also exclude the
+ * pattern picker, for the same reason plus freeing up a plain circle
+ * click there to mean something else instead -- both the picker and
+ * that click's own meaning are gone now, see this file's own "Pattern/
+ * channel picker: REMOVED" section.)
  * Mid-hold cancellation ALSO checks for any pad touch now, not just
  * minus/plus -- real feedback moved ratchet-edit onto a "hold circle,
  * then touch a step" combo (see seq_handle_step_taps()'s own check),
@@ -2062,7 +1952,7 @@ static void handle_circle_tap(uint32_t now_ms) {
         /* ARP mode (the original other half of "only active in sequencer
          * and arp mode") has been removed entirely -- see the mode enum's
          * own comment -- so tap tempo is sequencer-only now. */
-        bool mode_ok = (s_active_mode == OP_MODE_SEQUENCER && !s_pattern_menu_visible && s_seq_edit_mode == OP_SEQ_EDIT_NONE);
+        bool mode_ok = (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode == OP_SEQ_EDIT_NONE);
         bool combo_conflict = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
@@ -2078,18 +1968,12 @@ static void handle_circle_tap(uint32_t now_ms) {
     }
 
     if (!held && s_circle_was_held) {
-        if (s_active_mode == OP_MODE_SEQUENCER && s_pattern_menu_visible) {
-            /* Real feedback: "yes per step probablility but we should be
-             * able to turn that on and off." A per-pattern master switch,
-             * toggled here rather than inside the picker's own tap
-             * handling since circle is otherwise unclaimed while the
-             * picker is open (length-adjust is disabled there too -- see
-             * handle_transport_and_length()'s own `active` gate). */
-            op_seq_pattern_t *pat = active_pattern();
-            pat->probability_enabled = !pat->probability_enabled;
-            printf("[op_mode] pattern %u probability_enabled -> %d\n", (unsigned)s_seq_active_pattern,
-                   (int)pat->probability_enabled);
-        } else if (s_circle_press_pending_tap) {
+        /* A plain-circle-click-while-the-pattern-picker-was-open gesture
+         * used to live here too (toggled a pattern's probability_enabled
+         * master switch) -- removed along with the picker itself, see
+         * this file's own "Pattern/channel picker: REMOVED" section;
+         * that setting has no other access point right now. */
+        if (s_circle_press_pending_tap) {
             tiles_midi_clock_register_tap(s_circle_press_ms);
         }
     }
@@ -2114,7 +1998,7 @@ static void handle_transport_and_length(uint32_t now_ms) {
     bool minus_held = tiles_button_is_pressed(TILES_MINUS_BUTTON_ID);
     bool plus_held = tiles_button_is_pressed(TILES_PLUS_BUTTON_ID);
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
-    bool active = (s_active_mode == OP_MODE_SEQUENCER) && !s_pattern_menu_visible && s_seq_edit_mode == OP_SEQ_EDIT_NONE;
+    bool active = (s_active_mode == OP_MODE_SEQUENCER) && s_seq_edit_mode == OP_SEQ_EDIT_NONE;
     bool guitar_active = (s_active_mode == OP_MODE_GUITAR);
 
     if (active && minus_held && !s_minus_was_held && circle_held) {
@@ -2264,7 +2148,6 @@ void tiles_op_mode_init(void) {
     s_seq_pending_restart = false;
     s_seq_ratchet_remaining = 0u;
     s_seq_edit_mode = OP_SEQ_EDIT_NONE;
-    s_pattern_menu_visible = false;
     s_minus_was_held = false;
     s_plus_was_held = false;
     s_minus_used_as_combo = false;
@@ -2364,12 +2247,6 @@ void tiles_op_mode_scan(void) {
         return;
     }
 
-    if (s_active_mode == OP_MODE_SEQUENCER && s_pattern_menu_visible) {
-        handle_pattern_menu_taps();
-        render_pattern_menu(now_ms, clock.running);
-        return;
-    }
-
     if (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
         handle_edit_mode(now_ms);
         render_edit_mode(now_ms, clock.running);
@@ -2442,5 +2319,5 @@ bool tiles_op_mode_is_sequencer_active(void) {
 }
 
 bool tiles_op_mode_has_menu_open(void) {
-    return s_menu_visible || s_scale_menu_visible || s_pattern_menu_visible || s_seq_edit_mode != OP_SEQ_EDIT_NONE;
+    return s_menu_visible || s_scale_menu_visible || s_seq_edit_mode != OP_SEQ_EDIT_NONE;
 }

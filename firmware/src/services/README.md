@@ -4132,5 +4132,33 @@ not its code.
      not a new color guessed here), everything else off -- so the new
      value reads clearly instead of blending into whatever armed/cursor
      state those same pads already had.
+- **Scale picker made universal; sequencer's own pattern/channel picker
+  removed.** Real feedback: "make sure the shift scasle works on chord
+  melodic mode and on sequewndcer as well measning remove whatever aux
+  menu we had in sequencer mode." `handle_triangle_click()`'s shift
+  branch no longer checks `s_active_mode` at all -- it always toggles
+  the scale picker (or cancels an active per-step edit first, still the
+  one thing that needs its own escape hatch). Chord mode's own melody
+  columns and sequencer's own note mapping both already read
+  `note_map.c`'s global scale the identical way melodic's idle grid
+  does, so there was never really a reason for melodic to be the only
+  mode that could open it.
+  Sequencer's own DIFFERENT sub-menu (the "4 patterns, one per row"
+  picker from the earlier multi-pattern rework) is gone outright, not
+  replaced: `render_pattern_menu()`, `handle_pattern_menu_taps()`,
+  `pattern_menu_enter()`/`_exit()`, `pattern_row_color()`, and their
+  `OP_PATTERN_1..4_R/G/B` colors are all deleted. The underlying
+  multi-pattern DATA MODEL is deliberately left in place (`s_seq_pattern
+  [OP_SEQ_NUM_PATTERNS]`, `active_pattern()`, each pattern's own MIDI
+  channel/length/armed-steps/pitch-overrides) -- reverting that too
+  would have been a much larger, riskier change than what was actually
+  asked for, and it costs nothing to leave it dormant. `s_seq_active_
+  pattern` just has no UI left that can ever move it off 0 now. One
+  real casualty: a plain circle-click while the picker was open used to
+  toggle a pattern's `probability_enabled` master switch -- that
+  gesture's home is gone along with the picker, so the setting is
+  currently unreachable (stays at its default) until/unless a future
+  round gives either pattern-switching or this specific toggle a new
+  access point.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
