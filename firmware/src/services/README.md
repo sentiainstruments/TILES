@@ -4160,5 +4160,38 @@ not its code.
   currently unreachable (stays at its default) until/unless a future
   round gives either pattern-switching or this specific toggle a new
   access point.
+- **Diamond transport still not doing anything -- researched real
+  hardware instead of re-guessing, changed the wire approach.** Real
+  feedback: "diamond is still not doing anything why is it not sending
+  transport controls to daw. look online foir hoiw other things do that
+  liike the novation lounch key." The previous round's Play/Stop
+  (System Realtime Start/Stop bytes, betting on Ableton's Sync/Ext
+  external-sync mechanism) had a real gap: external sync fundamentally
+  means slaving to a continuous MIDI Clock stream too, and this device
+  has only ever RECEIVED clock, never sent it -- isolated Start/Stop
+  bytes with no clock behind them landing on a port never fully in that
+  state explains "not doing anything" better than a missed checkbox.
+  Checked how a real Launchkey does it instead of assuming: its
+  transport buttons "send MIDI Control Change events on Channel 16" --
+  plain, mappable CCs, not Realtime bytes. Confirmed (again) that
+  Ableton's own Play/Stop/Record ARE each individually MIDI-mappable via
+  generic Map Mode, and that same generic "MIDI learn" concept exists in
+  effectively every other DAW too (Cubase's MIDI Remote, Reaper's Action
+  List binding) -- unlike Sync/Ext, needs no clock output and no
+  per-DAW-specific feature.
+  Play and Stop now each get their own momentary CC trigger
+  (`OP_TRANSPORT_PLAY_CC`/`_STOP_CC`, 102/103), the same shape
+  `OP_TRANSPORT_RECORD_CC` already used -- moved from 3 to 104 for
+  consistency, all three now drawn from the MIDI spec's own "Undefined"
+  generic-controller range (102-119), the same CONVENTIONAL block real
+  transport hardware draws from (not a claim of matching a Launchkey's
+  exact numbers, which weren't confirmed to that precision -- just the
+  same real-world convention). The Realtime Start/Stop sends stay too,
+  harmless and still a real win for the rarer setup that does have
+  Sync/Ext genuinely engaged, but the CC triggers are now the primary,
+  research-backed path. Needs the same one-time MIDI-Map step in
+  whatever DAW is actually in use for all THREE triggers, not just
+  Record -- mapping only one and assuming the others inherit it is the
+  most likely way this still reads as "not doing anything" again.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

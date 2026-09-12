@@ -1791,44 +1791,88 @@ static void handle_triangle_click(void) {
     s_triangle_was_held = held;
 }
 
-/* Diamond, freed from every menu-related duty above, as a dedicated
- * Ableton transport remote instead -- real feedback: "the diamond for
- * now will play and stop in ableton like a toggle and stop brings back
- * to the start always. if we hold it for 2 sec it arms record and when
- * we let go it counts down metronome into record play."
+/* Diamond, freed from every menu-related duty above, as a dedicated DAW
+ * transport remote instead -- real feedback: "the diamond for now will
+ * play and stop in ableton like a toggle and stop brings back to the
+ * start always. if we hold it for 2 sec it arms record and when we let
+ * go it counts down metronome into record play," then, once the first
+ * version (System Realtime Start/Stop only) turned out not to actually
+ * do anything: "diamond is still not doing anything why is it not
+ * sending transport controls to daw. look online for how other things
+ * do that like the novation lounch key."
  *
- * Short click: toggles s_transport_playing, sending MIDI Start (never
- * Continue) to go stopped->playing and Stop the other way -- see
- * tiles_midi_send_start()'s own comment in midi_out.h for why never
- * sending Continue is exactly what makes "stop brings back to the start
- * always" true, for free, rather than something this file has to
- * implement.
+ * That research changed the actual wire approach, not just the
+ * troubleshooting: Ableton's own "Synchronizing via MIDI" docs confirm
+ * System Realtime Start/Stop DO drive its transport, but only once that
+ * MIDI input is genuinely in EXTERNAL SYNC (Preferences -> Link/MIDI,
+ * Sync on for the port, AND Live's own transport-bar Ext button both
+ * on) -- and external sync fundamentally means slaving to a continuous
+ * MIDI Clock (0xF8) stream too, which this device has never sent (only
+ * ever RECEIVED, for its own sequencer -- see services/midi_clock.h).
+ * Isolated Start/Stop bytes with no clock behind them landing on a port
+ * that was never fully in that state explains "not doing anything"
+ * better than assuming the one-time Ext toggle was simply missed again.
+ *
+ * Checking how real hardware actually does this instead of guessing
+ * again: a Novation Launchkey's own transport buttons "send MIDI
+ * Control Change events on Channel 16" -- plain, mappable CCs, not
+ * System Realtime bytes at all. Ableton's Play/Stop/Record ARE each
+ * individually MIDI-mappable via generic Map Mode (Cmd/Ctrl+M -- "click
+ * the parameter you want to map... press your MIDI controller button"),
+ * and that same generic "MIDI learn" concept exists in effectively
+ * every other DAW too (Cubase's MIDI Remote, Reaper's Action List MIDI
+ * binding, etc.) -- unlike the Sync/Ext mechanism, this needs no clock
+ * output, no per-DAW transport-specific feature, and no assumption
+ * about what else is enabled. Play/Stop now each get their own
+ * momentary CC trigger, the exact same shape OP_TRANSPORT_RECORD_CC
+ * already used below -- three consistent, independently-mappable
+ * triggers instead of one CC plus two special-case Realtime bytes. The
+ * Realtime Start/Stop sends stay too (harmless, and still a real win on
+ * the rarer setup that does have Sync/Ext genuinely engaged), but the
+ * CC triggers are now the primary, verified-by-research path -- map
+ * ALL THREE (Play, Stop, Record) via Ableton's Map Mode (or the
+ * equivalent in whatever DAW is actually in use) for this to do
+ * anything.
+ *
+ * Short click: toggles s_transport_playing, sending Stop-CC+Realtime-
+ * Stop to go playing->stopped, or Play-CC+Realtime-Start the other way
+ * (never Continue -- see tiles_midi_send_start()'s own comment in
+ * midi_out.h for why that alone makes "stop brings back to the start
+ * always" true on the Realtime path, for free).
  *
  * Held >= OP_TRANSPORT_RECORD_ARM_HOLD_MS: arms (s_diamond_record_armed,
  * edge-latched so it can only fire once per hold) -- LED starts
  * blinking (see render below), nothing sent yet. On release while
  * armed, instead of the short-click toggle: sends OP_TRANSPORT_RECORD_CC
- * once as a momentary trigger (see that constant's own comment for why
- * a CC, not a Note-On, and the one-time manual step this needs in
- * Ableton itself). Recording implies playing, so s_transport_playing is
- * set true here too, same as a plain Start would leave it. */
-#define OP_TRANSPORT_RECORD_ARM_HOLD_MS 2000u
-/* Momentary CC trigger for "start recording," sent on the Zone Master
- * Channel. Unlike Start/Stop (universal, spec-defined System Realtime
- * bytes every synced DAW already understands), MIDI has no standard
- * message for "begin recording" -- this needs the user to MIDI-Map it
- * once, in Ableton: Key/MIDI Map Mode (Cmd/Ctrl+M), click Live's own
- * Record button, then do this exact hold-2s-and-release gesture on the
- * hardware to complete the mapping. Live's own Count-In preference
+ * once as a momentary trigger. Live's own Count-In preference
  * (Preferences -> Record/Warp/Launch) then handles "counts down
  * metronome into record play" automatically once Record engages --
- * nothing about counting beats needs to happen in firmware at all. A
- * CC, not a Note-On, specifically so a stray/unmapped receive can never
- * sound an actual note the way a Note-On on the Zone Master Channel
- * might on a receiver that isn't strictly MPE-aware. 3 (Undefined,
- * generic controller #2 in the MIDI spec) isn't used anywhere else in
- * this file. */
-#define OP_TRANSPORT_RECORD_CC 3u
+ * nothing about counting beats needs to happen in firmware at all.
+ * Recording implies playing, so s_transport_playing is set true here
+ * too, same as a plain Start would leave it. */
+#define OP_TRANSPORT_RECORD_ARM_HOLD_MS 2000u
+/* Momentary CC triggers for Play/Stop/Record, each sent on the Zone
+ * Master Channel as value 127 then immediately 0 (a clean on/off pair,
+ * not a value left dangling at 127) -- see handle_diamond_transport()'s
+ * own comment for the research behind using CCs at all instead of only
+ * System Realtime bytes. 102/103/104 are drawn from the MIDI spec's own
+ * "Undefined" generic-controller CC range (102-119) -- not a copy of
+ * any specific real device's exact numbers (a Launchkey's own Play/
+ * Stop/Record CC assignments weren't confirmed to this precision), just
+ * the same CONVENTIONAL range real transport-control hardware already
+ * draws from, chosen deliberately over arbitrary numbers for that
+ * reason. CCs, not Note-Ons, specifically so a stray/unmapped receive
+ * can never sound an actual note the way a Note-On on the Zone Master
+ * Channel might on a receiver that isn't strictly MPE-aware. Each needs
+ * a ONE-TIME manual MIDI-Map step in whatever DAW is actually in use
+ * (Ableton: Key/MIDI Map Mode, Cmd/Ctrl+M, click the target transport
+ * button, then trigger this device's matching gesture once) -- doing
+ * this for only one of the three and assuming the others "should just
+ * work" the same way is the most likely way this still reads as "not
+ * doing anything" after this change too. */
+#define OP_TRANSPORT_PLAY_CC 102u
+#define OP_TRANSPORT_STOP_CC 103u
+#define OP_TRANSPORT_RECORD_CC 104u
 
 static void handle_diamond_transport(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
@@ -1857,11 +1901,18 @@ static void handle_diamond_transport(uint32_t now_ms) {
                 /* A plain click always means "stop everything," matching
                  * a real transport's single Stop control -- stopping
                  * while recording doesn't leave recording somehow still
-                 * armed in the background. */
+                 * armed in the background. CC first, then the Realtime
+                 * byte -- see handle_diamond_transport()'s own comment
+                 * for why the CC is the primary, verified path and the
+                 * Realtime send is a harmless bonus for a Sync/Ext setup. */
+                tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_STOP_CC, 127u);
+                tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_STOP_CC, 0u);
                 tiles_midi_send_stop();
                 s_transport_playing = false;
                 s_transport_recording = false;
             } else {
+                tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_PLAY_CC, 127u);
+                tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_PLAY_CC, 0u);
                 tiles_midi_send_start();
                 s_transport_playing = true;
             }
