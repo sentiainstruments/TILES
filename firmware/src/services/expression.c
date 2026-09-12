@@ -1288,6 +1288,48 @@ static float pitch_bend_confidence_multiplier(uint32_t hold_ms) {
 #define PITCH_BEND_WIRE_RANGE_COMPENSATION \
     ((float)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES / PITCH_BEND_MPE_SPEC_DEFAULT_RANGE_SEMITONES)
 
+/* Shapes the [0,1] linear tilt ratio (how far through the usable range a
+ * tilt is, before sign) into the actual output fraction -- real
+ * feedback: "preassurte is afecting big tilt. big tilt should be an
+ * exponential curve that reaches the octave not a contant jittery."
+ * A near-max tilt sits right against pitch_bend_14bit_from_cosine_
+ * delta()'s own hard clamp to 1.0 -- under a plain LINEAR mapping, the
+ * ordinary residual x2/y2 noise this file has fought all session (now
+ * much smaller after pitch_bend_run_magnitude's freeze, but never
+ * exactly zero) crosses that clamp boundary back and forth, which reads
+ * as flickering between "near max" and "pinned at max" -- exactly
+ * "constant jittery" at the top of the range specifically, even though
+ * the same noise is imperceptible lower down.
+ *
+ * Fixed with an exponential ease-out curve, y = (1 - e^(-k*x)) /
+ * (1 - e^(-k)) for x in [0,1] -- NOT y = x^k (which grows steepest right
+ * at x=1, the opposite of what's needed here). This shape's own slope is
+ * steepest near x=0 (a small tilt already produces a noticeably bigger
+ * bend than linear would -- more expressive resolution for ordinary
+ * playing) and flattens continuously toward x=1, where the derivative is
+ * smallest -- the same real noise near max tilt now moves the OUTPUT far
+ * less, directly targeting "jittery" at its actual source (clamp-
+ * boundary sensitivity), without needing to hunt for and suppress yet
+ * another noise source. Endpoint-preserving by construction: y(0) = 0,
+ * y(1) = 1 exactly, so "reaches the octave" still means exactly
+ * TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES at true full-scale tilt, not
+ * an asymptote that technically never quite arrives.
+ *
+ * PITCH_BEND_RESPONSE_CURVE_K controls how aggressive the curve is --
+ * larger K rises faster and flattens harder (more noise rejection right
+ * at the top, less resolution for distinguishing a "big" tilt from an
+ * "almost max" one); smaller K approaches the old linear behavior.
+ * A musical/design choice, not a hardware measurement, same as
+ * s_pitch_bend_max_cosine_deviation's own history -- 3.0 is a first,
+ * clearly visible curve, not yet tuned against real playing. */
+#define PITCH_BEND_RESPONSE_CURVE_K 3.0f
+
+static float pitch_bend_shape_response_curve(float ratio) {
+    float numerator = 1.0f - expf(-PITCH_BEND_RESPONSE_CURVE_K * ratio);
+    float denominator = 1.0f - expf(-PITCH_BEND_RESPONSE_CURVE_K);
+    return numerator / denominator;
+}
+
 /* Maps a cosine delta (already vertical-pressure-compensated and
  * sign-flipped by the caller -- see this file's "Pitch bend from
  * sideways motion" section for why) to the 14-bit MIDI pitch bend wire
@@ -1298,10 +1340,12 @@ static float pitch_bend_confidence_multiplier(uint32_t hold_ms) {
  * nonzero value, and still reaches full swing at exactly the same real
  * deviation (s_pitch_bend_max_cosine_deviation) as before any deadzone
  * existed -- before PITCH_BEND_ARM_MS's own confidence ramp (see
- * pitch_bend_confidence_multiplier()) is layered on top of that. Reads
- * and updates `s`'s own run-tracking fields (now per-pad, not
- * module-level -- every currently-bending pad confirms/tracks its run
- * completely independently of every other one). */
+ * pitch_bend_confidence_multiplier()) is layered on top of that, and
+ * before pitch_bend_shape_response_curve()'s own exponential reshaping
+ * is layered on top of THAT. Reads and updates `s`'s own run-tracking
+ * fields (now per-pad, not module-level -- every currently-bending pad
+ * confirms/tracks its run completely independently of every other
+ * one). */
 static uint16_t pitch_bend_14bit_from_cosine_delta(pad_expr_t *s, float delta, uint32_t now_ms) {
     float magnitude = fabsf(delta);
     bool positive = delta >= 0.0f;
@@ -1360,17 +1404,18 @@ static uint16_t pitch_bend_14bit_from_cosine_delta(pad_expr_t *s, float delta, u
          * instead of clamping the sub-menu's own values. */
         usable_range = 0.01f;
     }
-    float normalized = sign * (magnitude / usable_range);
+    float ratio = magnitude / usable_range;
 
     uint32_t hold_ms = s->pitch_bend_run_active ? (now_ms - s->pitch_bend_run_start_ms) : 0u;
-    normalized *= pitch_bend_confidence_multiplier(hold_ms);
+    ratio *= pitch_bend_confidence_multiplier(hold_ms);
 
-    if (normalized > 1.0f) {
-        normalized = 1.0f;
+    if (ratio > 1.0f) {
+        ratio = 1.0f;
     }
-    if (normalized < -1.0f) {
-        normalized = -1.0f;
+    if (ratio < 0.0f) {
+        ratio = 0.0f;
     }
+    float normalized = sign * pitch_bend_shape_response_curve(ratio);
     int32_t bend = (int32_t)PITCH_BEND_CENTER +
                    (int32_t)(normalized * 8191.0f * PITCH_BEND_WIRE_RANGE_COMPENSATION);
     if (bend < 0) {

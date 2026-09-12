@@ -3910,5 +3910,32 @@ not its code.
   precision drift a naive `sinf(2*pi*rate*now_ms/1000)` would accumulate
   over long continuous uptimes. `[vib-cap]` removed now that its capture
   has done its job.
+- **Vibrato confirmed working; big tilt still jittery from pressure --
+  fixed with an exponential response curve, not more filtering.** Real
+  feedback: "wiggle works good. preassurte is afecting big tilt. big
+  tilt should be an exponential curve that reaches the octave not a
+  contant jittery." A near-max tilt sits right against the existing
+  hard clamp to full scale -- under the previous LINEAR mapping, the
+  ordinary residual x2/y2 noise this file has fought all session (much
+  smaller since `pitch_bend_run_magnitude`'s freeze, never exactly
+  zero) crosses that clamp boundary back and forth, reading as
+  flickering between "near max" and "pinned at max" specifically at the
+  top of the range, even though the same noise is imperceptible lower
+  down.
+  Rather than chase yet another noise source, reshaped the response
+  curve itself: `pitch_bend_shape_response_curve()` maps the linear
+  [0,1] tilt ratio through `y = (1 - e^(-k*x)) / (1 - e^(-k))`,
+  `k = PITCH_BEND_RESPONSE_CURVE_K` (3.0, a first guess) -- NOT `y=x^k`,
+  which grows steepest at the top, the opposite of what's needed here.
+  This shape's slope is steepest near x=0 (more expressive resolution
+  for an ordinary small tilt) and flattens continuously toward x=1,
+  where the derivative is smallest -- the same real noise near max tilt
+  now moves the output far less. Endpoint-preserving by construction
+  (y(0)=0, y(1)=1 exactly), so "reaches the octave" still means exactly
+  `TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES` at true full-scale tilt,
+  not an asymptote that never quite arrives. Applied to the ratio AFTER
+  `PITCH_BEND_ARM_MS`'s own temporal confidence multiplier (an
+  orthogonal, time-based ramp) but before the sign is reapplied, so
+  both bend directions get the identical shape.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
