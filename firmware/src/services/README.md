@@ -3732,5 +3732,50 @@ not its code.
   doesn't. The semitone VALUE itself (12) was deliberately left
   unchanged this round so a fresh test can tell whether the interop fix
   alone resolves it before also re-tuning the value.
+- **The single-shared-stage fix above was itself wrong -- collapsed
+  both terms onto the LIGHTER cascade stage instead of the heavier
+  one, making things worse than ever.** Real feedback: "you've ruined
+  the stable version and bend is still extreme and unpredictable...
+  everything became more unstable than it was... like it's just
+  reading the unfiltered numbers." The diagnosis that both terms must
+  read the SAME cascade stage was correct (that invariant is real and
+  this file has hit violations of it more than once), but "make both
+  terms read `pitch_bend_smoothed_x/y`" picked the wrong half of the
+  fast-wiggle split's asymmetry to standardize on. Tracing back through
+  every commit since the cubic-blend fix (`git show <rev>:...`, not
+  guessing from memory) confirmed: from the ORIGINAL "too jittery,
+  inconsistent" two-stage cascade all the way through the depth-rate
+  gating fix and the cubic-blend fix that earned "wow it feels good,"
+  BOTH the baseline recenter target and the live signal had ALWAYS read
+  the fully-cascaded stage 2 (`smoothed_x2/y2`) -- the fast-wiggle
+  attempt was the only round that ever moved the live signal onto stage
+  1, and only the live signal, not the baseline. So the correct
+  "make both terms match" fix was to put current_cosine_x/y back on
+  stage 2, not to pull the baseline down onto stage 1.
+
+  Why the wrong stage failed so much harder than merely "some noise
+  came back": `PITCH_BEND_DEADZONE_COSINE_DELTA` (0.025) and
+  `PITCH_BEND_ARM_MS` (30) were both tuned down to their current,
+  tightest-ever values against a live signal that was ALWAYS the
+  fully-cascaded one up to that point -- there is no real-hardware data
+  showing those thresholds are enough to reject a single-EMA-stage
+  noise floor, only a two-stage one. Worse, the baseline recenter
+  chases whichever stage `current_cosine_x/y` reads, at up to
+  `PITCH_BEND_BASELINE_RECENTER_ALPHA_FAST` (0.25, near-instant) during
+  any depth change -- with the live signal downgraded to stage 1,
+  baseline_x/y itself started picking up much more raw tremor
+  specifically DURING every press/release ramp, exactly the regime this
+  whole mechanism exists to keep clean. Two compounding noise sources,
+  not one.
+
+  `pitch_bend_smoothed_x2/y2` restored, both terms reading it again --
+  functionally identical to the pre-fast-wiggle-attempt arrangement.
+  The fast-wiggle-via-cascade-split idea is now considered a dead end,
+  not just paused: this file's own tremor-vs-vibrato research already
+  explains why splitting ONE shared live signal across two filter
+  strengths can't work (real vibrato and hand tremor overlap in
+  frequency), so a future attempt at that feature needs an INDEPENDENT
+  wiggle detector layered on top of a stable bend path, not a lighter
+  filter substituted into this one.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

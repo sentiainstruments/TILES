@@ -856,18 +856,21 @@ static float s_pitch_bend_max_cosine_deviation = 0.065f;
  * it. Still unmeasured against real playing at this specific
  * configuration; worth a fresh capture to confirm.
  *
- * The two-stage cascade above was later REMOVED again -- real feedback,
- * once the adaptive depth-rate-gated recentering (see PITCH_BEND_
- * BASELINE_RECENTER_ALPHA_SLOW's own comment) made a genuinely
- * different kind of split tempting: "i just need fast wiggles of the
- * keys to activate bend as well" led to reading the live delta from
- * only the first cascade stage while the baseline recenter target kept
- * reading the second -- which reintroduced real pressure-coupled false
- * tilt via a lag mismatch between the two (real feedback: "the last
- * boot re introduced the pitch bend issues with preassure"). Back to a
- * single stage for both terms; this constant's own tremor-rejection
- * math above is still the reasoning for ITS value, just no longer
- * applied twice in series. */
+ * The two-stage cascade above was briefly SPLIT, then briefly REMOVED,
+ * then restored to exactly this uniform two-stage arrangement -- see the
+ * main scan loop's own comment (at current_cosine_x/y) for the full
+ * blow-by-blow of both failed intermediate attempts, real feedback
+ * quotes included ("the last boot re introduced the pitch bend issues
+ * with preassure," then "you've ruined the stable version... like it's
+ * just reading the unfiltered numbers"). Short version: the live delta
+ * and the baseline recenter target must always read the SAME cascade
+ * stage (a hard invariant this file has hit more than once), and that
+ * shared stage must be the fully-cascaded one, not the lighter one --
+ * both terms landing on the lighter stage together technically satisfies
+ * "same stage" but throws away the noise rejection PITCH_BEND_DEADZONE_
+ * COSINE_DELTA and PITCH_BEND_ARM_MS were actually tuned against. This
+ * constant's own tremor-rejection math above is exactly what applying it
+ * twice in series, uniformly, is still buying. */
 #define PITCH_BEND_SMOOTHING_ALPHA 0.08f
 
 typedef enum {
@@ -1060,37 +1063,20 @@ typedef struct {
      * slowly-leaned hold exposed. */
     float pitch_bend_smoothed_x;
     float pitch_bend_smoothed_y;
-    /* A second, more heavily cascaded stage used to live here
-     * (pitch_bend_smoothed_x2/y2), read only by the baseline recenter
-     * target while current_cosine_x/y read the lighter stage above --
-     * split that way specifically so a fast wiggle (real feedback: "i
-     * just need fast wiggles of the keys to activate bend as well")
-     * wouldn't get smoothed away by a filter steep enough to also
-     * reject tremor. REMOVED again almost immediately -- real feedback
-     * on the very next boot: "the last boot re introduced the pitch
-     * bend issues with preassure." Splitting the two terms across two
-     * DIFFERENT cascade stages reintroduced exactly the "mismatched lag
-     * between the two terms" failure this file has hit more than once
-     * before (see the main scan loop's own comment on the historical
-     * "smoothed current vs. raw/differently-lagged baseline" bug): the
-     * faster-reacting live signal now raced ahead of the slower-
-     * reacting baseline during any real depth change, and that
-     * transient gap read as fake tilt again. Both terms now read this
-     * SAME single stage -- eliminates the mismatch by construction
-     * (there's only one lag to match against itself), at the cost of
-     * however much fast-wiggle amplitude the missing second stage
-     * used to preserve; worth a fresh capture to see whether a single
-     * stage alone is still enough for genuine wiggles to register now
-     * that the adaptive recenter (not raw filtering) carries most of
-     * the pressure-rejection burden. */
-    /* Single EMA stage, same as X/Y above -- what BOTH the live delta
-     * computation and the baseline recenter target divide by. See that
-     * computation's own comment for why matching stages matters (the
-     * "both terms use the identical magnitude" invariant real hardware
-     * testing showed is load-bearing cares about using ONE consistent
-     * magnitude, not about which stage it's drawn from -- but ONE
-     * stage, not two DIFFERENT ones, is what actually matters, per this
-     * section's own history above). */
+    /* Second, more heavily cascaded stage -- see PITCH_BEND_SMOOTHING_
+     * ALPHA's own comment for the cascaded-filter math. BOTH the live
+     * delta computation (current_cosine_x/y) AND the baseline recenter
+     * target read THIS stage, not the lighter one above -- see the main
+     * scan loop's own comment for why a real attempt at splitting them
+     * across the two stages (to let fast wiggles through) made things
+     * WORSE, not better, twice over. */
+    float pitch_bend_smoothed_x2;
+    float pitch_bend_smoothed_y2;
+    /* Single EMA stage -- magnitude never needed a second cascade stage
+     * the way X/Y did: it's read identically by both the "predicted
+     * baseline" and "current" terms below (see that computation's own
+     * comment), so there's only ever one lag to match against itself
+     * regardless of how heavily it's filtered. */
     float pitch_bend_smoothed_magnitude;
     /* EMA of the already depth-compensated delta (real feedback: "you
      * broke mpe preassure... biased towards down it never goes up" --
@@ -1482,14 +1468,15 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
     tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
     float x, y, magnitude;
     hall_xy_and_magnitude(hs.x, hs.y, hs.z, &x, &y, &magnitude);
-    /* Seeds BOTH cascade stages (and magnitude's own cascade) directly
-     * from this instant's raw reading, same reasoning as the pre-
-     * existing x/y seeding below -- starting a slow filter at 0 would
-     * produce a fake ramp-up transient every single note-on; starting it
-     * at the current real value means it only has to track genuine
-     * CHANGE from here, not climb out of a false zero first. */
+    /* Seeds BOTH cascade stages (and magnitude's own single stage)
+     * directly from this instant's raw reading -- starting a slow filter
+     * at 0 would produce a fake ramp-up transient every single note-on;
+     * starting it at the current real value means it only has to track
+     * genuine CHANGE from here, not climb out of a false zero first. */
     s->pitch_bend_smoothed_x = x;
+    s->pitch_bend_smoothed_x2 = x;
     s->pitch_bend_smoothed_y = y;
+    s->pitch_bend_smoothed_y2 = y;
     s->pitch_bend_smoothed_magnitude = magnitude;
     /* Seeded from a fresh read here, NOT s->smoothed_depth -- at this
      * exact point s->smoothed_depth still holds whatever this pad's
@@ -1809,20 +1796,19 @@ void tiles_expression_scan(void) {
                 float x, y, magnitude;
                 hall_xy_and_magnitude(hs.x, hs.y, hs.z, &x, &y, &magnitude);
 
-                /* Single-stage EMA of raw X/Y/magnitude -- see
-                 * pitch_bend_smoothed_x/y's own struct-field comment for
-                 * why this is ONE stage, not two: a second, more heavily
-                 * cascaded stage lived here briefly, read only by the
-                 * baseline recenter target below, but splitting the live
-                 * signal and the baseline reference across two
-                 * DIFFERENTLY-lagged stages reintroduced real pressure-
-                 * coupled false tilt. Both the live delta computation
-                 * below and the baseline recenter target now read this
-                 * SAME value. Runs every tick unconditionally (both
-                 * before AND after baseline settles), not just during
-                 * the initial settle window. */
+                /* Two-stage cascaded EMA of raw X/Y (see PITCH_BEND_
+                 * SMOOTHING_ALPHA's own comment for the cascaded-filter
+                 * math), single-stage for magnitude -- see
+                 * pitch_bend_smoothed_x2/y2's own struct-field comment:
+                 * BOTH the live delta computation below and the baseline
+                 * recenter target read the fully-cascaded x2/y2, not the
+                 * lighter first stage. Runs every tick unconditionally
+                 * (both before AND after baseline settles), not just
+                 * during the initial settle window. */
                 s->pitch_bend_smoothed_x += PITCH_BEND_SMOOTHING_ALPHA * (x - s->pitch_bend_smoothed_x);
+                s->pitch_bend_smoothed_x2 += PITCH_BEND_SMOOTHING_ALPHA * (s->pitch_bend_smoothed_x - s->pitch_bend_smoothed_x2);
                 s->pitch_bend_smoothed_y += PITCH_BEND_SMOOTHING_ALPHA * (y - s->pitch_bend_smoothed_y);
+                s->pitch_bend_smoothed_y2 += PITCH_BEND_SMOOTHING_ALPHA * (s->pitch_bend_smoothed_y - s->pitch_bend_smoothed_y2);
                 s->pitch_bend_smoothed_magnitude += PITCH_BEND_SMOOTHING_ALPHA * (magnitude - s->pitch_bend_smoothed_magnitude);
 
                 /* Signed tick-to-tick depth delta, smoothed -- see
@@ -1866,8 +1852,8 @@ void tiles_expression_scan(void) {
                      * that settled value rather than one raw
                      * instantaneous sample. */
                     if ((now_ms - s->pitch_bend_claim_ms) >= PITCH_BEND_SETTLE_MS) {
-                        s->pitch_bend_baseline_x = s->pitch_bend_smoothed_x;
-                        s->pitch_bend_baseline_y = s->pitch_bend_smoothed_y;
+                        s->pitch_bend_baseline_x = s->pitch_bend_smoothed_x2;
+                        s->pitch_bend_baseline_y = s->pitch_bend_smoothed_y2;
                         s->pitch_bend_baseline_settled = true;
                         s->pitch_bend_smoothed_delta = 0.0f;
                     }
@@ -1920,8 +1906,8 @@ void tiles_expression_scan(void) {
                                                 (PITCH_BEND_BASELINE_RECENTER_ALPHA_FAST -
                                                  PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW) *
                                                     activity_shaped;
-                        s->pitch_bend_baseline_x += recenter_alpha * (s->pitch_bend_smoothed_x - s->pitch_bend_baseline_x);
-                        s->pitch_bend_baseline_y += recenter_alpha * (s->pitch_bend_smoothed_y - s->pitch_bend_baseline_y);
+                        s->pitch_bend_baseline_x += recenter_alpha * (s->pitch_bend_smoothed_x2 - s->pitch_bend_baseline_x);
+                        s->pitch_bend_baseline_y += recenter_alpha * (s->pitch_bend_smoothed_y2 - s->pitch_bend_baseline_y);
                     }
 
                     float baseline_x_at_depth = s->pitch_bend_baseline_x;
@@ -2031,54 +2017,91 @@ void tiles_expression_scan(void) {
                      * X-specific, and Y gets the identical treatment
                      * below.
                      *
-                     * CURRENT cosine reads the FIRST cascade stage
-                     * (pitch_bend_smoothed_x/y, ~100-200ms), not the
-                     * fully-cascaded second stage -- real feedback: "i
-                     * just need fast wiggles of the keys to activate bend
-                     * as well." The two-stage cascade was originally
-                     * applied everywhere (see PITCH_BEND_SMOOTHING_
-                     * ALPHA's own comment) to reject hand tremor before
-                     * it ever reached the deadzone -- but real musical
-                     * vibrato and hand tremor sit in overlapping
-                     * frequency bands (this file's own research
+                     * CURRENT cosine reads the fully-cascaded SECOND
+                     * stage (pitch_bend_smoothed_x2/y2), the SAME stage
+                     * baseline_x/y_at_depth is recentered from -- this
+                     * went through two failed attempts before landing
+                     * here, both worth keeping on record since the
+                     * failure mode is subtle and could easily be re-tried
+                     * by a future round chasing the same fast-wiggle ask.
+                     *
+                     * Attempt 1: read the LIGHTER first stage
+                     * (pitch_bend_smoothed_x/y) here instead, keeping the
+                     * baseline on the heavier second stage -- real
+                     * feedback wanted this: "i just need fast wiggles of
+                     * the keys to activate bend as well," and real
+                     * musical vibrato genuinely does overlap hand
+                     * tremor's frequency band (this file's own research
                      * summary), so a filter steep enough to reject one
-                     * necessarily damps the other too; a deliberate fast
-                     * wiggle was getting smoothed down below the
-                     * deadzone right along with genuine tremor. Splits
-                     * the two jobs the cascade was doing across its two
-                     * stages instead of using both for everything: the
-                     * BASELINE reference (baseline_x/y_at_depth, still
-                     * recentered from the fully-cascaded stage 2) stays
-                     * maximally stable, since that's what the earlier
-                     * convergence-transient and false-tilt bugs actually
-                     * needed; the LIVE signal being compared against it
-                     * only needs the lighter, faster-responding first
-                     * stage, preserving more of a fast wiggle's real
-                     * amplitude. Magnitude also drops to the matching
-                     * first-stage value (pitch_bend_smoothed_magnitude,
-                     * not _magnitude2) for both terms -- the "same
-                     * magnitude for both terms" invariant this section's
-                     * own history cares about is about using ONE
-                     * consistent magnitude, not about which cascade stage
-                     * it comes from, and pairing a less-lagged X/Y with a
-                     * more-lagged magnitude would reintroduce exactly the
-                     * kind of mismatched-lag artifact that invariant
-                     * exists to prevent. Real tradeoff, not fully solved
-                     * (per this file's own tremor-vs-vibrato research):
-                     * this also lets more raw hand tremor back into the
-                     * live signal than the two-stage version did; worth a
-                     * fresh capture to confirm this doesn't reintroduce
-                     * jitter during a plain, non-wiggling hold. */
+                     * necessarily damps the other; splitting the cascade
+                     * this way was meant to preserve a fast wiggle's
+                     * amplitude in the live signal while keeping the
+                     * baseline maximally stable. Broke almost
+                     * immediately -- real feedback on the very next boot:
+                     * "the last boot re introduced the pitch bend issues
+                     * with preassure." Splitting the two terms across two
+                     * DIFFERENTLY-lagged stages reintroduced exactly the
+                     * "mismatched lag between the two terms" failure this
+                     * file has hit more than once before (see this
+                     * section's own "first version of this fix" comment
+                     * above): the faster-reacting live signal raced ahead
+                     * of the slower-reacting baseline during any real
+                     * depth change, and that transient gap read as fake
+                     * tilt again.
+                     *
+                     * Attempt 2: collapse BOTH terms onto the LIGHTER
+                     * first stage instead (satisfies "both terms must
+                     * read the same stage" -- true, but the wrong half of
+                     * the mismatch to keep). Also broke, worse than
+                     * either previous state -- real feedback: "you've
+                     * ruined the stable version and bend is still extreme
+                     * and unpredictable... like it's just reading the
+                     * unfiltered numbers." PITCH_BEND_DEADZONE_COSINE_
+                     * DELTA (0.025) and PITCH_BEND_ARM_MS (30) were both
+                     * tuned down to their current, more sensitive values
+                     * against a live signal that was ALWAYS the fully-
+                     * cascaded stage up to that point -- swapping the
+                     * live signal for the noisier single-stage one while
+                     * leaving those thresholds at their tightest-ever
+                     * settings meant meaningfully more raw tremor now had
+                     * to be rejected by a deadzone/confirmation window
+                     * that was never validated against that much noise.
+                     * Worse still, the baseline recenter chases
+                     * WHICHEVER stage current_cosine now reads at up to
+                     * PITCH_BEND_BASELINE_RECENTER_ALPHA_FAST (0.25, near-
+                     * instant) during any depth change -- chasing the
+                     * lighter, noisier stage at that rate lets baseline_x/
+                     * y itself pick up much more raw tremor specifically
+                     * during every press/release ramp, exactly the
+                     * regime this whole mechanism exists to keep clean.
+                     *
+                     * Fix: both terms read x2/y2 -- literally the same
+                     * arrangement that was already in place, continuously,
+                     * from the original "too jittery, inconsistent"
+                     * two-stage cascade all the way through the depth-
+                     * rate-gating fix and the linear-to-cubic recenter
+                     * fix that earned "wow it feels good" in the first
+                     * place. The fast-wiggle ask is a real, still-open
+                     * request, but this file's own tremor-vs-vibrato
+                     * research already says why it can't be solved by
+                     * lightening the ONE shared live signal both jobs
+                     * depend on: any future attempt needs an
+                     * INDEPENDENT wiggle detector layered on top of a
+                     * stable bend, not a lighter filter substituted into
+                     * this path. Magnitude stays single-stage for both
+                     * terms as before -- see pitch_bend_smoothed_
+                     * magnitude's own struct comment for why it never
+                     * needed a second stage to begin with. */
                     float predicted_baseline_cosine_x =
                         direction_cosine_from(baseline_x_at_depth, s->pitch_bend_smoothed_magnitude);
                     float current_cosine_x =
-                        direction_cosine_from(s->pitch_bend_smoothed_x, s->pitch_bend_smoothed_magnitude);
+                        direction_cosine_from(s->pitch_bend_smoothed_x2, s->pitch_bend_smoothed_magnitude);
                     float delta_x = predicted_baseline_cosine_x - current_cosine_x;
 
                     float predicted_baseline_cosine_y =
                         direction_cosine_from(baseline_y_at_depth, s->pitch_bend_smoothed_magnitude);
                     float current_cosine_y =
-                        direction_cosine_from(s->pitch_bend_smoothed_y, s->pitch_bend_smoothed_magnitude);
+                        direction_cosine_from(s->pitch_bend_smoothed_y2, s->pitch_bend_smoothed_magnitude);
                     float delta_y = predicted_baseline_cosine_y - current_cosine_y;
 
                     float combined_magnitude = sqrtf(delta_x * delta_x + delta_y * delta_y);
@@ -2086,12 +2109,12 @@ void tiles_expression_scan(void) {
 
                     if (print_depth_diagnostics) {
                         s_depth_calibration_print_ms = now_ms;
-                        printf("[depth-cal] pad %u depth=%.0f rate=%.2f activity=%.2f baseline_x=%.1f x=%.1f "
-                               "baseline_y=%.1f y=%.1f combined=%.4f deadzone=%.4f\n",
+                        printf("[depth-cal] pad %u depth=%.0f rate=%.2f activity=%.2f baseline_x=%.1f x2=%.1f "
+                               "baseline_y=%.1f y2=%.1f combined=%.4f deadzone=%.4f\n",
                                pad, (double)s->smoothed_depth, (double)s->pitch_bend_smoothed_depth_rate,
                                (double)depth_activity, (double)s->pitch_bend_baseline_x,
-                               (double)s->pitch_bend_smoothed_x, (double)s->pitch_bend_baseline_y,
-                               (double)s->pitch_bend_smoothed_y, (double)raw_delta_this_tick,
+                               (double)s->pitch_bend_smoothed_x2, (double)s->pitch_bend_baseline_y,
+                               (double)s->pitch_bend_smoothed_y2, (double)raw_delta_this_tick,
                                (double)PITCH_BEND_DEADZONE_COSINE_DELTA);
                     }
 
