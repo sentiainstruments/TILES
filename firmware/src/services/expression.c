@@ -1137,6 +1137,32 @@ static bool s_pitch_bend_enabled;
 static uint32_t s_depth_calibration_print_ms;
 #define DEPTH_CALIBRATION_PRINT_INTERVAL_MS 150u
 
+/* Temporary bring-up visibility, same family as s_depth_calibration_
+ * print_ms above but faster -- real feedback asked whether "showing you
+ * motions for tilt vs fast wiggle" would help distinguish a genuine held
+ * tilt (expected: raw X/Y deviates and stays one sign for the whole
+ * hold) from a genuine fast wiggle (expected: raw X/Y flips sign
+ * repeatedly, faster than a real tilt's own settle time) from ordinary
+ * passive tremor (this file's own research says it overlaps both in
+ * frequency, so amplitude/deliberateness -- visible directly in a real
+ * capture -- may be the only thing left to separate it on). 150ms
+ * (6.7 samples/sec) is nowhere near enough to see that shape -- real
+ * tremor/vibrato content lives in the 4-15Hz band, so resolving it at
+ * all needs meaningfully faster sampling than that, same Nyquist
+ * reasoning as any other signal here. 25ms (40 samples/sec) is a large
+ * step up but still a small fraction of pico-sdk's blocking-write risk
+ * (see the main scan loop's own freeze history) -- that freeze came
+ * from an UNTHROTTLED per-tick print stacked with a 40ms one running
+ * simultaneously, not from a single throttled print at a comparable
+ * rate on its own, and this one only ever fires while genuinely
+ * bending (already gated inside pitch_bend_active below), not during
+ * idle multi-pad play. Meant for one short, deliberate, single-note
+ * capture session -- remove once that capture has actually informed a
+ * real wiggle-vs-tremor mechanism, same as every other "temporary
+ * bring-up visibility" print in this file. */
+static uint32_t s_wiggle_capture_print_ms;
+#define WIGGLE_CAPTURE_PRINT_INTERVAL_MS 25u
+
 /* MPE Member Channel allocator -- one slot per Member Channel
  * (TILES_MIDI_MPE_NUM_MEMBER_CHANNELS of them), mirroring
  * services/haptics.c's own voice-stealing policy almost exactly
@@ -1858,6 +1884,13 @@ void tiles_expression_scan(void) {
                 s->pitch_bend_smoothed_y += PITCH_BEND_SMOOTHING_ALPHA * (y - s->pitch_bend_smoothed_y);
                 s->pitch_bend_smoothed_y2 += PITCH_BEND_SMOOTHING_ALPHA * (s->pitch_bend_smoothed_y - s->pitch_bend_smoothed_y2);
                 s->pitch_bend_smoothed_magnitude += PITCH_BEND_SMOOTHING_ALPHA * (magnitude - s->pitch_bend_smoothed_magnitude);
+
+                if ((now_ms - s_wiggle_capture_print_ms) >= WIGGLE_CAPTURE_PRINT_INTERVAL_MS) {
+                    s_wiggle_capture_print_ms = now_ms;
+                    printf("[wiggle-cap] pad %u t=%u x=%.1f y=%.1f x2=%.1f y2=%.1f depth=%.0f\n", pad, now_ms,
+                           (double)x, (double)y, (double)s->pitch_bend_smoothed_x2,
+                           (double)s->pitch_bend_smoothed_y2, (double)s->smoothed_depth);
+                }
 
                 /* Signed tick-to-tick depth delta, smoothed -- see
                  * pitch_bend_smoothed_depth_rate's own struct comment for

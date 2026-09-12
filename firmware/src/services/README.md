@@ -3810,5 +3810,17 @@ not its code.
   would now see a narrower ~3-semitone actual range instead of the full
   12 -- worth revisiting if one is ever found; until then, matching the
   two real receivers actually tested is the right default.
+- **Temporary `[wiggle-cap]` capture print added, not yet acted on.**
+  Remaining real feedback after the cascade restore: "not quite fully
+  stable but mostly... when bent it wobbles but also its not sensitive
+  to the natural vibrato wiggle." Rather than guess at another
+  filtering/gating change, asked whether a real capture of the two
+  gestures would help distinguish them -- "yes go ahead." Added a
+  25ms-throttled `[wiggle-cap]` print (raw x/y AND cascaded x2/y2,
+  plus depth) gated the same safe way as `s_depth_calibration_print_ms`
+  (see that constant's own freeze history) but fast enough to actually
+  resolve 4-15Hz tremor/vibrato content, for one deliberate single-note
+  capture session. Meant to be removed once the capture actually
+  informs a real fix, not left running.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
