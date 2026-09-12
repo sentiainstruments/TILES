@@ -3822,5 +3822,52 @@ not its code.
   resolve 4-15Hz tremor/vibrato content, for one deliberate single-note
   capture session. Meant to be removed once the capture actually
   informs a real fix, not left running.
+- **`[wiggle-cap]` capture analyzed: explains the residual wobble, and
+  quantifies (doesn't yet fix) why fast wiggle still isn't sensitive.**
+  A real ~5.5s deliberate tilt hold and ~8.6s fast wiggle were captured
+  on the same pad and cross-referenced against the actual `[expression]
+  pitch bend sent` output from the same session:
+  - **Wobble, explained.** During the "steady" tilt hold, real depth
+    swung from 527 to 1059 (a human hand isn't perfectly steady in press
+    force while concentrating on holding an angle) and the sent bend
+    value wobbled by as much as ~600 (out of a ~2047 max) within a few
+    hundred ms, in lockstep with those depth swings -- even though
+    `pitch_bend_baseline_x/y` were already frozen (a run was confirmed
+    throughout). Root cause: the "pure depth change cancels to 0" proof
+    only holds when `x2 == baseline_x` (no real tilt) -- for an ACTIVE
+    tilt, `delta = (baseline_x - x2) / magnitude` is still inversely
+    proportional to whatever magnitude does, so natural press-force
+    jitter during a real held bend directly modulates the OUTPUT, not
+    just the (already-protected) angle. Fixed by freezing magnitude too,
+    the instant a run is confirmed (`pitch_bend_run_magnitude`, chased
+    in lockstep with baseline_x/y, same gate) -- extends the exact same
+    protection baseline_x/y already have to how that angle gets scaled
+    into a cosine. Accepted, documented tradeoff: a deliberate LARGE
+    press change mid-run (not just natural jitter) now reads against a
+    stale magnitude for the rest of that run; unmeasured how often that
+    matters versus the jitter this fixes.
+  - **Fast wiggle, quantified.** The tilt hold reached bend deviations
+    up to 1929 (94% of the current ~2047 max); the fast wiggle never
+    exceeded 240 (12% of that same max), even though the RAW x range
+    during the wiggle (288) was comparable to the raw x range during the
+    tilt (352) -- similar physical amplitude, wildly different output.
+    Cross-referencing the underlying cosine deltas: wiggle peaked around
+    0.029, barely above `PITCH_BEND_DEADZONE_COSINE_DELTA` (0.025),
+    while the tilt ramped past 0.06 (close to `s_pitch_bend_max_cosine_
+    deviation`, 0.065). This is the two-stage cascade's -12dB/octave
+    rolloff doing exactly what it was designed to do (this file's own
+    tremor-research math) -- a fast wiggle reverses direction before the
+    cascade can catch up to the true instantaneous deflection, so its
+    OWN amplitude gets cut down near the deadzone, not just "confidence"
+    from `PITCH_BEND_ARM_MS`. Confirms, with real numbers this time,
+    exactly what this file's own research already concluded: this can't
+    be fixed by lightening the shared live signal (tried twice, both
+    made things worse -- see current_cosine_x/y's own history) --
+    a real fix needs an INDEPENDENT wiggle-energy detector (e.g.
+    comparing a fast, lightly-filtered signal against x2/y2 to measure
+    "how much faster is this moving than the stable path thinks")
+    layered additively on top of the now-stable main path, not built yet
+    -- flagged to the user as a separate, more exploratory follow-up
+    given this file's two prior failed attempts at this exact feature.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

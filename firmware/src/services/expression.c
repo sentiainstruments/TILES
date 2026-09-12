@@ -1078,6 +1078,12 @@ typedef struct {
      * comment), so there's only ever one lag to match against itself
      * regardless of how heavily it's filtered. */
     float pitch_bend_smoothed_magnitude;
+    /* Magnitude actually used by BOTH cosine terms below -- see the main
+     * scan loop's own comment (where this is chased/frozen, mirroring
+     * pitch_bend_baseline_x/y exactly) for why a real held tilt still
+     * needs a FROZEN magnitude, not the live one, once a run is
+     * confirmed. */
+    float pitch_bend_run_magnitude;
     /* EMA of the already depth-compensated delta (real feedback: "you
      * broke mpe preassure... biased towards down it never goes up" --
      * see the main scan loop's own comment on why this replaced
@@ -1136,32 +1142,6 @@ static bool s_pitch_bend_enabled;
  * file. */
 static uint32_t s_depth_calibration_print_ms;
 #define DEPTH_CALIBRATION_PRINT_INTERVAL_MS 150u
-
-/* Temporary bring-up visibility, same family as s_depth_calibration_
- * print_ms above but faster -- real feedback asked whether "showing you
- * motions for tilt vs fast wiggle" would help distinguish a genuine held
- * tilt (expected: raw X/Y deviates and stays one sign for the whole
- * hold) from a genuine fast wiggle (expected: raw X/Y flips sign
- * repeatedly, faster than a real tilt's own settle time) from ordinary
- * passive tremor (this file's own research says it overlaps both in
- * frequency, so amplitude/deliberateness -- visible directly in a real
- * capture -- may be the only thing left to separate it on). 150ms
- * (6.7 samples/sec) is nowhere near enough to see that shape -- real
- * tremor/vibrato content lives in the 4-15Hz band, so resolving it at
- * all needs meaningfully faster sampling than that, same Nyquist
- * reasoning as any other signal here. 25ms (40 samples/sec) is a large
- * step up but still a small fraction of pico-sdk's blocking-write risk
- * (see the main scan loop's own freeze history) -- that freeze came
- * from an UNTHROTTLED per-tick print stacked with a 40ms one running
- * simultaneously, not from a single throttled print at a comparable
- * rate on its own, and this one only ever fires while genuinely
- * bending (already gated inside pitch_bend_active below), not during
- * idle multi-pad play. Meant for one short, deliberate, single-note
- * capture session -- remove once that capture has actually informed a
- * real wiggle-vs-tremor mechanism, same as every other "temporary
- * bring-up visibility" print in this file. */
-static uint32_t s_wiggle_capture_print_ms;
-#define WIGGLE_CAPTURE_PRINT_INTERVAL_MS 25u
 
 /* MPE Member Channel allocator -- one slot per Member Channel
  * (TILES_MIDI_MPE_NUM_MEMBER_CHANNELS of them), mirroring
@@ -1552,6 +1532,7 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
     s->pitch_bend_smoothed_y = y;
     s->pitch_bend_smoothed_y2 = y;
     s->pitch_bend_smoothed_magnitude = magnitude;
+    s->pitch_bend_run_magnitude = magnitude;
     /* Seeded from a fresh read here, NOT s->smoothed_depth -- at this
      * exact point s->smoothed_depth still holds whatever this pad's
      * PREVIOUS note last left it at (it isn't reseeded to the real
@@ -1885,13 +1866,6 @@ void tiles_expression_scan(void) {
                 s->pitch_bend_smoothed_y2 += PITCH_BEND_SMOOTHING_ALPHA * (s->pitch_bend_smoothed_y - s->pitch_bend_smoothed_y2);
                 s->pitch_bend_smoothed_magnitude += PITCH_BEND_SMOOTHING_ALPHA * (magnitude - s->pitch_bend_smoothed_magnitude);
 
-                if ((now_ms - s_wiggle_capture_print_ms) >= WIGGLE_CAPTURE_PRINT_INTERVAL_MS) {
-                    s_wiggle_capture_print_ms = now_ms;
-                    printf("[wiggle-cap] pad %u t=%u x=%.1f y=%.1f x2=%.1f y2=%.1f depth=%.0f\n", pad, now_ms,
-                           (double)x, (double)y, (double)s->pitch_bend_smoothed_x2,
-                           (double)s->pitch_bend_smoothed_y2, (double)s->smoothed_depth);
-                }
-
                 /* Signed tick-to-tick depth delta, smoothed -- see
                  * pitch_bend_smoothed_depth_rate's own struct comment for
                  * why SIGNED-then-smoothed (sign-consistent real presses
@@ -1989,6 +1963,13 @@ void tiles_expression_scan(void) {
                                                     activity_shaped;
                         s->pitch_bend_baseline_x += recenter_alpha * (s->pitch_bend_smoothed_x2 - s->pitch_bend_baseline_x);
                         s->pitch_bend_baseline_y += recenter_alpha * (s->pitch_bend_smoothed_y2 - s->pitch_bend_baseline_y);
+                        /* Chased in lockstep with baseline_x/y above, same
+                         * gate, same one-tick-of-lag reasoning -- see this
+                         * section's own comment right below (at
+                         * predicted_baseline_cosine_x) for WHY magnitude
+                         * itself now needs to freeze during a confirmed
+                         * run too, not just baseline_x/y. */
+                        s->pitch_bend_run_magnitude = s->pitch_bend_smoothed_magnitude;
                     }
 
                     float baseline_x_at_depth = s->pitch_bend_baseline_x;
@@ -2169,20 +2150,61 @@ void tiles_expression_scan(void) {
                      * depend on: any future attempt needs an
                      * INDEPENDENT wiggle detector layered on top of a
                      * stable bend, not a lighter filter substituted into
-                     * this path. Magnitude stays single-stage for both
-                     * terms as before -- see pitch_bend_smoothed_
-                     * magnitude's own struct comment for why it never
-                     * needed a second stage to begin with. */
+                     * this path. Magnitude stays single-stage -- see
+                     * pitch_bend_smoothed_magnitude's own struct comment
+                     * for why it never needed a second cascade stage --
+                     * but as of the real capture behind PITCH_BEND_
+                     * WIRE_RANGE_COMPENSATION's own history, it DOES need
+                     * to freeze during a confirmed run, same as baseline_
+                     * x/y just above (pitch_bend_run_magnitude, chased in
+                     * lockstep with baseline_x/y, same gate).
+                     *
+                     * Why: the "pure depth change cancels to 0" proof a
+                     * few paragraphs up only holds when x2 == baseline_x
+                     * (no real tilt yet) -- for an ACTIVE, non-zero tilt
+                     * (x2 != baseline_x, the whole point of a confirmed
+                     * run), delta = (baseline_x - x2) / magnitude is
+                     * still inversely proportional to whatever magnitude
+                     * does. A real capture of a held ~5.5s deliberate
+                     * tilt (see this file's own wiggle-vs-tilt capture,
+                     * "[wiggle-cap]") found depth swinging from 527 to
+                     * 1059 DURING that single "steady" hold -- a real
+                     * hand isn't perfectly steady in press force while
+                     * also concentrating on holding an angle -- and the
+                     * sent bend value wobbling by as much as ~600 (out of
+                     * a ~2047 max) over a few hundred ms in direct
+                     * lockstep with those depth wobbles, even though
+                     * baseline_x/y were already frozen (run_active was
+                     * true throughout). That's this same division-by-
+                     * live-magnitude effect, not a new bug: real feedback
+                     * "not quite fully stable but mostly... when bent it
+                     * wobbles" is that residual. Freezing magnitude too,
+                     * the instant a run is confirmed, removes this
+                     * specific coupling for the rest of that run, exactly
+                     * how baseline_x/y already protect the ANGLE from
+                     * further pressure changes once a run is confirmed --
+                     * this extends the same protection to how that angle
+                     * gets SCALED into a cosine.
+                     * Real, accepted tradeoff, not fully solved: a
+                     * deliberate LARGE press change mid-run (not just
+                     * natural hold jitter) will now read against a stale
+                     * magnitude for the rest of that run, which could
+                     * under- or over-state the angle depending on which
+                     * way depth moved -- unmeasured how often that
+                     * matters in practice versus the jitter this fixes,
+                     * worth a fresh capture if a future round finds bend
+                     * feels wrong specifically after a big mid-hold press
+                     * change. */
                     float predicted_baseline_cosine_x =
-                        direction_cosine_from(baseline_x_at_depth, s->pitch_bend_smoothed_magnitude);
+                        direction_cosine_from(baseline_x_at_depth, s->pitch_bend_run_magnitude);
                     float current_cosine_x =
-                        direction_cosine_from(s->pitch_bend_smoothed_x2, s->pitch_bend_smoothed_magnitude);
+                        direction_cosine_from(s->pitch_bend_smoothed_x2, s->pitch_bend_run_magnitude);
                     float delta_x = predicted_baseline_cosine_x - current_cosine_x;
 
                     float predicted_baseline_cosine_y =
-                        direction_cosine_from(baseline_y_at_depth, s->pitch_bend_smoothed_magnitude);
+                        direction_cosine_from(baseline_y_at_depth, s->pitch_bend_run_magnitude);
                     float current_cosine_y =
-                        direction_cosine_from(s->pitch_bend_smoothed_y2, s->pitch_bend_smoothed_magnitude);
+                        direction_cosine_from(s->pitch_bend_smoothed_y2, s->pitch_bend_run_magnitude);
                     float delta_y = predicted_baseline_cosine_y - current_cosine_y;
 
                     float combined_magnitude = sqrtf(delta_x * delta_x + delta_y * delta_y);
