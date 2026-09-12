@@ -1102,6 +1102,18 @@ typedef struct {
     bool pitch_bend_run_active;
     bool pitch_bend_run_positive;
     uint32_t pitch_bend_run_start_ms;
+    /* Independent fast-wiggle-vibrato detector -- see VIBRATO_ENERGY_
+     * NOISE_FLOOR's own comment for the real capture behind this and
+     * why it's a SEPARATE signal from everything above, not a change to
+     * it. pitch_bend_wiggle_energy is the smoothed magnitude of the gap
+     * between the two existing cascade stages; pitch_bend_wiggle_active/
+     * _start_ms are the same "how long has this been true" confirmation
+     * shape as pitch_bend_run_active/_start_ms above, applied to "is
+     * wiggle energy currently above the noise floor" instead of "is
+     * delta currently outside the deadzone". */
+    float pitch_bend_wiggle_energy;
+    bool pitch_bend_wiggle_active;
+    uint32_t pitch_bend_wiggle_start_ms;
 } pad_expr_t;
 
 static pad_expr_t s_pads[TILES_NUM_PADS];
@@ -1142,29 +1154,6 @@ static bool s_pitch_bend_enabled;
  * file. */
 static uint32_t s_depth_calibration_print_ms;
 #define DEPTH_CALIBRATION_PRINT_INTERVAL_MS 150u
-
-/* Temporary bring-up visibility, same family/safety reasoning as
- * s_depth_calibration_print_ms above (see that constant's own freeze
- * history) -- a second, more targeted round of the same "[wiggle-cap]"
- * idea, replaced after the first round's capture showed raw-minus-
- * cascaded residual energy doesn't cleanly separate a real wiggle from
- * ordinary sensor noise (mean residual 56 during a real held tilt vs.
- * 63 during a real wiggle -- basically the same, since raw X is
- * dominated by quantization noise at a similar level regardless of the
- * real gesture underneath it). This round logs BOTH cascade stages
- * (pitch_bend_smoothed_x/y, the lighter stage 1, alongside x2/y2, the
- * fully-cascaded stage 2) instead of raw -- stage 1 already rejects some
- * quantization noise while still tracking a real fast wiggle, so the
- * GAP between the two stages should be a cleaner "is something moving
- * faster than the stable path thinks" signal than raw ever could be.
- * Meant for a three-gesture capture (hold still, deliberate tilt, fast
- * wiggle) to test whether that gap's AMPLITUDE reliably separates
- * deliberate wiggle from passive tremor even where their frequency
- * content overlaps (this file's own research). Remove once that
- * capture has actually informed a real wiggle-detector mechanism, same
- * as every other "temporary bring-up visibility" print in this file. */
-static uint32_t s_vibrato_capture_print_ms;
-#define VIBRATO_CAPTURE_PRINT_INTERVAL_MS 25u
 
 /* MPE Member Channel allocator -- one slot per Member Channel
  * (TILES_MIDI_MPE_NUM_MEMBER_CHANNELS of them), mirroring
@@ -1393,6 +1382,161 @@ static uint16_t pitch_bend_14bit_from_cosine_delta(pad_expr_t *s, float delta, u
     return (uint16_t)bend;
 }
 
+/* Independent fast-wiggle-vibrato detector -- deliberately separate from
+ * everything above (pitch_bend_smoothed_x/y/x2/y2, baseline_x/y,
+ * run_magnitude) and everything below (pitch_bend_apply_vibrato()'s own
+ * additive output), per this file's own hard-won lesson: TWO earlier
+ * attempts at fast-wiggle support that touched the SHARED tilt/pressure
+ * signal both made pressure stability worse, not better (see
+ * PITCH_BEND_SMOOTHING_ALPHA's own history and current_cosine_x/y's
+ * "Attempt 1"/"Attempt 2" comments). This round reads two values that
+ * already exist (pitch_bend_smoothed_x/y, the lighter first cascade
+ * stage, and _x2/_y2, the fully-cascaded second stage) but never
+ * modifies them, and its own output is added on top of the final wire
+ * value, after everything above has already run -- it cannot affect,
+ * and cannot be affected by, the baseline/current-cosine computation
+ * the stability fixes depend on.
+ *
+ * Real feedback: "maybe fast wiggles can be tected and that activates
+ * bivrato? i just need fast wiggles of the keys to activate bedn as
+ * well." Researched real precedent first (LinnStrument's own docs:
+ * "wobble a finger left and right to generate vibrato" on the SAME
+ * pitch-bend path used for slides; Haken Continuum: "convert finger
+ * tremble into vibrato" via direct high-resolution tracking) -- neither
+ * needs a separate detector, because their sensors are precise/
+ * responsive enough that one live signal handles both slow tilts and
+ * fast wiggles. This hardware can't do that directly: its 2-stage
+ * cascade (needed for the cross-axis pressure-coupling this file has
+ * fought all session) rolls off a real wiggle's own amplitude right
+ * along with tremor, confirmed with real numbers rather than assumed --
+ * a captured ~5.5s deliberate tilt hold reached 94% of max bend output,
+ * a ~8.6s fast wiggle on the same pad never exceeded 12%, even though
+ * their RAW motion amplitude was comparable (this file's own "[wiggle-
+ * cap]" capture, since removed).
+ *
+ * The fix that capture's own data ruled out: lightening the shared
+ * live signal (tried twice, both broke pressure stability). The fix
+ * that worked: measure how much the LIGHTER first cascade stage
+ * disagrees with the fully-cascaded second stage -- during a slow,
+ * settled signal (steady press, or a tilt held long enough for both
+ * stages to converge), that gap is small; during a genuine fast
+ * wiggle, the light stage tracks the oscillation while the heavy stage
+ * can't keep up, so the gap is large AND stays large for the duration.
+ * A dedicated three-gesture real capture on one pad (hold still,
+ * deliberate tilt, fast wiggle -- this file's own "[vib-cap]" capture,
+ * since removed) measured the smoothed magnitude of that gap directly:
+ *   - hold still:      mean 7.5, sustained energy never exceeds ~9
+ *   - deliberate tilt:  mean 8.5, one single-tick blip to ~12 (at
+ *                        RELEASE, not onset -- see VIBRATO_ARM_MS below)
+ *   - fast wiggle:      mean 16.2, energy stays above 11 for 93% of
+ *                        the gesture's whole duration
+ * Onset (the first 300ms of every strike, all three gestures) stayed
+ * under 7 -- an ordinary strike's own fast depth ramp does not spike
+ * this signal. */
+#define VIBRATO_ENERGY_NOISE_FLOOR 8.0f
+/* Above this, wiggle depth is full-scale (before VIBRATO_ARM_MS's own
+ * confirmation ramp) -- see VIBRATO_ENERGY_NOISE_FLOOR's own comment for
+ * the real capture (sustained ~16.2 during a genuine wiggle) this is
+ * measured against. The 8..16 span between the two constants is a soft
+ * knee, not a hard cutoff -- ramps continuously so a borderline gesture
+ * doesn't click a vibrato on/off, same reasoning as PITCH_BEND_DEADZONE_
+ * COSINE_DELTA's own soft-knee treatment. */
+#define VIBRATO_ENERGY_FULL_SCALE 16.0f
+/* Requires wiggle energy to stay above VIBRATO_ENERGY_NOISE_FLOOR for
+ * this long before vibrato ramps in at all -- same "hold to confirm"
+ * shape as PITCH_BEND_ARM_MS, applied here specifically because the real
+ * capture found the one place a NON-wiggle gesture came close to the
+ * floor was a single tick at the exact instant of RELEASING a held tilt
+ * (a fast depth-ramp event, same class of transient as every other
+ * cross-axis-coupling artifact this file has fought, just at release
+ * instead of onset) -- harmless there on its own since pitch bend resets
+ * to center on note-off regardless of what this detector is doing, but
+ * a similarly brief transient from a deliberate hard press MID-hold
+ * (untested; no capture of that specific gesture yet) is exactly the
+ * kind of thing this file's history says not to assume away. A real
+ * wiggle's own 93%-of-duration coverage sails through this easily; a
+ * one-or-two-tick transient does not. */
+#define VIBRATO_ARM_MS 80u
+/* Fixed vibrato rate, not derived from the player's own gesture speed --
+ * deliberately simple for a first attempt rather than trying to extract
+ * a stable rate/phase estimate from an already-small, jittery energy
+ * signal. 5.5Hz sits in the commonly-cited natural vibrato range for
+ * strings/voice (this file's own tremor-vs-vibrato research already put
+ * genuine vibrato at 4-8Hz); worth revisiting if a future round finds
+ * a fixed rate feels robotic against real playing. */
+#define VIBRATO_RATE_HZ 5.5f
+/* Peak wire-unit amplitude of the added oscillation at full depth --
+ * roughly 0.9 semitones peak (see PITCH_BEND_WIRE_RANGE_COMPENSATION's
+ * own comment: this device's post-compensation full-scale bend is
+ * ~2047 wire units for TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES, 12
+ * semitones, so 1 semitone is roughly 2047/12 =~ 171 wire units) -- a
+ * musical/design choice, not a hardware measurement, same as
+ * s_pitch_bend_max_cosine_deviation's own history; worth tuning against
+ * real playing like every other constant in this pipeline. */
+#define VIBRATO_MAX_WIRE_DEPTH 150.0f
+/* Not M_PI -- not guaranteed available without a feature-test macro on
+ * this newlib target; services/standby.c already established the
+ * pattern of defining pi locally rather than relying on it (see
+ * TILES_STANDBY_PI there). */
+#define TILES_EXPRESSION_VIBRATO_PI 3.14159265358979323846f
+
+/* Applies the independent wiggle-vibrato detector's output to an
+ * already-fully-computed wire bend value -- called AFTER
+ * pitch_bend_14bit_from_cosine_delta() returns, never before, so
+ * nothing here can influence the baseline/current-cosine computation
+ * that function and its caller depend on. See VIBRATO_ENERGY_NOISE_
+ * FLOOR's own comment for the full reasoning and the real capture
+ * behind every constant used here. */
+static uint16_t pitch_bend_apply_vibrato(pad_expr_t *s, uint16_t bend, uint32_t now_ms) {
+    bool above_floor = s->pitch_bend_wiggle_energy > VIBRATO_ENERGY_NOISE_FLOOR;
+    if (above_floor) {
+        if (!s->pitch_bend_wiggle_active) {
+            s->pitch_bend_wiggle_active = true;
+            s->pitch_bend_wiggle_start_ms = now_ms;
+        }
+    } else {
+        s->pitch_bend_wiggle_active = false;
+    }
+
+    uint32_t hold_ms = s->pitch_bend_wiggle_active ? (now_ms - s->pitch_bend_wiggle_start_ms) : 0u;
+    float confirm = (hold_ms >= VIBRATO_ARM_MS) ? 1.0f : (float)hold_ms / (float)VIBRATO_ARM_MS;
+
+    float energy_above_floor = s->pitch_bend_wiggle_energy - VIBRATO_ENERGY_NOISE_FLOOR;
+    if (energy_above_floor < 0.0f) {
+        energy_above_floor = 0.0f;
+    }
+    float depth = energy_above_floor / (VIBRATO_ENERGY_FULL_SCALE - VIBRATO_ENERGY_NOISE_FLOOR);
+    if (depth > 1.0f) {
+        depth = 1.0f;
+    }
+    depth *= confirm;
+    if (depth <= 0.0f) {
+        return bend;
+    }
+
+    /* Phase reduced via INTEGER modulo on now_ms before ever touching a
+     * float, not sinf(2*pi*rate*now_ms/1000.0f) directly -- casting a
+     * multi-million-ms uptime straight to float first loses enough
+     * mantissa precision to visibly drift this LFO's phase over long
+     * continuous uptimes (a plain uint32_t now_ms already exceeds
+     * float's exact-integer range well within a day of uptime). Taking
+     * the remainder in exact uint32_t arithmetic first means only the
+     * small, always-precise phase-within-one-period value ever reaches
+     * sinf(). */
+    uint32_t period_ms = (uint32_t)(1000.0f / VIBRATO_RATE_HZ);
+    uint32_t phase_ms = now_ms % period_ms;
+    float lfo = sinf(2.0f * TILES_EXPRESSION_VIBRATO_PI * (float)phase_ms / (float)period_ms);
+
+    int32_t with_vibrato = (int32_t)bend + (int32_t)(depth * VIBRATO_MAX_WIRE_DEPTH * lfo);
+    if (with_vibrato < 0) {
+        with_vibrato = 0;
+    }
+    if (with_vibrato > 16383) {
+        with_vibrato = 16383;
+    }
+    return (uint16_t)with_vibrato;
+}
+
 /* Shared by tiles_expression_toggle_pitch_bend() (disabling) and
  * tiles_expression_set_muted() (muting) below -- under the old
  * single-owner design there was at most one bending pad to reset;
@@ -1573,6 +1717,12 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
     s->pitch_bend_claim_ms = now_ms;
     s->pitch_bend_last_sent = PITCH_BEND_CENTER;
     s->pitch_bend_run_active = false;
+    /* Zeroed, not carried over -- same reasoning as pitch_bend_smoothed_
+     * depth_rate above: a stale energy value left over from this pad's
+     * PREVIOUS note would otherwise bias the vibrato detector for the
+     * first few ticks of a brand new note. */
+    s->pitch_bend_wiggle_energy = 0.0f;
+    s->pitch_bend_wiggle_active = false;
 }
 
 /* Ends `pad`'s currently-held note completely and cleanly: MIDI note-off,
@@ -1889,12 +2039,21 @@ void tiles_expression_scan(void) {
                 s->pitch_bend_smoothed_y2 += PITCH_BEND_SMOOTHING_ALPHA * (s->pitch_bend_smoothed_y - s->pitch_bend_smoothed_y2);
                 s->pitch_bend_smoothed_magnitude += PITCH_BEND_SMOOTHING_ALPHA * (magnitude - s->pitch_bend_smoothed_magnitude);
 
-                if ((now_ms - s_vibrato_capture_print_ms) >= VIBRATO_CAPTURE_PRINT_INTERVAL_MS) {
-                    s_vibrato_capture_print_ms = now_ms;
-                    printf("[vib-cap] pad %u t=%u x1=%.1f y1=%.1f x2=%.1f y2=%.1f depth=%.0f\n", pad, now_ms,
-                           (double)s->pitch_bend_smoothed_x, (double)s->pitch_bend_smoothed_y,
-                           (double)s->pitch_bend_smoothed_x2, (double)s->pitch_bend_smoothed_y2,
-                           (double)s->smoothed_depth);
+                /* Independent wiggle-vibrato energy -- see
+                 * pitch_bend_apply_vibrato()'s own VIBRATO_ENERGY_NOISE_
+                 * FLOOR comment for the full reasoning and the real
+                 * capture behind this. Reads the gap between the two
+                 * cascade stages just updated above but writes neither
+                 * of them -- runs unconditionally, same as the cascade
+                 * itself, so it's already settled by the time a run
+                 * might need it, not starting cold mid-gesture. */
+                {
+                    float wiggle_residual_x = s->pitch_bend_smoothed_x - s->pitch_bend_smoothed_x2;
+                    float wiggle_residual_y = s->pitch_bend_smoothed_y - s->pitch_bend_smoothed_y2;
+                    float wiggle_residual_magnitude =
+                        sqrtf(wiggle_residual_x * wiggle_residual_x + wiggle_residual_y * wiggle_residual_y);
+                    s->pitch_bend_wiggle_energy +=
+                        PITCH_BEND_SMOOTHING_ALPHA * (wiggle_residual_magnitude - s->pitch_bend_wiggle_energy);
                 }
 
                 /* Signed tick-to-tick depth delta, smoothed -- see
@@ -2268,6 +2427,7 @@ void tiles_expression_scan(void) {
                     s->pitch_bend_smoothed_delta = raw_delta_this_tick;
                     float delta = s->pitch_bend_smoothed_delta;
                     uint16_t bend = pitch_bend_14bit_from_cosine_delta(s, delta, now_ms);
+                    bend = pitch_bend_apply_vibrato(s, bend, now_ms);
                     if (bend != s->pitch_bend_last_sent) {
                         s->pitch_bend_last_sent = bend;
                         tiles_midi_send_pitch_bend(s->midi_channel, bend);

@@ -3869,5 +3869,46 @@ not its code.
     layered additively on top of the now-stable main path, not built yet
     -- flagged to the user as a separate, more exploratory follow-up
     given this file's two prior failed attempts at this exact feature.
+- **Fast-wiggle vibrato, built as an independent detector this time.**
+  Researched real precedent before implementing ("lets... do research
+  and think first"): LinnStrument's own docs describe vibrato as
+  nothing special -- "wobble a finger left and right" on the SAME
+  pitch-bend path used for slides -- and Haken Continuum "converts
+  finger tremble into vibrato" via direct high-resolution tracking;
+  neither needs a separate mechanism because their sensors are precise
+  enough that one live signal handles both slow tilts and fast wiggles.
+  This hardware can't do that (its cascade has to be heavy enough to
+  reject real cross-axis pressure coupling, confirmed all session), so
+  a real fix needed a genuinely independent signal, not a lighter
+  shared filter (both prior attempts at the latter made pressure
+  stability worse).
+  A dedicated three-gesture capture (hold still / deliberate tilt /
+  fast wiggle, one pad, `[vib-cap]`) tested the gap between the two
+  cascade stages ALREADY in the pipeline (`pitch_bend_smoothed_x/y`
+  minus `_x2/_y2`) as the detector signal: mean 7.5 at rest, 8.5 during
+  a held tilt (one single-tick blip to ~12, at RELEASE specifically),
+  16.2 during a genuine wiggle, sustained above threshold for 93% of
+  its duration. Onset (first 300ms of every strike, all three gestures)
+  stayed under 7 -- an ordinary strike doesn't spike it.
+  Implementation (`pitch_bend_apply_vibrato()`, called AFTER
+  `pitch_bend_14bit_from_cosine_delta()` returns, never before): smooths
+  that gap's magnitude into `pitch_bend_wiggle_energy`; a soft knee
+  between the real captured floor (8) and sustained-wiggle level (16)
+  maps it to a 0-1 depth; `VIBRATO_ARM_MS` (80ms) requires that to hold
+  before ramping in at all, specifically because the one non-wiggle
+  gesture that came close to the floor was a release transient -- a
+  deliberate hard press MID-hold (a similar fast depth-ramp event) is
+  untested and exactly the kind of thing this file's history says not
+  to assume safe without a confirmation window. Once armed, a fixed
+  ~5.5Hz sine (real feedback asked whether showing the motions would
+  help distinguish them -- "yes go ahead" led to the data above, not a
+  literal video), scaled by depth, is added directly to the FINAL wire
+  value -- never routed through the deadzone/confidence logic the main
+  bend depends on, so it cannot reintroduce either of the two previous
+  regressions by construction. LFO phase is reduced via integer modulo
+  on `now_ms` before ever touching a float, avoiding a real (if slow)
+  precision drift a naive `sinf(2*pi*rate*now_ms/1000)` would accumulate
+  over long continuous uptimes. `[vib-cap]` removed now that its capture
+  has done its job.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
