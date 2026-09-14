@@ -4193,5 +4193,110 @@ not its code.
   whatever DAW is actually in use for all THREE triggers, not just
   Record -- mapping only one and assuming the others inherit it is the
   most likely way this still reads as "not doing anything" again.
+- **Stuck-note audit: one real gap found and closed.** Real feedback: "is
+  there anything needed to stop stuck niotes?" `services/expression.c`'s
+  live-touch MPE channel allocator (`claim_mpe_channel()`) and
+  `op_mode.c`'s own per-pattern sequencer channel assignment
+  (`active_pattern()->channel`) are two independent systems that never
+  knew about each other. Now that the sequencer runs in the background
+  regardless of which mode is displayed (see "sequencer should not stop
+  if mode is changed" above), a live touch could claim the exact MPE
+  channel the sequencer was using for its own background note -- the
+  sequencer's next `seq_fire_note()` would then end/steal whatever the
+  live touch put there without `expression.c` ever knowing, leaving that
+  pad's own state machine believing it still owns a note that's already
+  gone, never able to send its own eventual note-off. New accessor
+  `tiles_op_mode_sequencer_reserved_channel()` returns the sequencer's
+  active channel while genuinely running (0, never a valid channel,
+  otherwise); `claim_mpe_channel()` skips it in both the free-slot search
+  and the steal-oldest fallback. Every other stuck-note path was already
+  covered by existing code (grid-ownership-change and standby both
+  already force every sounding pad off via `seq_end_current_note()`/
+  `chord_end_all_notes()`/expression.c's own release handling) -- this
+  channel-collision gap was the one real hole.
+- **Sequencer capture mode (SW4 diamond + shift).** Real feedback: "make
+  a sequencer capture mode when sifht and diamoind clicked together. this
+  means the sequencer turns into the regular chromatic scale and captures
+  the lplayed melody into sequecer in the current tempo quantized but
+  also do allow overlap. this makes the diamond flash glow and then exit
+  into sequencer is by shift or by diamond, not directly to the menu. the
+  curent step of the sequencer should light up pink sentia when the
+  sequencer is at that step." Entered with the same shift+diamond combo
+  language `handle_triangle_click()`'s own shift detection already
+  established (circle held + diamond, square NOT also held or it
+  escalates to a conflict instead); forces sequencer mode active first if
+  it wasn't already, switches `note_map.c`'s scale to chromatic for the
+  duration (restored on exit) so every pad plays its natural note with no
+  scale filtering, and arms a quantized-start just like a fresh Start
+  would. While active, the grid is owned entirely by
+  `seq_capture_handle_taps()`/`seq_capture_advance_clock()`/
+  `render_seq_capture()` -- a dedicated dispatch branch, not routed
+  through the normal playback engine at all, since capture's job
+  (accumulate live touches, commit on the beat) is unrelated to
+  probability/ratchet/pitch-override playback logic.
+  "Allow overlap": a fresh touch always wins over whatever was already
+  sounding -- ends the old note, starts the new one, the same "hold the
+  trig, play the note" simplicity this file's per-step pitch-assignment
+  view already uses -- so overlapping touches hand off cleanly instead of
+  rejecting or glitching, both for the audible note and for which note
+  gets written into the step currently being recorded.
+  Quantization: each step has an accumulator (`s_seq_capture_step_note`/
+  `_armed`) that a touch during that step's window writes into; only at
+  the NEXT step boundary does `seq_capture_advance_clock()` commit the
+  accumulator into `active_pattern()`'s real `step_armed`/`step_note`/
+  `step_pitch_override` arrays and reset it. A touch's real timing only
+  ever decides WHICH step's window it landed in, never a sub-step offset
+  -- this is what makes capture genuinely quantized rather than free-time
+  recording with a grid overlay.
+  Exit is by a solo release of either shift or diamond alone (checked
+  ahead of their normal meanings in both `handle_circle_tap()`'s and
+  `handle_diamond_transport()`'s own release branches), matching "exit
+  into sequencer is by shift or by diamond, not directly to the menu"
+  precisely -- capture mode hands control back to the normal sequencer
+  step view, never straight to a menu.
+  Diamond's LED gets a fifth, highest-priority state while capture is
+  active: `menu_selected_pulse_level()`, this file's own established
+  "selected" pulse (the scale picker's own pulse speed), deliberately
+  faster than recording's slow breathing and not a hard blink like armed
+  -- satisfies "this makes the diamond flash glow" while staying visually
+  distinct from transport's other four states.
+  Current-step color: Sentia magenta/pink (`OP_MENU_MELODIC_R/G/B`, this
+  file's own established brand-color constants, pulsed at the same
+  `menu_selected_pulse_level()`) exactly matches "the curent step of the
+  sequencer should light up pink sentia when the sequencer is at that
+  step" -- overridden to solid white only for the pad currently actually
+  sounding, so a held note is always visually unambiguous even when it
+  lands on the current step.
+  One proactively-caught bug while wiring the entry combo:
+  `handle_circle_tap()`'s existing mid-hold cancellation only watched
+  minus/plus/pad-touch to decide whether a circle-hold had become some
+  other combo instead of a tap-tempo tap -- diamond joining the hold
+  (this exact gesture) wasn't in that check, so "circle first, diamond
+  joins" could have spuriously registered a tap-tempo tap on release
+  despite genuinely being the capture-mode entry combo. Fixed by adding
+  diamond to that same check, mirroring the identical fix the
+  circle+minus/plus length-adjust combo already needed for the same
+  "circle pressed first" ordering.
+- **Pattern bank restored (SW3 triangle + shift, sequencer mode only).**
+  Real feedback: "in sequencer mode shift plus triangle opens up the
+  pattern bajnk. make all patterns white except for the selecteed onel
+  tjhat ones is red flashing." `handle_triangle_click()`'s shift branch
+  goes back to per-mode routing for this one mode only -- sequencer gets
+  this pattern bank, every other mode still gets the universal scale
+  picker (see "Scale picker made universal" above, which this doesn't
+  reverse anywhere except this single gesture in this single mode). Not
+  a straight revert of the old, fully-deleted pattern/channel picker:
+  different visual language on purpose -- plain white
+  (`OP_SCALE_AVAILABLE_LEVEL`, this file's existing "available option"
+  brightness) for every non-selected pattern instead of 4 distinct row
+  colors, and a hard on/off RED FLASH (300ms, deliberately a blink, not
+  this file's usual smooth "selected" pulse, so it reads as visually
+  distinct and matches the word real feedback actually used) for the
+  active one instead of a pulsing white. Same touch-click-then-push-
+  past-50%-depth selection gesture every other picker in this file uses;
+  opening the bank silences whatever's currently sounding first
+  (`seq_end_current_note()`), same as every other sub-view here; switching
+  patterns clears any in-flight ratchet count too, the same cross-pattern
+  mix-up guard the original picker already established.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

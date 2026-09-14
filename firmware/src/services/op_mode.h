@@ -308,9 +308,11 @@ bool tiles_op_mode_owns_octave_buttons(void);
 bool tiles_op_mode_owns_pad(uint8_t logical_pad);
 
 /* True whenever sequencer mode is the currently active mode, regardless
- * of which sequencer sub-view (pitch assign, normal step view -- the
- * pattern picker that used to be a third option here is gone, see this
- * file's own "Sub-menu made universal" section) is showing. Used by
+ * of which sequencer sub-view (pitch assign, normal step view, the
+ * restored pattern bank -- see this file's own "Pattern bank" section) is
+ * showing -- OR whenever a pattern is genuinely still running in the
+ * background while some OTHER mode is displayed (see op_mode.c's own
+ * "sequencer should not stop if mode is changed" fix). Used by
  * services/standby.h to give sequencer mode a
  * longer idle timeout before screensaver/deep sleep than plain melodic
  * idle gets -- real feedback: "sleep screensaver should be set to 20
@@ -318,8 +320,9 @@ bool tiles_op_mode_owns_pad(uint8_t logical_pad);
 bool tiles_op_mode_is_sequencer_active(void);
 
 /* True while any of this module's own sub-views is open: the top-level
- * mode picker, the (now-universal, not melodic-only) scale picker, or a
- * sequencer per-step pitch/probability/ratchet editor. Used by
+ * mode picker, the (now-universal, not melodic-only) scale picker,
+ * sequencer mode's own restored pattern bank, or a sequencer per-step
+ * pitch/probability/ratchet editor. Used by
  * services/standby.h to hold off its own automatic idle timeout while
  * one of these is showing -- real feedback: "something triggering
  * animations when clicking the diamond menu" turned out to be
@@ -330,3 +333,12 @@ bool tiles_op_mode_is_sequencer_active(void);
  * this file's other sub-views for the same reason, not just the one that
  * happened to get reported first. */
 bool tiles_op_mode_has_menu_open(void);
+
+/* The MPE Member Channel (1-15) the sequencer is currently using for its
+ * active pattern's own notes, or 0 (never a valid channel) if the
+ * sequencer isn't genuinely running right now. services/expression.c's
+ * own claim_mpe_channel() reserves this channel from its live-touch
+ * pool so the two independent channel-allocation systems can't collide
+ * -- see that function's own comment, and this accessor's own comment
+ * in op_mode.c, for the real stuck-note failure mode this prevents. */
+uint8_t tiles_op_mode_sequencer_reserved_channel(void);

@@ -1810,26 +1810,54 @@ void tiles_expression_force_release_all(void) {
 
 /* MPE Member Channel allocator -- see s_mpe_channels' own comment for
  * the voice-stealing policy. Returns the claimed channel (status-byte
- * nibble). If every Member Channel is already in use, forcibly ends the
- * oldest-claimed one's note (via end_held_note() above) and hands that
- * SAME channel straight to the new pad, rather than freeing it and
- * re-searching -- avoids a redundant second scan and keeps the "steal"
- * atomic from this function's own perspective. */
+ * nibble). If every (non-reserved) Member Channel is already in use,
+ * forcibly ends the oldest-claimed one's note (via end_held_note()
+ * above) and hands that SAME channel straight to the new pad, rather
+ * than freeing it and re-searching -- avoids a redundant second scan
+ * and keeps the "steal" atomic from this function's own perspective.
+ *
+ * Real feedback: "is there anything needed to stop stuck niotes?" --
+ * `reserved` (see tiles_op_mode_sequencer_reserved_channel()'s own
+ * comment) is skipped in BOTH the free-slot search and the steal-oldest
+ * fallback below, so a live touch can never claim the exact channel the
+ * sequencer is currently using for its own background pattern -- the
+ * real, if narrow, collision that used to be possible now that a
+ * sequencer pattern and live melodic touches can genuinely run at the
+ * same time. Doesn't retroactively evict a live touch that already sat
+ * on that channel BEFORE the sequencer started wanting it -- reaching
+ * that needs 11+ simultaneous fingers already down (search fills the
+ * LOW channels first, pattern channels are the top few) AND the
+ * sequencer starting at that exact moment; narrower still than the
+ * gap this fix closes, and not chased here. */
 static uint8_t claim_mpe_channel(uint8_t pad) {
+    uint8_t reserved = tiles_op_mode_sequencer_reserved_channel();
+
     for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
-        if (!s_mpe_channels[i].in_use) {
+        uint8_t channel = (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i);
+        if (!s_mpe_channels[i].in_use && channel != reserved) {
             s_mpe_channels[i].in_use = true;
             s_mpe_channels[i].owner_pad = pad;
             s_mpe_channels[i].claim_seq = s_next_mpe_claim_seq++;
-            return (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i);
+            return channel;
         }
     }
 
-    uint8_t oldest_idx = 0;
-    for (uint8_t i = 1; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
-        if (s_mpe_channels[i].claim_seq < s_mpe_channels[oldest_idx].claim_seq) {
+    uint8_t oldest_idx = TILES_MIDI_MPE_NUM_MEMBER_CHANNELS;
+    for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
+        if ((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i) == reserved) {
+            continue;
+        }
+        if (oldest_idx == TILES_MIDI_MPE_NUM_MEMBER_CHANNELS || s_mpe_channels[i].claim_seq < s_mpe_channels[oldest_idx].claim_seq) {
             oldest_idx = i;
         }
+    }
+    if (oldest_idx == TILES_MIDI_MPE_NUM_MEMBER_CHANNELS) {
+        /* Every single Member Channel is the reserved one -- impossible
+         * given TILES_MIDI_MPE_NUM_MEMBER_CHANNELS (15) > 1, but a
+         * defined, harmless fallback (the reserved channel itself)
+         * rather than reading s_mpe_channels[15] out of bounds if this
+         * constant ever changed. */
+        return reserved;
     }
     uint8_t stolen_pad = s_mpe_channels[oldest_idx].owner_pad;
     printf("[expression] pad %u stealing pad %u's MPE channel %u (all %u member channels in use)\n", pad, stolen_pad,
