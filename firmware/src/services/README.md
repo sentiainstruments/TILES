@@ -4511,5 +4511,74 @@ not its code.
   a sub-view with no touch input) never included capture mode, even
   though it can sit genuinely armed with no touch at all while waiting
   for a tempo or the next beat -- added.
+- **Corrected: capture mode moved to plain diamond; DAW transport remote
+  disabled in sequencer mode; play/stop made fully per-lane.** Real
+  feedback: "no, capture mode is triggered by diamond in sequencer mode.
+  transport controls disable on sequencer mode... play and stop are
+  independent per active pattern. the only thing global is tap tempo or
+  midi tempo." Corrects the previous round's design in three connected
+  ways:
+  1. **Diamond's DAW-transport role (CC sends, record-arm hold, the
+     5-state LED language) is now entirely suspended while sequencer
+     mode is active.** In sequencer mode, plain diamond is a simple
+     click-toggle for capture mode (no hold needed at all -- shift alone
+     already tells it apart from the pattern bank); outside sequencer
+     mode, diamond is back to being purely the DAW remote, unchanged.
+     `s_diamond_shift_capture_armed`/`OP_SEQ_SHIFT_DIAMOND_CAPTURE_HOLD_MS`
+     from the previous round's hold-gating are gone -- no longer needed
+     once plain vs. shift alone cleanly separates the two meanings.
+     `handle_circle_tap()`'s old "exit capture mode on solo circle
+     release" override is also gone -- it only made sense back when
+     shift+diamond WAS the entry combo; circle/shift has no role in
+     capture mode's lifecycle at all anymore.
+  2. **Play/stop became fully per-lane.** New `s_seq_lane_running
+     [OP_SEQ_NUM_LANES]` -- "-"/"+" now start/stop only `s_seq_edit_lane`
+     (the lane currently shown), not all 4 at once. `seq_advance_clock()`
+     gates on this FIRST, ahead of even `clock.start_edge` -- a stopped
+     lane must never fire its step-0 note just because some other lane
+     (or a fresh external Start) happens to land while it's sitting
+     stopped. `midi_clock.h`'s own shared `running` flag is untouched in
+     contract -- still the ONE thing genuinely global ("tap tempo or
+     midi tempo") -- and is now DERIVED from this: `set_running(true)`
+     fires the moment any lane goes from stopped to running,
+     `set_running(false)` only once every lane has stopped
+     (`any_lane_running()`). `tiles_op_mode_sequencer_channel_is_
+     reserved()` and `tiles_op_mode_is_sequencer_active()` both switched
+     from the shared clock flag to this per-lane state too, for the same
+     reason: a stopped lane can't have a note sounding and doesn't need
+     its channel reserved; an external clock ticking with every lane
+     still stopped isn't actually "a pattern playing in the background."
+  3. **Pattern-bank colors corrected again**, real feedback after
+     actually testing the previous round's two-state (running/stopped)
+     design on hardware: "shift diamond does pattern opicker but only
+     full or enabeled patterns are on, rn i see all of them on... if a
+     pattern is empty there is no light but lights will appear if
+     pattern is filled or modified... patterns with notes are led on
+     respectively and emptu ones are off." Replaced with ONE unified
+     per-cell rule, checked most-specific-first: the cell that's both
+     this lane's own pick AND the lane you're viewing -- flashing red,
+     always, empty or not (you need to see your own cursor even on a
+     slot you're about to record into); any OTHER lane's own pick while
+     THAT lane is genuinely running (`s_seq_lane_running[lane]`) --
+     flashing white; any cell with real content (`pattern_has_content()`,
+     new) -- that lane's own dim identity color; otherwise -- off. No
+     more running/stopped branching in `render_pattern_bank()` at all.
+  One more real bug caught auditing all of this together: switching a
+  lane's alternative via the bank never reset `s_seq_current_step` for
+  that lane -- if the lane was currently stopped, `seq_advance_clock()`
+  never got a chance to normalize it (it now returns immediately while
+  `!s_seq_lane_running[lane]`, before reaching the pending-start logic
+  that used to do this implicitly), so a later "+" could have resumed
+  the NEWLY picked pattern from whatever step index the OLD one was left
+  at. Now reset explicitly at switch time. Also: capture mode now
+  requires a tempo to exist before it can be entered at all (mirroring
+  "+"'s own identical gate) -- without this, `seq_capture_advance_clock()`
+  would sit permanently inert with no tempo, so live touches would
+  audibly sound but never actually commit into the pattern, with no
+  indication anything was wrong; and capture mode now marks its lane
+  `s_seq_lane_running` on entry, so the freshly recorded pattern keeps
+  looping once you exit instead of silently freezing (capture's own
+  advance function never consulted that flag, so exiting used to hand
+  back to the normal engine with the lane still marked stopped).
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

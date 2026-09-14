@@ -309,29 +309,13 @@ static bool s_diamond_record_armed;
 static bool s_transport_playing;
 static bool s_transport_recording;
 /* True if SW6/circle was ALSO seen held during the current diamond
- * press -- see handle_diamond_transport()'s own comment for the
- * pattern-selector/capture-mode split this distinguishes from a plain
- * solo click. Same edge-latched-sticky reasoning as s_triangle_press_
- * was_shift. */
+ * press -- real feedback: "capture mode is triggered by diamond in
+ * sequencer mode... shift diamond does pattern opicker." In sequencer
+ * mode, this is what tells the pattern bank (shift held) apart from
+ * capture mode's own plain-click toggle (shift NOT held) -- see
+ * handle_diamond_transport()'s own release branch. Same edge-latched-
+ * sticky reasoning as s_triangle_press_was_shift. */
 static bool s_diamond_press_was_shift;
-/* Real feedback: "i want shift plus diamond in sequencer only to be the
- * pattern selector" -- shift+diamond now does two DIFFERENT things
- * depending on how long it's held, the same "short click vs. long hold"
- * shape plain diamond's own s_diamond_record_armed already uses one
- * level up: a quick shift+diamond TAP toggles the pattern bank (see
- * handle_diamond_transport()'s own release branch), while holding it
- * past this threshold instead arms sequencer capture mode -- freeing
- * shift+diamond's previous single meaning (capture mode, unconditional
- * on release) to make room for the pattern bank without losing capture
- * mode's own access point. Edge-latched true once armed, same shape as
- * s_diamond_record_armed. Shorter than OP_TRANSPORT_RECORD_ARM_HOLD_MS
- * (2000ms) -- entering capture mode doesn't itself start recording
- * anything (a note only gets captured once a pad is actually played), so
- * it doesn't need that same deliberately-long, hard-to-trigger-by-
- * accident threshold; still clearly longer than a quick tap. */
-#define OP_SEQ_SHIFT_DIAMOND_CAPTURE_HOLD_MS 400u
-static bool s_diamond_shift_capture_armed;
-static uint32_t s_diamond_shift_started_ms; /* when circle first joined THIS diamond press, not the press itself */
 
 /* Tap-tempo press tracking -- see this file's own "Master tap tempo"
  * section above. No conflict flag like diamond/triangle's own: a tap
@@ -496,6 +480,21 @@ static uint32_t s_seq_length_flash_ms;
  * by lane (0..OP_SEQ_NUM_LANES-1) everywhere below, never by
  * s_seq_edit_lane implicitly (that's an EDIT/display concern only; see
  * active_pattern() vs. pattern_for_lane() further down). */
+/* Real feedback: "play and stop are independent per active pattern. the
+ * only thing global is tap tempo or midi tempo." Each lane's own play/
+ * stop, toggled by "-"/"+" while that lane is the one being VIEWED (see
+ * handle_transport_and_length()'s own sequencer branch) -- switching
+ * which lane the bank shows you never touches this for any lane but the
+ * one you just switched away from/to. midi_clock.h's own tiles_midi_
+ * clock_set_running()/is_running() stays exactly what it already was
+ * (ONE shared flag for whether pulse_count is ticking at all, driven by
+ * whatever tempo source exists) -- this is a second, per-lane gate
+ * layered on top inside seq_advance_clock() below, not a replacement for
+ * it. Derived, not independent: tiles_midi_clock_set_running(true) is
+ * called the moment any lane here goes from stopped to running (so the
+ * shared pulse_count starts advancing if it wasn't already), and
+ * set_running(false) only once EVERY lane here has stopped. */
+static bool s_seq_lane_running[OP_SEQ_NUM_LANES];
 static uint8_t s_seq_current_step[OP_SEQ_NUM_LANES]; /* 0..23 */
 static bool s_seq_note_sounding[OP_SEQ_NUM_LANES];
 static uint8_t s_seq_sounding_pad[OP_SEQ_NUM_LANES]; /* 1..24, valid iff s_seq_note_sounding[lane] */
@@ -936,13 +935,14 @@ static void seq_start(void) {
      * skip the transport reset entirely when it's already running, only
      * touching the view-level state that's actually about THIS mode
      * becoming visible again, not about any lane's own playback.
-     * Scoped to s_seq_edit_lane only, not all OP_SEQ_NUM_LANES -- if the
-     * clock is genuinely stopped nothing is playing on ANY lane yet, and
-     * the moment it genuinely (re-)starts, seq_advance_clock()'s own
-     * clock.start_edge branch resets every lane correctly on its own (see
-     * that function below); this is purely this ONE lane's view/display
-     * state settling before that happens, same as it always was. */
-    if (!tiles_midi_clock_is_running()) {
+     * Checks s_seq_lane_running[s_seq_edit_lane] specifically now, not
+     * the shared clock -- real feedback: "play and stop are independent
+     * per active pattern." The lane you're about to look at might be
+     * stopped while a DIFFERENT lane keeps the shared clock ticking in
+     * the background; resetting THIS one's view is harmless exactly when
+     * it's the one actually stopped, regardless of what any other lane
+     * is doing. */
+    if (!s_seq_lane_running[s_seq_edit_lane]) {
         s_seq_current_step[s_seq_edit_lane] = 0u;
         s_seq_note_sounding[s_seq_edit_lane] = false;
         s_seq_step_started_at_pulse[s_seq_edit_lane] = 0u;
@@ -1041,12 +1041,33 @@ static void seq_handle_step_taps(uint32_t now_ms) {
  * loop) -- all OP_SEQ_NUM_LANES share one global transport (start/stop/
  * tempo), each just tracks its own phase against it independently. */
 static void seq_advance_clock(uint8_t lane, tiles_midi_clock_state_t clock) {
+    /* Real feedback: "play and stop are independent per active pattern."
+     * Checked FIRST, ahead of even start_edge -- a stopped lane must
+     * never fire its step-0 note just because some OTHER lane's start (or
+     * a fresh external MIDI Start) happens to land while this one is
+     * sitting stopped. When this lane is LATER started via "+" (see
+     * handle_transport_and_length()'s own sequencer branch), that already
+     * arms s_seq_pending_start[lane] itself -- the pending-start handling
+     * further down picks it up cleanly at that point, so nothing here
+     * needs to pre-sync a stopped lane's position in the meantime. */
+    if (!s_seq_lane_running[lane]) {
+        seq_end_current_note(lane);
+        return;
+    }
+
     if (clock.start_edge) {
         seq_reset(lane, clock.pulse_count);
         return;
     }
 
     if (!clock.running) {
+        /* The shared tempo itself stopped (e.g. a real external Stop) --
+         * silences this lane too even though ITS OWN s_seq_lane_running
+         * flag was never explicitly toggled off, and leaves that flag
+         * alone: the moment the tempo resumes, this lane picks back up
+         * on its own, matching how a real hardware sequencer slaved to
+         * an external clock keeps remembering which tracks were enabled
+         * through a pause. */
         seq_end_current_note(lane);
         return;
     }
@@ -1732,25 +1753,23 @@ static void scale_menu_exit(void) {
  * channels selectable by each row of 6 alternatives... make each row a
  * different color in seelctor to signify 4 lanes," later moved off
  * triangle entirely: "i want shift plus diamond in sequencer only to be
- * the pattern selector" (see handle_diamond_transport()'s own shift
- * branch -- a quick shift+diamond click toggles this, a longer hold
- * arms sequencer capture mode instead, freeing shift+triangle for the
- * new per-pattern scale picker -- see handle_triangle_click()'s own
- * comment). Every one of the 24 pads is a real, individually selectable
- * slot -- row = LANE (see this file's own "Multi-lane pattern bank"
- * section), column = which of that lane's 6 alternatives. Tapping a cell
- * does two things at once: picks that alternative as the lane's
- * currently PLAYING pattern (s_seq_active_alt[lane]), and makes that
- * lane the one shown/edited in the main step view (s_seq_edit_lane) --
- * one gesture unambiguously specifies both "which lane" and "which
- * alternative for it," so no separate lane-select gesture is needed.
- * Visual language, standardized further per real feedback: "lets
- * standardize colors in sequencer. playing selected pattern is red, off
- * patterns are not led enabeled. only when sequence is entered but not
- * playing the pattern has the correct color prevousely defined. the
- * playing but not selected pattern flashes white. remeber 4 patterns can
- * play at once" -- see render_pattern_bank()'s own comment for the full
- * two-state (transport running vs. stopped) breakdown this produced. */
+ * the pattern selector... capture mode is triggered by diamond in
+ * sequencer mode" (see handle_diamond_transport()'s own release branch
+ * -- shift+diamond toggles this bank; plain diamond, no shift, toggles
+ * capture mode instead -- and shift+triangle for the new per-pattern
+ * scale picker, see handle_triangle_click()'s own comment). Every one of
+ * the 24 pads is a real, individually selectable slot -- row = LANE (see
+ * this file's own "Multi-lane pattern bank" section), column = which of
+ * that lane's 6 alternatives. Tapping a cell does two things at once:
+ * picks that alternative as the lane's currently PLAYING pattern
+ * (s_seq_active_alt[lane]), and makes that lane the one shown/edited in
+ * the main step view (s_seq_edit_lane) -- one gesture unambiguously
+ * specifies both "which lane" and "which alternative for it," so no
+ * separate lane-select gesture is needed.
+ * Visual language, standardized further per real feedback -- see
+ * render_pattern_bank()'s own comment for the full per-cell breakdown
+ * (selected = red flash; playing elsewhere = white flash; has content =
+ * that lane's own dim color; genuinely empty = off). */
 #define OP_PATTERN_BANK_FLASH_MS 300u
 /* Four maximally-distinguishable hues, deliberately avoiding red (reserved
  * for "selected" above) and Sentia's own brand magenta (reserved
@@ -1801,33 +1820,41 @@ static void lane_color(uint8_t lane, float *r, float *g, float *b) {
     }
 }
 
-/* Real feedback: "lets standardize colors in sequencer. playing selected
- * pattern is red, off patterns are not led enabeled. only when sequence
- * is entered but not playing the pattern has the correct color
- * prevousely defined. the playing but not selected pattern flashes
- * white. remeber 4 patterns can play at once."
- * Two entirely different readouts depending on whether the transport is
- * actually running, since "playing" vs. "not playing" per LANE is a
- * meaningless distinction while nothing is running on ANY lane at all:
- * - Transport STOPPED: "the correct color previously defined" -- exactly
- *   this function's original scheme, unchanged (each lane's own
- *   identity color, dim, for its available alternatives; hard red flash
- *   for each lane's own current pick) -- this is browsing/picking mode,
- *   not a playback readout.
- * - Transport RUNNING: becomes a pure "what's sounding right now, across
- *   all 4 simultaneous lanes" readout instead. Solid red for the ONE
- *   cell that is BOTH this lane's own playing alternative AND the lane
- *   currently shown in the main step view (s_seq_edit_lane) -- "you are
- *   here, and it's playing." Flashing white for every OTHER lane's own
- *   playing alternative -- "also playing, but not what you're looking
- *   at right now" (the real reason this needs its own signal: up to 4 of
- *   these can be lit at once, on rows you aren't currently viewing).
- *   Every non-playing alternative goes fully dark in this state -- lane
- *   identity color is a browsing aid, not meaningful once the readout's
- *   whole point is "what's actually sounding." */
+static bool pattern_has_content(const op_seq_pattern_t *pat) {
+    for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
+        if (pat->step_armed[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Real feedback: "shift diamond does pattern opicker but only full or
+ * enabeled patterns are on, rn i see all of them on, the idea is for 4
+ * patterns to be able to run at once on different signal channels. if a
+ * pattern is empty there is no light but lights will appear if pattern
+ * is filled or modified. the flashing red indicator only applies for the
+ * selected patten at the time and flashing white appeards for the
+ * playing but not selectedd pattern. patterns with notes are led on
+ * respectively and emptu ones are off." One unified rule now (the
+ * previous round's separate stopped/running display was wrong -- real
+ * feedback corrected it), checked per cell, most-specific first:
+ * - The ONE cell that is both this lane's own current pick AND the lane
+ *   currently shown in the main step view (s_seq_edit_lane) -- hard
+ *   on/off RED FLASH, always, regardless of whether it has content yet
+ *   (you need to see your own cursor even on a still-empty slot you're
+ *   about to record into).
+ * - Any OTHER lane's own current pick, while that lane is actually
+ *   RUNNING (s_seq_lane_running[lane], independent per lane -- real
+ *   feedback: "play and stop are independent per active pattern...
+ *   remeber 4 patterns can play at once") -- FLASHING WHITE. Up to 3 of
+ *   these can be lit at once, on rows you aren't currently viewing.
+ * - Any cell with real content (pattern_has_content() above), whether or
+ *   not it's currently picked for its lane -- that lane's own dim
+ *   identity color (lane_color()).
+ * - Otherwise (genuinely empty, not selected, not playing) -- OFF. */
 static void render_pattern_bank(uint32_t now_ms) {
     bool flash_on = ((now_ms / OP_PATTERN_BANK_FLASH_MS) % 2u) == 0u;
-    bool transport_running = tiles_midi_clock_is_running();
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         uint8_t lane = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
         float lr, lg, lb;
@@ -1836,20 +1863,16 @@ static void render_pattern_bank(uint32_t now_ms) {
             uint8_t alt = (uint8_t)(col - TILES_GRID_MIN_COL);
             uint8_t pad = board_pad_for_row_col(row, col);
             bool is_active = (alt == s_seq_active_alt[lane]);
-            if (transport_running) {
-                if (is_active && lane == s_seq_edit_lane) {
-                    tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 0.0f, 0.0f);
-                } else if (is_active) {
-                    float level = flash_on ? 1.0f : 0.0f;
-                    tiles_lighting_set_standby_pad_rgb(pad, level, level, level);
-                } else {
-                    tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
-                }
-            } else if (is_active) {
+            if (is_active && lane == s_seq_edit_lane) {
                 float level = flash_on ? 1.0f : 0.0f;
                 tiles_lighting_set_standby_pad_rgb(pad, level, 0.0f, 0.0f);
-            } else {
+            } else if (is_active && s_seq_lane_running[lane]) {
+                float level = flash_on ? 1.0f : 0.0f;
+                tiles_lighting_set_standby_pad_rgb(pad, level, level, level);
+            } else if (pattern_has_content(&s_seq_pattern[lane][alt])) {
                 tiles_lighting_set_standby_pad_rgb(pad, lr, lg, lb);
+            } else {
+                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
             }
         }
     }
@@ -1885,6 +1908,19 @@ static void handle_pattern_bank_taps(void) {
                      * original single-lane bank already established. */
                     s_seq_ratchet_remaining[lane] = 0u;
                     s_seq_active_alt[lane] = alt;
+                    /* Real bug caught auditing this: s_seq_current_step
+                     * belongs to whichever pattern was PREVIOUSLY active
+                     * on this lane, not the one just switched to -- if
+                     * this lane is currently stopped, seq_advance_clock()
+                     * never gets a chance to normalize it (that function
+                     * returns immediately while !s_seq_lane_running[lane],
+                     * before ever reaching pending-start handling), so a
+                     * LATER "+" press would resume the NEW pattern from
+                     * whatever step index the OLD one happened to be left
+                     * at -- reset explicitly here so the newly-picked
+                     * pattern always starts clean from step 0 regardless
+                     * of when (or whether) this lane is next started. */
+                    s_seq_current_step[lane] = 0u;
                     /* Quantizes the swap to the next beat boundary via
                      * the SAME pending-start mechanism a fresh Start/
                      * resume already uses (see seq_advance_clock()'s own
@@ -1895,7 +1931,11 @@ static void handle_pattern_bank_taps(void) {
                      * from the ONE call tiles_op_mode_scan() already made
                      * this scan (that function consumes it as a side
                      * effect -- see seq_advance_clock()'s own header
-                     * comment). */
+                     * comment). Only actually consumed if this lane is
+                     * currently running -- otherwise harmlessly inert
+                     * until a future "+" press starts it, at which point
+                     * the step-0 reset just above is what makes that
+                     * first playthrough correct. */
                     s_seq_pending_start[lane] = true;
                     s_seq_pending_restart[lane] = true;
                     printf("[op_mode] lane %u pattern -> %u\n", (unsigned)lane, (unsigned)alt);
@@ -2159,27 +2199,29 @@ static void seq_capture_end_sounding_note(void) {
     s_seq_capture_sounding_pad = 0u;
 }
 
+/* Only ever called while s_active_mode is ALREADY OP_MODE_SEQUENCER --
+ * see handle_diamond_transport()'s own release branch, which gates this
+ * whole call behind sequencer_active. Real feedback: "capture mode is
+ * triggered by diamond in sequencer mode" -- unlike an earlier round,
+ * there's no longer a "jump into capture from any mode" gesture to
+ * support, so this no longer needs to force a mode switch itself. */
 static void seq_capture_mode_enter(void) {
-    if (s_active_mode != OP_MODE_SEQUENCER) {
-        set_active_mode(OP_MODE_SEQUENCER);
-    }
-    /* Defensive: a short shift+diamond tap (pattern bank) and a long
-     * shift+diamond hold (this) are two separate press cycles on the
-     * SAME combo now -- nothing stops tapping the bank open, releasing,
-     * then immediately holding shift+diamond again before ever closing
-     * it. Without this, capture mode would silently start taking over
+    /* Defensive: shift+diamond (pattern bank) and plain diamond (this)
+     * are two separate, independent gestures now -- nothing stops
+     * opening the bank, releasing, then a later PLAIN diamond click
+     * entering capture mode without ever closing the bank first.
+     * Without this, capture mode would silently start taking over
      * s_seq_edit_lane's background playback while the VISIBLE view (and
      * touch routing) stayed on the pattern bank, since tiles_op_mode_
      * scan()'s dispatch checks s_pattern_bank_visible before s_seq_
      * capture_mode_active. Closing it first keeps the two mutually
-     * exclusive, same as they always were back when they lived on
-     * different buttons entirely. */
+     * exclusive. */
     if (s_pattern_bank_visible) {
         pattern_bank_exit();
     }
     /* Same defensive reasoning, same reachability gap, for the per-
      * pattern scale picker (shift+triangle) instead of the pattern bank
-     * -- open it, release, then hold shift+diamond long enough to arm
+     * -- open it, release, then a later plain diamond click enters
      * capture mode without ever closing the picker first, and capture
      * mode would start swapping the scale AGAIN underneath the picker's
      * own already-in-progress swap (see scale_menu_enter()'s own
@@ -2190,9 +2232,9 @@ static void seq_capture_mode_enter(void) {
         scale_menu_exit();
     }
     /* Same reachability gap a third time: a per-step pitch/probability/
-     * ratchet edit (hold a step) can be left open, then shift+diamond
-     * held long enough to arm capture mode without ever backing out of
-     * it first -- seq_handle_step_taps() (and so normal step taps) never
+     * ratchet edit (hold a step) can be left open, then a later plain
+     * diamond click enters capture mode without ever backing out of it
+     * first -- seq_handle_step_taps() (and so normal step taps) never
      * runs while this is active, but the edit view itself would keep
      * showing and keep consuming touches instead of capture mode's
      * note-input, since tiles_op_mode_scan()'s dispatch checks s_seq_
@@ -2215,6 +2257,17 @@ static void seq_capture_mode_enter(void) {
     tiles_note_map_set_scale(TILES_SCALE_CHROMATIC);
     s_seq_capture_step_armed = false;
     s_seq_capture_sounding_pad = 0u;
+    /* Real bug caught auditing this: seq_capture_advance_clock() only
+     * ever checks the SHARED clock's own running state, never this
+     * lane's own s_seq_lane_running -- so exiting capture mode used to
+     * hand back to the normal seq_advance_clock() with this lane still
+     * marked stopped, silently freezing the pattern you just recorded
+     * the instant you left. Marking it running here (mirroring exactly
+     * what "+" already does for a fresh start -- see handle_transport_
+     * and_length()'s own sequencer branch) is what makes the freshly
+     * captured pattern keep looping once you exit. */
+    s_seq_lane_running[s_seq_edit_lane] = true;
+    tiles_midi_clock_set_running(true);
     /* Same quantized-start behavior seq_start() itself already
      * establishes for entering sequencer mode fresh -- waits for the
      * next beat boundary (see seq_capture_advance_clock() below) rather
@@ -2525,6 +2578,23 @@ static void handle_triangle_click(void) {
  * sending transport controls to daw. look online for how other things
  * do that like the novation lounch key."
  *
+ * Real feedback, later: "capture mode is triggered by diamond in
+ * sequencer mode. transport controls disable on sequencer mode." The
+ * DAW-transport-remote role below (CC sends, record-arm hold, the
+ * 5-state LED language) is now ENTIRELY SUSPENDED while sequencer mode
+ * is active -- diamond has a completely different job there instead:
+ * plain click toggles sequencer capture mode (see this file's own
+ * "Sequencer capture mode" section) for s_seq_edit_lane, no hold needed
+ * at all (a previous round briefly hold-gated this against shift+
+ * diamond's pattern-bank meaning, back when the two shared one release
+ * condition -- no longer needed now that plain vs. shift alone cleanly
+ * separates them). Shift+diamond in sequencer mode stays the pattern
+ * bank toggle, unconditional on hold duration for the same reason.
+ * Outside sequencer mode, diamond's DAW-transport role is fully back to
+ * how it was: neither capture mode nor the pattern bank apply there at
+ * all (sequencer-only concepts), so shift+diamond outside sequencer is
+ * simply a no-op.
+ *
  * That research changed the actual wire approach, not just the
  * troubleshooting: Ableton's own "Synchronizing via MIDI" docs confirm
  * System Realtime Start/Stop DO drive its transport, but only once that
@@ -2601,13 +2671,13 @@ static void handle_triangle_click(void) {
 static void handle_diamond_transport(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
+    bool sequencer_active = (s_active_mode == OP_MODE_SEQUENCER);
 
     if (held && !s_diamond_was_held) {
         s_diamond_press_had_conflict = false;
         s_diamond_press_start_ms = now_ms;
         s_diamond_record_armed = false;
         s_diamond_press_was_shift = false;
-        s_diamond_shift_capture_armed = false;
     }
     if (held && tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID)) {
         s_diamond_press_had_conflict = true;
@@ -2620,59 +2690,47 @@ static void handle_diamond_transport(uint32_t now_ms) {
              * comment. */
             s_diamond_press_had_conflict = true;
         } else {
-            /* Real feedback: "make a sequencer capture mode when sifht
-             * and diamoind clicked together," later split into a short-
-             * tap/long-hold pair -- see s_diamond_shift_capture_armed's
-             * own comment. */
-            if (!s_diamond_press_was_shift) {
-                /* The hold-duration check just below is timed from HERE
-                 * (when the combo itself started), not from
-                 * s_diamond_press_start_ms (diamond's own solo press) --
-                 * diamond can sit held alone for a while before circle
-                 * ever joins (nothing stops that), and using the wrong
-                 * anchor would let a late-joining shift instantly read as
-                 * already past the hold threshold. */
-                s_diamond_shift_started_ms = now_ms;
-            }
             s_diamond_press_was_shift = true;
         }
     }
-    if (held && s_diamond_press_was_shift && !s_diamond_press_had_conflict && !s_diamond_shift_capture_armed &&
-        (now_ms - s_diamond_shift_started_ms) >= OP_SEQ_SHIFT_DIAMOND_CAPTURE_HOLD_MS) {
-        s_diamond_shift_capture_armed = true;
-    }
-    if (held && !s_diamond_press_had_conflict && !s_diamond_press_was_shift && !s_seq_capture_mode_active &&
+    /* Record-arm only applies OUTSIDE sequencer mode now -- real
+     * feedback: "transport controls disable on sequencer mode" (see this
+     * function's own header comment). */
+    if (held && !sequencer_active && !s_diamond_press_had_conflict && !s_diamond_press_was_shift &&
         !s_diamond_record_armed && (now_ms - s_diamond_press_start_ms) >= OP_TRANSPORT_RECORD_ARM_HOLD_MS) {
         s_diamond_record_armed = true;
     }
 
     if (!held && s_diamond_was_held) {
         if (!s_diamond_press_had_conflict) {
-            if (s_seq_capture_mode_active) {
-                /* Real feedback: "exit into sequencer is by shift or by
-                 * diamond" -- a solo diamond release exits capture mode
-                 * just as well as the shift+diamond combo that entered
-                 * it, overriding diamond's normal transport meaning for
-                 * as long as capture mode owns it. handle_circle_tap()
-                 * has the identical override for a solo circle release. */
-                seq_capture_mode_exit();
-            } else if (s_diamond_press_was_shift) {
-                /* Real feedback: "i want shift plus diamond in sequencer
-                 * only to be the pattern selector" -- a quick shift+
-                 * diamond click toggles the pattern bank (sequencer mode
-                 * only -- there is no pattern bank to open anywhere
-                 * else); holding it past OP_SEQ_SHIFT_DIAMOND_CAPTURE_
-                 * HOLD_MS instead arms capture mode, unchanged from
-                 * before other than which release condition reaches it
-                 * -- see s_diamond_shift_capture_armed's own comment. */
-                if (s_diamond_shift_capture_armed) {
-                    seq_capture_mode_enter();
-                } else if (s_active_mode == OP_MODE_SEQUENCER) {
+            if (sequencer_active) {
+                /* Real feedback: "capture mode is triggered by diamond
+                 * in sequencer mode... shift diamond does pattern
+                 * picker." Plain click is a simple toggle now -- no hold
+                 * needed at all, since shift alone already cleanly
+                 * separates this from the pattern bank below. */
+                if (s_diamond_press_was_shift) {
                     if (s_pattern_bank_visible) {
                         pattern_bank_exit();
                     } else {
                         pattern_bank_enter();
                     }
+                } else if (s_seq_capture_mode_active) {
+                    seq_capture_mode_exit();
+                } else if (tiles_midi_clock_tap_tempo_established() || tiles_midi_clock_external_active(now_ms)) {
+                    /* Real gap caught auditing this: without this gate,
+                     * capture mode could be entered with no tempo at all
+                     * -- seq_capture_advance_clock() would then just sit
+                     * inert forever (it needs clock.running, same as "+"
+                     * already requires below), so live touches would
+                     * audibly sound but NEVER actually commit into the
+                     * pattern, with no indication anything was wrong.
+                     * Same tempo-exists check "+" already uses one level
+                     * up (see handle_transport_and_length()'s own
+                     * sequencer branch) -- a diamond click is simply a
+                     * no-op until a tempo genuinely exists, exactly like
+                     * "+" already is. */
+                    seq_capture_mode_enter();
                 }
             } else if (s_diamond_record_armed) {
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 127u);
@@ -2701,45 +2759,48 @@ static void handle_diamond_transport(uint32_t now_ms) {
         }
         s_diamond_record_armed = false;
         s_diamond_press_was_shift = false;
-        s_diamond_shift_capture_armed = false;
     }
 
-    /* Five-state LED language -- real feedback: "armed record and
-     * stopped is blik twice and pause then again, play is on, stopped
-     * is off. record is pulsing in the same fashon as the deep sleep
-     * for shift button," later joined by "this makes the diamond flash
-     * glow" for capture mode. Checked most-specific-state-first:
-     * capture mode (a distinct modal context, not a transport state at
-     * all) overrides everything else; armed (a transient hold-in-
-     * progress state) overrides recording/playing; recording overrides
-     * playing (both can be true at once -- recording implies playing,
-     * see s_transport_recording's own comment -- and recording's own
-     * pulse is what should show). Capture's own pulse reuses menu_
-     * selected_pulse_level() (this file's own established "selected"
-     * pulse, e.g. the scale picker's) -- moderate speed, deliberately
-     * distinguishable from both the armed hard blink and recording's
-     * much slower deep-sleep-style breathing. */
-    float led_level;
-    if (s_seq_capture_mode_active) {
-        led_level = menu_selected_pulse_level(now_ms);
-    } else if (s_diamond_record_armed) {
-        uint32_t cycle_ms =
-            OP_TRANSPORT_ARMED_BLINK_ON_MS * 2u + OP_TRANSPORT_ARMED_BLINK_GAP_MS + OP_TRANSPORT_ARMED_PAUSE_MS;
-        uint32_t t = now_ms % cycle_ms;
-        bool on = (t < OP_TRANSPORT_ARMED_BLINK_ON_MS) ||
-                  (t >= OP_TRANSPORT_ARMED_BLINK_ON_MS + OP_TRANSPORT_ARMED_BLINK_GAP_MS &&
-                   t < OP_TRANSPORT_ARMED_BLINK_ON_MS * 2u + OP_TRANSPORT_ARMED_BLINK_GAP_MS);
-        led_level = on ? 1.0f : 0.0f;
-    } else if (s_transport_recording) {
-        float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
-        float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
-        led_level = OP_TRANSPORT_RECORDING_PULSE_MIN + (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
-    } else if (s_transport_playing) {
-        led_level = OP_TRANSPORT_LED_PLAYING_LEVEL;
+    if (sequencer_active) {
+        /* Real feedback: "this makes the diamond flash glow" for capture
+         * mode, still true -- reuses menu_selected_pulse_level() (this
+         * file's own established "selected" pulse, e.g. the scale
+         * picker's). No DAW-transport states apply here at all anymore
+         * (see this function's own header comment), so there's nothing
+         * else to check -- off otherwise. */
+        float led_level = s_seq_capture_mode_active ? menu_selected_pulse_level(now_ms) : 0.0f;
+        tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, led_level);
     } else {
-        led_level = OP_TRANSPORT_LED_STOPPED_LEVEL;
+        /* Four-state DAW-transport LED language -- real feedback: "armed
+         * record and stopped is blik twice and pause then again, play is
+         * on, stopped is off. record is pulsing in the same fashon as
+         * the deep sleep for shift button." Checked most-specific-state-
+         * first: armed (a transient hold-in-progress state) overrides
+         * recording/playing; recording overrides playing (both can be
+         * true at once -- recording implies playing, see s_transport_
+         * recording's own comment -- and recording's own pulse is what
+         * should show). */
+        float led_level;
+        if (s_diamond_record_armed) {
+            uint32_t cycle_ms =
+                OP_TRANSPORT_ARMED_BLINK_ON_MS * 2u + OP_TRANSPORT_ARMED_BLINK_GAP_MS + OP_TRANSPORT_ARMED_PAUSE_MS;
+            uint32_t t = now_ms % cycle_ms;
+            bool on = (t < OP_TRANSPORT_ARMED_BLINK_ON_MS) ||
+                      (t >= OP_TRANSPORT_ARMED_BLINK_ON_MS + OP_TRANSPORT_ARMED_BLINK_GAP_MS &&
+                       t < OP_TRANSPORT_ARMED_BLINK_ON_MS * 2u + OP_TRANSPORT_ARMED_BLINK_GAP_MS);
+            led_level = on ? 1.0f : 0.0f;
+        } else if (s_transport_recording) {
+            float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
+            float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
+            led_level = OP_TRANSPORT_RECORDING_PULSE_MIN +
+                        (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
+        } else if (s_transport_playing) {
+            led_level = OP_TRANSPORT_LED_PLAYING_LEVEL;
+        } else {
+            led_level = OP_TRANSPORT_LED_STOPPED_LEVEL;
+        }
+        tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, led_level);
     }
-    tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, led_level);
 
     s_diamond_was_held = held;
 }
@@ -2807,22 +2868,24 @@ static void handle_circle_tap(uint32_t now_ms) {
         (tiles_button_is_pressed(TILES_MINUS_BUTTON_ID) || tiles_button_is_pressed(TILES_PLUS_BUTTON_ID) ||
          tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) || any_pad_touched())) {
         /* This hold became a length-adjust/ratchet-edit combo, or the
-         * sequencer-capture-mode combo (real feedback: "shift and
-         * diamoind clicked together" -- diamond added to this check
-         * for that reason, same "circle pressed first, then the other
-         * button joins" ordering length-adjust already needed this
-         * exact fix for) -- cancel candidacy so it doesn't ALSO
-         * register as a spurious tap. */
+         * pattern-bank combo (shift+diamond -- diamond joining mid-hold
+         * still means a genuine 2-button combo is forming here, same
+         * "circle pressed first, then the other button joins" ordering
+         * length-adjust already needed this exact fix for, even though
+         * shift+diamond's own meaning moved to the pattern bank) --
+         * cancel candidacy so it doesn't ALSO register as a spurious tap. */
         s_circle_press_pending_tap = false;
     }
 
     if (!held && s_circle_was_held) {
-        if (s_seq_capture_mode_active) {
-            /* Real feedback: "exit into sequencer is by shift or by
-             * diamond" -- see handle_diamond_transport()'s own matching
-             * comment for the solo-diamond half of this. */
-            seq_capture_mode_exit();
-        } else if (s_circle_press_pending_tap) {
+        /* Real feedback: "capture mode is triggered by diamond in
+         * sequencer mode" -- circle/shift is no longer part of capture
+         * mode's own entry or exit at all (a previous round's "exit via
+         * shift or diamond" convenience only made sense back when shift+
+         * diamond WAS the entry combo); a solo circle release just
+         * registers a tap-tempo tap like normal now, same as any other
+         * time. */
+        if (s_circle_press_pending_tap) {
             tiles_midi_clock_register_tap(s_circle_press_ms);
         }
         /* A plain-circle-click-while-the-pattern-picker-was-open gesture
@@ -2833,6 +2896,15 @@ static void handle_circle_tap(uint32_t now_ms) {
     }
 
     s_circle_was_held = held;
+}
+
+static bool any_lane_running(void) {
+    for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
+        if (s_seq_lane_running[lane]) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /* SW1/SW2 ("-"/"+") -- sequencer mode's own transport/length (unchanged),
@@ -2852,7 +2924,17 @@ static void handle_transport_and_length(uint32_t now_ms) {
     bool minus_held = tiles_button_is_pressed(TILES_MINUS_BUTTON_ID);
     bool plus_held = tiles_button_is_pressed(TILES_PLUS_BUTTON_ID);
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
-    bool active = (s_active_mode == OP_MODE_SEQUENCER) && s_seq_edit_mode == OP_SEQ_EDIT_NONE;
+    /* Also excludes capture mode now -- found auditing this round's
+     * changes: capture mode already owns s_seq_edit_lane exclusively via
+     * its own seq_capture_advance_clock() (see that function and this
+     * file's own dispatch loop), and it ALSO happens to consume s_seq_
+     * pending_start/_restart, the exact same fields "+" writes to below
+     * -- an in-capture "+" press would have silently restarted the live
+     * recording from step 0 mid-take instead of doing nothing or
+     * something clearly intentional. Same "exclusive sub-state suspends
+     * transport/length" treatment per-step edit already gets. */
+    bool active =
+        (s_active_mode == OP_MODE_SEQUENCER) && s_seq_edit_mode == OP_SEQ_EDIT_NONE && !s_seq_capture_mode_active;
     bool guitar_active = (s_active_mode == OP_MODE_GUITAR);
 
     if (active && minus_held && !s_minus_was_held && circle_held) {
@@ -2876,29 +2958,27 @@ static void handle_transport_and_length(uint32_t now_ms) {
         if (active && !s_minus_used_as_combo) {
             /* Real feedback: "we need a button that starts and stops
              * sequencer... play position of head should reset when stop
-             * click twice." tiles_midi_clock_is_running() reflects
-             * whatever it was for this ENTIRE press (transport state
-             * can't change from a button this file itself doesn't touch
-             * anywhere else), so this cleanly distinguishes "stop while
-             * playing" (pause in place) from "stop while ALREADY
-             * stopped" (a second stop -- Ableton-style rewind to the top,
-             * without resuming playback). */
-            /* Global transport -- minus/plus stop/start/rewind ALL
-             * OP_SEQ_NUM_LANES at once (they share one tempo/transport,
-             * see this file's own "Multi-lane pattern bank" section);
-             * only per-lane CONTENT (which alternative, channel, steps)
-             * is independent. */
-            if (tiles_midi_clock_is_running()) {
-                tiles_midi_clock_set_running(false);
-                for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
-                    s_seq_pending_start[lane] = false;
+             * click twice," later refined: "play and stop are
+             * independent per active pattern. the only thing global is
+             * tap tempo or midi tempo." Operates on s_seq_edit_lane only
+             * -- s_seq_lane_running[edit_lane] (not the shared clock)
+             * decides "stop while playing" (pause in place) from "stop
+             * while ALREADY stopped" (a second stop -- Ableton-style
+             * rewind to the top, without resuming playback), scoped to
+             * THIS lane; the other 3 are untouched either way. */
+            uint8_t lane = s_seq_edit_lane;
+            if (s_seq_lane_running[lane]) {
+                s_seq_lane_running[lane] = false;
+                s_seq_pending_start[lane] = false;
+                /* Only turns off the shared pulse_count once EVERY lane
+                 * has stopped -- see s_seq_lane_running's own comment. */
+                if (!any_lane_running()) {
+                    tiles_midi_clock_set_running(false);
                 }
             } else {
-                for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
-                    s_seq_current_step[lane] = 0u;
-                    s_seq_note_sounding[lane] = false;
-                    s_seq_pending_start[lane] = false;
-                }
+                s_seq_current_step[lane] = 0u;
+                s_seq_note_sounding[lane] = false;
+                s_seq_pending_start[lane] = false;
             }
         } else if (guitar_active) {
             /* Real feedback: "-+ change frets up and down." One fret per
@@ -2915,7 +2995,8 @@ static void handle_transport_and_length(uint32_t now_ms) {
     }
     if (!plus_held && s_plus_was_held) {
         if (active && !s_plus_used_as_combo) {
-            if (tiles_midi_clock_is_running()) {
+            uint8_t lane = s_seq_edit_lane;
+            if (s_seq_lane_running[lane]) {
                 /* Real feedback: "if playing and play again it starts
                  * from the top again" -- a retrigger, not a no-op.
                  * Re-arming pending-start quantizes the restart to the
@@ -2923,29 +3004,30 @@ static void handle_transport_and_length(uint32_t now_ms) {
                  * (see seq_advance_clock()), rather than snapping to step
                  * 0 mid-beat. pending_restart=true is what makes this
                  * land back on step 0 rather than replaying wherever the
-                 * playhead already was. */
-                for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
-                    s_seq_pending_start[lane] = true;
-                    s_seq_pending_restart[lane] = true;
-                }
+                 * playhead already was. Scoped to THIS lane. */
+                s_seq_pending_start[lane] = true;
+                s_seq_pending_restart[lane] = true;
             } else if (tiles_midi_clock_tap_tempo_established() || tiles_midi_clock_external_active(now_ms)) {
                 /* Only meaningful once a tempo actually exists --
-                 * otherwise this would set `running` true with nothing
-                 * to ever advance pulse_count, an inert state rather
-                 * than "playing." s_seq_pending_start quantizes the
-                 * resume to the next beat boundary instead of fast-
+                 * otherwise this would set this lane running with
+                 * nothing to ever advance pulse_count, an inert state
+                 * rather than "playing." s_seq_pending_start quantizes
+                 * the resume to the next beat boundary instead of fast-
                  * forwarding through however many pulses accumulated
                  * while stopped (pulse_count keeps advancing even while
                  * !running -- see midi_clock.h's own header).
                  * pending_restart=false: real feedback: "when stopped
                  * makes play" -- resumes exactly where a plain stop left
                  * the playhead (or step 0, if a double-stop rewound it
-                 * first), never resetting position on its own. */
+                 * first), never resetting position on its own. Sets the
+                 * SHARED clock running too (harmless no-op if some other
+                 * lane already had it running) -- see s_seq_lane_
+                 * running's own comment for why that's still needed
+                 * alongside this lane's own flag. */
+                s_seq_lane_running[lane] = true;
                 tiles_midi_clock_set_running(true);
-                for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
-                    s_seq_pending_start[lane] = true;
-                    s_seq_pending_restart[lane] = false;
-                }
+                s_seq_pending_start[lane] = true;
+                s_seq_pending_restart[lane] = false;
             }
         } else if (guitar_active) {
             /* tiles_note_map_set_guitar_fret_offset() clamps internally
@@ -2992,7 +3074,6 @@ void tiles_op_mode_init(void) {
     s_diamond_was_held = false;
     s_diamond_press_had_conflict = false;
     s_diamond_press_was_shift = false;
-    s_diamond_shift_capture_armed = false;
     s_diamond_record_armed = false;
     s_transport_playing = false;
     s_transport_recording = false;
@@ -3021,6 +3102,7 @@ void tiles_op_mode_init(void) {
          * unchanged for anyone never touching the bank. */
         s_seq_lane_channel[lane] =
             (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + TILES_MIDI_MPE_NUM_MEMBER_CHANNELS - 1u - lane);
+        s_seq_lane_running[lane] = false;
         s_seq_current_step[lane] = 0u;
         s_seq_note_sounding[lane] = false;
         s_seq_step_started_at_pulse[lane] = 0u;
@@ -3250,8 +3332,15 @@ bool tiles_op_mode_is_sequencer_active(void) {
      * tiles_op_mode_scan()'s own other_feature_owns_input() branch
      * still correctly ends whatever's sounding the moment standby DOES
      * engage), but directly related: a background pattern now keeps
-     * its own longer runway before that engages at all. */
-    return s_active_mode == OP_MODE_SEQUENCER || tiles_midi_clock_is_running();
+     * its own longer runway before that engages at all. Checks any_lane_
+     * running() now, not tiles_midi_clock_is_running() -- real feedback:
+     * "play and stop are independent per active pattern." An external
+     * clock can be present and ticking with every lane still individually
+     * stopped (nothing started via "+" yet); this function's own point is
+     * "is a pattern genuinely audible in the background," which any_lane_
+     * running() answers directly instead of through the shared clock's
+     * derived flag. */
+    return s_active_mode == OP_MODE_SEQUENCER || any_lane_running();
 }
 
 bool tiles_op_mode_has_menu_open(void) {
@@ -3283,15 +3372,17 @@ bool tiles_op_mode_has_menu_open(void) {
  * A query rather than a single return value -- once all 4 lanes can be
  * simultaneously reserved (not just one pattern's worth), "the reserved
  * channel" stopped being a single number; claim_mpe_channel() asks this
- * once per CANDIDATE channel instead. Always false when the sequencer
- * isn't genuinely running, so claim_mpe_channel() can treat that as
- * "nothing reserved" with no special-casing needed there. */
+ * once per CANDIDATE channel instead. Checks each lane's OWN s_seq_lane_
+ * running flag now, not just whether the shared clock is ticking at all
+ * -- real feedback: "play and stop are independent per active pattern."
+ * A STOPPED lane can't have a note sounding (seq_advance_clock() ends it
+ * the instant that lane stops, see that function's own comment) and
+ * won't fire a new one, so its channel is genuinely free for live touch
+ * to use -- reserving it anyway would just shrink live polyphony for no
+ * real reason. */
 bool tiles_op_mode_sequencer_channel_is_reserved(uint8_t channel) {
-    if (!tiles_midi_clock_is_running()) {
-        return false;
-    }
     for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
-        if (s_seq_lane_channel[lane] == channel) {
+        if (s_seq_lane_running[lane] && s_seq_lane_channel[lane] == channel) {
             return true;
         }
     }
