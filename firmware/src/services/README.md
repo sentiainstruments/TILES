@@ -4413,5 +4413,61 @@ not its code.
   actual MIDI note is always fully separated by channel) -- not chased
   here, the same tradeoff the single-background-lane version already
   accepted.
+- **Pattern bank moved to shift+diamond; shift+triangle became a
+  per-pattern scale picker.** Real feedback: "i want shift plus diamond
+  in sequencer only to be the pattern selector. shift plus triangle in
+  [sequencer mode] scale selector for that specific pattern." Frees
+  shift+triangle to become the scale picker UNCONDITIONALLY across every
+  mode (no more per-mode branch in `handle_triangle_click()`), while
+  shift+diamond in sequencer mode now opens the pattern bank instead.
+  Diamond's own shift-combo used to mean sequencer capture mode
+  unconditionally on release -- now split by HOLD DURATION, the same
+  "short click vs. long hold" shape diamond's own plain (non-shift)
+  record-arm already uses one level up: a quick shift+diamond click
+  toggles the pattern bank; holding it past `OP_SEQ_SHIFT_DIAMOND_
+  CAPTURE_HOLD_MS` (400ms -- shorter than record-arm's 2000ms, since
+  entering capture mode doesn't itself start recording anything until a
+  pad is actually played) instead arms capture mode, unchanged from
+  before other than which release condition now reaches it. Capture
+  mode's own EXIT gesture (solo shift or solo diamond release) is
+  untouched.
+  Per-pattern scale: each of the 24 patterns now carries its own
+  `scale` field, read/written by the exact same picker view/tap-handling
+  every other mode's shift+triangle already uses, completely unchanged
+  -- `scale_menu_enter()` just temporarily points note_map.c's GLOBAL
+  scale slot at the pattern's own stored value for as long as the picker
+  stays open (the same swap-in/swap-out shape sequencer capture mode
+  already uses for its own scale override), then writes whatever got
+  picked back into the pattern and restores the real global scale on
+  exit -- melodic mode's own live scale is never visibly disturbed.
+  Only ever consulted at ARM time (see the "three sequencer bugs closed"
+  entry above), so changing a pattern's scale later never retunes steps
+  already armed under the old value, the same "fully scale independent"
+  guarantee already established there.
+- **Pattern bank colors standardized for 4 simultaneous lanes.** Real
+  feedback: "lets standardize colors in sequencer. playing selected
+  pattern is red, off patterns are not led enabeled. only when sequence
+  is entered but not playing the pattern has the correct color
+  prevousely defined. the playing but not selected pattern flashes
+  white. remeber 4 patterns can play at once." `render_pattern_bank()`
+  now reads as two entirely different displays depending on whether the
+  transport is actually running -- "playing" vs. "not playing" per lane
+  is meaningless while nothing is running on ANY lane at all:
+  - **Transport stopped** ("the correct color previously defined"):
+    unchanged from the previous round -- each lane's own identity color,
+    dim, for its available alternatives; hard red flash for each lane's
+    own current pick. Still a browsing/picking view, not a playback
+    readout.
+  - **Transport running**: becomes a pure "what's sounding right now,
+    across all 4 simultaneous lanes" readout instead. Solid red for the
+    ONE cell that is BOTH this lane's own playing alternative AND the
+    lane currently shown in the main step view (`s_seq_edit_lane`) --
+    "you are here, and it's playing." Flashing white for every OTHER
+    lane's own playing alternative -- "also playing, but not what you're
+    looking at" (the real reason this needs its own signal: up to 4 of
+    these can be lit at once, on rows you aren't currently viewing).
+    Every non-playing alternative goes fully dark -- lane identity color
+    is a browsing aid, not meaningful once the point is "what's actually
+    sounding."
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

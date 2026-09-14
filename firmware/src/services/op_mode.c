@@ -286,6 +286,12 @@ static bool s_scale_menu_visible;
 static bool s_diamond_was_held;
 static bool s_diamond_press_had_conflict; /* see s_triangle_press_had_conflict's own comment -- same reasoning, watches diamond instead of triangle, guards against game_mode.h's 4-button combo */
 static bool s_scale_menu_prev_pad_touched[TILES_NUM_PADS];
+/* True while the CURRENTLY OPEN scale menu is scoped to one sequencer
+ * pattern (opened from sequencer mode) rather than note_map.c's global
+ * scale (every other mode) -- see scale_menu_enter()'s own comment for
+ * the swap-in/swap-out this drives. */
+static bool s_scale_menu_is_per_pattern;
+static tiles_scale_mode_t s_scale_menu_saved_global_scale;
 
 /* ---- Diamond: Ableton transport remote ---------------------------------
  * See handle_diamond_transport()'s own comment for the full feature.
@@ -304,9 +310,28 @@ static bool s_transport_playing;
 static bool s_transport_recording;
 /* True if SW6/circle was ALSO seen held during the current diamond
  * press -- see handle_diamond_transport()'s own comment for the
- * sequencer capture mode this distinguishes from a plain solo click.
- * Same edge-latched-sticky reasoning as s_triangle_press_was_shift. */
+ * pattern-selector/capture-mode split this distinguishes from a plain
+ * solo click. Same edge-latched-sticky reasoning as s_triangle_press_
+ * was_shift. */
 static bool s_diamond_press_was_shift;
+/* Real feedback: "i want shift plus diamond in sequencer only to be the
+ * pattern selector" -- shift+diamond now does two DIFFERENT things
+ * depending on how long it's held, the same "short click vs. long hold"
+ * shape plain diamond's own s_diamond_record_armed already uses one
+ * level up: a quick shift+diamond TAP toggles the pattern bank (see
+ * handle_diamond_transport()'s own release branch), while holding it
+ * past this threshold instead arms sequencer capture mode -- freeing
+ * shift+diamond's previous single meaning (capture mode, unconditional
+ * on release) to make room for the pattern bank without losing capture
+ * mode's own access point. Edge-latched true once armed, same shape as
+ * s_diamond_record_armed. Shorter than OP_TRANSPORT_RECORD_ARM_HOLD_MS
+ * (2000ms) -- entering capture mode doesn't itself start recording
+ * anything (a note only gets captured once a pad is actually played), so
+ * it doesn't need that same deliberately-long, hard-to-trigger-by-
+ * accident threshold; still clearly longer than a quick tap. */
+#define OP_SEQ_SHIFT_DIAMOND_CAPTURE_HOLD_MS 400u
+static bool s_diamond_shift_capture_armed;
+static uint32_t s_diamond_shift_started_ms; /* when circle first joined THIS diamond press, not the press itself */
 
 /* Tap-tempo press tracking -- see this file's own "Master tap tempo"
  * section above. No conflict flag like diamond/triangle's own: a tap
@@ -420,6 +445,21 @@ typedef struct {
     /* No `channel` field here anymore -- channel is now a LANE property
      * (s_seq_lane_channel[] below), shared by all 6 of a lane's own
      * alternatives, not something that could ever disagree between them. */
+    /* Real feedback: "changing scale on a melodic modes or other
+     * sequences should not affect other sequences that are already set
+     * up or playing meaning fully scale independent sequences," followed
+     * by "shift plus triangle in [sequencer] scale selector for that
+     * specific pattern." Each pattern keeps its OWN scale, read/written
+     * by the exact same scale-picker view every other mode's shift+
+     * triangle already opens -- see scale_menu_enter()'s own comment for
+     * how it temporarily borrows note_map.c's global scale slot to do
+     * that without a second copy of the whole picker. Only ever consulted
+     * at ARM time (see seq_handle_step_taps()'s own freeze-on-arm logic)
+     * -- once a step is armed its note is already absolute, so this
+     * changing later never retunes steps armed under a previous value,
+     * the same "fully scale independent" invariant the global scale
+     * already respects for already-armed steps. */
+    tiles_scale_mode_t scale;
 } op_seq_pattern_t;
 
 /* [lane][alternative] -- see this section's own header comment. */
@@ -1639,8 +1679,24 @@ static void handle_scale_menu_taps(void) {
     }
 }
 
-static void scale_menu_enter(void) {
+/* Real feedback: "shift plus triangle in [sequencer] scale selector for
+ * that specific pattern." `per_pattern` reuses render_scale_menu()'s and
+ * handle_scale_menu_taps()'s existing logic completely unchanged -- both
+ * only ever read/write note_map.c's GLOBAL scale -- by temporarily
+ * pointing that global slot at the current pattern's own stored scale
+ * for as long as this sub-view stays open, then writing whatever the
+ * player picked back into the pattern and restoring the real global
+ * scale on exit (see scale_menu_exit()'s own other half of this). Same
+ * swap-in/swap-out shape seq_capture_mode_enter()/_exit() already use
+ * for their own scale override, just persisted into a pattern field
+ * instead of discarded. */
+static void scale_menu_enter(bool per_pattern) {
     s_scale_menu_visible = true;
+    s_scale_menu_is_per_pattern = per_pattern;
+    if (per_pattern) {
+        s_scale_menu_saved_global_scale = tiles_note_map_get_scale();
+        tiles_note_map_set_scale(active_pattern()->scale);
+    }
     s_scale_menu_haptic_pulse_ms = to_ms_since_boot(get_absolute_time());
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_scale_menu_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
@@ -1651,6 +1707,11 @@ static void scale_menu_enter(void) {
 
 static void scale_menu_exit(void) {
     s_scale_menu_visible = false;
+    if (s_scale_menu_is_per_pattern) {
+        active_pattern()->scale = tiles_note_map_get_scale();
+        tiles_note_map_set_scale(s_scale_menu_saved_global_scale);
+        s_scale_menu_is_per_pattern = false;
+    }
     tiles_lighting_set_standby_active(false);
     tiles_buttons_set_standby_active(false);
     /* See menu_exit()'s own comment (same bug, same fix, same root
@@ -1664,27 +1725,32 @@ static void scale_menu_exit(void) {
     tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
 }
 
-/* ---- Pattern bank (SW3/triangle+shift, sequencer mode only) ------------
+/* ---- Pattern bank (SW4/diamond+shift, sequencer mode only) -------------
  * Real feedback: "in sequencer mode shift plus triangle opens up the
  * pattern bajnk... sequence selector should have all 24 pads as possible
  * sequences... lets do 4 independent sequences that can be assigned to 4
  * channels selectable by each row of 6 alternatives... make each row a
- * different color in seelctor to signify 4 lanes." Every one of the 24
- * pads is now a real, individually selectable slot -- row = LANE (see
- * this file's own "Multi-lane pattern bank" section), column = which of
- * that lane's 6 alternatives. Tapping a cell does two things at once:
- * picks that alternative as the lane's currently PLAYING pattern
- * (s_seq_active_alt[lane]), and makes that lane the one shown/edited in
- * the main step view (s_seq_edit_lane) -- one gesture unambiguously
- * specifies both "which lane" and "which alternative for it," so no
- * separate lane-select gesture is needed.
- * Visual language: each row's own identity color (lane_color() below) at
- * OP_SCALE_AVAILABLE_LEVEL brightness for that row's non-selected cells,
- * hard on/off RED flash (matching real feedback's own word "flashing,"
- * not this file's usual smooth "selected" pulse elsewhere) for whichever
- * cell is that row's own current selection -- red stays the ONE universal
- * "this is selected" signal across all 4 rows; hue only ever distinguishes
- * which row/lane a cell belongs to, never selection state. */
+ * different color in seelctor to signify 4 lanes," later moved off
+ * triangle entirely: "i want shift plus diamond in sequencer only to be
+ * the pattern selector" (see handle_diamond_transport()'s own shift
+ * branch -- a quick shift+diamond click toggles this, a longer hold
+ * arms sequencer capture mode instead, freeing shift+triangle for the
+ * new per-pattern scale picker -- see handle_triangle_click()'s own
+ * comment). Every one of the 24 pads is a real, individually selectable
+ * slot -- row = LANE (see this file's own "Multi-lane pattern bank"
+ * section), column = which of that lane's 6 alternatives. Tapping a cell
+ * does two things at once: picks that alternative as the lane's
+ * currently PLAYING pattern (s_seq_active_alt[lane]), and makes that
+ * lane the one shown/edited in the main step view (s_seq_edit_lane) --
+ * one gesture unambiguously specifies both "which lane" and "which
+ * alternative for it," so no separate lane-select gesture is needed.
+ * Visual language, standardized further per real feedback: "lets
+ * standardize colors in sequencer. playing selected pattern is red, off
+ * patterns are not led enabeled. only when sequence is entered but not
+ * playing the pattern has the correct color prevousely defined. the
+ * playing but not selected pattern flashes white. remeber 4 patterns can
+ * play at once" -- see render_pattern_bank()'s own comment for the full
+ * two-state (transport running vs. stopped) breakdown this produced. */
 #define OP_PATTERN_BANK_FLASH_MS 300u
 /* Four maximally-distinguishable hues, deliberately avoiding red (reserved
  * for "selected" above) and Sentia's own brand magenta (reserved
@@ -1735,8 +1801,33 @@ static void lane_color(uint8_t lane, float *r, float *g, float *b) {
     }
 }
 
+/* Real feedback: "lets standardize colors in sequencer. playing selected
+ * pattern is red, off patterns are not led enabeled. only when sequence
+ * is entered but not playing the pattern has the correct color
+ * prevousely defined. the playing but not selected pattern flashes
+ * white. remeber 4 patterns can play at once."
+ * Two entirely different readouts depending on whether the transport is
+ * actually running, since "playing" vs. "not playing" per LANE is a
+ * meaningless distinction while nothing is running on ANY lane at all:
+ * - Transport STOPPED: "the correct color previously defined" -- exactly
+ *   this function's original scheme, unchanged (each lane's own
+ *   identity color, dim, for its available alternatives; hard red flash
+ *   for each lane's own current pick) -- this is browsing/picking mode,
+ *   not a playback readout.
+ * - Transport RUNNING: becomes a pure "what's sounding right now, across
+ *   all 4 simultaneous lanes" readout instead. Solid red for the ONE
+ *   cell that is BOTH this lane's own playing alternative AND the lane
+ *   currently shown in the main step view (s_seq_edit_lane) -- "you are
+ *   here, and it's playing." Flashing white for every OTHER lane's own
+ *   playing alternative -- "also playing, but not what you're looking
+ *   at right now" (the real reason this needs its own signal: up to 4 of
+ *   these can be lit at once, on rows you aren't currently viewing).
+ *   Every non-playing alternative goes fully dark in this state -- lane
+ *   identity color is a browsing aid, not meaningful once the readout's
+ *   whole point is "what's actually sounding." */
 static void render_pattern_bank(uint32_t now_ms) {
     bool flash_on = ((now_ms / OP_PATTERN_BANK_FLASH_MS) % 2u) == 0u;
+    bool transport_running = tiles_midi_clock_is_running();
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         uint8_t lane = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
         float lr, lg, lb;
@@ -1744,8 +1835,17 @@ static void render_pattern_bank(uint32_t now_ms) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             uint8_t alt = (uint8_t)(col - TILES_GRID_MIN_COL);
             uint8_t pad = board_pad_for_row_col(row, col);
-            bool selected = (alt == s_seq_active_alt[lane]);
-            if (selected) {
+            bool is_active = (alt == s_seq_active_alt[lane]);
+            if (transport_running) {
+                if (is_active && lane == s_seq_edit_lane) {
+                    tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 0.0f, 0.0f);
+                } else if (is_active) {
+                    float level = flash_on ? 1.0f : 0.0f;
+                    tiles_lighting_set_standby_pad_rgb(pad, level, level, level);
+                } else {
+                    tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
+                }
+            } else if (is_active) {
                 float level = flash_on ? 1.0f : 0.0f;
                 tiles_lighting_set_standby_pad_rgb(pad, level, 0.0f, 0.0f);
             } else {
@@ -1755,8 +1855,10 @@ static void render_pattern_bank(uint32_t now_ms) {
     }
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         /* Same "which button got you here" language every other
-         * sub-menu in this file uses. */
-        float level = (col == TILES_TRIANGLE_BUTTON_COL) ? OP_TRIANGLE_LED_MENU_LEVEL : 0.0f;
+         * sub-menu in this file uses -- diamond's own column now, not
+         * triangle's, since this bank moved to shift+diamond (see this
+         * file's own "Pattern bank" section header). */
+        float level = (col == TILES_DIAMOND_BUTTON_COL) ? OP_TRIANGLE_LED_MENU_LEVEL : 0.0f;
         tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
@@ -1887,7 +1989,18 @@ static void set_active_mode(tiles_op_mode_t mode) {
     }
     if (mode != OP_MODE_MELODIC) {
         /* Melodic's own sub-menu can't stay open once melodic isn't the
-         * active mode anymore. */
+         * active mode anymore. Restores the real global scale first if a
+         * per-pattern session was mid-swap (see scale_menu_enter()'s own
+         * comment) -- this bypasses the normal scale_menu_exit() call
+         * entirely (no LED/standby cleanup here, matching this function's
+         * existing light-touch force-close), so it has to redo that one
+         * piece itself or the swapped-in pattern scale would leak into
+         * whatever mode is being entered. */
+        if (s_scale_menu_is_per_pattern) {
+            active_pattern()->scale = tiles_note_map_get_scale();
+            tiles_note_map_set_scale(s_scale_menu_saved_global_scale);
+            s_scale_menu_is_per_pattern = false;
+        }
         s_scale_menu_visible = false;
     }
     if (mode != OP_MODE_SEQUENCER) {
@@ -2231,25 +2344,22 @@ static void handle_menu_taps(void) {
  * triangle plus shift pressed. freeing up diamond from everything for
  * now," briefly made universal ("make sure the shift scasle works on
  * chord melodic mode and on sequewndcer as well measning remove
- * whatever aux menu we had in sequencer mode"), then split by mode
- * again: "in sequencer mode shift plus triangle opens up the pattern
- * bajnk." A plain solo click keeps its existing meaning (toggle the
- * top-level mode picker); triangle+shift (circle held too) opens the
- * scale picker in melodic/chord, but the pattern bank specifically in
- * sequencer mode -- see this file's own "Pattern bank" section for that
- * one's real feedback and why its visual language deliberately doesn't
- * match the scale picker's. Sequencer briefly had NO sub-menu here at
- * all (real feedback that removed the ORIGINAL, differently-designed
- * pattern/channel picker: "remove whatever aux menu we had in sequencer
- * mode" -- see this file's own "Pattern/channel picker: REMOVED"
- * section for what that removal took with it, none of which came back
- * with the pattern bank) before landing here. While any per-step edit
- * (pitch/probability/ratchet) owns the grid, the shift gesture still
- * cancels it with no change instead of opening the pattern bank on top
- * of it -- the escape hatch a toggle-style gesture needs (real
- * feedback: "it should be a toggle to set pitch of sequencer note, not
- * a momentary thing"), checked before the pattern bank's own open/close
- * toggle within that same sequencer-only branch.
+ * whatever aux menu we had in sequencer mode"), then split by mode for
+ * the pattern bank ("in sequencer mode shift plus triangle opens up the
+ * pattern bajnk"), then unified again once the pattern bank moved to
+ * shift+diamond instead ("i want shift plus diamond in sequencer only to
+ * be the pattern selector" -- see handle_diamond_transport()'s own shift
+ * branch): shift+triangle is now the scale picker UNCONDITIONALLY, no
+ * per-mode branch -- just PER-PATTERN rather than global while in
+ * sequencer mode specifically ("shift plus triangle in [sequencer] scale
+ * selector for that specific pattern" -- see scale_menu_enter()'s own
+ * comment for how that's implemented without a second copy of the whole
+ * picker). A plain solo click keeps its existing meaning (toggle the
+ * top-level mode picker). While any per-step edit (pitch/probability/
+ * ratchet) owns the grid, the shift gesture still cancels it with no
+ * change instead of opening the scale picker on top of it -- the escape
+ * hatch a toggle-style gesture needs (real feedback: "it should be a
+ * toggle to set pitch of sequencer note, not a momentary thing").
  *
  * s_triangle_press_was_shift is edge-latched true the first time circle
  * is seen held during this triangle press (not re-checked fresh at
@@ -2287,27 +2397,24 @@ static void handle_triangle_click(void) {
         if (!s_triangle_press_had_conflict) {
             if (s_triangle_press_was_shift) {
                 if (!s_menu_visible) {
-                    if (s_active_mode == OP_MODE_SEQUENCER) {
-                        /* Real feedback: "in sequencer mode shift plus
-                         * triangle opens up the pattern bajnk" -- back
-                         * to per-mode branching for THIS one mode only
-                         * (see this file's own "Pattern bank" section);
-                         * every other mode below still gets the
-                         * universal scale picker. */
-                        if (s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
-                            /* Still needs its own escape hatch -- real
-                             * feedback: "it should be a toggle to set
-                             * pitch of sequencer note, not a momentary
-                             * thing." Checked first since a per-step
-                             * edit owns the grid exclusively; opening
-                             * the pattern bank on top of it would be
-                             * ambiguous. */
-                            edit_exit();
-                        } else if (s_pattern_bank_visible) {
-                            pattern_bank_exit();
-                        } else {
-                            pattern_bank_enter();
-                        }
+                    /* Real feedback: "i want shift plus diamond in
+                     * sequencer only to be the pattern selector" moved
+                     * the pattern bank off THIS button entirely (see
+                     * handle_diamond_transport()'s own shift branch) --
+                     * shift+triangle is now the scale picker everywhere,
+                     * no per-mode branch needed at all. In sequencer mode
+                     * specifically it's PER-PATTERN, not global -- real
+                     * feedback: "shift plus triangle in [sequencer]
+                     * scale selector for that specific pattern" (see
+                     * scale_menu_enter()'s own comment for how). */
+                    if (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
+                        /* Still needs its own escape hatch -- real
+                         * feedback: "it should be a toggle to set pitch
+                         * of sequencer note, not a momentary thing."
+                         * Checked first since a per-step edit owns the
+                         * grid exclusively; opening the scale picker on
+                         * top of it would be ambiguous. */
+                        edit_exit();
                     } else if (s_scale_menu_visible) {
                         scale_menu_exit();
                     } else {
@@ -2319,10 +2426,8 @@ static void handle_triangle_click(void) {
                          * idle grid does (see this file's own "Chord
                          * mode" section), so picking a scale is exactly
                          * as meaningful from chord as it always was from
-                         * melodic. Sequencer no longer falls through to
-                         * here (see the branch above) now that it has
-                         * its own pattern bank again. */
-                        scale_menu_enter();
+                         * melodic. */
+                        scale_menu_enter(s_active_mode == OP_MODE_SEQUENCER);
                     }
                 }
             } else if (s_menu_visible) {
@@ -2438,6 +2543,7 @@ static void handle_diamond_transport(uint32_t now_ms) {
         s_diamond_press_start_ms = now_ms;
         s_diamond_record_armed = false;
         s_diamond_press_was_shift = false;
+        s_diamond_shift_capture_armed = false;
     }
     if (held && tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID)) {
         s_diamond_press_had_conflict = true;
@@ -2451,10 +2557,25 @@ static void handle_diamond_transport(uint32_t now_ms) {
             s_diamond_press_had_conflict = true;
         } else {
             /* Real feedback: "make a sequencer capture mode when sifht
-             * and diamoind clicked together" -- see this file's own
-             * "Sequencer capture mode" section. */
+             * and diamoind clicked together," later split into a short-
+             * tap/long-hold pair -- see s_diamond_shift_capture_armed's
+             * own comment. */
+            if (!s_diamond_press_was_shift) {
+                /* The hold-duration check just below is timed from HERE
+                 * (when the combo itself started), not from
+                 * s_diamond_press_start_ms (diamond's own solo press) --
+                 * diamond can sit held alone for a while before circle
+                 * ever joins (nothing stops that), and using the wrong
+                 * anchor would let a late-joining shift instantly read as
+                 * already past the hold threshold. */
+                s_diamond_shift_started_ms = now_ms;
+            }
             s_diamond_press_was_shift = true;
         }
+    }
+    if (held && s_diamond_press_was_shift && !s_diamond_press_had_conflict && !s_diamond_shift_capture_armed &&
+        (now_ms - s_diamond_shift_started_ms) >= OP_SEQ_SHIFT_DIAMOND_CAPTURE_HOLD_MS) {
+        s_diamond_shift_capture_armed = true;
     }
     if (held && !s_diamond_press_had_conflict && !s_diamond_press_was_shift && !s_seq_capture_mode_active &&
         !s_diamond_record_armed && (now_ms - s_diamond_press_start_ms) >= OP_TRANSPORT_RECORD_ARM_HOLD_MS) {
@@ -2472,7 +2593,23 @@ static void handle_diamond_transport(uint32_t now_ms) {
                  * has the identical override for a solo circle release. */
                 seq_capture_mode_exit();
             } else if (s_diamond_press_was_shift) {
-                seq_capture_mode_enter();
+                /* Real feedback: "i want shift plus diamond in sequencer
+                 * only to be the pattern selector" -- a quick shift+
+                 * diamond click toggles the pattern bank (sequencer mode
+                 * only -- there is no pattern bank to open anywhere
+                 * else); holding it past OP_SEQ_SHIFT_DIAMOND_CAPTURE_
+                 * HOLD_MS instead arms capture mode, unchanged from
+                 * before other than which release condition reaches it
+                 * -- see s_diamond_shift_capture_armed's own comment. */
+                if (s_diamond_shift_capture_armed) {
+                    seq_capture_mode_enter();
+                } else if (s_active_mode == OP_MODE_SEQUENCER) {
+                    if (s_pattern_bank_visible) {
+                        pattern_bank_exit();
+                    } else {
+                        pattern_bank_enter();
+                    }
+                }
             } else if (s_diamond_record_armed) {
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 127u);
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 0u);
@@ -2500,6 +2637,7 @@ static void handle_diamond_transport(uint32_t now_ms) {
         }
         s_diamond_record_armed = false;
         s_diamond_press_was_shift = false;
+        s_diamond_shift_capture_armed = false;
     }
 
     /* Five-state LED language -- real feedback: "armed record and
@@ -2785,10 +2923,12 @@ void tiles_op_mode_init(void) {
     s_triangle_press_had_conflict = false;
     s_triangle_press_was_shift = false;
     s_scale_menu_visible = false;
+    s_scale_menu_is_per_pattern = false;
     s_pattern_bank_visible = false;
     s_diamond_was_held = false;
     s_diamond_press_had_conflict = false;
     s_diamond_press_was_shift = false;
+    s_diamond_shift_capture_armed = false;
     s_diamond_record_armed = false;
     s_transport_playing = false;
     s_transport_recording = false;
@@ -2805,6 +2945,10 @@ void tiles_op_mode_init(void) {
             }
             pat->probability_enabled = false;
             pat->length = OP_SEQ_NUM_STEPS;
+            /* Matches note_map.c's own boot default -- every pattern
+             * starts identical until its own shift+triangle scale picker
+             * (sequencer mode only) is used to customize it. */
+            pat->scale = TILES_SCALE_CHROMATIC;
         }
         s_seq_active_alt[lane] = 0u;
         /* Claims from the TOP of the 15 MPE Member Channels downward --
