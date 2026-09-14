@@ -1910,6 +1910,17 @@ static void handle_pattern_bank_taps(void) {
 }
 
 static void pattern_bank_enter(void) {
+    /* Defensive: a per-step pitch/probability/ratchet edit is a genuine
+     * TOGGLE that can sit open with no pad touched (release the
+     * originally-held step and it just waits, see this file's own
+     * "Per-step editing" section) -- easy to leave open, then reach for
+     * shift+diamond with a free hand. Without this, tiles_op_mode_scan()'s
+     * dispatch (which checks s_pattern_bank_visible before s_seq_edit_
+     * mode) would show the bank while the edit view stayed silently
+     * "open" underneath, popping back up the instant the bank closes. */
+    if (s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
+        edit_exit();
+    }
     /* Silences whatever's currently sounding on the EDITED lane the
      * instant the bank opens -- the other 3 lanes keep playing right
      * through this, same "runs in the background" precedent as every
@@ -2151,6 +2162,46 @@ static void seq_capture_end_sounding_note(void) {
 static void seq_capture_mode_enter(void) {
     if (s_active_mode != OP_MODE_SEQUENCER) {
         set_active_mode(OP_MODE_SEQUENCER);
+    }
+    /* Defensive: a short shift+diamond tap (pattern bank) and a long
+     * shift+diamond hold (this) are two separate press cycles on the
+     * SAME combo now -- nothing stops tapping the bank open, releasing,
+     * then immediately holding shift+diamond again before ever closing
+     * it. Without this, capture mode would silently start taking over
+     * s_seq_edit_lane's background playback while the VISIBLE view (and
+     * touch routing) stayed on the pattern bank, since tiles_op_mode_
+     * scan()'s dispatch checks s_pattern_bank_visible before s_seq_
+     * capture_mode_active. Closing it first keeps the two mutually
+     * exclusive, same as they always were back when they lived on
+     * different buttons entirely. */
+    if (s_pattern_bank_visible) {
+        pattern_bank_exit();
+    }
+    /* Same defensive reasoning, same reachability gap, for the per-
+     * pattern scale picker (shift+triangle) instead of the pattern bank
+     * -- open it, release, then hold shift+diamond long enough to arm
+     * capture mode without ever closing the picker first, and capture
+     * mode would start swapping the scale AGAIN underneath the picker's
+     * own already-in-progress swap (see scale_menu_enter()'s own
+     * comment). Calling the real scale_menu_exit() here, not just
+     * clearing the flag, is what correctly unwinds that swap before
+     * capture mode does its own. */
+    if (s_scale_menu_visible) {
+        scale_menu_exit();
+    }
+    /* Same reachability gap a third time: a per-step pitch/probability/
+     * ratchet edit (hold a step) can be left open, then shift+diamond
+     * held long enough to arm capture mode without ever backing out of
+     * it first -- seq_handle_step_taps() (and so normal step taps) never
+     * runs while this is active, but the edit view itself would keep
+     * showing and keep consuming touches instead of capture mode's
+     * note-input, since tiles_op_mode_scan()'s dispatch checks s_seq_
+     * edit_mode before s_seq_capture_mode_active. No scale/channel side
+     * effect to unwind here (pitch-assign doesn't touch note_map.c's
+     * scale), but the same "don't let two exclusive sub-views both think
+     * they own the grid" invariant still applies. */
+    if (s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
+        edit_exit();
     }
     /* Whatever the NORMAL playback engine had sounding on the EDITED
      * lane must not keep ringing underneath a live capture performance
@@ -2415,6 +2466,19 @@ static void handle_triangle_click(void) {
                          * grid exclusively; opening the scale picker on
                          * top of it would be ambiguous. */
                         edit_exit();
+                    } else if (s_seq_capture_mode_active) {
+                        /* Defensive, same reachability gap as seq_
+                         * capture_mode_enter()'s own comment about the
+                         * pattern bank: nothing stops a fresh shift+
+                         * triangle tap while a capture session is already
+                         * running. Opening the per-pattern picker on top
+                         * would swap the global scale AGAIN underneath
+                         * capture mode's own chromatic override -- exit
+                         * capture mode instead of opening anything, the
+                         * same "shift+triangle cancels whatever sequencer
+                         * sub-state owns the grid" role this branch
+                         * already plays for per-step edit just above. */
+                        seq_capture_mode_exit();
                     } else if (s_scale_menu_visible) {
                         scale_menu_exit();
                     } else {
@@ -3191,7 +3255,16 @@ bool tiles_op_mode_is_sequencer_active(void) {
 }
 
 bool tiles_op_mode_has_menu_open(void) {
-    return s_menu_visible || s_scale_menu_visible || s_pattern_bank_visible || s_seq_edit_mode != OP_SEQ_EDIT_NONE;
+    /* Real gap found auditing this round's changes: sequencer capture
+     * mode can sit genuinely armed with no touch input at all for a
+     * while (entered, quantized-start still pending because no tempo
+     * exists yet, or the player just hasn't started playing) -- exactly
+     * the same "reading/setting up takes no touch" situation every other
+     * sub-view here already protects against standby's idle timeout for.
+     * Without this, the screensaver could pop up over an armed-but-not-
+     * yet-playing capture session. */
+    return s_menu_visible || s_scale_menu_visible || s_pattern_bank_visible || s_seq_edit_mode != OP_SEQ_EDIT_NONE ||
+           s_seq_capture_mode_active;
 }
 
 /* Real feedback: "is there anything needed to stop stuck niotes?" --

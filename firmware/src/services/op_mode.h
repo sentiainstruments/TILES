@@ -321,8 +321,8 @@ bool tiles_op_mode_is_sequencer_active(void);
 
 /* True while any of this module's own sub-views is open: the top-level
  * mode picker, the (now-universal, not melodic-only) scale picker,
- * sequencer mode's own restored pattern bank, or a sequencer per-step
- * pitch/probability/ratchet editor. Used by
+ * sequencer mode's own pattern bank, a sequencer per-step pitch/
+ * probability/ratchet editor, or sequencer capture mode. Used by
  * services/standby.h to hold off its own automatic idle timeout while
  * one of these is showing -- real feedback: "something triggering
  * animations when clicking the diamond menu" turned out to be
@@ -331,7 +331,9 @@ bool tiles_op_mode_is_sequencer_active(void);
  * touch input at all), silently replacing the menu with the screensaver
  * animation mid-browse. The same class of interruption applies to any of
  * this file's other sub-views for the same reason, not just the one that
- * happened to get reported first. */
+ * happened to get reported first -- capture mode joined this list latest
+ * (found auditing, not reported): it can sit genuinely armed with no
+ * touch at all while waiting for a tempo/the next beat. */
 bool tiles_op_mode_has_menu_open(void);
 
 /* True if `channel` (an MPE Member Channel, 1-15) is one of the sequencer's

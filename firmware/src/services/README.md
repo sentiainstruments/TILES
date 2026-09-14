@@ -4469,5 +4469,47 @@ not its code.
     Every non-playing alternative goes fully dark -- lane identity color
     is a browsing aid, not meaningful once the point is "what's actually
     sounding."
+- **Audit: sequencer sub-view mutual exclusion.** Real feedback: "lets
+  do a check of everything weve changed over the past uploads," asked
+  right after the pattern-bank/capture-mode button remap above. Focused
+  the review on that remap and the 4-lane rearchitecture from the
+  previous two rounds -- the newest, least hardware-tested code, and
+  where real bugs were most likely to be hiding versus the earlier
+  pitch-bend/expression work already validated on real hardware. Found
+  and fixed one real class of bug, in four places: sequencer has five
+  mutually-exclusive sub-views (top-level menu, scale picker, pattern
+  bank, per-step edit, capture mode), but `handle_triangle_click()`/
+  `handle_diamond_transport()` run their OWN button state machines every
+  scan regardless of which sub-view is currently displayed -- nothing
+  stopped a SECOND sub-view's entry gesture from firing while a FIRST
+  one was still sitting open (e.g. open the pattern bank with a short
+  shift+diamond tap, release, then hold shift+diamond again long enough
+  to arm capture mode without ever closing the bank first). Since
+  `tiles_op_mode_scan()`'s dispatch checks sub-views in a fixed priority
+  order, the SCREEN would keep showing whichever one was checked first,
+  while the other quietly became "active" underneath -- capture mode
+  specifically would start swapping note_map.c's global scale to
+  chromatic and taking over `s_seq_edit_lane`'s background playback
+  while touches kept routing to the wrong view entirely. Worse for the
+  scale-picker case specifically: capture mode's own scale swap would
+  land on top of the per-pattern picker's ALREADY-in-progress swap,
+  risking a pattern's real saved scale getting silently overwritten with
+  chromatic.
+  Fixed by having `seq_capture_mode_enter()` defensively close the
+  pattern bank, the (real, swap-aware) scale menu, and any open per-step
+  edit first -- and `pattern_bank_enter()` do the same for an open
+  per-step edit -- before doing anything else, the same "close whatever
+  else might be open" discipline `set_active_mode()` already applies
+  when leaving a mode entirely, just applied one level down between
+  sequencer's own sub-views. `handle_triangle_click()`'s shift branch
+  also gained its own escape hatch out of capture mode (a fresh
+  shift+triangle tap now exits it, same role that gesture already plays
+  for per-step edit), rather than silently corrupting the scale swap by
+  opening the picker on top of it.
+  One more, smaller gap from the same review: `tiles_op_mode_has_menu_
+  open()` (used by `services/standby.h` to hold off its idle timeout for
+  a sub-view with no touch input) never included capture mode, even
+  though it can sit genuinely armed with no touch at all while waiting
+  for a tempo or the next beat -- added.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
