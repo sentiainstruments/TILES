@@ -703,61 +703,173 @@ static bool s_plus_used_as_combo;
                                    precedent for the identical reason. */
 static bool s_chord_pad_touched[TILES_NUM_PADS];
 static bool s_chord_pad_sounding[TILES_NUM_PADS];
-static uint8_t s_chord_pad_notes[TILES_NUM_PADS][TILES_NOTE_MAP_CHORD_NUM_NOTES];
 
-/* Real feedback, chord mode heard on real hardware: "make the chords
+/* ---- Pressure-tiered chord voicing --------------------------------------
+ * Real feedback, chord mode heard on real hardware: "make the chords
  * with inversions to make them feel more musical, take insouration from
- * the [Omnichord]" -- a real chord-organ/autoharp doesn't just stack
- * every chord root-third-fifth fresh off its own root (which, across 8
- * different scale-degree roots, would mean each chord's overall
- * register keeps climbing as you move up the strip); it keeps the
- * voicing compact by choosing whichever inversion sits closest to
- * wherever the music already was. Tracks the actual 3 notes of
- * whichever chord was most recently STRUCK (not released -- see
- * chord_pad_note_on() below), so consecutive chords gravitate toward
- * each other instead of each being voiced in isolation. Not reset on
- * release (a chord ending shouldn't erase where the voicing was, only
- * a fresh entry into chord mode should -- see set_active_mode()'s own
- * chord-mode-entry block, which clears s_chord_voice_anchor_valid). */
-static uint8_t s_chord_voice_anchor_notes[TILES_NOTE_MAP_CHORD_NUM_NOTES];
-static bool s_chord_voice_anchor_valid;
+ * the [Omnichord]" tried an ADAPTIVE approach first (each new chord
+ * re-voiced toward wherever the previous one sounded) -- real feedback
+ * after living with it: "we are having issues with the chords drifting
+ * positions in certain sequences of presses," confirmed again once
+ * pressure-tiers were asked for and still hadn't landed: "the preassure
+ * dependant chord type is not working and we still have this situation
+ * when the chord shapes evolve in a way that transports the chords to
+ * different parts of the range. we need consistent predictable shapes."
+ * Replaced entirely with a STATIC design -- every voicing below is a
+ * pure function of (root pad, chord quality, press depth), never of
+ * whatever played before it. The old adaptive re-voicing (`tiles_note_
+ * map_nearest_pitch_class()`, `s_chord_voice_anchor_*`) is gone outright,
+ * not tuned -- it was the drift's actual root cause, not a side effect
+ * of it.
+ * Three depth tiers, chosen live off each pad's own Hall depth while
+ * held (morphs both directions -- press harder mid-hold to escalate,
+ * ease off to revert, same held note): "tap regular triads, regular
+ * push tensions, max preassure or hard push complex jazz chord with
+ * tensions with octave lower bass note." Every tier shares the SAME
+ * per-voice register conventions (root/fifth at the chord register,
+ * third always raised an octave for an open spread, bass always one
+ * more octave below root) -- only which voices are PRESENT changes
+ * tier to tier, never how any one voice is registered, so a tier change
+ * reads as "notes added/removed," not "the whole chord jumped range."
+ * Quality (major/minor/diminished) is read directly off the actual
+ * root-to-third and root-to-fifth intervals `tiles_note_map_get_chord_
+ * notes()` returns, not hardcoded per scale degree, so it automatically
+ * tracks whichever diatonic mode is currently selected: diminished
+ * degrees are capped at the middle tier's voicing (a real fully-
+ * diminished chord's own tensions need chromatic alteration this
+ * diatonic-only system doesn't attempt -- forcing them on would
+ * reintroduce exactly the clashes this design is trying to avoid);
+ * major-quality chords get a 13th as their top jazz tension, minor-
+ * quality get an 11th instead -- a natural (perfect) 11th a minor 9th
+ * above a MAJOR 3rd is jazz harmony's textbook "avoid note" (a harsh
+ * half-step-adjacent clash once octave-reduced), so it's only ever
+ * added where the 3rd is minor and that clash can't occur. */
+typedef enum {
+    OP_CHORD_TIER_TAP = 0,
+    OP_CHORD_TIER_PUSH,
+    OP_CHORD_TIER_FULL,
+} op_chord_tier_t;
+
+/* Same ~900 full-scale reference OP_MENU_SELECT_DEPTH_THRESHOLD's own
+ * comment already established -- reused verbatim for the tap/push
+ * boundary (a deliberate, not incidental, choice: "regular push" reads
+ * as the same "past halfway" gesture this file's pickers already use
+ * for "select/commit"). OP_CHORD_FULL_PRESS_DEPTH_THRESHOLD is new --
+ * unmeasured, a starting guess at "unambiguously mashed all the way
+ * down" pending real-hardware tuning, same as most of this file's other
+ * depth/timing constants. */
+#define OP_CHORD_FULL_PRESS_DEPTH_THRESHOLD 810.0f
+/* Root note pushed one extra octave down from the chord register for
+ * the dedicated bass voice, on top of note_map.c's own CHORD_OCTAVE_
+ * DOWN_SEMITONES -- real feedback: "octave lower bass note." */
+#define OP_CHORD_BASS_EXTRA_OCTAVE_SEMITONES 12
+/* Bass + up to 5 upper voices (the push tier's root/fifth/third/seventh/
+ * ninth is the largest set any tier actually uses). */
+#define OP_CHORD_MAX_VOICES 6u
+
+static op_chord_tier_t s_chord_pad_tier[TILES_NUM_PADS]; /* only meaningful while s_chord_pad_sounding[pad] */
+static uint8_t s_chord_pad_notes[TILES_NUM_PADS][OP_CHORD_MAX_VOICES];
+static uint8_t s_chord_pad_note_count[TILES_NUM_PADS];
+
+static uint8_t clamp_midi_note(int note) {
+    if (note < 0) {
+        return 0u;
+    }
+    if (note > 127) {
+        return 127u;
+    }
+    return (uint8_t)note;
+}
+
+static op_chord_tier_t chord_tier_for_depth(float depth) {
+    if (depth >= OP_CHORD_FULL_PRESS_DEPTH_THRESHOLD) {
+        return OP_CHORD_TIER_FULL;
+    }
+    if (depth >= OP_MENU_SELECT_DEPTH_THRESHOLD) {
+        return OP_CHORD_TIER_PUSH;
+    }
+    return OP_CHORD_TIER_TAP;
+}
+
+/* Builds `tier`'s note set for the diatonic stack `raw` already returned
+ * (root/3rd/5th/7th/9th/11th/13th, see tiles_note_map_get_chord_notes()'s
+ * own comment) into `out_notes`, returning how many voices it wrote --
+ * see this section's own header comment for the full tier/quality
+ * design this implements. */
+static uint8_t build_chord_voicing(const uint8_t raw[TILES_NOTE_MAP_CHORD_NUM_NOTES], op_chord_tier_t tier,
+                                    uint8_t out_notes[OP_CHORD_MAX_VOICES]) {
+    uint8_t root = raw[0];
+    uint8_t third = raw[1];
+    uint8_t fifth = raw[2];
+    uint8_t seventh = raw[3];
+    uint8_t ninth = raw[4];
+    uint8_t eleventh = raw[5];
+    uint8_t thirteenth = raw[6];
+
+    uint8_t bass = clamp_midi_note((int)root - OP_CHORD_BASS_EXTRA_OCTAVE_SEMITONES);
+    uint8_t open_third = clamp_midi_note((int)third + 12);
+
+    int third_interval = (int)third - (int)root;
+    int fifth_interval = (int)fifth - (int)root;
+    bool is_diminished = (fifth_interval == 6);
+    bool is_minor = !is_diminished && (third_interval == 3);
+
+    uint8_t n = 0;
+    out_notes[n++] = bass;
+    if (tier == OP_CHORD_TIER_FULL && !is_diminished) {
+        /* Rootless jazz upper structure -- real feedback: "complex jazz
+         * chord with tensions." Root and fifth deliberately DROPPED
+         * here, not just added-to -- the bass voice already states the
+         * root, so the upper structure is free to be guide-tones-plus-
+         * tensions only, the same "bass covers the root, the chordal
+         * instrument voices it rootless" shape real jazz piano/guitar
+         * voicings use. */
+        out_notes[n++] = open_third;
+        out_notes[n++] = seventh;
+        out_notes[n++] = ninth;
+        out_notes[n++] = is_minor ? eleventh : thirteenth;
+    } else {
+        /* Tap and push tiers (and diminished's own capped top tier)
+         * share the identical foundation -- push only ADDS the 7th/9th
+         * on top, never rearranges the triad underneath it, so a tier
+         * change reads as "notes added," never "the chord moved." */
+        out_notes[n++] = root;
+        out_notes[n++] = fifth;
+        out_notes[n++] = open_third;
+        if (tier != OP_CHORD_TIER_TAP) {
+            out_notes[n++] = seventh;
+            out_notes[n++] = ninth;
+        }
+    }
+    return n;
+}
 
 static void chord_pad_note_off(uint8_t pad) {
     if (!s_chord_pad_sounding[pad - 1u]) {
         return;
     }
-    for (uint8_t i = 0; i < TILES_NOTE_MAP_CHORD_NUM_NOTES; i++) {
+    for (uint8_t i = 0; i < s_chord_pad_note_count[pad - 1u]; i++) {
         tiles_midi_note_off(OP_CHORD_CHANNEL, s_chord_pad_notes[pad - 1u][i]);
     }
     tiles_haptics_stop(pad);
     s_chord_pad_sounding[pad - 1u] = false;
 }
 
-static void chord_pad_note_on(uint8_t pad) {
-    tiles_note_map_get_chord_notes(pad, s_chord_pad_notes[pad - 1u]);
-    /* Re-voice this chord's raw root-position triad toward whichever
-     * chord last sounded -- each of the 3 notes independently folds to
-     * the nearest octave of its own pitch class relative to the
-     * CORRESPONDING voice of the anchor chord (voice 0<->0, 1<->1,
-     * 2<->2), not just to a single shared reference point, so root
-     * stays near the previous root, third near the previous third, and
-     * fifth near the previous fifth -- minimal movement per voice,
-     * exactly the "smooth voice leading" a real chord organ/autoharp's
-     * auto-chord aims for. The very first chord since entering chord
-     * mode has no anchor yet, so it plays in plain root position
-     * unchanged -- exactly matching what tiles_note_map_get_chord_notes()
-     * already returned before this re-voicing step existed. */
-    if (s_chord_voice_anchor_valid) {
-        for (uint8_t i = 0; i < TILES_NOTE_MAP_CHORD_NUM_NOTES; i++) {
-            s_chord_pad_notes[pad - 1u][i] =
-                tiles_note_map_nearest_pitch_class(s_chord_pad_notes[pad - 1u][i], s_chord_voice_anchor_notes[i]);
-        }
-    }
-    for (uint8_t i = 0; i < TILES_NOTE_MAP_CHORD_NUM_NOTES; i++) {
+/* Strikes `pad` fresh at `tier` -- shared by the initial touch-down and
+ * by handle_chord_pad_taps()'s own live tier-change retrigger, so both
+ * go through identical logic (end whatever that pad had sounding first,
+ * every time, matching this file's own seq_fire_note()-style "always
+ * clean up before striking again" precedent). */
+static void chord_pad_strike(uint8_t pad, op_chord_tier_t tier) {
+    chord_pad_note_off(pad);
+    uint8_t raw[TILES_NOTE_MAP_CHORD_NUM_NOTES];
+    tiles_note_map_get_chord_notes(pad, raw);
+    uint8_t count = build_chord_voicing(raw, tier, s_chord_pad_notes[pad - 1u]);
+    s_chord_pad_note_count[pad - 1u] = count;
+    for (uint8_t i = 0; i < count; i++) {
         tiles_midi_note_on(OP_CHORD_CHANNEL, s_chord_pad_notes[pad - 1u][i], OP_CHORD_VELOCITY);
-        s_chord_voice_anchor_notes[i] = s_chord_pad_notes[pad - 1u][i];
     }
-    s_chord_voice_anchor_valid = true;
+    s_chord_pad_tier[pad - 1u] = tier;
     tiles_haptics_trigger_kick(pad, OP_CHORD_VELOCITY);
     s_chord_pad_sounding[pad - 1u] = true;
 }
@@ -780,8 +892,19 @@ static void handle_chord_pad_taps(void) {
         }
         bool touched = tiles_touch_is_touched(pad);
         if (touched && !s_chord_pad_touched[pad - 1u]) {
-            chord_pad_note_on(pad);
-        } else if (!touched && s_chord_pad_touched[pad - 1u]) {
+            chord_pad_strike(pad, chord_tier_for_depth((float)tiles_hall_get_depth(pad)));
+        } else if (touched) {
+            /* Real feedback: "regular push tensions, max preassure or
+             * hard push complex jazz chord" -- live, continuous, morphs
+             * BOTH ways within the same held note (confirmed: pressing
+             * harder escalates, easing off reverts). Only re-strikes on
+             * an actual tier CHANGE, not every scan -- a steady hold
+             * produces one clean strike, not a retrigger storm. */
+            op_chord_tier_t tier = chord_tier_for_depth((float)tiles_hall_get_depth(pad));
+            if (tier != s_chord_pad_tier[pad - 1u]) {
+                chord_pad_strike(pad, tier);
+            }
+        } else if (s_chord_pad_touched[pad - 1u]) {
             chord_pad_note_off(pad);
         }
         s_chord_pad_touched[pad - 1u] = touched;
@@ -2095,13 +2218,6 @@ static void set_active_mode(tiles_op_mode_t mode) {
      * mode takes over. */
     tiles_note_map_set_chord_mode(mode == OP_MODE_CHORD);
     if (mode == OP_MODE_CHORD) {
-        /* Fresh voice-leading anchor every time chord mode is (re-)
-         * entered -- see s_chord_voice_anchor_valid's own comment above
-         * chord_pad_note_on() for why: the very first chord of a new
-         * session should play in plain root position, not gravitate
-         * toward wherever some earlier, unrelated chord-mode session
-         * happened to leave off. */
-        s_chord_voice_anchor_valid = false;
         for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
             s_chord_pad_touched[pad - 1u] = tiles_touch_is_touched(pad);
         }

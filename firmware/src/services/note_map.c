@@ -128,14 +128,23 @@ bool tiles_note_map_is_guitar_fret_marker_pad(uint8_t logical_pad, bool *out_is_
  * original spec ("chords are one octave lower than melodic") turns out
  * to have been correct all along; two octaves overshot it. */
 #define CHORD_OCTAVE_DOWN_SEMITONES 12
-/* Diatonic third and fifth, in SCALE-DEGREE space (not semitones) --
- * skip-one, skip-two through the scale's own interval table, same as
- * how a real chord-organ/autoharp harmonizes each scale degree. This is
- * what makes the triad quality (major/minor/diminished) automatically
- * correct for whichever scale is currently selected, rather than always
- * building a plain major triad regardless of scale. */
+/* Diatonic third through thirteenth, in SCALE-DEGREE space (not
+ * semitones) -- skip-two-per-tone through the scale's own interval
+ * table, same as how a real chord-organ/autoharp harmonizes each scale
+ * degree, extended past the triad up to the 13th (each an octave-doubled
+ * continuation of the exact same stacked-thirds pattern -- degree+8 is
+ * the same pitch class as the 2nd degree one octave up, i.e. a diatonic
+ * 9th, and so on). This is what makes chord quality (major/minor/
+ * diminished) and tension quality (natural vs. needing alteration this
+ * file doesn't attempt) automatically correct for whichever scale is
+ * currently selected, rather than always building against a plain major
+ * scale regardless. */
 #define CHORD_THIRD_DEGREE_STEP 2u
 #define CHORD_FIFTH_DEGREE_STEP 4u
+#define CHORD_SEVENTH_DEGREE_STEP 6u
+#define CHORD_NINTH_DEGREE_STEP 8u
+#define CHORD_ELEVENTH_DEGREE_STEP 10u
+#define CHORD_THIRTEENTH_DEGREE_STEP 12u
 /* Real feedback, once played on real hardware: "chords are not
  * structured propperly. they should all be the chords on a same key
  * and real chords not random 3 note group. and melodic side should me
@@ -463,38 +472,6 @@ static tiles_scale_table_t chord_mode_scale_table(void) {
     return scale_table(TILES_SCALE_IONIAN);
 }
 
-/* Nearest instance of `note`'s own pitch class to `anchor` -- e.g. pitch
- * class G (7 semitones above C) folds to 5 semitones BELOW an anchor of
- * C, not 7 above, since |-5| < |+7|. Used by chord_pad_note_on() in
- * op_mode.c to voice each new chord as close as possible to whatever
- * chord last sounded, rather than always stacking root-third-fifth
- * upward from each chord's own root -- see that function's own comment
- * for why ("make the chords with inversions to make them feel more
- * musical," real feedback, matching how a real chord organ/autoharp's
- * auto-chord voicing stays compact instead of leaping registers every
- * time the harmonized root climbs to a new scale degree). Exposed here
- * (not static) because op_mode.c, not this file, is where the "last
- * chord played" state that supplies `anchor` naturally lives -- this
- * file's own note-mapping functions have no sequential/temporal state
- * of their own otherwise, and this keeps it that way. */
-uint8_t tiles_note_map_nearest_pitch_class(uint8_t note, uint8_t anchor) {
-    int pitch_class = (int)note % 12;
-    int octave_base = (int)anchor - ((int)anchor % 12);
-    int candidate = octave_base + pitch_class;
-    if (candidate - (int)anchor > 6) {
-        candidate -= 12;
-    } else if ((int)anchor - candidate > 6) {
-        candidate += 12;
-    }
-    if (candidate < 0) {
-        candidate = 0;
-    }
-    if (candidate > 127) {
-        candidate = 127;
-    }
-    return (uint8_t)candidate;
-}
-
 void tiles_note_map_get_chord_notes(uint8_t logical_pad, uint8_t out_notes[TILES_NOTE_MAP_CHORD_NUM_NOTES]) {
     const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
     if (!s_chord_mode_active || cfg == NULL || cfg->col > CHORD_REGION_MAX_COL) {
@@ -505,7 +482,14 @@ void tiles_note_map_get_chord_notes(uint8_t logical_pad, uint8_t out_notes[TILES
     }
     tiles_scale_table_t table = chord_mode_scale_table();
     uint8_t root_degree = chord_mode_degree(cfg);
-    const uint8_t degree_steps[TILES_NOTE_MAP_CHORD_NUM_NOTES] = {0u, CHORD_THIRD_DEGREE_STEP, CHORD_FIFTH_DEGREE_STEP};
+    const uint8_t degree_steps[TILES_NOTE_MAP_CHORD_NUM_NOTES] = {
+        0u,
+        CHORD_THIRD_DEGREE_STEP,
+        CHORD_FIFTH_DEGREE_STEP,
+        CHORD_SEVENTH_DEGREE_STEP,
+        CHORD_NINTH_DEGREE_STEP,
+        CHORD_ELEVENTH_DEGREE_STEP,
+        CHORD_THIRTEENTH_DEGREE_STEP};
     for (uint8_t i = 0; i < TILES_NOTE_MAP_CHORD_NUM_NOTES; i++) {
         int note = note_for_scale_degree_using(table, (uint8_t)(root_degree + degree_steps[i])) - CHORD_OCTAVE_DOWN_SEMITONES;
         if (note < 0) {

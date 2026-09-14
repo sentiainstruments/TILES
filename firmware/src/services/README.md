@@ -4580,5 +4580,73 @@ not its code.
   looping once you exit instead of silently freezing (capture's own
   advance function never consulted that flag, so exiting used to hand
   back to the normal engine with the lane still marked stopped).
+- **Chord mode: pressure-tiered voicing, static and predictable, real
+  jazz theory behind the tensions.** Real feedback: "for chord plus
+  melodic mode the tap of capacitive touch does regular chord but with a
+  root bass note and an oppen voicing for the chord then when pad is
+  pressed past 50% make the chord more spicy depending on velocity...
+  and full press does a more jazz complex voicing and more tensions
+  replacing notes," and separately: "we are having issues with the
+  chords drifting positions in certain sequences of presses so remove
+  the voice leading thing. we just keep same positions and inversion
+  static not adaptive, find best voicings firast tho." A later session
+  confirmed neither had actually landed yet: "the preassure dependant
+  chord type is not working and we still have this situation when the
+  chord shapes evolve in a way that transports the chords to different
+  parts of the range. we need consistent predictable shapes."
+  **Voice-leading removed outright, not tuned.** The old design
+  (`s_chord_voice_anchor_notes`/`_valid`, `tiles_note_map_nearest_
+  pitch_class()`) re-voiced each new chord toward wherever the previous
+  one sounded, one note at a time -- exactly what caused the drift. Every
+  voicing is now a pure function of (root pad, chord quality, press
+  depth) with zero history: `tiles_note_map_get_chord_notes()` always
+  returns the identical 7-note diatonic stack for a given pad regardless
+  of anything played before it.
+  **The stack extended from 3 notes (root/3rd/5th) to 7**
+  (root/3rd/5th/7th/9th/11th/13th, `TILES_NOTE_MAP_CHORD_NUM_NOTES`
+  3->7), reusing the exact same skip-two-scale-degrees-per-tone
+  harmonization the triad already used, just carried further -- this is
+  "for free" from `note_for_scale_degree_using()`'s own existing octave-
+  doubling, so it automatically stays correct for whichever diatonic
+  mode is selected with no new math. Register spreading (which tier uses
+  which voices, the bass note, the "open" spread) stays entirely
+  `op_mode.c`'s concern, not `note_map.c`'s -- the note-mapping file
+  hands back raw chord tones, nothing about performance articulation.
+  **Three tiers, chosen live off Hall depth while held** (`chord_tier_
+  for_depth()`, thresholds at `OP_MENU_SELECT_DEPTH_THRESHOLD` and a new
+  `OP_CHORD_FULL_PRESS_DEPTH_THRESHOLD`), morphing both directions within
+  the same held note -- pressing harder escalates, easing off reverts,
+  re-striking only on an actual tier change:
+  - **Tap**: bass (root, TWO octaves below the melody register --
+    `OP_CHORD_BASS_EXTRA_OCTAVE_SEMITONES` on top of note_map.c's own
+    existing one-octave chord drop) + an OPEN triad (root and fifth at
+    the chord register, third raised a further octave on top) -- "a root
+    bass note and an open voicing."
+  - **Push (>=50% depth)**: the identical tap foundation, PLUS the 7th
+    and 9th -- "more spicy... some tensions," never rearranging the
+    triad underneath, so the tier change reads as notes added, not the
+    chord moving.
+  - **Full press (very deep)**: the bass stays, but the upper structure
+    goes ROOTLESS -- third/7th/9th plus a top tension, root and fifth
+    dropped outright ("replacing notes"), the same "bass states the
+    root, the chordal voice goes rootless" shape real jazz piano/guitar
+    voicings use.
+  **Chord quality read directly off the actual returned intervals**
+  (root-to-third, root-to-fifth), not hardcoded per scale degree, so it
+  tracks whatever diatonic mode is active automatically: major/minor
+  determines the full-press top tension (13th for major-quality, 11th
+  for minor) specifically to dodge jazz harmony's textbook "avoid note"
+  -- a natural 11th sits a minor 9th above a MAJOR 3rd once octave-
+  reduced, a genuinely harsh clash, so it's only ever added where the
+  3rd is minor and that clash can't occur; diminished-quality degrees
+  are capped at the push tier's own voicing at full press too (a real
+  diminished chord's own tensions need chromatic alteration this
+  diatonic-only system doesn't attempt -- forcing untreated ones on
+  would reintroduce exactly the clash this design avoids elsewhere).
+  Verified by hand-tracing the actual interval math for major/minor/
+  diminished scale degrees before flashing (not just by eye) -- see the
+  session's own worked examples for the specific semitone arithmetic
+  confirming no unintended half-step/minor-9th clashes land in any
+  tier's final voicing.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
