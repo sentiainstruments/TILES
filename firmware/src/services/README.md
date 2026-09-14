@@ -4298,5 +4298,120 @@ not its code.
   (`seq_end_current_note()`), same as every other sub-view here; switching
   patterns clears any in-flight ratchet count too, the same cross-pattern
   mix-up guard the original picker already established.
+- **Three sequencer bugs closed.** Real feedback: "ok we have clashing
+  issues on modes, mode selectro shouldnt pause sequencer... also
+  selectring a new sequence takes that initial press as a note on for
+  that step, lets fix that... changing scale on a melodic modes or other
+  sequences should not affect other sequences that are already set up or
+  playing meaning fully scale independent sequences and no stopping on
+  playing sequences regarless of manu displayed or scale changed
+  somewoehre else."
+  1. **Menus were pausing playback.** `tiles_op_mode_scan()`'s own
+     `seq_advance_clock()` call used to sit at the BOTTOM of the
+     function, past four separate `return`s (top-level menu, scale menu,
+     pattern bank, per-step edit) -- every one of those silently froze
+     the playhead for as long as it stayed open. Moved the call to the
+     TOP of the function, unconditional (now looped per lane -- see
+     below), closing the gap for all four sub-views at once. Capture
+     mode stays the one genuine exception (it replaces the advance
+     entirely with its own `seq_capture_advance_clock()` for the one
+     lane it owns).
+  2. **Selecting a pattern bled its touch into the next view as a note
+     toggle.** The finger that just tapped a bank cell to select it is
+     often still down the instant control returns to the normal step
+     view; `pattern_bank_exit()` never re-synced `seq_handle_step_taps()`'s
+     own touch-tracking arrays the way `edit_exit()` already did for the
+     identical reason, so that same pad read as a fresh touch-down and
+     toggled whatever step it landed on. Fixed by adding the exact same
+     resync loop `edit_exit()` and `seq_start()` already establish.
+  3. **Armed steps re-read the LIVE global scale every time they played.**
+     A plain tap-to-arm left `step_pitch_override` false, so
+     `seq_fire_note()` re-resolved that step's pitch from
+     `tiles_note_map_get_note()` -- the current global scale/octave/key
+     -- on every single pass, meaning changing the scale ANYWHERE later
+     (melodic mode, a different lane's own pick) silently retuned every
+     already-programmed step everywhere, including patterns actively
+     playing in the background. Fixed by freezing the resolved note into
+     `step_note`/`step_pitch_override` the instant a step is armed
+     (`seq_handle_step_taps()`'s own release branch) -- the same
+     always-absolute approach sequencer capture mode already used per
+     step. Re-arming a step later re-freezes it fresh at THAT moment's
+     scale (a deliberate new edit, not passive drift); octave shift and
+     key transpose freeze the same way, alongside scale, since all three
+     bake into the one absolute MIDI note number this returns.
+- **Sequencer rearchitected: 4 independent, simultaneous lanes, 24
+  selectable patterns.** Real feedback: "sequence selector should have
+  all 24 pads as possible sequences... lets do 4 independent sequences
+  that can be assigned to 4 channels selectable by each row of 6
+  alternatives. by defoult they just do different midi channels...  make
+  each row a different color in seelctor to signify 4 lanes." Replaces
+  the previous round's flat 4-pattern bank (one pattern per row, only
+  ever one "active" pattern playing at a time) with a genuine 4 LANE x 6
+  ALTERNATIVE grid -- every one of the 24 pads is now a real,
+  individually selectable slot.
+  A **lane** is a fully independent playhead with its own fixed MIDI
+  channel (`s_seq_lane_channel[OP_SEQ_NUM_LANES]`, defaulting to nibbles
+  15/14/13/12 -- lane 0 keeps today's original single-pattern channel
+  unchanged) -- all 4 now run SIMULTANEOUSLY once the clock is running,
+  never just one at a time. Every scalar that used to describe "the
+  sequencer's" playback state (`s_seq_current_step`,
+  `s_seq_step_started_at_pulse`, `s_seq_pending_start`/`_restart`, the
+  ratchet-scheduling fields, the sounding-note bookkeeping) became a
+  `[OP_SEQ_NUM_LANES]` array, and every playback function that touched
+  them (`seq_advance_clock()`, `seq_enter_step()`, `seq_fire_note()`,
+  `seq_reset()`, `seq_resume_current_step()`, `seq_end_current_note()`)
+  gained an explicit `lane` parameter -- `tiles_op_mode_scan()` now loops
+  all 4 once per scan with the SAME clock snapshot (all lanes share one
+  global tempo/transport; only their CONTENT is independent).
+  Each lane's own row of 6 **alternatives** is a full, independent
+  pattern (armed steps, pitch overrides, length, probability) -- picking
+  a different column for a row swaps what that ONE lane plays without
+  touching the other 3. `active_pattern()` deliberately keeps its old,
+  narrower meaning throughout this change: "whichever pattern the player
+  is currently LOOKING AT" (`s_seq_edit_lane` + that lane's own active
+  alternative) -- every EDIT-side function (per-step pitch/probability/
+  ratchet, length-adjust, capture mode, the bank's own rendering) still
+  calls it completely unchanged. Only the PLAYBACK engine needed the new
+  lane-parameterized `pattern_for_lane()` sibling -- this is what kept
+  the refactor's blast radius to the playback functions and the bank
+  itself, rather than touching every edit-side call site too.
+  Tapping a bank cell does two things at once: sets that ROW's (lane's)
+  active alternative to that COLUMN, and makes that ROW the one shown in
+  the main step view (`s_seq_edit_lane`) -- one gesture unambiguously
+  specifies both "which lane" and "which alternative," so no separate
+  lane-select gesture was needed. Swapping a lane's active alternative
+  reuses the SAME quantized-start mechanism (`s_seq_pending_start`) a
+  fresh Start already uses, waiting for the next beat boundary rather
+  than jumping into the new pattern's content at a possibly-mid-beat
+  offset or an out-of-bounds step index if the two alternatives have
+  different lengths.
+  Colors: each row gets its own fixed identity hue at this file's usual
+  `OP_SCALE_AVAILABLE_LEVEL` "available" brightness (amber/green/blue/
+  purple for lanes 0-3, deliberately avoiding both red -- reserved
+  everywhere in this bank for "selected" -- and Sentia's own brand
+  magenta, reserved elsewhere for capture mode's playhead and the
+  length-change flash); the selected cell in each row keeps the hard
+  on/off red flash the previous round already established.
+  MPE stuck-note reservation updated to match: since up to 4 channels
+  can now be simultaneously reserved instead of just 1, `tiles_op_mode_
+  sequencer_reserved_channel()` (a single return value) became `tiles_
+  op_mode_sequencer_channel_is_reserved(channel)` (a query), and
+  `services/expression.c`'s `claim_mpe_channel()` now asks it per
+  candidate channel instead of comparing against one stored value.
+  "write down that the control software can send the sequences to
+  differetn out ports loke cv gate, or midi" -- noted in
+  `companion-app/README.md`'s planned feature list; by default every
+  lane still sends out the same USB-MIDI endpoint on its own channel,
+  same as everything else in this firmware -- per-lane physical output
+  routing (CV/gate vs. MIDI) is a companion-app-side feature, not built
+  here.
+  Known, accepted tradeoff: haptic step-pulses are a PHYSICAL pad
+  resource, but up to 4 lanes can each independently reach "step N" (pad
+  N+1) at the same instant now -- a stop from one lane can occasionally
+  cut a kick another lane (or capture mode, or a live touch) just started
+  on that same physical actuator. Rare, momentary, cosmetic only (the
+  actual MIDI note is always fully separated by channel) -- not chased
+  here, the same tradeoff the single-background-lane version already
+  accepted.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

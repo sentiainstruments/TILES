@@ -1817,24 +1817,22 @@ void tiles_expression_force_release_all(void) {
  * and keeps the "steal" atomic from this function's own perspective.
  *
  * Real feedback: "is there anything needed to stop stuck niotes?" --
- * `reserved` (see tiles_op_mode_sequencer_reserved_channel()'s own
- * comment) is skipped in BOTH the free-slot search and the steal-oldest
- * fallback below, so a live touch can never claim the exact channel the
- * sequencer is currently using for its own background pattern -- the
- * real, if narrow, collision that used to be possible now that a
- * sequencer pattern and live melodic touches can genuinely run at the
- * same time. Doesn't retroactively evict a live touch that already sat
- * on that channel BEFORE the sequencer started wanting it -- reaching
- * that needs 11+ simultaneous fingers already down (search fills the
- * LOW channels first, pattern channels are the top few) AND the
- * sequencer starting at that exact moment; narrower still than the
- * gap this fix closes, and not chased here. */
+ * tiles_op_mode_sequencer_channel_is_reserved() (see that function's own
+ * comment) is checked for every candidate in BOTH the free-slot search
+ * and the steal-oldest fallback below, so a live touch can never claim
+ * one of the sequencer's OP_SEQ_NUM_LANES own channels while it's
+ * genuinely running -- the real, if narrow, collision that used to be
+ * possible now that up to 4 lanes and live melodic touches can genuinely
+ * run at the same time. Doesn't retroactively evict a live touch that
+ * already sat on one of those channels BEFORE the sequencer started
+ * wanting it -- reaching that needs several simultaneous fingers already
+ * down (search fills the LOW channels first, lane channels are the top
+ * few) AND the sequencer starting at that exact moment; narrower still
+ * than the gap this fix closes, and not chased here. */
 static uint8_t claim_mpe_channel(uint8_t pad) {
-    uint8_t reserved = tiles_op_mode_sequencer_reserved_channel();
-
     for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
         uint8_t channel = (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i);
-        if (!s_mpe_channels[i].in_use && channel != reserved) {
+        if (!s_mpe_channels[i].in_use && !tiles_op_mode_sequencer_channel_is_reserved(channel)) {
             s_mpe_channels[i].in_use = true;
             s_mpe_channels[i].owner_pad = pad;
             s_mpe_channels[i].claim_seq = s_next_mpe_claim_seq++;
@@ -1844,7 +1842,7 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
 
     uint8_t oldest_idx = TILES_MIDI_MPE_NUM_MEMBER_CHANNELS;
     for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
-        if ((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i) == reserved) {
+        if (tiles_op_mode_sequencer_channel_is_reserved((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i))) {
             continue;
         }
         if (oldest_idx == TILES_MIDI_MPE_NUM_MEMBER_CHANNELS || s_mpe_channels[i].claim_seq < s_mpe_channels[oldest_idx].claim_seq) {
@@ -1852,12 +1850,12 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
         }
     }
     if (oldest_idx == TILES_MIDI_MPE_NUM_MEMBER_CHANNELS) {
-        /* Every single Member Channel is the reserved one -- impossible
-         * given TILES_MIDI_MPE_NUM_MEMBER_CHANNELS (15) > 1, but a
-         * defined, harmless fallback (the reserved channel itself)
-         * rather than reading s_mpe_channels[15] out of bounds if this
+        /* Every single Member Channel is reserved -- impossible given
+         * TILES_MIDI_MPE_NUM_MEMBER_CHANNELS (15) > OP_SEQ_NUM_LANES (4),
+         * but a defined, harmless fallback (the first Member Channel)
+         * rather than reading s_mpe_channels[15] out of bounds if either
          * constant ever changed. */
-        return reserved;
+        return TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL;
     }
     uint8_t stolen_pad = s_mpe_channels[oldest_idx].owner_pad;
     printf("[expression] pad %u stealing pad %u's MPE channel %u (all %u member channels in use)\n", pad, stolen_pad,

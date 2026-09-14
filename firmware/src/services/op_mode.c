@@ -362,25 +362,28 @@ static uint32_t s_beat_flash_start_ms;
 #define OP_SEQ_CURSOR_ARMED_G 0.3f
 #define OP_SEQ_CURSOR_ARMED_B 1.0f
 
-/* ---- Multi-pattern bank ------------------------------------------------
- * Real feedback: "sub menu triangle is reserved for other stuff... maybe
- * in triangle we can select midi channels for multiple patterns." 4
- * patterns -- deliberately matches the grid's own 4 pad rows exactly, so
- * the picker (below) reuses the mode-picker's one-row-per-item shape
- * rather than inventing a new layout for a small, fixed item count.
- * Each pattern keeps its own armed steps, per-step pitch override, length,
- * and output channel -- what used to be this file's only flat
- * s_seq_step_armed[]/fixed OP_SEQ_CHANNEL is now per-pattern state behind
- * active_pattern() below. Default channel per pattern claims from the TOP
- * of the 15 MPE Member Channels downward (pattern 0 = nibble 15, exactly
- * today's original single-channel behavior, unchanged for anyone not
- * using extra patterns) -- a default, not a reservation:
- * services/expression.c's own live per-touch channel allocator is
- * untouched, so this can only ever collide with live touch playing in the
- * rare case of using many fingers at once while ALSO running multiple
- * active patterns, an accepted edge case rather than something worth
- * shrinking live MPE polyphony to avoid. */
-#define OP_SEQ_NUM_PATTERNS 4u
+/* ---- Multi-lane pattern bank ---------------------------------------------
+ * Real feedback: "sequence selector should have all 24 pads as possible
+ * sequences... lets do 4 independent sequences that can be assigned to 4
+ * channels selectable by each row of 6 alternatives... by defoult they
+ * just do different midi channels." Reworked from the previous round's
+ * flat 4-pattern bank (one pattern per row, only one ever playing) into a
+ * genuine 4 LANE x 6 ALTERNATIVE grid -- all 24 pads meaningful, matching
+ * the grid's own real shape exactly instead of using only 4 of its rows.
+ * A LANE is a fully independent, always-running playhead with its own
+ * fixed MIDI channel (s_seq_lane_channel[] below) -- all 4 play
+ * SIMULTANEOUSLY once the clock is running, never just one "active"
+ * pattern at a time the way the previous round worked. Each lane's own
+ * row of 6 alternatives is a set of interchangeable patterns for THAT
+ * lane -- picking a different column for a row swaps what that ONE lane
+ * plays without touching the other 3 lanes' own playback at all. "write
+ * down that the control software can send the sequences to differetn out
+ * ports loke cv gate, or midi" -- noted for companion-app/README.md's own
+ * planned feature list, not built here: this firmware round only ever
+ * sends all 4 lanes out the same USB-MIDI endpoint on their own channels,
+ * same as everything else in this file. */
+#define OP_SEQ_NUM_LANES 4u
+#define OP_SEQ_ALTS_PER_LANE 6u
 #define OP_SEQ_MIN_LENGTH 1u
 #define OP_SEQ_MAX_LENGTH OP_SEQ_NUM_STEPS
 /* Real feedback: "when we do shift plus modifiers -+ for changiong
@@ -414,22 +417,51 @@ typedef struct {
      * left at (false by default, never set anywhere reachable now). */
     bool probability_enabled;
     uint8_t length;  /* 1..24 active steps -- see OP_SEQ_MIN/MAX_LENGTH */
-    uint8_t channel; /* raw 0-15 status-nibble MPE channel */
+    /* No `channel` field here anymore -- channel is now a LANE property
+     * (s_seq_lane_channel[] below), shared by all 6 of a lane's own
+     * alternatives, not something that could ever disagree between them. */
 } op_seq_pattern_t;
 
-static op_seq_pattern_t s_seq_pattern[OP_SEQ_NUM_PATTERNS];
-static uint8_t s_seq_active_pattern;
+/* [lane][alternative] -- see this section's own header comment. */
+static op_seq_pattern_t s_seq_pattern[OP_SEQ_NUM_LANES][OP_SEQ_ALTS_PER_LANE];
+/* Which alternative (0..5) each lane is CURRENTLY PLAYING -- read by every
+ * lane's own independent seq_advance_clock() call, completely separate
+ * from which lane the player happens to be LOOKING at right now
+ * (s_seq_edit_lane below). */
+static uint8_t s_seq_active_alt[OP_SEQ_NUM_LANES];
+/* Which lane's pattern the main step view/editor currently shows -- the
+ * OTHER 3 lanes keep playing in the background regardless, same
+ * established "runs in the background" precedent this file already uses
+ * for the sequencer as a whole vs. other top-level modes. active_pattern()
+ * below always resolves through this + s_seq_active_alt[this lane]. */
+static uint8_t s_seq_edit_lane;
+/* Default channel per lane claims from the TOP of the 15 MPE Member
+ * Channels downward (lane 0 = nibble 15, exactly today's original
+ * single-pattern behavior, unchanged for anyone never touching the bank)
+ * -- a default, not a hard reservation against LIVE touch (services/
+ * expression.c's own per-touch allocator is untouched and can still use
+ * any of these 15 channels when the sequencer isn't genuinely running --
+ * see tiles_op_mode_sequencer_channel_is_reserved()'s own comment for
+ * when it IS). */
+static uint8_t s_seq_lane_channel[OP_SEQ_NUM_LANES];
 /* See OP_SEQ_LENGTH_FLASH_DURATION_MS's own comment. 0 at boot/pattern
  * init is indistinguishable from "just flashed at boot time" for a
  * single frame at most -- not worth a separate bool for. */
 static uint32_t s_seq_length_flash_ms;
 
-static uint8_t s_seq_current_step; /* 0..23 */
-static bool s_seq_note_sounding;
-static uint8_t s_seq_sounding_pad; /* 1..24, valid iff s_seq_note_sounding */
-static uint8_t s_seq_sounding_channel;
-static uint8_t s_seq_sounding_note;
-static uint32_t s_seq_step_started_at_pulse;
+/* ---- Per-lane playback state ---------------------------------------------
+ * Every one of these used to be a single scalar, back when only one
+ * pattern ever played at a time. Now that all 4 lanes run their own
+ * independent playhead simultaneously, each needs its own slot -- indexed
+ * by lane (0..OP_SEQ_NUM_LANES-1) everywhere below, never by
+ * s_seq_edit_lane implicitly (that's an EDIT/display concern only; see
+ * active_pattern() vs. pattern_for_lane() further down). */
+static uint8_t s_seq_current_step[OP_SEQ_NUM_LANES]; /* 0..23 */
+static bool s_seq_note_sounding[OP_SEQ_NUM_LANES];
+static uint8_t s_seq_sounding_pad[OP_SEQ_NUM_LANES]; /* 1..24, valid iff s_seq_note_sounding[lane] */
+static uint8_t s_seq_sounding_channel[OP_SEQ_NUM_LANES];
+static uint8_t s_seq_sounding_note[OP_SEQ_NUM_LANES];
+static uint32_t s_seq_step_started_at_pulse[OP_SEQ_NUM_LANES];
 static bool s_seq_prev_pad_touched[TILES_NUM_PADS];
 /* Real feedback: "we need to quantice to midi clock when that is
  * conected" -- confirmed meaning: a manual (re-)start doesn't just jump
@@ -445,18 +477,23 @@ static bool s_seq_prev_pad_touched[TILES_NUM_PADS];
  * pending flag isn't enough on its own. True for a genuine restart
  * (seq_start()'s own fresh entry, and "+" pressed WHILE already playing);
  * false for a plain resume ("+" pressed while stopped, not preceded by a
- * double-stop rewind). */
-static bool s_seq_pending_start;
-static bool s_seq_pending_restart;
+ * double-stop rewind). Per-lane now: all 4 lanes share one global
+ * transport (minus/plus start/stop/rewind everything at once, same as
+ * before -- see handle_transport_and_length()'s own sequencer branch),
+ * but EACH lane still needs its own pending-start/restart bookkeeping
+ * since seq_advance_clock() reads/clears these once per lane per scan. */
+static bool s_seq_pending_start[OP_SEQ_NUM_LANES];
+static bool s_seq_pending_restart[OP_SEQ_NUM_LANES];
 
 /* Ratchet playback state for the CURRENT step only -- reset every time a
  * new step is entered (seq_enter_step()), consumed by seq_advance_clock()
  * firing additional sub-hits within that same step's own pulse window.
  * s_seq_ratchet_remaining counts hits still owed AFTER the one seq_enter_
- * step() already fired directly. */
-static uint8_t s_seq_ratchet_remaining;
-static uint32_t s_seq_ratchet_interval_pulses;
-static uint32_t s_seq_next_ratchet_pulse;
+ * step() already fired directly. Per-lane, same reasoning as the
+ * pending-start state just above. */
+static uint8_t s_seq_ratchet_remaining[OP_SEQ_NUM_LANES];
+static uint32_t s_seq_ratchet_interval_pulses[OP_SEQ_NUM_LANES];
+static uint32_t s_seq_next_ratchet_pulse[OP_SEQ_NUM_LANES];
 
 /* ---- Per-step editing: pitch, probability, ratchet ---------------------
  * Real feedback: "we need a way to assign pitches to the notes"; later,
@@ -717,44 +754,72 @@ static bool other_feature_owns_input(void) {
            tiles_octave_control_is_transpose_active() || tiles_standby_is_active() || tiles_standby_is_deep_sleep();
 }
 
+/* The pattern the player is currently LOOKING AT/editing -- the main step
+ * view, per-step pitch/probability/ratchet edit, the pattern bank's own
+ * selection, capture mode, and length-adjust all read/write through this
+ * one. Deliberately NOT what plays each lane's own audio -- see
+ * pattern_for_lane() below for that -- so switching which lane you're
+ * viewing never has to fight over which pattern struct playback itself is
+ * independently reading. */
 static op_seq_pattern_t *active_pattern(void) {
-    return &s_seq_pattern[s_seq_active_pattern];
+    return &s_seq_pattern[s_seq_edit_lane][s_seq_active_alt[s_seq_edit_lane]];
+}
+
+/* The pattern actually playing on a given lane right now -- used only by
+ * the playback engine below (seq_fire_note()/seq_enter_step()/
+ * seq_advance_clock() and friends), each call parameterized by lane since
+ * all OP_SEQ_NUM_LANES now run independently and simultaneously. When
+ * `lane == s_seq_edit_lane` this happens to be the exact same pattern
+ * active_pattern() above also resolves to -- no special-casing needed for
+ * that overlap, both just read the same s_seq_active_alt[lane]. */
+static op_seq_pattern_t *pattern_for_lane(uint8_t lane) {
+    return &s_seq_pattern[lane][s_seq_active_alt[lane]];
 }
 
 static void edit_enter(uint8_t step, uint32_t started_ms); /* defined below, used by seq_handle_step_taps()'s own hold detection */
 static void edit_enter_ratchet(uint8_t step); /* defined below, used by seq_handle_step_taps()'s own circle+touch detection */
 
 /* Uses the channel/note captured at note-on time (below), not whatever
- * active_pattern() currently resolves to -- correctness never depends on
- * s_seq_active_pattern staying the same between a note firing and this
- * ending it (moot while pattern-switching has no UI at all -- see this
- * file's own "Pattern/channel picker: REMOVED" section -- but a robust
- * invariant worth keeping regardless, in case that changes again). */
-static void seq_end_current_note(void) {
-    if (!s_seq_note_sounding) {
+ * pattern_for_lane(lane) currently resolves to -- correctness never
+ * depends on that lane's s_seq_active_alt staying the same between a note
+ * firing and this ending it (the pattern bank can switch it mid-note --
+ * see handle_pattern_bank_taps()'s own comment -- and this stays correct
+ * either way). */
+static void seq_end_current_note(uint8_t lane) {
+    if (!s_seq_note_sounding[lane]) {
         return;
     }
-    tiles_midi_note_off(s_seq_sounding_channel, s_seq_sounding_note);
-    tiles_haptics_stop(s_seq_sounding_pad);
-    s_seq_note_sounding = false;
+    tiles_midi_note_off(s_seq_sounding_channel[lane], s_seq_sounding_note[lane]);
+    /* Real, accepted edge case: haptics are a PHYSICAL pad resource, but
+     * up to 4 lanes can each independently reach "step N" (pad N+1) at
+     * the same moment -- a stop from one lane can cut a kick another lane
+     * (or capture mode, or a live touch) just started on that same
+     * physical actuator. Rare, momentary, and cosmetic only (never
+     * affects the actual MIDI note, which is fully per-lane via its own
+     * channel) -- not worth suppressing haptics for background lanes
+     * over, the same tradeoff this file already accepted for the single
+     * background pattern the previous round shipped. */
+    tiles_haptics_stop(s_seq_sounding_pad[lane]);
+    s_seq_note_sounding[lane] = false;
 }
 
-/* Fires ONE note for `step` -- shared by seq_enter_step() (the step's
- * first hit) and seq_advance_clock() (any additional ratchet sub-hits
- * within that same step) so both go through identical logic. Does NOT
- * touch s_seq_current_step or roll probability -- those are seq_enter_
- * step()'s own concerns, once per step, not per ratchet hit. */
-static void seq_fire_note(uint8_t step) {
-    seq_end_current_note();
-    op_seq_pattern_t *pat = active_pattern();
+/* Fires ONE note for `step` on `lane` -- shared by seq_enter_step() (the
+ * step's first hit) and seq_advance_clock() (any additional ratchet
+ * sub-hits within that same step) so both go through identical logic.
+ * Does NOT touch s_seq_current_step[lane] or roll probability -- those are
+ * seq_enter_step()'s own concerns, once per step, not per ratchet hit. */
+static void seq_fire_note(uint8_t lane, uint8_t step) {
+    seq_end_current_note(lane);
+    op_seq_pattern_t *pat = pattern_for_lane(lane);
     uint8_t pad = (uint8_t)(step + 1u);
     uint8_t note = pat->step_pitch_override[step] ? pat->step_note[step] : tiles_note_map_get_note(pad);
-    tiles_midi_note_on(pat->channel, note, OP_SEQ_VELOCITY);
+    uint8_t channel = s_seq_lane_channel[lane];
+    tiles_midi_note_on(channel, note, OP_SEQ_VELOCITY);
     tiles_haptics_trigger_kick(pad, OP_SEQ_VELOCITY);
-    s_seq_note_sounding = true;
-    s_seq_sounding_pad = pad;
-    s_seq_sounding_channel = pat->channel;
-    s_seq_sounding_note = note;
+    s_seq_note_sounding[lane] = true;
+    s_seq_sounding_pad[lane] = pad;
+    s_seq_sounding_channel[lane] = channel;
+    s_seq_sounding_note[lane] = note;
 }
 
 /* Real feedback: "yes per step probablility but we should be able to
@@ -764,11 +829,11 @@ static void seq_fire_note(uint8_t step) {
  * doesn't, matching how real hardware "trig probability" works) and, if
  * it fires, arms however many additional ratchet hits it's set for --
  * seq_advance_clock() below fires those on schedule via seq_fire_note(). */
-static void seq_enter_step(uint8_t step) {
-    seq_end_current_note();
-    s_seq_current_step = step;
-    s_seq_ratchet_remaining = 0u;
-    op_seq_pattern_t *pat = active_pattern();
+static void seq_enter_step(uint8_t lane, uint8_t step) {
+    seq_end_current_note(lane);
+    s_seq_current_step[lane] = step;
+    s_seq_ratchet_remaining[lane] = 0u;
+    op_seq_pattern_t *pat = pattern_for_lane(lane);
     if (!pat->step_armed[step]) {
         return;
     }
@@ -781,21 +846,21 @@ static void seq_enter_step(uint8_t step) {
     if (ratchet_total < 1u) {
         ratchet_total = 1u;
     }
-    seq_fire_note(step);
+    seq_fire_note(lane, step);
     if (ratchet_total > 1u) {
-        s_seq_ratchet_remaining = (uint8_t)(ratchet_total - 1u);
-        s_seq_ratchet_interval_pulses = OP_SEQ_CLOCKS_PER_STEP / ratchet_total;
-        if (s_seq_ratchet_interval_pulses < 1u) {
-            s_seq_ratchet_interval_pulses = 1u;
+        s_seq_ratchet_remaining[lane] = (uint8_t)(ratchet_total - 1u);
+        s_seq_ratchet_interval_pulses[lane] = OP_SEQ_CLOCKS_PER_STEP / ratchet_total;
+        if (s_seq_ratchet_interval_pulses[lane] < 1u) {
+            s_seq_ratchet_interval_pulses[lane] = 1u;
         }
-        s_seq_next_ratchet_pulse = s_seq_step_started_at_pulse + s_seq_ratchet_interval_pulses;
+        s_seq_next_ratchet_pulse[lane] = s_seq_step_started_at_pulse[lane] + s_seq_ratchet_interval_pulses[lane];
     }
 }
 
-static void seq_reset(uint32_t now_pulse) {
-    s_seq_step_started_at_pulse = now_pulse;
-    s_seq_pending_start = false;
-    seq_enter_step(0u);
+static void seq_reset(uint8_t lane, uint32_t now_pulse) {
+    s_seq_step_started_at_pulse[lane] = now_pulse;
+    s_seq_pending_start[lane] = false;
+    seq_enter_step(lane, 0u);
 }
 
 /* The other half of s_seq_pending_restart's distinction -- resumes
@@ -803,9 +868,9 @@ static void seq_reset(uint32_t now_pulse) {
  * including a new probability roll/ratchet cycle, since from the
  * player's perspective this IS a new occurrence of that step) instead of
  * jumping back to step 0. */
-static void seq_resume_current_step(uint32_t now_pulse) {
-    s_seq_step_started_at_pulse = now_pulse;
-    seq_enter_step(s_seq_current_step);
+static void seq_resume_current_step(uint8_t lane, uint32_t now_pulse) {
+    s_seq_step_started_at_pulse[lane] = now_pulse;
+    seq_enter_step(lane, s_seq_current_step[lane]);
 }
 
 /* Called every time sequencer mode is (re-)entered from the menu --
@@ -830,13 +895,19 @@ static void seq_start(void) {
      * "stop if mode is changed" symptom this fix removes elsewhere --
      * skip the transport reset entirely when it's already running, only
      * touching the view-level state that's actually about THIS mode
-     * becoming visible again, not about the pattern's own playback. */
+     * becoming visible again, not about any lane's own playback.
+     * Scoped to s_seq_edit_lane only, not all OP_SEQ_NUM_LANES -- if the
+     * clock is genuinely stopped nothing is playing on ANY lane yet, and
+     * the moment it genuinely (re-)starts, seq_advance_clock()'s own
+     * clock.start_edge branch resets every lane correctly on its own (see
+     * that function below); this is purely this ONE lane's view/display
+     * state settling before that happens, same as it always was. */
     if (!tiles_midi_clock_is_running()) {
-        s_seq_current_step = 0u;
-        s_seq_note_sounding = false;
-        s_seq_step_started_at_pulse = 0u;
-        s_seq_pending_start = true;
-        s_seq_pending_restart = true; /* fresh entry always starts from step 0 */
+        s_seq_current_step[s_seq_edit_lane] = 0u;
+        s_seq_note_sounding[s_seq_edit_lane] = false;
+        s_seq_step_started_at_pulse[s_seq_edit_lane] = 0u;
+        s_seq_pending_start[s_seq_edit_lane] = true;
+        s_seq_pending_restart[s_seq_edit_lane] = true; /* fresh entry always starts from step 0 */
     }
     s_seq_edit_mode = OP_SEQ_EDIT_NONE;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
@@ -887,6 +958,32 @@ static void seq_handle_step_taps(uint32_t now_ms) {
              * shouldn't ALSO arm/disarm the step it landed on. */
             if (s_seq_step_touch_started_ms[step] != 0u) {
                 pat->step_armed[step] = !pat->step_armed[step];
+                if (pat->step_armed[step]) {
+                    /* Real feedback: "changing scale on a melodic modes
+                     * or other sequences should not affect other
+                     * sequences that are already set up or playing
+                     * meaning fully scale independent sequences." A
+                     * plain tap-to-arm used to leave step_pitch_override
+                     * false, meaning seq_fire_note() re-resolved this
+                     * step's pitch from tiles_note_map_get_note() -- the
+                     * LIVE global scale/octave/key -- every single time
+                     * it played, so changing the scale anywhere later
+                     * (melodic mode, a different pattern's own scale
+                     * pick) silently retuned every already-programmed
+                     * step everywhere. Freezing the resolved note here,
+                     * the instant a step is armed, and always setting
+                     * step_pitch_override true, closes that gap the
+                     * exact same way seq_capture_mode already does per
+                     * step (see seq_capture_advance_clock()'s own
+                     * commit) -- every armed step is now permanently
+                     * absolute from the moment it's armed, never
+                     * re-reading the live scale again. Re-arming a step
+                     * later re-freezes it fresh at THAT moment's scale,
+                     * which is correct: that's a deliberate new edit,
+                     * not a passive drift. */
+                    pat->step_note[step] = tiles_note_map_get_note(pad);
+                    pat->step_pitch_override[step] = true;
+                }
             }
             s_seq_step_touch_started_ms[step] = 0u;
         }
@@ -899,19 +996,22 @@ static void seq_handle_step_taps(uint32_t now_ms) {
  * (clears) start_edge as a side effect, and tiles_op_mode_scan() also
  * needs the same snapshot for the beat flash (see this file's own
  * "Master tap tempo" section) -- fetching it twice in one scan would
- * silently drop a real start_edge on whichever call ran second. */
-static void seq_advance_clock(tiles_midi_clock_state_t clock) {
+ * silently drop a real start_edge on whichever call ran second. Called
+ * once per LANE, same snapshot every time (see tiles_op_mode_scan()'s own
+ * loop) -- all OP_SEQ_NUM_LANES share one global transport (start/stop/
+ * tempo), each just tracks its own phase against it independently. */
+static void seq_advance_clock(uint8_t lane, tiles_midi_clock_state_t clock) {
     if (clock.start_edge) {
-        seq_reset(clock.pulse_count);
+        seq_reset(lane, clock.pulse_count);
         return;
     }
 
     if (!clock.running) {
-        seq_end_current_note();
+        seq_end_current_note(lane);
         return;
     }
 
-    if (s_seq_pending_start) {
+    if (s_seq_pending_start[lane]) {
         /* Real feedback: "we need to quantice to midi clock when that is
          * conected" -- confirmed meaning: entering sequencer mode (or
          * pressing "+") while a clock is already running waits for the
@@ -928,11 +1028,11 @@ static void seq_advance_clock(tiles_midi_clock_state_t clock) {
         if ((clock.pulse_count % OP_CLOCK_PULSES_PER_BEAT) != 0u) {
             return;
         }
-        s_seq_pending_start = false;
-        if (s_seq_pending_restart) {
-            seq_reset(clock.pulse_count);
+        s_seq_pending_start[lane] = false;
+        if (s_seq_pending_restart[lane]) {
+            seq_reset(lane, clock.pulse_count);
         } else {
-            seq_resume_current_step(clock.pulse_count);
+            seq_resume_current_step(lane, clock.pulse_count);
         }
         return;
     }
@@ -944,14 +1044,15 @@ static void seq_advance_clock(tiles_midi_clock_state_t clock) {
      * unbounded while(), matching this function's own "handle more than
      * one due" pattern elsewhere. */
     uint32_t ratchet_guard = 0u;
-    while (s_seq_ratchet_remaining > 0u && clock.pulse_count >= s_seq_next_ratchet_pulse && ratchet_guard < OP_SEQ_MAX_RATCHET) {
-        seq_fire_note(s_seq_current_step);
-        s_seq_ratchet_remaining--;
-        s_seq_next_ratchet_pulse += s_seq_ratchet_interval_pulses;
+    while (s_seq_ratchet_remaining[lane] > 0u && clock.pulse_count >= s_seq_next_ratchet_pulse[lane] &&
+           ratchet_guard < OP_SEQ_MAX_RATCHET) {
+        seq_fire_note(lane, s_seq_current_step[lane]);
+        s_seq_ratchet_remaining[lane]--;
+        s_seq_next_ratchet_pulse[lane] += s_seq_ratchet_interval_pulses[lane];
         ratchet_guard++;
     }
 
-    uint32_t elapsed = clock.pulse_count - s_seq_step_started_at_pulse;
+    uint32_t elapsed = clock.pulse_count - s_seq_step_started_at_pulse[lane];
     if (elapsed < OP_SEQ_CLOCKS_PER_STEP) {
         return;
     }
@@ -959,10 +1060,10 @@ static void seq_advance_clock(tiles_midi_clock_state_t clock) {
      * between scans (robust regardless of main-loop iteration rate vs
      * incoming clock rate), not just the common one-step case. */
     uint32_t steps_to_advance = elapsed / OP_SEQ_CLOCKS_PER_STEP;
-    s_seq_step_started_at_pulse += steps_to_advance * OP_SEQ_CLOCKS_PER_STEP;
-    uint8_t length = active_pattern()->length;
-    uint8_t new_step = (uint8_t)((s_seq_current_step + steps_to_advance) % length);
-    seq_enter_step(new_step);
+    s_seq_step_started_at_pulse[lane] += steps_to_advance * OP_SEQ_CLOCKS_PER_STEP;
+    uint8_t length = pattern_for_lane(lane)->length;
+    uint8_t new_step = (uint8_t)((s_seq_current_step[lane] + steps_to_advance) % length);
+    seq_enter_step(lane, new_step);
 }
 
 static void render_sequencer(float beat_flash_level, bool transport_running) {
@@ -973,7 +1074,7 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             uint8_t pad = board_pad_for_row_col(row, col);
             uint8_t step = (uint8_t)(pad - 1u);
-            bool is_current = (step == s_seq_current_step);
+            bool is_current = (step == s_seq_current_step[s_seq_edit_lane]);
             if (length_flashing) {
                 /* See OP_SEQ_LENGTH_FLASH_DURATION_MS's own comment --
                  * briefly replaces the normal step coloring entirely so
@@ -1076,7 +1177,7 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
  * normal view simply catches up and resumes wherever the clock already
  * is, the same way this file's other sub-views have always worked. */
 static void edit_enter(uint8_t step, uint32_t started_ms) {
-    seq_end_current_note();
+    seq_end_current_note(s_seq_edit_lane);
     s_seq_edit_mode = OP_SEQ_EDIT_PITCH;
     s_seq_edit_step = step;
     s_seq_edit_started_ms = started_ms;
@@ -1091,7 +1192,7 @@ static void edit_enter(uint8_t step, uint32_t started_ms) {
  * hold-duration wait at all, rather than a third escalation tier off the
  * same timeline pitch/probability already share. */
 static void edit_enter_ratchet(uint8_t step) {
-    seq_end_current_note();
+    seq_end_current_note(s_seq_edit_lane);
     s_seq_edit_mode = OP_SEQ_EDIT_RATCHET;
     s_seq_edit_step = step;
 }
@@ -1565,39 +1666,90 @@ static void scale_menu_exit(void) {
 
 /* ---- Pattern bank (SW3/triangle+shift, sequencer mode only) ------------
  * Real feedback: "in sequencer mode shift plus triangle opens up the
- * pattern bajnk. make all patterns white except for the selecteed onel
- * tjhat ones is red flashing." Brought back after the SAME gesture's
- * sequencer-specific sub-menu (the old pattern/channel picker) was
- * removed two rounds ago in favor of a universal scale picker -- see
- * this file's own "Pattern/channel picker: REMOVED" section -- so
- * triangle+shift is per-mode again: sequencer gets this pattern bank,
- * every other mode still gets the scale picker (see handle_triangle_
- * click()'s own shift branch). Different visual language from the old
- * picker on purpose (not a straight revert): plain white for every
- * pattern instead of 4 distinct row colors, red and FLASHING (a hard
- * on/off blink, not a smooth pulse -- this file's other "selected"
- * language everywhere else already uses a smooth pulse, so a flash
- * reads as deliberately different, matching the word real feedback
- * actually used) for the currently-active one instead of pulsing white. */
+ * pattern bajnk... sequence selector should have all 24 pads as possible
+ * sequences... lets do 4 independent sequences that can be assigned to 4
+ * channels selectable by each row of 6 alternatives... make each row a
+ * different color in seelctor to signify 4 lanes." Every one of the 24
+ * pads is now a real, individually selectable slot -- row = LANE (see
+ * this file's own "Multi-lane pattern bank" section), column = which of
+ * that lane's 6 alternatives. Tapping a cell does two things at once:
+ * picks that alternative as the lane's currently PLAYING pattern
+ * (s_seq_active_alt[lane]), and makes that lane the one shown/edited in
+ * the main step view (s_seq_edit_lane) -- one gesture unambiguously
+ * specifies both "which lane" and "which alternative for it," so no
+ * separate lane-select gesture is needed.
+ * Visual language: each row's own identity color (lane_color() below) at
+ * OP_SCALE_AVAILABLE_LEVEL brightness for that row's non-selected cells,
+ * hard on/off RED flash (matching real feedback's own word "flashing,"
+ * not this file's usual smooth "selected" pulse elsewhere) for whichever
+ * cell is that row's own current selection -- red stays the ONE universal
+ * "this is selected" signal across all 4 rows; hue only ever distinguishes
+ * which row/lane a cell belongs to, never selection state. */
 #define OP_PATTERN_BANK_FLASH_MS 300u
+/* Four maximally-distinguishable hues, deliberately avoiding red (reserved
+ * for "selected" above) and Sentia's own brand magenta (reserved
+ * elsewhere in this file for capture mode's playhead / the length-change
+ * flash, so that color keeps one unambiguous meaning). Unmeasured -- a
+ * starting guess at legibility, same as most of this file's other
+ * real-hardware-tuned color constants. */
+#define OP_SEQ_LANE_0_R OP_SCALE_AVAILABLE_LEVEL
+#define OP_SEQ_LANE_0_G (OP_SCALE_AVAILABLE_LEVEL * 0.5f)
+#define OP_SEQ_LANE_0_B 0.0f
+#define OP_SEQ_LANE_1_R 0.0f
+#define OP_SEQ_LANE_1_G OP_SCALE_AVAILABLE_LEVEL
+#define OP_SEQ_LANE_1_B 0.0f
+#define OP_SEQ_LANE_2_R 0.0f
+#define OP_SEQ_LANE_2_G (OP_SCALE_AVAILABLE_LEVEL * 0.6f)
+#define OP_SEQ_LANE_2_B OP_SCALE_AVAILABLE_LEVEL
+#define OP_SEQ_LANE_3_R (OP_SCALE_AVAILABLE_LEVEL * 0.7f)
+#define OP_SEQ_LANE_3_G 0.0f
+#define OP_SEQ_LANE_3_B OP_SCALE_AVAILABLE_LEVEL
+
 static bool s_pattern_bank_visible;
 static bool s_pattern_bank_prev_pad_touched[TILES_NUM_PADS];
 
 static void pattern_bank_exit(void);
 
+static void lane_color(uint8_t lane, float *r, float *g, float *b) {
+    switch (lane) {
+    case 0u:
+        *r = OP_SEQ_LANE_0_R;
+        *g = OP_SEQ_LANE_0_G;
+        *b = OP_SEQ_LANE_0_B;
+        break;
+    case 1u:
+        *r = OP_SEQ_LANE_1_R;
+        *g = OP_SEQ_LANE_1_G;
+        *b = OP_SEQ_LANE_1_B;
+        break;
+    case 2u:
+        *r = OP_SEQ_LANE_2_R;
+        *g = OP_SEQ_LANE_2_G;
+        *b = OP_SEQ_LANE_2_B;
+        break;
+    default:
+        *r = OP_SEQ_LANE_3_R;
+        *g = OP_SEQ_LANE_3_G;
+        *b = OP_SEQ_LANE_3_B;
+        break;
+    }
+}
+
 static void render_pattern_bank(uint32_t now_ms) {
     bool flash_on = ((now_ms / OP_PATTERN_BANK_FLASH_MS) % 2u) == 0u;
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
-        uint8_t pattern_index = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
-        bool selected = (pattern_index == s_seq_active_pattern);
+        uint8_t lane = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
+        float lr, lg, lb;
+        lane_color(lane, &lr, &lg, &lb);
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+            uint8_t alt = (uint8_t)(col - TILES_GRID_MIN_COL);
             uint8_t pad = board_pad_for_row_col(row, col);
+            bool selected = (alt == s_seq_active_alt[lane]);
             if (selected) {
                 float level = flash_on ? 1.0f : 0.0f;
                 tiles_lighting_set_standby_pad_rgb(pad, level, 0.0f, 0.0f);
             } else {
-                tiles_lighting_set_standby_pad_rgb(pad, OP_SCALE_AVAILABLE_LEVEL, OP_SCALE_AVAILABLE_LEVEL,
-                                                    OP_SCALE_AVAILABLE_LEVEL);
+                tiles_lighting_set_standby_pad_rgb(pad, lr, lg, lb);
             }
         }
     }
@@ -1616,23 +1768,37 @@ static void render_pattern_bank(uint32_t now_ms) {
  * file already uses. */
 static void handle_pattern_bank_taps(void) {
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
-        uint8_t pattern_index = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
+        uint8_t lane = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+            uint8_t alt = (uint8_t)(col - TILES_GRID_MIN_COL);
             uint8_t pad = board_pad_for_row_col(row, col);
             bool touched = tiles_touch_is_touched(pad);
             if (touched && !s_pattern_bank_prev_pad_touched[pad - 1u]) {
                 tiles_haptics_trigger_touch_pulse(pad);
             }
             if (touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD) {
-                if (pattern_index != s_seq_active_pattern) {
-                    seq_end_current_note();
-                    /* Same cross-pattern ratchet mix-up guard the old
-                     * picker already established -- see this file's own
-                     * "Pattern/channel picker: REMOVED" section. */
-                    s_seq_ratchet_remaining = 0u;
-                    s_seq_active_pattern = pattern_index;
-                    printf("[op_mode] sequencer pattern -> %u\n", (unsigned)pattern_index);
+                if (alt != s_seq_active_alt[lane]) {
+                    seq_end_current_note(lane);
+                    /* Same cross-pattern ratchet mix-up guard the
+                     * original single-lane bank already established. */
+                    s_seq_ratchet_remaining[lane] = 0u;
+                    s_seq_active_alt[lane] = alt;
+                    /* Quantizes the swap to the next beat boundary via
+                     * the SAME pending-start mechanism a fresh Start/
+                     * resume already uses (see seq_advance_clock()'s own
+                     * pending-start handling) instead of jumping straight
+                     * to step 0 at a possibly-mid-beat instant -- also
+                     * avoids a second tiles_midi_clock_get_state() call
+                     * here, which would silently steal a real start_edge
+                     * from the ONE call tiles_op_mode_scan() already made
+                     * this scan (that function consumes it as a side
+                     * effect -- see seq_advance_clock()'s own header
+                     * comment). */
+                    s_seq_pending_start[lane] = true;
+                    s_seq_pending_restart[lane] = true;
+                    printf("[op_mode] lane %u pattern -> %u\n", (unsigned)lane, (unsigned)alt);
                 }
+                s_seq_edit_lane = lane;
                 pattern_bank_exit();
                 return; /* grid ownership just changed under this loop -- stop iterating it */
             }
@@ -1642,12 +1808,14 @@ static void handle_pattern_bank_taps(void) {
 }
 
 static void pattern_bank_enter(void) {
-    /* Silences whatever's currently sounding the instant the bank opens
-     * -- browsing patterns already pauses seq_advance_clock() (same
-     * precedent as every other sub-view this file has), so without
-     * this a note struck right before opening the bank would otherwise
-     * just hang audibly for as long as the bank stays open. */
-    seq_end_current_note();
+    /* Silences whatever's currently sounding on the EDITED lane the
+     * instant the bank opens -- the other 3 lanes keep playing right
+     * through this, same "runs in the background" precedent as every
+     * other sub-view in this file now (see tiles_op_mode_scan()'s own
+     * unconditional seq_advance_clock() loop) -- without this, a note
+     * struck on the edited lane right before opening the bank would
+     * otherwise just hang audibly for as long as the bank stays open. */
+    seq_end_current_note(s_seq_edit_lane);
     s_pattern_bank_visible = true;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_pattern_bank_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
@@ -1656,6 +1824,20 @@ static void pattern_bank_enter(void) {
 
 static void pattern_bank_exit(void) {
     s_pattern_bank_visible = false;
+    /* Real feedback: "selectring a new sequence takes that initial press
+     * as a note on for that step, lets fix that" -- the finger that just
+     * tapped a pattern to select it is often still down the instant this
+     * returns control to the normal step view; without this resync,
+     * seq_handle_step_taps() would see that same pad go touched=true with
+     * its OWN prev-touched tracking still stale at false (never updated
+     * while the bank owned the grid) and misread it as a fresh arm-toggle
+     * touch landing on the NEWLY selected pattern. Exact same fix
+     * edit_exit() already applies for the identical reason -- see that
+     * function's own comment. */
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_seq_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+        s_seq_step_touch_started_ms[i] = 0u;
+    }
     /* Deliberately does NOT touch standby_active, unlike scale_menu_
      * exit() -- sequencer mode already keeps buttons/lighting standby-
      * active for its ENTIRE duration (see set_active_mode()'s own
@@ -1848,7 +2030,7 @@ static void seq_capture_end_sounding_note(void) {
     if (s_seq_capture_sounding_pad == 0u) {
         return;
     }
-    tiles_midi_note_off(active_pattern()->channel, s_seq_capture_sounding_note);
+    tiles_midi_note_off(s_seq_lane_channel[s_seq_edit_lane], s_seq_capture_sounding_note);
     tiles_haptics_stop(s_seq_capture_sounding_pad);
     s_seq_capture_sounding_pad = 0u;
 }
@@ -1857,9 +2039,13 @@ static void seq_capture_mode_enter(void) {
     if (s_active_mode != OP_MODE_SEQUENCER) {
         set_active_mode(OP_MODE_SEQUENCER);
     }
-    /* Whatever the NORMAL playback engine had sounding must not keep
-     * ringing underneath a live capture performance. */
-    seq_end_current_note();
+    /* Whatever the NORMAL playback engine had sounding on the EDITED
+     * lane must not keep ringing underneath a live capture performance
+     * -- capture mode takes over that ONE lane specifically; the other 3
+     * keep playing normally the whole time (see tiles_op_mode_scan()'s
+     * own per-lane advance loop, which skips only s_seq_edit_lane while
+     * s_seq_capture_mode_active is true). */
+    seq_end_current_note(s_seq_edit_lane);
     s_seq_capture_mode_active = true;
     s_seq_capture_prev_scale = tiles_note_map_get_scale();
     tiles_note_map_set_scale(TILES_SCALE_CHROMATIC);
@@ -1869,11 +2055,11 @@ static void seq_capture_mode_enter(void) {
      * establishes for entering sequencer mode fresh -- waits for the
      * next beat boundary (see seq_capture_advance_clock() below) rather
      * than starting to record at some arbitrary mid-phrase pulse count. */
-    s_seq_pending_start = true;
+    s_seq_pending_start[s_seq_edit_lane] = true;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_seq_capture_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
     }
-    printf("[op_mode] sequencer capture mode -> on\n");
+    printf("[op_mode] sequencer capture mode -> on (lane %u)\n", (unsigned)s_seq_edit_lane);
 }
 
 static void seq_capture_mode_exit(void) {
@@ -1893,7 +2079,7 @@ static void seq_capture_handle_taps(void) {
         if (touched && !was_touched) {
             seq_capture_end_sounding_note();
             uint8_t note = tiles_note_map_get_note(pad);
-            tiles_midi_note_on(active_pattern()->channel, note, OP_SEQ_VELOCITY);
+            tiles_midi_note_on(s_seq_lane_channel[s_seq_edit_lane], note, OP_SEQ_VELOCITY);
             tiles_haptics_trigger_kick(pad, OP_SEQ_VELOCITY);
             s_seq_capture_sounding_pad = pad;
             s_seq_capture_sounding_note = note;
@@ -1911,44 +2097,47 @@ static void seq_capture_handle_taps(void) {
  * firing logic (seq_enter_step()/seq_fire_note()) is all about REPLAYING
  * already-programmed steps, none of which applies while RECORDING new
  * ones; keeping them fully separate means neither has to reason about
- * the other's state. Reuses s_seq_current_step/s_seq_step_started_at_
- * pulse/s_seq_pending_start, the SAME fields the normal engine uses, so
- * switching in and out of capture mode doesn't need its own parallel
- * copy of "where is the playhead right now." */
+ * the other's state. Reuses s_seq_current_step[s_seq_edit_lane]/
+ * s_seq_step_started_at_pulse[s_seq_edit_lane]/s_seq_pending_start[s_seq_
+ * edit_lane], the SAME per-lane fields the normal engine uses for that
+ * lane, so switching in and out of capture mode doesn't need its own
+ * parallel copy of "where is the playhead right now" -- and so the other
+ * 3 lanes' own identical fields are never touched by this at all. */
 static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
+    uint8_t lane = s_seq_edit_lane;
     if (clock.start_edge) {
-        s_seq_current_step = 0u;
-        s_seq_step_started_at_pulse = clock.pulse_count;
+        s_seq_current_step[lane] = 0u;
+        s_seq_step_started_at_pulse[lane] = clock.pulse_count;
         s_seq_capture_step_armed = false;
-        s_seq_pending_start = false;
+        s_seq_pending_start[lane] = false;
         return;
     }
     if (!clock.running) {
         return;
     }
-    if (s_seq_pending_start) {
+    if (s_seq_pending_start[lane]) {
         if ((clock.pulse_count % OP_CLOCK_PULSES_PER_BEAT) != 0u) {
             return;
         }
-        s_seq_pending_start = false;
-        s_seq_current_step = 0u;
-        s_seq_step_started_at_pulse = clock.pulse_count;
+        s_seq_pending_start[lane] = false;
+        s_seq_current_step[lane] = 0u;
+        s_seq_step_started_at_pulse[lane] = clock.pulse_count;
         s_seq_capture_step_armed = false;
         return;
     }
 
-    uint32_t elapsed = clock.pulse_count - s_seq_step_started_at_pulse;
+    uint32_t elapsed = clock.pulse_count - s_seq_step_started_at_pulse[lane];
     if (elapsed < OP_SEQ_CLOCKS_PER_STEP) {
         return;
     }
     uint32_t steps_to_advance = elapsed / OP_SEQ_CLOCKS_PER_STEP;
-    s_seq_step_started_at_pulse += steps_to_advance * OP_SEQ_CLOCKS_PER_STEP;
+    s_seq_step_started_at_pulse[lane] += steps_to_advance * OP_SEQ_CLOCKS_PER_STEP;
 
     op_seq_pattern_t *pat = active_pattern();
-    pat->step_armed[s_seq_current_step] = s_seq_capture_step_armed;
+    pat->step_armed[s_seq_current_step[lane]] = s_seq_capture_step_armed;
     if (s_seq_capture_step_armed) {
-        pat->step_note[s_seq_current_step] = s_seq_capture_step_note;
-        pat->step_pitch_override[s_seq_current_step] = true;
+        pat->step_note[s_seq_current_step[lane]] = s_seq_capture_step_note;
+        pat->step_pitch_override[s_seq_current_step[lane]] = true;
     }
     s_seq_capture_step_armed = false;
 
@@ -1956,7 +2145,7 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
     if (length < 1u) {
         length = 1u;
     }
-    s_seq_current_step = (uint8_t)((s_seq_current_step + steps_to_advance) % length);
+    s_seq_current_step[lane] = (uint8_t)((s_seq_current_step[lane] + steps_to_advance) % length);
 }
 
 /* Real feedback: "the curent step of the sequencer should light up pink
@@ -1975,7 +2164,7 @@ static void render_seq_capture(uint32_t now_ms) {
     op_seq_pattern_t *pat = active_pattern();
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         uint8_t step = (uint8_t)(pad - 1u);
-        bool is_current_step = (step == s_seq_current_step) && step < pat->length;
+        bool is_current_step = (step == s_seq_current_step[s_seq_edit_lane]) && step < pat->length;
         if (pad == s_seq_capture_sounding_pad) {
             tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f);
         } else if (is_current_step) {
@@ -2492,13 +2681,22 @@ static void handle_transport_and_length(uint32_t now_ms) {
              * playing" (pause in place) from "stop while ALREADY
              * stopped" (a second stop -- Ableton-style rewind to the top,
              * without resuming playback). */
+            /* Global transport -- minus/plus stop/start/rewind ALL
+             * OP_SEQ_NUM_LANES at once (they share one tempo/transport,
+             * see this file's own "Multi-lane pattern bank" section);
+             * only per-lane CONTENT (which alternative, channel, steps)
+             * is independent. */
             if (tiles_midi_clock_is_running()) {
                 tiles_midi_clock_set_running(false);
-                s_seq_pending_start = false;
+                for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
+                    s_seq_pending_start[lane] = false;
+                }
             } else {
-                s_seq_current_step = 0u;
-                s_seq_note_sounding = false;
-                s_seq_pending_start = false;
+                for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
+                    s_seq_current_step[lane] = 0u;
+                    s_seq_note_sounding[lane] = false;
+                    s_seq_pending_start[lane] = false;
+                }
             }
         } else if (guitar_active) {
             /* Real feedback: "-+ change frets up and down." One fret per
@@ -2524,8 +2722,10 @@ static void handle_transport_and_length(uint32_t now_ms) {
                  * 0 mid-beat. pending_restart=true is what makes this
                  * land back on step 0 rather than replaying wherever the
                  * playhead already was. */
-                s_seq_pending_start = true;
-                s_seq_pending_restart = true;
+                for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
+                    s_seq_pending_start[lane] = true;
+                    s_seq_pending_restart[lane] = true;
+                }
             } else if (tiles_midi_clock_tap_tempo_established() || tiles_midi_clock_external_active(now_ms)) {
                 /* Only meaningful once a tempo actually exists --
                  * otherwise this would set `running` true with nothing
@@ -2540,8 +2740,10 @@ static void handle_transport_and_length(uint32_t now_ms) {
                  * the playhead (or step 0, if a double-stop rewound it
                  * first), never resetting position on its own. */
                 tiles_midi_clock_set_running(true);
-                s_seq_pending_start = true;
-                s_seq_pending_restart = false;
+                for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
+                    s_seq_pending_start[lane] = true;
+                    s_seq_pending_restart[lane] = false;
+                }
             }
         } else if (guitar_active) {
             /* tiles_note_map_set_guitar_fret_offset() clamps internally
@@ -2591,28 +2793,34 @@ void tiles_op_mode_init(void) {
     s_transport_playing = false;
     s_transport_recording = false;
     s_seq_capture_mode_active = false;
-    for (uint8_t p = 0; p < OP_SEQ_NUM_PATTERNS; p++) {
-        for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
-            s_seq_pattern[p].step_armed[i] = false;
-            s_seq_pattern[p].step_pitch_override[i] = false;
-            s_seq_pattern[p].step_note[i] = 0u;
-            s_seq_pattern[p].step_probability_percent[i] = 100u;
-            s_seq_pattern[p].step_ratchet_count[i] = 1u;
+    for (uint8_t lane = 0; lane < OP_SEQ_NUM_LANES; lane++) {
+        for (uint8_t alt = 0; alt < OP_SEQ_ALTS_PER_LANE; alt++) {
+            op_seq_pattern_t *pat = &s_seq_pattern[lane][alt];
+            for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
+                pat->step_armed[i] = false;
+                pat->step_pitch_override[i] = false;
+                pat->step_note[i] = 0u;
+                pat->step_probability_percent[i] = 100u;
+                pat->step_ratchet_count[i] = 1u;
+            }
+            pat->probability_enabled = false;
+            pat->length = OP_SEQ_NUM_STEPS;
         }
-        s_seq_pattern[p].probability_enabled = false;
-        s_seq_pattern[p].length = OP_SEQ_NUM_STEPS;
+        s_seq_active_alt[lane] = 0u;
         /* Claims from the TOP of the 15 MPE Member Channels downward --
-         * see this file's own "Multi-pattern bank" section. */
-        s_seq_pattern[p].channel =
-            (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + TILES_MIDI_MPE_NUM_MEMBER_CHANNELS - 1u - p);
+         * see this file's own "Multi-lane pattern bank" section. Lane 0
+         * = nibble 15, exactly today's original single-pattern behavior,
+         * unchanged for anyone never touching the bank. */
+        s_seq_lane_channel[lane] =
+            (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + TILES_MIDI_MPE_NUM_MEMBER_CHANNELS - 1u - lane);
+        s_seq_current_step[lane] = 0u;
+        s_seq_note_sounding[lane] = false;
+        s_seq_step_started_at_pulse[lane] = 0u;
+        s_seq_pending_start[lane] = false;
+        s_seq_pending_restart[lane] = false;
+        s_seq_ratchet_remaining[lane] = 0u;
     }
-    s_seq_active_pattern = 0u;
-    s_seq_current_step = 0u;
-    s_seq_note_sounding = false;
-    s_seq_step_started_at_pulse = 0u;
-    s_seq_pending_start = false;
-    s_seq_pending_restart = false;
-    s_seq_ratchet_remaining = 0u;
+    s_seq_edit_lane = 0u;
     s_seq_edit_mode = OP_SEQ_EDIT_NONE;
     s_minus_was_held = false;
     s_plus_was_held = false;
@@ -2672,9 +2880,12 @@ void tiles_op_mode_scan(void) {
          * something else owns the board. Ending it here, the instant
          * control is lost, closes that gap; idempotent (seq_end_current_
          * note() is a no-op once nothing's sounding), so calling it every
-         * scan while frozen here is harmless. */
-        if (s_seq_note_sounding) {
-            seq_end_current_note();
+         * scan while frozen here is harmless. Loops all OP_SEQ_NUM_LANES
+         * now that each has its own independent sounding-note state. */
+        for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
+            if (s_seq_note_sounding[lane]) {
+                seq_end_current_note(lane);
+            }
         }
         /* Same reasoning as the sequencer case just above, applied to
          * chord mode's own directly-driven notes: whatever's sounding on
@@ -2700,6 +2911,33 @@ void tiles_op_mode_scan(void) {
      * beat-flash computation need to see the SAME snapshot. */
     tiles_midi_clock_state_t clock = tiles_midi_clock_get_state();
     float beat_flash_level = compute_beat_flash_level(now_ms, clock);
+
+    /* Real feedback: "ok we have clashing issues on modes, mode selectro
+     * shouldnt pause sequencer... no stopping on playing sequences
+     * regarless of manu displayed." A pattern already running in the
+     * background must keep advancing regardless of which sub-view
+     * currently owns the grid (top-level menu, scale menu, pattern bank,
+     * or per-step edit) -- not just regardless of which TOP-LEVEL MODE is
+     * displayed, which a previous round already fixed (see this file's
+     * own "sequencer should not stop if mode is changed" section below).
+     * Every one of those sub-views used to `return` before ever reaching
+     * seq_advance_clock() at the bottom of this function, silently
+     * freezing the playhead for as long as they stayed open -- moving the
+     * call up here, unconditional, closes that gap for all four at once.
+     * Loops all OP_SEQ_NUM_LANES -- every lane plays independently and
+     * simultaneously now (see this file's own "Multi-lane pattern bank"
+     * section). Capture mode is the one genuine exception, and only for
+     * the ONE lane it currently owns (s_seq_edit_lane): it replaces that
+     * lane's advance entirely with its own seq_capture_advance_clock()
+     * (see that branch below), so the two must never both run for the
+     * SAME lane in the same scan -- the other 3 lanes are unaffected and
+     * keep advancing normally right through it. */
+    for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
+        if (s_seq_capture_mode_active && lane == s_seq_edit_lane) {
+            continue;
+        }
+        seq_advance_clock(lane, clock);
+    }
 
     if (s_menu_visible) {
         handle_menu_taps();
@@ -2727,8 +2965,8 @@ void tiles_op_mode_scan(void) {
 
     if (s_seq_capture_mode_active) {
         /* Own dispatch branch, not routed through the normal sequencer
-         * playback path below -- see this file's own "Sequencer capture
-         * mode" section for why it needs its own advance/render entirely
+         * playback path -- see this file's own "Sequencer capture mode"
+         * section for why it needs its own advance/render entirely
          * rather than reusing seq_advance_clock()/render_sequencer(). */
         seq_capture_handle_taps();
         seq_capture_advance_clock(clock);
@@ -2736,17 +2974,6 @@ void tiles_op_mode_scan(void) {
         return;
     }
 
-    /* Unconditional on s_active_mode (unlike the two calls below) --
-     * real feedback: "sequencer should not stop if mode is changed. it
-     * should be able to run in the background." Still gated behind the
-     * five `return`s above (top-level menu, scale menu, pattern bank,
-     * per-step edit, capture mode) exactly as before -- those are
-     * pre-existing, deliberate pauses for a sub-view that's actively
-     * being browsed/edited/recorded, unrelated to this fix and not
-     * something real feedback asked to change; only "a genuinely
-     * different TOP-LEVEL MODE is simply the one currently displayed"
-     * no longer implies "stopped." */
-    seq_advance_clock(clock);
     if (s_active_mode == OP_MODE_SEQUENCER) {
         seq_handle_step_taps(now_ms);
         render_sequencer(beat_flash_level, clock.running);
@@ -2825,24 +3052,31 @@ bool tiles_op_mode_has_menu_open(void) {
 
 /* Real feedback: "is there anything needed to stop stuck niotes?" --
  * investigated the one real gap: services/expression.c's live-touch MPE
- * channel allocator (claim_mpe_channel()) and this file's own per-
- * pattern channel assignment are two independent systems that don't
- * know about each other. Since seq_advance_clock() can now genuinely
- * fire notes on active_pattern()'s channel WHILE a different mode is
- * displayed and live melodic touches are ALSO claiming channels from
- * the same 1-15 pool, a live touch claiming the exact channel the
- * sequencer is using for its own background note would desync both
- * sides -- the sequencer's own next seq_fire_note() would end/steal
- * whatever the live touch put there without expression.c ever knowing,
- * and that pad's own state machine would still believe it owns a note
- * that's already gone, never able to send its own eventual note-off
- * (the actual stuck-note failure mode). Returns 0 (never a valid
- * channel -- TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL starts at 1) when the
- * sequencer isn't genuinely running, so claim_mpe_channel() can treat
- * that as "nothing reserved" with no special-casing needed there. */
-uint8_t tiles_op_mode_sequencer_reserved_channel(void) {
+ * channel allocator (claim_mpe_channel()) and this file's own per-lane
+ * channel assignment are two independent systems that don't know about
+ * each other. Since seq_advance_clock() can now genuinely fire notes on
+ * any of OP_SEQ_NUM_LANES channels WHILE a different mode is displayed
+ * and live melodic touches are ALSO claiming channels from the same 1-15
+ * pool, a live touch claiming the exact channel a lane is using for its
+ * own background note would desync both sides -- that lane's own next
+ * seq_fire_note() would end/steal whatever the live touch put there
+ * without expression.c ever knowing, and that pad's own state machine
+ * would still believe it owns a note that's already gone, never able to
+ * send its own eventual note-off (the actual stuck-note failure mode).
+ * A query rather than a single return value -- once all 4 lanes can be
+ * simultaneously reserved (not just one pattern's worth), "the reserved
+ * channel" stopped being a single number; claim_mpe_channel() asks this
+ * once per CANDIDATE channel instead. Always false when the sequencer
+ * isn't genuinely running, so claim_mpe_channel() can treat that as
+ * "nothing reserved" with no special-casing needed there. */
+bool tiles_op_mode_sequencer_channel_is_reserved(uint8_t channel) {
     if (!tiles_midi_clock_is_running()) {
-        return 0u;
+        return false;
     }
-    return active_pattern()->channel;
+    for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
+        if (s_seq_lane_channel[lane] == channel) {
+            return true;
+        }
+    }
+    return false;
 }

@@ -334,11 +334,12 @@ bool tiles_op_mode_is_sequencer_active(void);
  * happened to get reported first. */
 bool tiles_op_mode_has_menu_open(void);
 
-/* The MPE Member Channel (1-15) the sequencer is currently using for its
- * active pattern's own notes, or 0 (never a valid channel) if the
- * sequencer isn't genuinely running right now. services/expression.c's
- * own claim_mpe_channel() reserves this channel from its live-touch
- * pool so the two independent channel-allocation systems can't collide
- * -- see that function's own comment, and this accessor's own comment
- * in op_mode.c, for the real stuck-note failure mode this prevents. */
-uint8_t tiles_op_mode_sequencer_reserved_channel(void);
+/* True if `channel` (an MPE Member Channel, 1-15) is one of the sequencer's
+ * OP_SEQ_NUM_LANES own output channels AND the sequencer is genuinely
+ * running right now -- always false otherwise. services/expression.c's
+ * own claim_mpe_channel() checks every candidate channel against this
+ * before claiming it from its live-touch pool, so the two independent
+ * channel-allocation systems can't collide -- see that function's own
+ * comment, and this accessor's own comment in op_mode.c, for the real
+ * stuck-note failure mode this prevents. */
+bool tiles_op_mode_sequencer_channel_is_reserved(uint8_t channel);
