@@ -42,6 +42,7 @@
 
 #include <stdio.h>
 
+#include "hardware/watchdog.h"
 #include "pico/stdlib.h"
 
 #include "tusb.h"
@@ -308,6 +309,35 @@ int main(void) {
          * current by the time anything else runs. */
         tiles_debug_trace('P');
         tiles_power_scan();
+        /* Real feedback, testing the crash-dig-in above: "yeah [do that]
+         * and implement in case of crash a report is generated capturing
+         * last activity before blackout" -- edge-triggered (only on an
+         * actual MODE change, never periodic) so this can't repeat the
+         * exact "unconditional printf every N ms" mistake main.c's own
+         * history above already made once with this same power-state
+         * data. Recorded into debug_mode.c's always-on ring buffer (see
+         * that file's own header) regardless of whether live debug mode
+         * is currently toggled, specifically so a genuine power-mode
+         * flicker right before a freeze -- the user's own suspicion,
+         * given a new cable/direct power stopped reproducing it -- would
+         * show up in a crash report even if nobody was watching live
+         * when it happened. */
+        {
+            static tiles_power_mode_t s_debug_last_power_mode = (tiles_power_mode_t)0xFFu;
+            tiles_power_mode_t mode_now = tiles_power_get_state().mode;
+            if (mode_now != s_debug_last_power_mode) {
+                static const char *const power_mode_names[] = {
+                    "USB_ONLY",
+                    "EXTERNAL_ONLY",
+                    "USB_AND_EXTERNAL",
+                    "FAULT",
+                };
+                char buf[32];
+                snprintf(buf, sizeof(buf), "[power->%s]", power_mode_names[mode_now]);
+                tiles_debug_trace_str(buf);
+                s_debug_last_power_mode = mode_now;
+            }
+        }
         tiles_debug_trace('B');
         tiles_buttons_scan();
         /* Needs fresh button state, same as tiles_octave_control_scan()
@@ -379,6 +409,18 @@ int main(void) {
          * comment. Both no-ops while debug mode is inactive. */
         tiles_debug_trace_str("\r\n");
         tiles_debug_trace_flush();
+
+        /* Real feedback: "let it run until faliure and then you can
+         * check the log for the final thing before crashing." Placed
+         * LAST, after every single stage above has already run this
+         * iteration -- if anything upstream hangs, this call is never
+         * reached, so services/debug_mode.h's own DEBUG_WATCHDOG_
+         * TIMEOUT_MS (1 second, armed in tiles_debug_mode_init() above)
+         * resets the chip instead of leaving it frozen forever, and
+         * whatever the trace ring held at that exact moment survives the
+         * reset intact (see that file's own header for the full
+         * mechanism) for the next debug-mode entry to report. */
+        watchdog_update();
 
         /* A periodic (every 2s) unconditional bring-up dump used to live
          * here -- tiles_diag_i2c_scan_expected_devices() (9 printf calls)

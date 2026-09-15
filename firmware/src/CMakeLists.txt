@@ -51,6 +51,7 @@ target_link_libraries(sentia_tiles_firmware
     hardware_pio
     hardware_clocks
     hardware_adc
+    hardware_watchdog
     tinyusb_device
     pico_unique_id
     pico_rand

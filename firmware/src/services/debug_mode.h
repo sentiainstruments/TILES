@@ -36,6 +36,45 @@
  * "never blocks the caller," which is the one property this feature
  * actually needs: watch it live with a terminal open, and the LAST
  * thing printed before the stream goes silent is where the freeze is.
+ *
+ * ---- Surviving the freeze itself ----------------------------------------
+ *
+ * The above only helps if a terminal happened to be open and someone was
+ * watching at the exact moment it froze. Real feedback afterward: "yeah
+ * [add the power-mode trace] and implement in case of crash a report is
+ * generated capturing last activity before blackout." Two more pieces,
+ * both always-on regardless of whether debug mode itself is toggled:
+ *
+ * 1. tiles_debug_trace()/_str() now ALSO record into a small ring buffer
+ *    placed in `__uninitialized_ram` (pico/platform/sections.h) -- RAM
+ *    that survives a reset (unlike ordinary `.bss`, which the C runtime
+ *    zeroes on every boot, this section is explicitly left alone).
+ *    Recording into it is just a couple of memory writes, unconditional
+ *    and free of any of the blocking/dropping concerns above, so there's
+ *    no reason to gate it behind whether anyone's watching live.
+ *
+ * 2. A hardware watchdog (hardware/watchdog.h), enabled here for the
+ *    first time in this project, turns "the main loop stopped calling
+ *    watchdog_update()" (main.c's job, once per iteration, at the very
+ *    end -- if a hang happens anywhere upstream, that call is never
+ *    reached) into an ACTUAL RESET after 1 second, instead of the
+ *    instrument sitting frozen forever until someone finds the cable and
+ *    power-cycles it. On the reboot that follows, tiles_debug_mode_init()
+ *    checks watchdog_enable_caused_reboot() -- confirmed against the
+ *    pico-sdk's own header comment to correctly read false after a
+ *    normal `picotool load -x` reflash (that goes through a DIFFERENT
+ *    watchdog_reboot() path that clears the same marker), so a routine
+ *    firmware update never gets mistaken for a crash. If it reads true,
+ *    whatever the ring buffer held at that exact moment (SRAM retains
+ *    its contents across a watchdog reset -- only an actual power loss
+ *    clears it) gets copied into a second, similarly-persistent snapshot
+ *    before normal recording resumes fresh. The NEXT time debug mode is
+ *    entered (same 8-second hold), that snapshot -- if one is pending
+ *    and hasn't already been shown -- is dumped as a one-time readable
+ *    report before live tracing continues, then marked as reported so it
+ *    doesn't repeat on every subsequent entry. No new gesture, no
+ *    separate retrieval step: notice something seemed off, hold the
+ *    combo, and the last thing that happened is right there.
  */
 
 #include <stdbool.h>

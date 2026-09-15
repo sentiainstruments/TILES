@@ -4981,5 +4981,83 @@ not its code.
   the cause, that's the natural next place to add finer tracing --
   informed by what's actually been observed, not speculative
   instrumentation everywhere up front.
+- **A promising new lead surfaced independently of any of the above**:
+  extended real-hardware stress testing with a NEW USB cable produced no
+  freeze at all, where the same testing previously had. Real feedback's
+  own theory: "im guessing it might have been the power draw through a
+  usb hub with mutiple devices like audio card webcam hdmi and more."
+  This fits the evidence better than anything the I2C/PIO rounds turned
+  up: intermittent rather than deterministic (a real software bug tends
+  to reproduce given the same inputs; a marginal shared-hub power budget
+  depends on what ELSE happens to be drawing current at any given
+  moment), and it directly matches a suspicion already sitting
+  unaddressed in this codebase's own history -- `services/power.c`'s
+  FAULT mode carries a comment (see `drivers/pca9685.c`'s own trigger_
+  kick() cross-reference) noting it's "never been exercised on real
+  hardware" and "could plausibly be flickering into FAULT transiently."
+  A brief brownout would also explain "haptics locked on" specifically:
+  the PCA9685 keeps outputting whatever PWM duty it was last told while
+  the MCU itself stalls or resets, with no code bug required at all.
+  Neither the I2C nor the PIO timeout work was wasted regardless -- a
+  transient voltage dip is exactly the kind of thing that could wedge an
+  I2C transaction or stall a PIO state machine, so those fixes may well
+  be part of why it's holding up now too, alongside the better cable.
+  **Given a real, external, plausible cause with a real, external,
+  practical fix (direct power, skip the loaded bus-powered hub) already
+  in hand, this is not necessarily worth more firmware work on its own**
+  -- logged here for the historical record and cross-referenced from
+  the crash-report entry immediately below, which now makes it possible
+  to actually CONFIRM this on a future occurrence instead of continuing
+  to just suspect it.
+- **Real hardware debug mode extended into an always-on crash recorder**
+  -- real feedback: "yeah [add the power-mode trace] and implement in
+  case of crash a report is generated capturing last activity before
+  blackout." The live trace above only ever helped if a terminal
+  happened to be open and someone was watching at the exact moment of a
+  freeze; this closes that gap for good, and does two new things this
+  project has never done before:
+  **A hardware watchdog, enabled for the first time** (`hardware/
+  watchdog.h`, armed in `tiles_debug_mode_init()`, pet via `watchdog_
+  update()` at the very end of `main.c`'s loop -- after every other
+  stage has already run this iteration, so a hang anywhere upstream
+  means this call is never reached) turns a hang from "sits frozen
+  forever until someone finds the cable" into an automatic reset within
+  `DEBUG_WATCHDOG_TIMEOUT_MS` (1 second -- generous headroom over any
+  realistic loop iteration, including a pathological one where several
+  of this session's own 5ms I2C/PIO timeouts all fire in the same pass).
+  Checked against the pico-sdk's own header comment specifically to
+  confirm `watchdog_enable_caused_reboot()` reads false after a normal
+  `picotool load -x` reflash (that goes through a different `watchdog_
+  reboot()`/bootrom UF2 path that clears the same scratch marker), so a
+  routine firmware update during development is never mistaken for a
+  crash.
+  **A trace ring buffer that survives that reset**: `tiles_debug_trace()`/
+  `_str()` now ALSO record, unconditionally regardless of whether live
+  debug mode is toggled, into a small buffer placed via `pico/platform/
+  sections.h`'s `__uninitialized_ram` -- RAM the C runtime deliberately
+  does NOT zero on boot the way it zeroes ordinary `.bss`, so it retains
+  whatever was there across a watchdog reset (only an actual power loss
+  clears real SRAM). On a boot where `watchdog_enable_caused_reboot()`
+  reads true, whatever the live ring held at that exact moment (the last
+  thing recorded before the hang, by construction) gets copied into a
+  second, similarly-persistent snapshot before normal recording resumes
+  fresh for the new session. The next time debug mode is entered (same
+  8-second hold), a pending unreported snapshot gets dumped as a
+  one-time readable report -- uptime when it froze, then the ring's
+  contents in chronological order, so the LAST characters printed are
+  unambiguously the last thing that happened -- before live tracing
+  continues, then marked reported so it doesn't repeat on every
+  subsequent entry. No new gesture, no separate retrieval tool: notice
+  something seemed off, hold the combo, and the answer is right there.
+  **The power-mode trace this entry's own title references**: a new
+  edge-triggered marker in `main.c`, right after `tiles_power_scan()`,
+  fires only when `tiles_power_get_state().mode` actually CHANGES --
+  never periodic, deliberately, given this exact file's own earlier
+  history of a periodic power-state print being a real freeze cause in
+  its own right (search "froze again with enough time" above). Feeds
+  the same always-on ring buffer as everything else, so a genuine
+  power-mode flicker right before a hang -- confirming or ruling out the
+  brownout theory in the entry just above -- would now show up in a
+  crash report even if nobody was watching live when it happened.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
