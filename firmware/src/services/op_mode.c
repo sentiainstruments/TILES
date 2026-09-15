@@ -3,6 +3,7 @@
 #include "board_layout.h"
 #include "board_pins.h"
 #include "buttons.h"
+#include "debug_mode.h"
 #include "expression_control.h"
 #include "game_mode.h"
 #include "hall.h"
@@ -3345,6 +3346,13 @@ void tiles_op_mode_scan(void) {
         if (s_seq_capture_mode_active && lane == s_seq_edit_lane) {
             continue;
         }
+        /* Real feedback: "it might be the sequencer triggering notes or
+         * clock or running" -- debug mode's own top suspect, so it gets
+         * finer-grained tracing than the rest of this file: which LANE
+         * (0-3) was being advanced, not just that op_mode_scan() as a
+         * whole was running (see main.c's own 'S' marker). See services/
+         * debug_mode.h for the full scheme. */
+        tiles_debug_trace((char)('0' + lane));
         seq_advance_clock(lane, clock);
     }
 

@@ -54,6 +54,7 @@
 #include "midi/usb_device.h"
 #include "services/boot_sequence.h"
 #include "services/buttons.h"
+#include "services/debug_mode.h"
 #include "services/expression.h"
 #include "services/expression_control.h"
 #include "services/game_mode.h"
@@ -244,6 +245,13 @@ int main(void) {
      * services/op_mode.h. */
     tiles_op_mode_init();
 
+    /* Real-hardware trace logging (diamond+square+circle held 8s to
+     * toggle) -- see services/debug_mode.h's own header for the full
+     * "why not printf()" reasoning. No hardware dependency, so no
+     * particular init ordering requirement; placed last simply to be
+     * near the loop it instruments. */
+    tiles_debug_mode_init();
+
     while (true) {
         /* MUST run every iteration: this is what actually services the
          * USB stack (processes control transfers, moves CDC/MIDI data
@@ -266,6 +274,7 @@ int main(void) {
          * stdio_usb_connected() never returns true, and queued MIDI
          * bytes never actually reach the host even if tud_midi_mounted()
          * happens to read true. */
+        tiles_debug_trace('T');
         tud_task();
 
         /* Sends the MPE zone configuration (see midi/midi_out.h) the
@@ -290,19 +299,28 @@ int main(void) {
          * FIFO is current, and must run before tiles_op_mode_scan()
          * below so this tick's fresh clock state is what sequencer mode
          * sees. See services/midi_clock.h. */
+        tiles_debug_trace('M');
         tiles_midi_clock_scan();
 
         /* Runs first: lighting's ceiling_level() and any future
          * haptics/CV consumer read tiles_power_get_state() during this
          * same iteration, so the debounced state should already be
          * current by the time anything else runs. */
+        tiles_debug_trace('P');
         tiles_power_scan();
+        tiles_debug_trace('B');
         tiles_buttons_scan();
+        /* Needs fresh button state, same as tiles_octave_control_scan()
+         * just below -- see services/debug_mode.h's own header. */
+        tiles_debug_mode_scan();
         /* Must run after tiles_buttons_scan() so this iteration's
          * debounced SW1/SW2 state is fresh. See
          * services/octave_control.h. */
+        tiles_debug_trace('o');
         tiles_octave_control_scan();
+        tiles_debug_trace('u');
         tiles_touch_scan();
+        tiles_debug_trace('d');
         tiles_pedal_scan();
         /* Must run after tiles_buttons_scan() (fresh circle/square
          * state) and tiles_touch_scan() (fresh touch state for the
@@ -310,15 +328,18 @@ int main(void) {
          * tiles_expression_scan() below so this tick's fresh "does the
          * sub-menu own the grid" state gates new-strike suppression
          * correctly. See services/expression_control.h. */
+        tiles_debug_trace('E');
         tiles_expression_control_scan();
         /* Must run after tiles_buttons_scan()/tiles_touch_scan() above
          * so this iteration's entry-gesture/in-game-control/menu-
          * selection input is fresh. See services/game_mode.h. */
+        tiles_debug_trace('G');
         tiles_game_mode_scan();
         /* Must run after tiles_buttons_scan()/tiles_touch_scan()
          * (diamond click + menu/step taps) and tiles_midi_clock_scan()
          * (fresh clock state for sequencer playback) above. See
          * services/op_mode.h. */
+        tiles_debug_trace('S');
         tiles_op_mode_scan();
         /* Must run after the scans above so this iteration's activity
          * check sees fresh state -- see services/standby.h. Skipped
@@ -332,20 +353,32 @@ int main(void) {
          * headers for the full reasoning. */
         if (!tiles_game_mode_is_active() && !tiles_octave_control_is_transpose_active() &&
             !tiles_expression_control_owns_pad_grid() && !tiles_op_mode_owns_pad_grid()) {
+            tiles_debug_trace('Y');
             tiles_standby_scan();
         }
+        tiles_debug_trace('L');
         tiles_lighting_service();
+        tiles_debug_trace('H');
         tiles_hall_scan();
         /* Non-blocking (zero-timeout stdio read) -- cheap even when
          * nothing has been typed. See diagnostics/calibration.h. */
+        tiles_debug_trace('c');
         tiles_calibration_scan();
         /* Must run after both tiles_touch_scan() and tiles_hall_scan()
          * above so it sees this iteration's fresh data from both. */
+        tiles_debug_trace('X');
         tiles_expression_scan();
         /* Advances KICK -> GAP -> SUSTAIN timing for any pad
          * expression_scan() just triggered/updated/stopped this
          * iteration. */
+        tiles_debug_trace('K');
         tiles_haptics_scan();
+        /* One line per full loop iteration, and pushed to the host now
+         * rather than waiting for TinyUSB's own fill-a-packet auto-flush
+         * -- see services/debug_mode.h's own tiles_debug_trace_flush()
+         * comment. Both no-ops while debug mode is inactive. */
+        tiles_debug_trace_str("\r\n");
+        tiles_debug_trace_flush();
 
         /* A periodic (every 2s) unconditional bring-up dump used to live
          * here -- tiles_diag_i2c_scan_expected_devices() (9 printf calls)

@@ -1,12 +1,17 @@
 #include "lighting.h"
 
 #include "board_pins.h"
+#include "debug_mode.h"
 #include "note_map.h"
 #include "pad_config.h"
 #include "power.h"
 
+#include "pico/time.h"
+
 #include "sk6805.h"
 #include "tca9554.h"
+
+#include <math.h>
 
 /* Real feedback, across several rounds: "make all led brighter its hard
  * to see" (10 -> 25), then "lets standardise led brightnbess, resting led
@@ -273,6 +278,47 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
     tiles_tca9554_disable_all_muxes(&s_led_mux);
 }
 
+/* Real feedback: debug mode "confirmed by the underglow pulsing red
+ * steady." Same sine-pulse shape services/op_mode.c's own menu_
+ * selected_pulse_level() uses for its own "this is the active/selected
+ * thing" language -- not shared code (op_mode.c's own copy is static to
+ * that file), just the same established visual convention, so debug
+ * mode reads as consistent with everything else that pulses in this
+ * firmware rather than inventing a new animation language. */
+#define DEBUG_UNDERGLOW_PULSE_PERIOD_MS 900.0f
+#define DEBUG_UNDERGLOW_PULSE_MIN 0.35f
+#define DEBUG_UNDERGLOW_PULSE_MAX 1.0f
+#define DEBUG_UNDERGLOW_PI 3.14159265358979323846f
+
+static float debug_underglow_pulse_level(uint32_t now_ms) {
+    float phase = (float)now_ms / DEBUG_UNDERGLOW_PULSE_PERIOD_MS;
+    float raw = 0.5f + 0.5f * sinf(2.0f * DEBUG_UNDERGLOW_PI * phase);
+    return DEBUG_UNDERGLOW_PULSE_MIN + (DEBUG_UNDERGLOW_PULSE_MAX - DEBUG_UNDERGLOW_PULSE_MIN) * raw;
+}
+
+/* Bypasses s_underglow_rgb[]/s_standby_active entirely -- real feedback
+ * specifically wants this indicator visible regardless of whatever mode
+ * or sub-view currently owns rendering (melodic, sequencer mid-pattern,
+ * a menu, standby's own animation...), and fighting over standby-active
+ * ownership to get that is exactly the bug class services/op_mode.c's
+ * own README history had to fix twice already this session (search
+ * "standby active" there). Writing directly to hardware here, unrelated
+ * to whatever s_underglow_rgb[] currently holds, sidesteps that
+ * entirely -- the instant debug mode exits, the very next call falls
+ * through to this function's normal round-robin/on-change behavior and
+ * underglow simply reflects whatever it was already supposed to. */
+static void write_debug_underglow(void) {
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    float pulse = debug_underglow_pulse_level(now_ms);
+    uint8_t level = underglow_channel_level(pulse);
+    uint32_t pixel = tiles_sk6805_pack_rgb(level, 0u, 0u);
+    uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
+    for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
+        pixels[i] = pixel;
+    }
+    tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
+}
+
 static void write_underglow(void) {
     uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
@@ -352,6 +398,10 @@ void tiles_lighting_set_pad_press(uint8_t logical_pad, float press_0_to_1) {
 void tiles_lighting_service(void) {
     if (!s_initialized) {
         return;
+    }
+
+    if (tiles_debug_mode_is_active()) {
+        write_debug_underglow();
     }
 
     write_pad(s_service_cursor);

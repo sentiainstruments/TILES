@@ -4910,5 +4910,76 @@ not its code.
   (power.c's still-unverified-on-real-hardware FAULT mode), not another
   unbounded-wait audit -- every blocking peripheral call in this
   codebase (stdio/CDC, I2C, PIO) has now had one.
+- **It froze a third time, on the PIO-timeout build.** Real feedback,
+  decisively: "dont do half ass fixes, lets figure out whats wrong
+  logically and work through the bugs." Two rounds of "bound the
+  suspect, ship it, wait and see" had each ruled out one real hazard
+  (unbounded I2C, then unbounded PIO) without ever actually explaining
+  the freeze -- a real pattern of progress, but not a diagnosis, and
+  guessing a third unbounded-wait candidate blind wasn't a good next
+  step. Real feedback redirected accordingly: build the tool to actually
+  see what's happening on the next freeze, instead of guessing again.
+  **New `services/debug_mode.c`/`.h`**: a real-hardware trace logger,
+  toggled by holding diamond+square+circle (deliberately NOT the
+  reserved 4-button combo -- see below) for 8 seconds, confirmed by the
+  underglow pulsing steady red for as long as it's active. Every main-
+  loop stage in `main.c` gets a one-character marker
+  (`tiles_debug_trace('X')`) written immediately BEFORE that stage runs,
+  so the trace stream is a continuous `TMPBoudEGSYLHCXK` (repeating once
+  per loop, one letter per stage -- see `main.c`'s own call sites for
+  which letter is which) for as long as everything's healthy -- and the
+  LAST character printed if it hangs is unambiguously where it's stuck,
+  not merely the last thing that finished. `services/op_mode.c`'s own
+  per-lane sequencer advance gets a second layer of granularity inside
+  the `S` stage (`'0'`-`'3'` for lanes 0-3) specifically because "it
+  might be the sequencer triggering notes or clock or running" was real
+  feedback's own leading theory -- if it hangs mid-`S`, the trace also
+  says which lane.
+  **Deliberately NOT `printf()`**: this project's entire reason for
+  chasing freezes this session is that `printf()` over USB-CDC blocks
+  for up to 500ms per call whenever nobody's draining it -- using it for
+  a debug-mode trace would risk becoming indistinguishable from the bug
+  it exists to diagnose, or worse, causing a freeze of its own that gets
+  misattributed to the real one. `tiles_debug_trace()`/`_str()` write
+  directly via `tud_cdc_write()` instead -- confirmed non-blocking by
+  reading TinyUSB's own vendored source (`cdc_device.c`'s `tud_cdc_n_
+  write()` is a plain FIFO write, `_write_flush()`'s endpoint claim is
+  skip-if-busy, never a wait), gated on `tud_cdc_write_available()`
+  first so a full buffer (nobody's terminal open) means trace bytes get
+  silently DROPPED, never queued or waited for. Debug mode trades "every
+  byte eventually arrives" for "never once blocks the caller," which is
+  the one property this feature actually needs -- watch it live with a
+  terminal open (screen/minicom/whatever's on hand at
+  `/dev/tty.usbmodem*` or equivalent) and the moment the stream stops is
+  the diagnosis.
+  **Button choice**: diamond+square+circle, WITHOUT triangle, is
+  deliberately not a subset of `services/game_mode.c`'s reserved
+  4-button combo (triangle+diamond+square+circle) that just happens to
+  omit one finger -- that combo's own `GM_HOLD_MS` is only 700ms, so any
+  hand that includes triangle while working toward this feature's
+  8-second hold would trigger game mode's secret entry several seconds
+  first. Requiring triangle to be explicitly UP (not just unchecked)
+  keeps the two from ever firing off the same held hand.
+  **Underglow indicator bypasses `s_standby_active` entirely** -- a new
+  `write_debug_underglow()` in `services/lighting.c`, called directly
+  from `tiles_lighting_service()` whenever `tiles_debug_mode_is_active()`
+  is true, writes the pulse straight to the underglow SK6805 chain,
+  unrelated to whatever `s_underglow_rgb[]`/`s_standby_active` currently
+  hold. Fighting over standby-active ownership to get an indicator
+  visible "regardless of whatever mode/sub-view currently owns
+  rendering" is exactly the bug class this file's own history already
+  had to fix twice this session (search "standby active" above) --
+  sidestepping that fight entirely, rather than becoming a third
+  claimant on the same flag, was the deliberate design choice here, not
+  an oversight.
+  **Scope, deliberately**: main-loop-stage and per-lane granularity
+  only for this first pass -- `services/hall.c`'s own per-pad loop and
+  `services/lighting.c`'s per-pad round-robin are NOT individually
+  traced yet, even though both are real suspects from the last two
+  rounds. If the top-level trace narrows a future freeze down to
+  consistently hanging mid-`H` or mid-`L` without already pinpointing
+  the cause, that's the natural next place to add finer tracing --
+  informed by what's actually been observed, not speculative
+  instrumentation everywhere up front.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

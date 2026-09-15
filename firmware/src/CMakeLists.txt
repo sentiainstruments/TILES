@@ -27,6 +27,7 @@ add_executable(sentia_tiles_firmware
     services/expression_control.c
     services/midi_clock.c
     services/op_mode.c
+    services/debug_mode.c
     midi/usb_device.c
     midi/usb_descriptors.c
     midi/midi_out.c
