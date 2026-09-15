@@ -721,51 +721,50 @@ static bool s_chord_pad_sounding[TILES_NUM_PADS];
  * map_nearest_pitch_class()`, `s_chord_voice_anchor_*`) is gone outright,
  * not tuned -- it was the drift's actual root cause, not a side effect
  * of it.
- * Three depth tiers, chosen live off each pad's own Hall depth while
+ * Two depth tiers now (simplified from an original three-tier pass --
+ * real feedback: "lets simplify to basic tirads and anything past 50%
+ * press jazz chord"), chosen live off each pad's own Hall depth while
  * held (morphs both directions -- press harder mid-hold to escalate,
- * ease off to revert, same held note): "tap regular triads, regular
- * push tensions, max preassure or hard push complex jazz chord with
- * tensions with octave lower bass note." Every tier shares the SAME
+ * ease off to revert, same held note). Both tiers share the SAME
  * per-voice register conventions (root/fifth at the chord register,
  * third always raised an octave for an open spread, bass always one
- * more octave below root) -- only which voices are PRESENT changes
- * tier to tier, never how any one voice is registered, so a tier change
- * reads as "notes added/removed," not "the whole chord jumped range."
+ * more octave below root) -- only which voices are PRESENT changes tier
+ * to tier, never how any one voice is registered, so a tier change reads
+ * as "notes added/removed," not "the whole chord jumped range."
  * Quality (major/minor/diminished) is read directly off the actual
  * root-to-third and root-to-fifth intervals `tiles_note_map_get_chord_
  * notes()` returns, not hardcoded per scale degree, so it automatically
  * tracks whichever diatonic mode is currently selected: diminished
- * degrees are capped at the middle tier's voicing (a real fully-
- * diminished chord's own tensions need chromatic alteration this
- * diatonic-only system doesn't attempt -- forcing them on would
- * reintroduce exactly the clashes this design is trying to avoid);
- * major-quality chords get a 13th as their top jazz tension, minor-
- * quality get an 11th instead -- a natural (perfect) 11th a minor 9th
- * above a MAJOR 3rd is jazz harmony's textbook "avoid note" (a harsh
- * half-step-adjacent clash once octave-reduced), so it's only ever
- * added where the 3rd is minor and that clash can't occur. */
+ * degrees cap at triad+7th past 50% (a real, safe, standard diminished/
+ * half-diminished 7th -- needs no chromatic alteration) rather than the
+ * full rootless-jazz treatment, since a diminished chord's own natural
+ * 9th/11th/13th tensions need alteration this diatonic-only system
+ * doesn't attempt -- adding them untreated would reintroduce exactly the
+ * clashes this design is trying to avoid; major-quality chords get a
+ * 13th as their top jazz tension, minor-quality get an 11th instead --
+ * a natural (perfect) 11th a minor 9th above a MAJOR 3rd is jazz
+ * harmony's textbook "avoid note" (a harsh half-step-adjacent clash once
+ * octave-reduced), so it's only ever added where the 3rd is minor and
+ * that clash can't occur. */
 typedef enum {
     OP_CHORD_TIER_TAP = 0,
-    OP_CHORD_TIER_PUSH,
-    OP_CHORD_TIER_FULL,
+    OP_CHORD_TIER_JAZZ,
 } op_chord_tier_t;
 
 /* Same ~900 full-scale reference OP_MENU_SELECT_DEPTH_THRESHOLD's own
- * comment already established -- reused verbatim for the tap/push
- * boundary (a deliberate, not incidental, choice: "regular push" reads
- * as the same "past halfway" gesture this file's pickers already use
- * for "select/commit"). OP_CHORD_FULL_PRESS_DEPTH_THRESHOLD is new --
- * unmeasured, a starting guess at "unambiguously mashed all the way
- * down" pending real-hardware tuning, same as most of this file's other
- * depth/timing constants. */
-#define OP_CHORD_FULL_PRESS_DEPTH_THRESHOLD 810.0f
+ * comment already established -- reused verbatim, deliberately not
+ * incidentally: "regular push tensions" (from the original three-tier
+ * spec) and this simplified "anything past 50%" both land on the same
+ * "past halfway" gesture this file's pickers already use for "select/
+ * commit." */
 /* Root note pushed one extra octave down from the chord register for
  * the dedicated bass voice, on top of note_map.c's own CHORD_OCTAVE_
  * DOWN_SEMITONES -- real feedback: "octave lower bass note." */
 #define OP_CHORD_BASS_EXTRA_OCTAVE_SEMITONES 12
-/* Bass + up to 5 upper voices (the push tier's root/fifth/third/seventh/
- * ninth is the largest set any tier actually uses). */
-#define OP_CHORD_MAX_VOICES 6u
+/* Bass + up to 4 upper voices (the diminished-capped jazz tier's root/
+ * fifth/third/seventh, and the major/minor rootless jazz tier's third/
+ * seventh/ninth/top-tension, are both the largest sets any tier uses). */
+#define OP_CHORD_MAX_VOICES 5u
 
 static op_chord_tier_t s_chord_pad_tier[TILES_NUM_PADS]; /* only meaningful while s_chord_pad_sounding[pad] */
 static uint8_t s_chord_pad_notes[TILES_NUM_PADS][OP_CHORD_MAX_VOICES];
@@ -782,11 +781,8 @@ static uint8_t clamp_midi_note(int note) {
 }
 
 static op_chord_tier_t chord_tier_for_depth(float depth) {
-    if (depth >= OP_CHORD_FULL_PRESS_DEPTH_THRESHOLD) {
-        return OP_CHORD_TIER_FULL;
-    }
     if (depth >= OP_MENU_SELECT_DEPTH_THRESHOLD) {
-        return OP_CHORD_TIER_PUSH;
+        return OP_CHORD_TIER_JAZZ;
     }
     return OP_CHORD_TIER_TAP;
 }
@@ -816,9 +812,23 @@ static uint8_t build_chord_voicing(const uint8_t raw[TILES_NOTE_MAP_CHORD_NUM_NO
 
     uint8_t n = 0;
     out_notes[n++] = bass;
-    if (tier == OP_CHORD_TIER_FULL && !is_diminished) {
-        /* Rootless jazz upper structure -- real feedback: "complex jazz
-         * chord with tensions." Root and fifth deliberately DROPPED
+    if (tier == OP_CHORD_TIER_TAP) {
+        /* Basic triad -- real feedback: "basic tirads." */
+        out_notes[n++] = root;
+        out_notes[n++] = fifth;
+        out_notes[n++] = open_third;
+    } else if (is_diminished) {
+        /* Capped short of the rootless jazz treatment below -- see this
+         * section's own header comment for why. Still genuinely "more"
+         * than the triad (a real, safe diminished/half-diminished 7th),
+         * not just the plain triad again. */
+        out_notes[n++] = root;
+        out_notes[n++] = fifth;
+        out_notes[n++] = open_third;
+        out_notes[n++] = seventh;
+    } else {
+        /* Rootless jazz upper structure -- real feedback: "anything past
+         * 50% press jazz chord." Root and fifth deliberately DROPPED
          * here, not just added-to -- the bass voice already states the
          * root, so the upper structure is free to be guide-tones-plus-
          * tensions only, the same "bass covers the root, the chordal
@@ -828,18 +838,6 @@ static uint8_t build_chord_voicing(const uint8_t raw[TILES_NOTE_MAP_CHORD_NUM_NO
         out_notes[n++] = seventh;
         out_notes[n++] = ninth;
         out_notes[n++] = is_minor ? eleventh : thirteenth;
-    } else {
-        /* Tap and push tiers (and diminished's own capped top tier)
-         * share the identical foundation -- push only ADDS the 7th/9th
-         * on top, never rearranges the triad underneath it, so a tier
-         * change reads as "notes added," never "the chord moved." */
-        out_notes[n++] = root;
-        out_notes[n++] = fifth;
-        out_notes[n++] = open_third;
-        if (tier != OP_CHORD_TIER_TAP) {
-            out_notes[n++] = seventh;
-            out_notes[n++] = ninth;
-        }
     }
     return n;
 }

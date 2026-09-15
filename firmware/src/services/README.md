@@ -4612,41 +4612,40 @@ not its code.
   which voices, the bass note, the "open" spread) stays entirely
   `op_mode.c`'s concern, not `note_map.c`'s -- the note-mapping file
   hands back raw chord tones, nothing about performance articulation.
-  **Three tiers, chosen live off Hall depth while held** (`chord_tier_
-  for_depth()`, thresholds at `OP_MENU_SELECT_DEPTH_THRESHOLD` and a new
-  `OP_CHORD_FULL_PRESS_DEPTH_THRESHOLD`), morphing both directions within
-  the same held note -- pressing harder escalates, easing off reverts,
+  **Two tiers, chosen live off Hall depth while held** (`chord_tier_
+  for_depth()`, one threshold at `OP_MENU_SELECT_DEPTH_THRESHOLD` --
+  simplified from an original three-tier pass before it saw much real
+  playing time: "lets simplify to basic tirads and anything past 50%
+  press jazz chord"), morphing both directions within the same held note
+  -- pressing past halfway escalates, easing back off reverts,
   re-striking only on an actual tier change:
   - **Tap**: bass (root, TWO octaves below the melody register --
     `OP_CHORD_BASS_EXTRA_OCTAVE_SEMITONES` on top of note_map.c's own
     existing one-octave chord drop) + an OPEN triad (root and fifth at
     the chord register, third raised a further octave on top) -- "a root
-    bass note and an open voicing."
-  - **Push (>=50% depth)**: the identical tap foundation, PLUS the 7th
-    and 9th -- "more spicy... some tensions," never rearranging the
-    triad underneath, so the tier change reads as notes added, not the
-    chord moving.
-  - **Full press (very deep)**: the bass stays, but the upper structure
-    goes ROOTLESS -- third/7th/9th plus a top tension, root and fifth
-    dropped outright ("replacing notes"), the same "bass states the
-    root, the chordal voice goes rootless" shape real jazz piano/guitar
-    voicings use.
+    bass note and an open voicing," "basic tirads."
+  - **Past 50% depth**: the bass stays, but the upper structure goes
+    ROOTLESS -- third/7th/9th plus a top tension, root and fifth dropped
+    outright, the same "bass states the root, the chordal voice goes
+    rootless" shape real jazz piano/guitar voicings use. Diminished-
+    quality degrees cap short of this instead (root/fifth/third/seventh,
+    no rootless swap, no 9th/11th/13th) -- a real, safe diminished/
+    half-diminished 7th needs no chromatic alteration, but a
+    diminished chord's own NATURAL upper tensions do, which this
+    diatonic-only system doesn't attempt; adding them untreated would
+    reintroduce exactly the clash this design is trying to avoid.
   **Chord quality read directly off the actual returned intervals**
   (root-to-third, root-to-fifth), not hardcoded per scale degree, so it
   tracks whatever diatonic mode is active automatically: major/minor
-  determines the full-press top tension (13th for major-quality, 11th
+  determines the jazz tier's top tension (13th for major-quality, 11th
   for minor) specifically to dodge jazz harmony's textbook "avoid note"
   -- a natural 11th sits a minor 9th above a MAJOR 3rd once octave-
   reduced, a genuinely harsh clash, so it's only ever added where the
-  3rd is minor and that clash can't occur; diminished-quality degrees
-  are capped at the push tier's own voicing at full press too (a real
-  diminished chord's own tensions need chromatic alteration this
-  diatonic-only system doesn't attempt -- forcing untreated ones on
-  would reintroduce exactly the clash this design avoids elsewhere).
+  3rd is minor and that clash can't occur.
   Verified by hand-tracing the actual interval math for major/minor/
   diminished scale degrees before flashing (not just by eye) -- see the
   session's own worked examples for the specific semitone arithmetic
-  confirming no unintended half-step/minor-9th clashes land in any
+  confirming no unintended half-step/minor-9th clashes land in either
   tier's final voicing.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
