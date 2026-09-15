@@ -4865,5 +4865,50 @@ not its code.
   driver) was mid-transaction, since a bounded timeout converts a silent
   hang into information: `write_reg()`/`read_regs()`'s own return value
   now actually means something again.
+- **It did recur.** Real feedback, after real runtime on the I2C-timeout
+  build above: "it still froze eventually so we didnt fix it yet." Since
+  a wedged I2C transaction can no longer hang forever (every call site
+  now bounded, previous entry), the freeze surviving that fix rules I2C
+  out as the actual cause -- confirmation, not just theory, that
+  something else entirely was responsible. Went looking specifically for
+  OTHER unbounded waits the I2C-focused pass wouldn't have caught, and
+  found one: `drivers/sk6805.c`'s `tiles_sk6805_write()` (the addressable
+  pad/underglow LED driver) calls pico-sdk's `pio_sm_put_blocking()`,
+  which -- read directly from `hardware/pio.h`, not assumed -- is a raw
+  `while (pio_sm_is_tx_fifo_full(...)) tight_loop_contents();` spin with
+  NO timeout at all. Same failure class as the I2C bug, different
+  peripheral entirely (PIO, not I2C), which is exactly why fixing I2C
+  didn't touch it. If this state machine ever stops draining its FIFO
+  for any reason, the wait never ends. This call site is arguably a
+  BIGGER exposure than I2C ever was: `services/lighting.c`'s own header
+  comment says pad LEDs are written ONE PIXEL AT A TIME (muxed via the
+  TCA9554/CD74HCT4051, per `sk6805.h`'s own file header), so a single
+  `tiles_lighting_service()` pass -- called unconditionally on EVERY
+  main-loop iteration, not just occasionally like most I2C reads -- is
+  roughly 24 separate blocking pushes for pads alone plus 4 more for
+  underglow, all with zero protection.
+  **Fix**: new `sk6805_put_blocking_with_timeout()` in `sk6805.c`,
+  hand-rolled (pico-sdk has no built-in timeout variant for PIO the way
+  it does for I2C) using the same `absolute_time_t`/`time_reached()`
+  pattern the SDK's own `i2c_write_blocking_until()` uses internally --
+  5000us per pixel push, the same generous-headroom philosophy as the
+  I2C fix (at this driver's configured 800kHz bit rate a 24-bit pixel
+  takes ~30us to shift out with an 8-word-deep TX FIFO behind it, so a
+  genuinely working state machine should never come remotely close to
+  5ms). `tiles_sk6805_write()` now `break`s out of its write loop (not
+  a hard early `return`) the instant one push times out -- still falls
+  through to the reset/latch `sleep_us()` afterward so timing stays
+  consistent for whatever DID get written, and the very next `tiles_
+  lighting_service()` call naturally retries with fresh pixel data, no
+  partial-frame state to reconcile. Grepped the rest of the codebase for
+  any other `pio_sm_put_blocking()`/`pio_sm_get_blocking()` call --
+  this was the only one. Same honest caveat as the I2C round: this
+  bounds the wait, it does not explain what stalls the PIO state machine
+  in the first place -- if a freeze still recurs after this, PIO is now
+  also ruled out, and the next place to look is something in `services/
+  standby.c`'s deep-sleep/wake path or a genuine hardware brownout
+  (power.c's still-unverified-on-real-hardware FAULT mode), not another
+  unbounded-wait audit -- every blocking peripheral call in this
+  codebase (stdio/CDC, I2C, PIO) has now had one.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
