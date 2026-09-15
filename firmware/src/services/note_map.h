@@ -193,17 +193,6 @@ int8_t tiles_note_map_get_key_offset(void);
  * out-of-range pad. */
 uint8_t tiles_note_map_get_note(uint8_t logical_pad);
 
-/* Same, but under an EXPLICITLY passed scale instead of the globally
- * selected one -- octave shift and key offset still come from the
- * live global state (only the scale itself is overridden). Real
- * feedback: "pattern mode wont lock to selectesd scales on scsale
- * selector it stays in chromsatic" -- see note_map.c's own comment on
- * this function for why op_mode.c's sequencer needs this instead of
- * the plain lookup above for its own per-pattern scale. Same guitar/
- * chord-mode exclusion as that function's own comment -- narrower on
- * purpose, since this exists for one real caller. */
-uint8_t tiles_note_map_get_note_in_scale(uint8_t logical_pad, tiles_scale_mode_t scale);
-
 /* True if this pad is currently the key's tonic (root) note -- driven by
  * services/lighting.c's idle pad coloring (real feedback: "root should
  * be blue"). Purely positional: independent of the current key offset --
