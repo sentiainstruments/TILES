@@ -4764,5 +4764,31 @@ not its code.
   alt`) protect the few fields that get used as array indices or modulo
   divisors elsewhere, in the astronomically unlikely case of a corrupted-
   but-somehow-CRC-passing value.
+- **Scale picker exit was breaking sequencer mode's own view -- same bug
+  `menu_exit()` had already been fixed for, missed here.** Real
+  feedback: "why does pressing a pattern then a scale sewnd me back to a
+  broken melodic layout? is the return to melodic broken? it should only
+  do that on melodic not in other modes or sequencer mode." Root cause:
+  `scale_menu_exit()` unconditionally called `tiles_lighting_set_
+  standby_active(false)`/`tiles_buttons_set_standby_active(false)` on
+  close -- correct back when the picker was melodic/chord-only (their
+  own normal rendering doesn't need standby), but sequencer mode keeps
+  standby active for its ENTIRE duration, since its own step view
+  (`render_sequencer()`) is rendered THROUGH that same mechanism (see
+  `set_active_mode()`'s own `OP_MODE_SEQUENCER` branch, and `pattern_
+  bank_exit()`'s identical guard/comment). Turning it off the instant
+  the scale picker closed killed the step view's own rendering on the
+  spot, falling back to `services/lighting.c`'s DEFAULT pad coloring
+  (melodic-style root/natural/sharp) even though `s_active_mode` was
+  still genuinely `OP_MODE_SEQUENCER` underneath -- exactly the "broken
+  melodic layout" while still nominally in sequencer mode that was
+  reported. `menu_exit()` (the top-level mode picker) had already needed
+  and gotten this EXACT `if (s_active_mode != OP_MODE_SEQUENCER)` guard
+  for the identical reason, from an earlier round -- just never carried
+  over to `scale_menu_exit()` when the scale picker later became
+  reachable from sequencer mode too. Fixed by mirroring that same guard;
+  triangle's own LED-reset write stays unconditional either way (a
+  separate, narrower fix for a different real bug -- see that line's own
+  comment).
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
