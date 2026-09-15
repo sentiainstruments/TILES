@@ -984,7 +984,7 @@ static void seq_fire_note(uint8_t lane, uint8_t step) {
     seq_end_current_note(lane);
     op_seq_pattern_t *pat = pattern_for_lane(lane);
     uint8_t pad = (uint8_t)(step + 1u);
-    uint8_t note = pat->step_pitch_override[step] ? pat->step_note[step] : tiles_note_map_get_note(pad);
+    uint8_t note = pat->step_pitch_override[step] ? pat->step_note[step] : tiles_note_map_get_note_in_scale(pad, pat->scale);
     uint8_t channel = s_seq_lane_channel[lane];
     tiles_midi_note_on(channel, note, OP_SEQ_VELOCITY);
     tiles_haptics_trigger_kick(pad, OP_SEQ_VELOCITY);
@@ -1153,8 +1153,20 @@ static void seq_handle_step_taps(uint32_t now_ms) {
                      * re-reading the live scale again. Re-arming a step
                      * later re-freezes it fresh at THAT moment's scale,
                      * which is correct: that's a deliberate new edit,
-                     * not a passive drift. */
-                    pat->step_note[step] = tiles_note_map_get_note(pad);
+                     * not a passive drift.
+                     * Real feedback, a later round: "pattern mode wont
+                     * lock to selectesd scales on scsale selector it
+                     * stays in chromsatic" -- tiles_note_map_get_note()
+                     * only ever reads the GLOBAL scale, which is back to
+                     * whatever it was before scale_menu_enter()'s own
+                     * temporary swap the instant the per-pattern picker
+                     * closes (see that function's own comment), so a
+                     * step armed AFTER picking a scale for this pattern
+                     * still silently used the wrong one. tiles_note_map_
+                     * get_note_in_scale(), new, takes this pattern's OWN
+                     * stored scale explicitly instead of trusting
+                     * whatever the global happens to be right now. */
+                    pat->step_note[step] = tiles_note_map_get_note_in_scale(pad, pat->scale);
                     pat->step_pitch_override[step] = true;
                 }
                 seq_store_mark_dirty();
@@ -1471,7 +1483,12 @@ static void handle_edit_mode(uint32_t now_ms) {
             if (touched && !was_touched) {
                 op_seq_pattern_t *pat = active_pattern();
                 pat->step_pitch_override[s_seq_edit_step] = true;
-                pat->step_note[s_seq_edit_step] = tiles_note_map_get_note(pad);
+                /* Real feedback: "pattern mode wont lock to selectesd
+                 * scales on scsale selector it stays in chromsatic" --
+                 * same fix as seq_handle_step_taps()'s arm-toggle above:
+                 * resolve this pad against the PATTERN's own stored
+                 * scale, not whatever the global happens to be right now. */
+                pat->step_note[s_seq_edit_step] = tiles_note_map_get_note_in_scale(pad, pat->scale);
                 seq_store_mark_dirty();
                 tiles_haptics_trigger_touch_pulse(pad);
                 edit_exit();
@@ -1534,11 +1551,17 @@ static void render_transport_toggle_leds(bool transport_running) {
 static void render_pitch_edit(uint32_t now_ms, bool transport_running) {
     float pulse = menu_selected_pulse_level(now_ms);
     op_seq_pattern_t *pat = active_pattern();
+    /* Same pattern-scale fix as the commit path in handle_edit_mode()
+     * just below this -- both the not-yet-overridden fallback and the
+     * per-pad comparison must resolve against pat->scale, not the global
+     * scale, or the white "currently assigned" pulse would land on the
+     * wrong pad (or no pad at all) the moment this pattern's own scale
+     * differs from whatever the global scale happens to be right now. */
     uint8_t current_note = pat->step_pitch_override[s_seq_edit_step] ? pat->step_note[s_seq_edit_step]
-                                                                      : tiles_note_map_get_note((uint8_t)(s_seq_edit_step + 1u));
+                                                                      : tiles_note_map_get_note_in_scale((uint8_t)(s_seq_edit_step + 1u), pat->scale);
 
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-        if (tiles_note_map_get_note(pad) == current_note) {
+        if (tiles_note_map_get_note_in_scale(pad, pat->scale) == current_note) {
             tiles_lighting_set_standby_pad_rgb(pad, pulse, pulse, pulse);
         } else if (tiles_note_map_is_root_pad(pad)) {
             tiles_lighting_set_standby_pad_rgb(pad, OP_MENU_MELODIC_R * OP_SCALE_AVAILABLE_LEVEL,

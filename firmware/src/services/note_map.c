@@ -417,20 +417,27 @@ int8_t tiles_note_map_get_key_offset(void) {
     return s_key_offset;
 }
 
+/* Resolves `scale` to its real interval table, falling back to
+ * chromatic if it has none (a reserved custom slot -- see note_map.h's
+ * own comment) rather than dividing by zero or producing garbage.
+ * Factored out from current_scale_table() below so tiles_note_map_get_
+ * note_in_scale() can share the identical fallback for an EXPLICIT
+ * scale instead of the globally selected one. */
+static tiles_scale_table_t scale_table_with_fallback(tiles_scale_mode_t scale) {
+    tiles_scale_table_t table = scale_table(scale);
+    if (table.count == 0u) {
+        table = scale_table(TILES_SCALE_CHROMATIC);
+    }
+    return table;
+}
+
 /* Folds a pad's linear 0-23 degree into the currently selected scale's
  * own interval table, octave-doubling every `table.count` degrees --
  * shared by tiles_note_map_get_note() and tiles_note_map_is_root_pad()
  * below so both always agree on exactly the same scale, including the
  * CUSTOM_* fallback. */
 static tiles_scale_table_t current_scale_table(void) {
-    tiles_scale_table_t table = scale_table(s_scale);
-    if (table.count == 0u) {
-        /* Selected scale has no real table (a reserved custom slot --
-         * see note_map.h's own comment) -- fall back to chromatic rather
-         * than dividing by zero or producing garbage. */
-        table = scale_table(TILES_SCALE_CHROMATIC);
-    }
-    return table;
+    return scale_table_with_fallback(s_scale);
 }
 
 /* Folds `degree` through `table` -- the shared tail end both
@@ -545,6 +552,38 @@ uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
      * position in that bottom-to-top, left-to-right sweep. */
     uint8_t degree = pad_degree(cfg);
     int note = note_for_scale_degree(degree);
+    if (note < 0) {
+        note = 0;
+    }
+    if (note > 127) {
+        note = 127;
+    }
+    return (uint8_t)note;
+}
+
+/* Real feedback: "pattern mode wont lock to selectesd scales on scsale
+ * selector it stays in chromsatic." Root cause: op_mode.c's own per-
+ * pattern scale (real feedback, an earlier round: "shift plus triangle
+ * in sequencer scale selector for that specific pattern") was being
+ * stored correctly, but every ARM-time note lookup still called plain
+ * tiles_note_map_get_note() above, which only ever reads the GLOBAL
+ * scale -- restored back to whatever it was before scale_menu_enter()'s
+ * own temporary swap the moment the picker closed (see that function's
+ * own comment), so a step armed AFTER closing the picker silently used
+ * the wrong scale again. This lets a caller pass the scale to use
+ * EXPLICITLY instead of relying on that swap, so a pattern's own note
+ * lookups can stay correct with the picker closed and the global scale
+ * back to whatever melodic mode (or a different pattern) is using.
+ * Deliberately narrower than tiles_note_map_get_note() above -- no
+ * guitar/chord special-casing, since sequencer mode (this function's
+ * only real caller) is never simultaneously guitar or chord mode. */
+uint8_t tiles_note_map_get_note_in_scale(uint8_t logical_pad, tiles_scale_mode_t scale) {
+    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
+    if (cfg == NULL) {
+        return 0u;
+    }
+    uint8_t degree = pad_degree(cfg);
+    int note = note_for_scale_degree_using(scale_table_with_fallback(scale), degree);
     if (note < 0) {
         note = 0;
     }
