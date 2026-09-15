@@ -4693,5 +4693,78 @@ not its code.
   during plain background playback, no capture-mode interaction), but it
   stays off until the actual fix has had real playing time to prove
   out. Re-enable by flipping that one constant back to 1.
+- **A second real-hardware freeze turned up more of the same printf()
+  class, in different files.** Real feedback: "froze again with enough
+  time." Unlike the haptics.c round above (needed capture mode plus a
+  dense external clock), this one didn't need anything specific to be
+  happening -- "enough time" was the whole trigger, which pointed at
+  `main.c`'s main loop rather than any one feature: a periodic 2-second
+  bring-up dump (`tiles_diag_i2c_scan_expected_devices()` -- 9 printf
+  calls, one per expected I2C device plus a summary -- plus 3 more for
+  power/Hall/standby state, 12 total) ran unconditionally on a plain
+  wall-clock timer, forever, from the moment the device powered on,
+  whether or not a serial terminal was ever attached to drain the CDC
+  buffer. With no terminal open (the normal case once TILES is plugged
+  into a DAW/synth rig instead of a dev machine), the buffer fills and
+  every printf() call blocks up to `PICO_STDIO_USB_STDOUT_TIMEOUT_US`
+  (500ms) -- up to 12 * 500ms = 6s of main-loop stall possible every 2s
+  once the buffer settled into "always full." Activity-independent,
+  unlike every other entry in this class -- explains a freeze regardless
+  of mode or what the player was doing, purely from elapsed power-on
+  time, matching the report exactly. Removed outright (the whole 2-
+  second-timer block, not just the prints inside it -- dead scaffolding
+  otherwise). The one-shot i2c scan still called once at boot
+  (`tiles_op_mode_init()`'s own neighborhood) is untouched -- fires once
+  before the loop starts, not on a recurring timer, so it can't
+  accumulate. `services/touch.c`'s per-touch-edge print (fired on every
+  touch AND release of every pad -- common during any play at all, not
+  rare) and three more in `services/expression.c` (every committed
+  note-on, every touch that ended without a real press, and one firing
+  whenever a held pad's live pitch-bend value changed from the last
+  value actually sent -- during genuine expressive play this changes on
+  very close to every scan iteration, making it the closest thing in the
+  codebase to truly continuous/unthrottled) went the same way. A fourth
+  expression.c print, `[depth-cal]`, was already throttled to at most
+  once per 150ms after an EARLIER pitch-bend freeze in this same file's
+  history -- removed too, since its own comment already said to do so
+  "once the real X(depth)/Y(depth) data has been captured and used to
+  build an actual depth-compensation model," which the surrounding
+  depth-compensated cosine-delta code shows had already happened. Same
+  treatment as every other entry in this class: printf() and any
+  print-justifying comment came out, logic comments stayed. Two now-
+  unused includes (`pico/time.h`, `stdio.h`) came out of `touch.c` too.
+  **First attempt at shipping this broke MIDI output, haptics, and the
+  sequencer's own clock advance entirely -- root cause still
+  unresolved.** The initial fix was built and flashed on top of the
+  session's newer work (per-pattern sequencer scale locking, the scale-
+  menu-exit standby-active guard, and -- the largest of the three --
+  first-ever real flash persistence for sequencer patterns). Real
+  feedback after flashing: "broke midi clock adn tap to play. seqcuencer
+  will not play at all," then, after this exact printf fix was reverted
+  in isolation and the OLDER code underneath was still broken: "no,
+  revert to the last working version everything broke," confirmed even
+  after a full USB power cycle (ruling out an I2C-peripheral-wedge
+  theory from repeated rapid reflashing that round). Bisected by
+  reverting one commit at a time: the checkpoint at this exact entry
+  above (haptics fix, no persistence, no scale-lock, no standby-exit
+  guard) was reflashed and confirmed genuinely working end to end (MIDI,
+  haptics, sequencer playback) -- it just freezes again given enough
+  time, the original bug this entry exists to fix. That isolates the
+  "everything broken" regression to somewhere in the persistence /
+  scale-lock / standby-exit-guard delta, NOT to this printf removal --
+  which was never actually tested in isolation against the old code
+  before being bundled with those three. This printf fix was then
+  reapplied fresh on top of that confirmed-working checkpoint (this
+  entry) and is believed safe on its own; persistence, the per-pattern
+  scale lock, and the standby-exit guard are NOT currently reapplied and
+  need their own isolated bisection in a future round before returning
+  -- prime suspect is `storage/seq_store.c`'s flash erase/program path
+  (the only piece of that delta touching real hardware state rather than
+  pure in-memory logic), but this is not yet confirmed, only the leading
+  theory. Their original commits are still in history (search for
+  "Persist sequencer patterns across power cycles", "Fix scale picker
+  exit breaking sequencer mode's own step view", and "Fix per-pattern
+  sequencer scale never being applied to step pitches") for whenever
+  that investigation resumes.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
