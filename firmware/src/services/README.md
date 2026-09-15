@@ -4647,5 +4647,51 @@ not its code.
   session's own worked examples for the specific semitone arithmetic
   confirming no unintended half-step/minor-9th clashes land in either
   tier's final voicing.
+- **Full device freeze during real Ableton MIDI clock playback -- root
+  cause: `printf()` flooding in `services/haptics.c`'s per-note hot
+  path.** Real feedback: "something made it freeze and crash in
+  sequwencer mode with ableton midi clock," confirmed as a hard lockup
+  (LEDs frozen, no response to touch/buttons, needs a full unplug/
+  replug) happening during ordinary, un-interacted-with playback -- "it
+  just froze again with no interactrio, just on regular ableton nplay
+  and pattern running."
+  This is the EXACT same bug class this file's own pitch-bend history
+  already found and fixed once (see that section's own "The freeze"
+  entry): the Pico SDK's USB-CDC stdio driver busy-waits internally for
+  up to `PICO_STDIO_USB_STDOUT_TIMEOUT_US` (500ms) every time its output
+  buffer fills faster than the host drains it, and does NOT return to
+  the main loop while waiting -- confirmed there by reading `pico-sdk/
+  src/rp2_common/pico_stdio_usb/stdio_usb.c` directly, and unchanged
+  since. `services/haptics.c` had never been through that same cleanup:
+  `tiles_haptics_trigger_kick()` (every kick), `tiles_haptics_trigger_
+  touch_pulse()` (every touch pulse, including its two "skipped"
+  branches), `steal_oldest_voice()`, `start_kick_now()`, and `tiles_
+  haptics_resync_hardware()` all had unconditional, per-call `printf()`s
+  -- all originally "temporary bring-up visibility" from earlier
+  haptics-debugging rounds, per their own comments, never removed once
+  their diagnostic job was done. The 4-lane sequencer rearchitecture
+  (this file's own recent rounds) is what finally exposed it: up to 4
+  lanes firing notes off a REAL external clock -- denser and less bursty
+  than tap-tempo, but sustained and continuous in a way single-lane
+  testing never was -- means `tiles_haptics_trigger_kick()` now fires
+  far more often, per note, per lane, with nobody's serial terminal open
+  to drain the output (the ordinary case when just using the device with
+  a DAW, not actively developing firmware) -- exactly the condition that
+  makes the stdio driver's internal wait actually block for real.
+  Fixed the same way as the pitch-bend round: deleted every one of
+  these prints outright rather than throttling them, once each had
+  served its original diagnostic purpose. The LOGIC comments explaining
+  WHY the surrounding code behaves the way it does (the voice-stealing
+  policy, the FAULT-mode power-flicker theory, etc.) were kept --
+  only the print statements themselves, and the prose that existed
+  solely to justify keeping THEM around, came out.
+  **Sequencer capture mode also disabled for now** (`OP_SEQ_CAPTURE_
+  MODE_ENABLED` gates the entry gesture in `handle_diamond_transport()`,
+  everything else untouched) -- explicit real feedback while chasing
+  this: "for now also disabel the live capture stuff." The confirmed
+  cause above is unrelated to capture mode itself (the crash reproduced
+  during plain background playback, no capture-mode interaction), but it
+  stays off until the actual fix has had real playing time to prove
+  out. Re-enable by flipping that one constant back to 1.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

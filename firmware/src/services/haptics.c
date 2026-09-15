@@ -188,7 +188,6 @@ void tiles_haptics_set_intensity(float level_0_to_1) {
         level_0_to_1 = HAPTIC_INTENSITY_MAX;
     }
     s_haptic_intensity = level_0_to_1;
-    printf("[haptics] intensity set directly to %.2f\n", (double)s_haptic_intensity);
 }
 
 float tiles_haptics_get_intensity(void) {
@@ -225,7 +224,6 @@ void tiles_haptics_set_muted(bool muted) {
             tiles_haptics_stop(pad);
         }
     }
-    printf("[haptics] muted=%d\n", (int)s_haptic_muted);
 }
 
 void tiles_haptics_set_sleep_silenced(bool silenced) {
@@ -354,7 +352,6 @@ static bool steal_oldest_voice(void) {
     }
 
     uint8_t logical_pad = (uint8_t)(oldest_idx + 1);
-    printf("[haptics] stealing pad %u's voice for a new strike (voice ceiling)\n", logical_pad);
     s_pads[oldest_idx].phase = HAPTIC_PHASE_IDLE;
     const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
     if (cfg != NULL) {
@@ -391,17 +388,6 @@ static void start_kick_now(uint8_t idx, const tiles_pad_config_t *cfg, uint8_t v
     s_pads[idx].sustain_current_duty = 0.0f;
     s_pads[idx].sustain_last_update_ms = now_ms;
     set_motor_level(cfg, MAX_KICK_DUTY);
-    /* Temporary bring-up visibility -- real feedback: "we lost the
-     * haptic preview a few prompts ago." Review of trigger_kick()'s
-     * voice-ceiling path, the shared PCA9685 wiring with buttons.c, and
-     * three separate debug captures (zero "[haptics] dropped/stealing"
-     * lines, power mode healthy the whole time) turned up no code-level
-     * cause -- this confirms the actual motor-drive call is reached at
-     * all, so the next test session can tell whether the trigger path is
-     * the problem or something downstream of it (wiring, the PCA9685
-     * write itself, a specific pad) is. */
-    printf("[haptics] pad %u kick started: velocity=%u duty=%.2f\n", (uint8_t)(idx + 1u), velocity_0_127,
-           (double)kick_duty_from_velocity(velocity_0_127));
 }
 
 void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
@@ -429,15 +415,12 @@ void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
      * power.c's state_for_mode()), leaving nothing to steal from
      * either. That GP22-derived mode has never been exercised on real
      * hardware (see power.c's own file header) and could plausibly be
-     * flickering into FAULT transiently. The printf below makes that
-     * specific case visible in the serial log, correlatable against the
-     * periodic "[power] mode=..." print in main.c instead of guessed
-     * at. */
+     * flickering into FAULT transiently -- if haptics mysteriously drop
+     * out again, correlate against the periodic "[power] mode=..." print
+     * in main.c first. */
     if (s_pads[idx].phase == HAPTIC_PHASE_IDLE &&
         active_voice_count() >= tiles_power_get_state().max_haptic_voices) {
         if (!steal_oldest_voice()) {
-            printf("[haptics] dropped pad %u kick -- voice ceiling, nothing to steal (mode=%d max_voices=%u)\n",
-                   logical_pad, (int)tiles_power_get_state().mode, tiles_power_get_state().max_haptic_voices);
             return;
         }
     }
@@ -484,26 +467,18 @@ void tiles_haptics_trigger_touch_pulse(uint8_t logical_pad) {
     }
     uint8_t idx = (uint8_t)(logical_pad - 1u);
     if (s_pads[idx].phase != HAPTIC_PHASE_IDLE) {
-        /* Temporary bring-up visibility -- real feedback: "touching the
-         * top won't give any haptic pulse." Distinguishes "never even
-         * called" from "called but skipped because this pad was already
-         * doing something else" from "started but never felt" (wiring/
-         * hardware) -- three different problems this print set can tell
-         * apart. */
-        printf("[haptics] pad %u touch pulse skipped -- already busy (phase=%d)\n", logical_pad,
-               (int)s_pads[idx].phase);
+        /* Already doing something else (a held note's SUSTAIN, a
+         * pending/active KICK) -- leave it alone rather than
+         * interrupting real feedback for a touch acknowledgment. */
         return;
     }
     const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
     if (cfg == NULL) {
-        printf("[haptics] pad %u touch pulse skipped -- no board config\n", logical_pad);
         return;
     }
     s_pads[idx].phase = HAPTIC_PHASE_TOUCH_PULSE;
     s_pads[idx].phase_start_ms = to_ms_since_boot(get_absolute_time());
     set_motor_level(cfg, TOUCH_PULSE_DUTY);
-    printf("[haptics] pad %u touch pulse started: pca=0x%02x channel=%u duty=%.2f\n", logical_pad,
-           cfg->haptic.pca9685_i2c_addr, cfg->haptic.channel, (double)TOUCH_PULSE_DUTY);
 }
 
 void tiles_haptics_set_sustain_level(uint8_t logical_pad, uint8_t aftertouch_0_127) {
@@ -567,7 +542,6 @@ void tiles_haptics_resync_hardware(void) {
         }
         set_motor_level(cfg, level);
     }
-    printf("[haptics] resynced hardware after a power-mode change\n");
 }
 
 void tiles_haptics_scan(void) {

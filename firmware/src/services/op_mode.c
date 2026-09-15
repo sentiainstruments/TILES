@@ -2285,6 +2285,18 @@ static void set_active_mode(tiles_op_mode_t mode) {
  * glitch, they just hand off cleanly to whichever pad was touched most
  * recently, both for the audible note AND for which note gets written
  * into the step currently being recorded. */
+/* DISABLED FOR NOW -- real feedback: "something made it freeze and crash
+ * in sequwencer mode with ableton midi clock," reported while a pattern
+ * was just running (no capture-mode interaction that session), later:
+ * "for now also disabel the live capture stuff." The actual confirmed
+ * cause was unrelated printf() flooding in services/haptics.c's per-
+ * note hot path (see that file's own history in this section's README
+ * entry), not capture mode itself -- but this stays off until that fix
+ * has had real playing time to prove out, per the explicit request.
+ * Only the ENTRY gesture is gated (see handle_diamond_transport()'s own
+ * use of this flag) -- everything else here is untouched and ready to
+ * re-enable by flipping this back to 1. */
+#define OP_SEQ_CAPTURE_MODE_ENABLED 0
 static tiles_scale_mode_t s_seq_capture_prev_scale;
 static bool s_seq_capture_prev_pad_touched[TILES_NUM_PADS];
 /* Accumulator for the step currently being recorded -- reset at the
@@ -2831,7 +2843,8 @@ static void handle_diamond_transport(uint32_t now_ms) {
                     }
                 } else if (s_seq_capture_mode_active) {
                     seq_capture_mode_exit();
-                } else if (tiles_midi_clock_tap_tempo_established() || tiles_midi_clock_external_active(now_ms)) {
+                } else if (OP_SEQ_CAPTURE_MODE_ENABLED &&
+                           (tiles_midi_clock_tap_tempo_established() || tiles_midi_clock_external_active(now_ms))) {
                     /* Real gap caught auditing this: without this gate,
                      * capture mode could be entered with no tempo at all
                      * -- seq_capture_advance_clock() would then just sit
