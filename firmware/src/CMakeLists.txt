@@ -27,7 +27,6 @@ add_executable(sentia_tiles_firmware
     services/expression_control.c
     services/midi_clock.c
     services/op_mode.c
-    storage/seq_store.c
     midi/usb_device.c
     midi/usb_descriptors.c
     midi/midi_out.c
@@ -42,7 +41,6 @@ target_include_directories(sentia_tiles_firmware PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/drivers
     ${CMAKE_CURRENT_SOURCE_DIR}/services
     ${CMAKE_CURRENT_SOURCE_DIR}/midi
-    ${CMAKE_CURRENT_SOURCE_DIR}/storage
 )
 
 target_link_libraries(sentia_tiles_firmware
@@ -52,8 +50,6 @@ target_link_libraries(sentia_tiles_firmware
     hardware_pio
     hardware_clocks
     hardware_adc
-    hardware_flash
-    hardware_sync
     tinyusb_device
     pico_unique_id
     pico_rand

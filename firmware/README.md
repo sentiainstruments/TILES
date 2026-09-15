@@ -242,14 +242,7 @@ first on-hardware note-on test.
   `expression.h` entry for the per-pad channel allocator and
   `midi/README.md` for the zone setup. Not yet verified with a real
   MIDI-receiving host. DIN MIDI not built.
-- `usb_vendor/`, `profiles/` still empty module skeletons. `storage/`
-  has one real piece now -- `seq_store.h`/`.c` persists the sequencer's
-  own patterns across power cycles (two alternating flash slots, CRC +
-  version checked on load) -- but not yet the rest of `storage/README.md`'s
-  own planned scope (profiles, per-pad calibration, CV/LED/motor config,
-  etc.), which stays unimplemented. See `services/README.md`'s own
-  "Sequencer patterns now survive a power cycle" entry for the full
-  design.
+- `usb_vendor/`, `profiles/`, `storage/` still empty module skeletons.
 
 Builds clean end-to-end against a real pico-sdk checkout (`cmake` +
 `arm-none-eabi-gcc`; see `BUILD.md`) with zero warnings, and produces a
@@ -434,10 +427,8 @@ flashable `.uf2`.
   turns those numbers into an applied per-pad calibration curve --
   picking new constants (e.g. `expression.c`'s
   `DEPTH_TO_AFTERTOUCH_FULL_SCALE`) from what it prints is still a
-  manual step, and calibration itself still has no persistence (`storage/`
-  exists now, but only for the sequencer's own patterns so far -- see
-  this file's own `storage/` entry above) so a capture doesn't survive a
-  reboot.
+  manual step, and there's no persistence (`storage/` doesn't exist) so
+  a capture doesn't survive a reboot.
 - `sk6805.pio`'s bit timing mirrors Raspberry Pi's reference `ws2812.pio`
   program; confirmed working on real SK6805 parts (all pads + underglow
   show correct white output on hardware), not independently verified on
