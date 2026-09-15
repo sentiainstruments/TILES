@@ -12,6 +12,7 @@
 #include "midi_out.h"
 #include "note_map.h"
 #include "octave_control.h"
+#include "seq_store.h"
 #include "standby.h"
 #include "touch.h"
 
@@ -472,6 +473,17 @@ static uint8_t s_seq_lane_channel[OP_SEQ_NUM_LANES];
  * init is indistinguishable from "just flashed at boot time" for a
  * single frame at most -- not worth a separate bool for. */
 static uint32_t s_seq_length_flash_ms;
+
+/* Real feedback: "add memory of last session when powered off for the
+ * sequencers." Defined for real (with the rest of the persistence
+ * machinery) near tiles_op_mode_init() below, alongside seq_store_
+ * save_now() and the debounce check tiles_op_mode_scan() runs every
+ * scan -- forward-declared here purely so every mutation site between
+ * here and there (arm-toggle, length-adjust, pitch/probability/ratchet
+ * commits, pattern-bank switches, scale picker commits) can call it
+ * without needing its own forward declaration each time. See storage/
+ * seq_store.h's own header for the full persistence design. */
+static void seq_store_mark_dirty(void);
 
 /* ---- Per-lane playback state ---------------------------------------------
  * Every one of these used to be a single scalar, back when only one
@@ -1145,6 +1157,7 @@ static void seq_handle_step_taps(uint32_t now_ms) {
                     pat->step_note[step] = tiles_note_map_get_note(pad);
                     pat->step_pitch_override[step] = true;
                 }
+                seq_store_mark_dirty();
             }
             s_seq_step_touch_started_ms[step] = 0u;
         }
@@ -1459,6 +1472,7 @@ static void handle_edit_mode(uint32_t now_ms) {
                 op_seq_pattern_t *pat = active_pattern();
                 pat->step_pitch_override[s_seq_edit_step] = true;
                 pat->step_note[s_seq_edit_step] = tiles_note_map_get_note(pad);
+                seq_store_mark_dirty();
                 tiles_haptics_trigger_touch_pulse(pad);
                 edit_exit();
                 return; /* grid ownership just changed under this loop -- stop iterating it */
@@ -1480,6 +1494,7 @@ static void handle_edit_mode(uint32_t now_ms) {
              * the final near-zero approach (below the guard) is ignored,
              * not every decrease. */
             active_pattern()->step_probability_percent[s_seq_edit_step] = probability_percent_from_depth(depth);
+            seq_store_mark_dirty();
         }
         return;
     }
@@ -1492,6 +1507,7 @@ static void handle_edit_mode(uint32_t now_ms) {
         uint16_t depth = tiles_hall_get_depth(edit_pad);
         if (depth >= OP_SEQ_EDIT_RELEASE_GUARD_DEPTH) {
             active_pattern()->step_ratchet_count[s_seq_edit_step] = ratchet_count_from_depth(depth);
+            seq_store_mark_dirty();
         }
         return;
     }
@@ -1851,6 +1867,7 @@ static void scale_menu_exit(void) {
     s_scale_menu_visible = false;
     if (s_scale_menu_is_per_pattern) {
         active_pattern()->scale = tiles_note_map_get_scale();
+        seq_store_mark_dirty();
         tiles_note_map_set_scale(s_scale_menu_saved_global_scale);
         s_scale_menu_is_per_pattern = false;
     }
@@ -2029,6 +2046,7 @@ static void handle_pattern_bank_taps(void) {
                      * original single-lane bank already established. */
                     s_seq_ratchet_remaining[lane] = 0u;
                     s_seq_active_alt[lane] = alt;
+                    seq_store_mark_dirty();
                     /* Real bug caught auditing this: s_seq_current_step
                      * belongs to whichever pattern was PREVIOUSLY active
                      * on this lane, not the one just switched to -- if
@@ -2170,6 +2188,7 @@ static void set_active_mode(tiles_op_mode_t mode) {
          * whatever mode is being entered. */
         if (s_scale_menu_is_per_pattern) {
             active_pattern()->scale = tiles_note_map_get_scale();
+            seq_store_mark_dirty();
             tiles_note_map_set_scale(s_scale_menu_saved_global_scale);
             s_scale_menu_is_per_pattern = false;
         }
@@ -2482,6 +2501,7 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
         pat->step_note[s_seq_current_step[lane]] = s_seq_capture_step_note;
         pat->step_pitch_override[s_seq_current_step[lane]] = true;
     }
+    seq_store_mark_dirty();
     s_seq_capture_step_armed = false;
 
     uint8_t length = pat->length;
@@ -3068,6 +3088,7 @@ static void handle_transport_and_length(uint32_t now_ms) {
         op_seq_pattern_t *pat = active_pattern();
         if (pat->length > OP_SEQ_MIN_LENGTH) {
             pat->length--;
+            seq_store_mark_dirty();
         }
         s_minus_used_as_combo = true;
         s_seq_length_flash_ms = now_ms;
@@ -3076,6 +3097,7 @@ static void handle_transport_and_length(uint32_t now_ms) {
         op_seq_pattern_t *pat = active_pattern();
         if (pat->length < OP_SEQ_MAX_LENGTH) {
             pat->length++;
+            seq_store_mark_dirty();
         }
         s_plus_used_as_combo = true;
         s_seq_length_flash_ms = now_ms;
@@ -3189,6 +3211,105 @@ static float compute_beat_flash_level(uint32_t now_ms, tiles_midi_clock_state_t 
     return 0.0f;
 }
 
+/* ---- Sequencer pattern persistence ---------------------------------------
+ * Real feedback: "add memory of last session when powered off for the
+ * sequencers." See storage/seq_store.h's own header for the full design
+ * (flash layout, the two-slot alternation, and why this is a debounced
+ * auto-save rather than a true power-loss-triggered one). Loaded once
+ * at boot (tiles_op_mode_init() below, after it's already set up the
+ * normal all-empty defaults -- a load only ever OVERWRITES those
+ * defaults, never leaves things half-initialized); saved a few seconds
+ * after the last edit goes quiet (seq_store_mark_dirty(), called from
+ * every mutation site above -- arm-toggle, length-adjust, pitch/
+ * probability/ratchet commits, pattern-bank switches, per-pattern scale
+ * commits), checked every scan in tiles_op_mode_scan() below. Never
+ * called from a hot path -- a flash write briefly disables interrupts,
+ * see tiles_seq_store_save()'s own comment for why that's fine here but
+ * would NOT be fine called per-edit or per-note. */
+#define OP_SEQ_STORE_DEBOUNCE_MS 3000u
+static bool s_seq_store_dirty;
+static uint32_t s_seq_store_dirty_since_ms;
+
+static void seq_store_mark_dirty(void) {
+    s_seq_store_dirty = true;
+    s_seq_store_dirty_since_ms = to_ms_since_boot(get_absolute_time());
+}
+
+/* Keeps storage/seq_store.h's own on-flash layout constants honest
+ * against this file's actual sequencer shape -- a mismatch here would
+ * silently truncate/misalign every pattern on save or load, so this is
+ * a build-time guard, not a runtime hope. */
+_Static_assert(TILES_SEQ_STORE_NUM_LANES == OP_SEQ_NUM_LANES, "seq_store lane count must match op_mode.c's own");
+_Static_assert(TILES_SEQ_STORE_ALTS_PER_LANE == OP_SEQ_ALTS_PER_LANE,
+               "seq_store alternative count must match op_mode.c's own");
+_Static_assert(TILES_SEQ_STORE_NUM_STEPS == OP_SEQ_NUM_STEPS, "seq_store step count must match op_mode.c's own");
+
+static void seq_store_pattern_to_wire(const op_seq_pattern_t *pat, tiles_seq_store_pattern_t *wire) {
+    for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
+        wire->step_armed[i] = pat->step_armed[i] ? 1u : 0u;
+        wire->step_pitch_override[i] = pat->step_pitch_override[i] ? 1u : 0u;
+        wire->step_note[i] = pat->step_note[i];
+        wire->step_probability_percent[i] = pat->step_probability_percent[i];
+        wire->step_ratchet_count[i] = pat->step_ratchet_count[i];
+    }
+    wire->probability_enabled = pat->probability_enabled ? 1u : 0u;
+    wire->length = pat->length;
+    wire->scale = (uint8_t)pat->scale;
+    wire->reserved = 0u;
+}
+
+static void seq_store_pattern_from_wire(const tiles_seq_store_pattern_t *wire, op_seq_pattern_t *pat) {
+    for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
+        pat->step_armed[i] = wire->step_armed[i] != 0u;
+        pat->step_pitch_override[i] = wire->step_pitch_override[i] != 0u;
+        pat->step_note[i] = wire->step_note[i];
+        pat->step_probability_percent[i] = wire->step_probability_percent[i];
+        pat->step_ratchet_count[i] = wire->step_ratchet_count[i];
+    }
+    pat->probability_enabled = wire->probability_enabled != 0u;
+    /* Defensive clamp -- a corrupted-but-somehow-CRC-passing value is
+     * astronomically unlikely, but `length` is used directly as a
+     * modulo divisor in seq_advance_clock() (see that function's own
+     * comment), so 0 there would be a genuine crash risk, not just a
+     * cosmetic glitch. */
+    pat->length =
+        (wire->length >= OP_SEQ_MIN_LENGTH && wire->length <= OP_SEQ_MAX_LENGTH) ? wire->length : OP_SEQ_NUM_STEPS;
+    pat->scale = (wire->scale < TILES_NUM_SCALE_VALUES) ? (tiles_scale_mode_t)wire->scale : TILES_SCALE_CHROMATIC;
+}
+
+static void seq_store_save_now(void) {
+    tiles_seq_store_data_t data;
+    for (uint8_t lane = 0; lane < OP_SEQ_NUM_LANES; lane++) {
+        data.lane_channel[lane] = s_seq_lane_channel[lane];
+        data.active_alt[lane] = s_seq_active_alt[lane];
+        for (uint8_t alt = 0; alt < OP_SEQ_ALTS_PER_LANE; alt++) {
+            seq_store_pattern_to_wire(&s_seq_pattern[lane][alt], &data.patterns[lane][alt]);
+        }
+    }
+    tiles_seq_store_save(&data);
+    s_seq_store_dirty = false;
+}
+
+/* Called once from tiles_op_mode_init() below, after it's already set
+ * every pattern to its normal all-empty default -- overwrites those
+ * defaults with whatever was last saved, if anything valid was there.
+ * Leaves the defaults alone (a genuinely blank slate) on a first-ever
+ * boot, or if the stored data is corrupt or from an incompatible older
+ * format -- see tiles_seq_store_load()'s own comment. */
+static void seq_store_load_into_state(void) {
+    tiles_seq_store_data_t data;
+    if (!tiles_seq_store_load(&data)) {
+        return;
+    }
+    for (uint8_t lane = 0; lane < OP_SEQ_NUM_LANES; lane++) {
+        s_seq_lane_channel[lane] = data.lane_channel[lane];
+        s_seq_active_alt[lane] = (data.active_alt[lane] < OP_SEQ_ALTS_PER_LANE) ? data.active_alt[lane] : 0u;
+        for (uint8_t alt = 0; alt < OP_SEQ_ALTS_PER_LANE; alt++) {
+            seq_store_pattern_from_wire(&data.patterns[lane][alt], &s_seq_pattern[lane][alt]);
+        }
+    }
+}
+
 void tiles_op_mode_init(void) {
     s_active_mode = OP_MODE_MELODIC;
     s_menu_visible = false;
@@ -3237,6 +3358,15 @@ void tiles_op_mode_init(void) {
         s_seq_pending_restart[lane] = false;
         s_seq_ratchet_remaining[lane] = 0u;
     }
+    /* Overwrites whatever defaults the loop above just set, IF anything
+     * valid was saved from a previous session -- see this function's
+     * own "Sequencer pattern persistence" section above for the full
+     * design. Deliberately NOT marked dirty by this -- loading a saved
+     * state isn't a new edit, and marking dirty here would trigger a
+     * pointless save of the exact data that was just read back. */
+    seq_store_load_into_state();
+    s_seq_store_dirty = false;
+    s_seq_store_dirty_since_ms = 0u;
     s_seq_edit_lane = 0u;
     s_seq_edit_mode = OP_SEQ_EDIT_NONE;
     s_minus_was_held = false;
@@ -3269,6 +3399,17 @@ void tiles_op_mode_scan(void) {
      * so this can't fight a menu that's genuinely showing at boot. */
     if (now_ms < s_boot_relight_guard_until_ms) {
         tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
+    }
+
+    /* Real feedback: "add memory of last session when powered off for
+     * the sequencers." Checked unconditionally, ahead of every other
+     * branch/early-return below (including other_feature_owns_input()'s
+     * own) -- a save that's due shouldn't wait on which sub-view or mode
+     * happens to be displayed, or get skipped entirely just because
+     * standby/game mode currently owns the board. See this file's own
+     * "Sequencer pattern persistence" section for the full design. */
+    if (s_seq_store_dirty && (now_ms - s_seq_store_dirty_since_ms) >= OP_SEQ_STORE_DEBOUNCE_MS) {
+        seq_store_save_now();
     }
 
     if (other_feature_owns_input()) {
