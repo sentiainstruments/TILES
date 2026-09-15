@@ -6,6 +6,10 @@
 #include "mpr121.h"
 #include "lighting.h"
 
+#include "pico/time.h"
+
+#include <stdio.h>
+
 static tiles_mpr121_t s_touch1; /* TILES_I2C0_ADDR_TOUCH1 */
 static tiles_mpr121_t s_touch2; /* TILES_I2C0_ADDR_TOUCH2 */
 static bool s_touch1_ok;
@@ -47,6 +51,18 @@ void tiles_touch_scan(void) {
             touched = (mask1 & (1u << cfg->touch.electrode)) != 0;
         } else if (cfg->touch.mpr121_i2c_addr == TILES_I2C0_ADDR_TOUCH2 && ok2) {
             touched = (mask2 & (1u << cfg->touch.electrode)) != 0;
+        }
+
+        /* Edge-triggered diagnostic -- real feedback that touch doesn't
+         * reliably wake standby; this makes it directly observable
+         * whether the MPR121 is even registering a touch at all (as
+         * opposed to registering it but something downstream not
+         * acting on it). Temporary bring-up visibility, same reasoning
+         * as main.c's other periodic diagnostic prints -- replace with
+         * a real usb_vendor/ diagnostics stream once that exists. */
+        if (touched != s_pad_touched[i]) {
+            printf("[touch] pad %u: %s (t=%u ms)\n", cfg->logical_pad, touched ? "touched" : "released",
+                   to_ms_since_boot(get_absolute_time()));
         }
 
         /* MIDI note on/off/velocity/aftertouch are owned by

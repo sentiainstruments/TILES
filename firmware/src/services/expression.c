@@ -1124,6 +1124,36 @@ static pad_expr_t s_pads[TILES_NUM_PADS];
  * the moment that specific note fired. */
 static bool s_pitch_bend_enabled;
 
+/* Temporary bring-up visibility for a real depth-compensation capture --
+ * real feedback, once the earlier bugs in this whole section were fixed
+ * and playable enough to expose it clearly: "pressure change also
+ * changes tilt. wich makes sence since all axxis readings change with
+ * preassure." Correct: the existing compensation (direction_cosine_
+ * from(), a ratio against magnitude) assumes a perfectly coaxial
+ * magnet/sensor, where X and Y scale PROPORTIONALLY with field
+ * magnitude under a pure depth change with zero real tilt -- real
+ * hardware's compliant pad mount evidently lets the magnet genuinely
+ * drift laterally as press force increases (real mechanical creep, not
+ * a math artifact), which no amount of ratio-based compensation can
+ * distinguish from an intentional tilt, since both are real lateral
+ * displacement from the sensor's point of view. Fixing this properly
+ * needs an ACTUAL measured X(depth)/Y(depth) relationship from this
+ * hardware -- this print exists to capture that: raw x, y, and depth
+ * together, meant for a short, single-pad, controlled capture (press
+ * slowly and steadily from no-touch to full depth, holding level, no
+ * deliberate tilt at any point) -- NOT for extended multi-pad free
+ * play. Throttled GLOBALLY (one timer shared across every pad, not
+ * per-pad) specifically because a much shorter interval on this same
+ * print family, left running during heavy multi-pad play, is what
+ * caused a real firmware freeze earlier this same debugging arc (see
+ * the main scan loop's own history on pico_stdio_usb's blocking-write
+ * behavior) -- 150ms here is deliberately conservative, not tuned for
+ * capture resolution. Remove once the real X(depth)/Y(depth) data has
+ * been captured and used to build an actual depth-compensation model,
+ * same as every other "temporary bring-up visibility" print in this
+ * file. */
+static uint32_t s_depth_calibration_print_ms;
+#define DEPTH_CALIBRATION_PRINT_INTERVAL_MS 150u
 
 /* MPE Member Channel allocator -- one slot per Member Channel
  * (TILES_MIDI_MPE_NUM_MEMBER_CHANNELS of them), mirroring
@@ -1946,6 +1976,16 @@ void tiles_expression_scan(void) {
             if (ready || commit_on_release) {
                 s->active_note = tiles_note_map_get_note(pad);
                 uint8_t velocity = velocity_from_strike(s->strike_time_ms, s->peak_depth);
+                /* Temporary bring-up visibility -- prints exactly what
+                 * the commit decision was based on, so a real-hardware
+                 * session can read off actual numbers instead of
+                 * guessing constants blind. Replace with a real
+                 * usb_vendor/ diagnostics stream once that exists, same
+                 * reasoning as touch.c/standby.c's own temporary
+                 * prints. */
+                printf("[expression] pad %u note-on: %s, peak_depth=%d strike_time_ms=%u velocity=%u\n", pad,
+                       commit_on_release ? "commit_on_release" : "ready", (int)s->peak_depth, s->strike_time_ms,
+                       velocity);
                 /* Claims this note's own MPE Member Channel BEFORE
                  * sending note-on -- matters even under MPE's genuinely
                  * per-note channels, because claim_mpe_channel() can
@@ -1980,7 +2020,16 @@ void tiles_expression_scan(void) {
             if (!touched) {
                 /* Released without ever measuring a real press -- a
                  * light tap, not an actual key motion. No note was ever
-                 * sent. */
+                 * sent. Temporary bring-up visibility: real feedback
+                 * ("sudden full force press is not triggering the
+                 * notes") described touches that looked and felt like
+                 * real hard strikes but produced nothing, with no way to
+                 * tell from the existing note-on-only print whether
+                 * depth genuinely never moved or something else is
+                 * wrong -- this print exists specifically to answer
+                 * that on the next capture. */
+                printf("[expression] pad %u cancelled (no press): peak_depth=%d touch_duration_ms=%u\n", pad,
+                       (int)s->peak_depth, now_ms - s->touch_start_ms);
                 s->state = PAD_STATE_IDLE;
             }
             continue;
@@ -2093,6 +2142,15 @@ void tiles_expression_scan(void) {
                 if (depth_activity > 1.0f) {
                     depth_activity = 1.0f;
                 }
+
+                /* Captured here (not printed yet) so the print further
+                 * below -- once delta_x/delta_y/combined_magnitude exist
+                 * -- can report on the exact same throttled cadence
+                 * without a second timer or doubling total print volume
+                 * (the same conservative-frequency discipline this
+                 * print's own history already established after the
+                 * earlier firmware freeze). */
+                bool print_depth_diagnostics = (now_ms - s_depth_calibration_print_ms) >= DEPTH_CALIBRATION_PRINT_INTERVAL_MS;
 
                 s->pitch_bend_prev_depth = s->smoothed_depth;
 
@@ -2407,6 +2465,17 @@ void tiles_expression_scan(void) {
                     float combined_magnitude = sqrtf(delta_x * delta_x + delta_y * delta_y);
                     float raw_delta_this_tick = (delta_x >= 0.0f) ? combined_magnitude : -combined_magnitude;
 
+                    if (print_depth_diagnostics) {
+                        s_depth_calibration_print_ms = now_ms;
+                        printf("[depth-cal] pad %u depth=%.0f rate=%.2f activity=%.2f baseline_x=%.1f x2=%.1f "
+                               "baseline_y=%.1f y2=%.1f combined=%.4f deadzone=%.4f\n",
+                               pad, (double)s->smoothed_depth, (double)s->pitch_bend_smoothed_depth_rate,
+                               (double)depth_activity, (double)s->pitch_bend_baseline_x,
+                               (double)s->pitch_bend_smoothed_x2, (double)s->pitch_bend_baseline_y,
+                               (double)s->pitch_bend_smoothed_y2, (double)raw_delta_this_tick,
+                               (double)PITCH_BEND_DEADZONE_COSINE_DELTA);
+                    }
+
                     /* No further smoothing here -- X/Y/magnitude are
                      * already TWO-STAGE cascaded above before this point
                      * (see PITCH_BEND_SMOOTHING_ALPHA's own comment), so
@@ -2427,6 +2496,18 @@ void tiles_expression_scan(void) {
                     if (bend != s->pitch_bend_last_sent) {
                         s->pitch_bend_last_sent = bend;
                         tiles_midi_send_pitch_bend(s->midi_channel, bend);
+                        /* Temporary bring-up visibility -- real feedback
+                         * across several rounds of guessed constants
+                         * with no captured real numbers behind most of
+                         * them, unlike MIN_STRIKE_DEPTH_DELTA/DEPTH_TO_
+                         * AFTERTOUCH_FULL_SCALE elsewhere in this file.
+                         * Prints the raw (already depth-compensated)
+                         * delta AND this tick's smoothed depth together
+                         * so a future capture can check whether the
+                         * compensation above actually decorrelated bend
+                         * from press depth, not just eyeball it. */
+                        printf("[expression] pad %u pitch bend sent: channel=%u bend=%u delta=%.4f depth=%.0f\n", pad,
+                               s->midi_channel, bend, (double)delta, (double)s->smoothed_depth);
                     }
                 }
             }

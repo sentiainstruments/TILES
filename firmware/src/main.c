@@ -244,6 +244,8 @@ int main(void) {
      * services/op_mode.h. */
     tiles_op_mode_init();
 
+    uint32_t last_scan_ms = to_ms_since_boot(get_absolute_time());
+
     while (true) {
         /* MUST run every iteration: this is what actually services the
          * USB stack (processes control transfers, moves CDC/MIDI data
@@ -347,31 +349,36 @@ int main(void) {
          * iteration. */
         tiles_haptics_scan();
 
-        /* A periodic (every 2s) unconditional bring-up dump used to live
-         * here -- tiles_diag_i2c_scan_expected_devices() (9 printf calls)
-         * plus 3 more for power/Hall/standby state, 12 total, forever,
-         * whether or not a serial terminal was ever attached to drain
-         * them. Real feedback: "froze again with enough time" -- with no
-         * terminal open (the normal case once TILES is plugged into a
-         * DAW/synth rig rather than a dev machine), the USB-CDC TX buffer
-         * fills and every printf() call blocks up to
-         * PICO_STDIO_USB_STDOUT_TIMEOUT_US (500ms) waiting for room that
-         * never appears (same bug class as this file's own haptics.c
-         * entry above, and the pitch-bend one before it) -- except this
-         * one didn't need capture mode or a dense external clock to
-         * trigger it, just the device staying powered on for a couple of
-         * minutes, since it fired on a plain wall-clock timer regardless
-         * of what the player was doing. Up to 12 * 500ms = 6s of main
-         * loop stall possible every 2s once the buffer settled into
-         * "always full" -- easily read as a full freeze. Removed outright
-         * rather than gated on stdio_usb_connected(): both prints were
-         * already self-labeled "Temporary bring-up visibility... replace
-         * with a real usb_vendor/ diagnostics stream once that exists",
-         * and a connected-but-idle terminal can still let the buffer fill
-         * regardless, which a connection check wouldn't catch. The
-         * one-shot boot-time tiles_diag_i2c_scan_expected_devices() call
-         * above (tiles_op_mode_init() region) is unaffected -- fires once
-         * before the loop even starts, not on a recurring timer. */
+        uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+        if (now_ms - last_scan_ms >= 2000) {
+            tiles_diag_i2c_scan_expected_devices();
+
+            /* Temporary bring-up visibility for the derived power
+             * state, same reasoning as the Hall print below -- replace
+             * with a real usb_vendor/ diagnostics stream once that
+             * exists. Names match tiles_power_mode_t's declaration
+             * order. */
+            static const char *const power_mode_names[] = {
+                "USB_ONLY", "EXTERNAL_ONLY", "USB_AND_EXTERNAL", "FAULT",
+            };
+            tiles_power_state_t pwr = tiles_power_get_state();
+            printf("[power] mode=%s led_ceiling=%u%% max_haptic_voices=%u cv_gate=%d\n",
+                   power_mode_names[pwr.mode], pwr.led_brightness_ceiling_percent,
+                   pwr.max_haptic_voices, pwr.cv_gate_permitted);
+
+            /* Temporary bring-up visibility for pad 1's raw Hall sample,
+             * over the same USB-CDC stdio as the I2C scan above. Replace
+             * with a real per-pad diagnostics stream once usb_vendor/
+             * exists -- this isn't meant to become the permanent way to
+             * inspect Hall data. */
+            tiles_hall_sample_t s = tiles_hall_get_sample(1);
+            printf("[hall] pad 1: x=%d y=%d z=%d valid=%d\n", s.x, s.y, s.z, s.valid);
+
+            printf("[standby] active=%d deep_sleep=%d manual_scroll=%d\n", tiles_standby_is_active(),
+                   tiles_standby_is_deep_sleep(), tiles_standby_owns_octave_buttons());
+
+            last_scan_ms = now_ms;
+        }
 
         /* No sleep here (was sleep_ms(10), then sleep_ms(1)): removed
          * entirely for latency -- it bought nothing. tud_task() is now
