@@ -4766,5 +4766,104 @@ not its code.
   exit breaking sequencer mode's own step view", and "Fix per-pattern
   sequencer scale never being applied to step pitches") for whenever
   that investigation resumes.
+- **Per-pattern sequencer scale abandoned in favor of one universal
+  scale -- supersedes the entry just above's per-pattern-lock work
+  entirely, not a bug fix on top of it.** Real feedback: "i need it to
+  be a universal scale for now." `op_seq_pattern_t` no longer has its
+  own `scale` field at all; `scale_menu_enter()`/`scale_menu_exit()`
+  (shift+triangle) no longer take a `per_pattern` argument or swap
+  note_map.c's global scale slot in and out -- they just edit that ONE
+  global scale directly, exactly like melodic/chord mode already did,
+  now unconditionally regardless of `s_active_mode`. The standby-active
+  render-ownership guard from the abandoned per-pattern round (real
+  feedback: "why does pressing a pattern then a scale sewnd me back to
+  a broken melodic layout") is kept in `scale_menu_exit()` -- that bug
+  was about sequencer mode's OWN rendering surviving the picker closing
+  at all, unrelated to whether the scale itself was per-pattern or
+  universal, so it's still correct and still needed here.
+  **Immediately refined further**: "not universaly in a way that alters
+  the underlying pattern but it alters the real time playing pattern.
+  so no rewriting lyust aproximating to the locked scale selected." A
+  universal scale still leaves a real question -- what happens to a
+  pattern's already-programmed steps when the scale changes out from
+  under them? Two options: rewrite `step_note[]` in place (destructive,
+  and ambiguous for any step whose pitch was an explicit hold-to-assign
+  reassignment rather than its own pad's default -- there's no stored
+  flag distinguishing the two, see seq_handle_step_taps()'s own
+  comment), or leave storage untouched and reinterpret live at playback
+  time (non-destructive, reversible, standard "quantize to scale" the
+  way Ableton's own Scale MIDI effect or most hardware sequencers do
+  it). Real feedback picked the second explicitly. New `note_map.c`/`.h`
+  function `tiles_note_map_quantize_to_scale(uint8_t note)`: searches
+  outward from `note` by semitone (0, then the nearest neighbor up or
+  down, then the next, ...) for the closest pitch whose pitch CLASS
+  (under the current key offset) belongs to the current scale, capped
+  at one octave each direction -- always terminates well inside that cap
+  given `current_scale_table()`'s own chromatic fallback (see that
+  function's neighbor `scale_table_with_fallback()`) guarantees a
+  same-pitch match at distance 0 for a genuinely empty/corrupt scale.
+  Wired into exactly one place, `seq_fire_note()`: a step's frozen
+  `step_note[step]` gets quantized to the CURRENT scale every time it
+  actually fires, never rewritten in storage; the not-yet-overridden
+  fallback branch (`tiles_note_map_get_note(pad)`) needs no such
+  treatment since it already resolves live against the current scale on
+  every call. Net effect: changing the scale instantly changes how every
+  pattern sounds, and changing it back instantly restores the exact
+  original pitches, because they were never actually touched.
+- **A second real-hardware freeze, this time with a haptic motor found
+  locked fully on afterward -- root cause and fix are both defensive,
+  not a single confirmed smoking gun.** Real feedback: "this last freeze
+  happened again and lockerd haptics on... it might be the sequencer
+  triggering notes or clock or running. the sequencer might be
+  fundamentally broken." Investigated and RULED OUT with actual source
+  evidence, not assumption: `tiles_midi_clock_scan()`'s USB MIDI drain
+  loop (unbounded-looking, but TinyUSB's own `CFG_TUD_MIDI_RX_BUFSIZE`
+  hard-caps the underlying FIFO at 64 bytes -- see `midi/tusb_config.h`
+  -- so it can't actually run away); `tiles_midi_note_on()`'s send path
+  (`tud_midi_n_stream_write()`, read directly from the vendored TinyUSB
+  source, is provably non-blocking -- it stops the instant `tu_fifo_
+  remaining()` says there's no room, silently drops the rest, never
+  waits); the sequencer's own ratchet loop (already guarded by `OP_SEQ_
+  MAX_RATCHET`, confirmed correctly bounded). `services/haptics.c`
+  itself has no loops at all -- its KICK/GAP/SUSTAIN state machine is
+  purely timer-driven off `now_ms`, which means a motor "locked on" is
+  consistent with being a SYMPTOM of the main loop stalling somewhere
+  else entirely (whatever pad happened to be mid-KICK -- `set_motor_
+  level(cfg, MAX_KICK_DUTY)` already sent -- simply never gets the
+  follow-up call that would ever turn it back off), not a bug inside
+  haptics.c's own logic.
+  **What was actually fixed**: every one of this project's 6 files that
+  talk I2C (`drivers/mpr121.c`, `tca9548a.c`, `pca9685.c`, `tmag5273.c`,
+  `tca9554.c`, `diagnostics/i2c_scan.c`) used plain `i2c_write_blocking()`/
+  `i2c_read_blocking()`, which the pico-sdk documents with NO timeout
+  bound at all -- a single wedged I2C transaction (a real, well-known
+  failure mode on a shared bus, and this board has several devices on
+  each of its two buses: I2C1 alone carries both PCA9685 haptic drivers
+  plus the TCA9554 LED mux) could hang the ENTIRE main loop forever.
+  This fits every symptom without needing a confirmed trigger: haptics
+  "locked on" (a motor mid-KICK when the hang hit, per the paragraph
+  above), MIDI/sequencer/everything else also dead (the SAME stalled
+  loop feeds all of them), and the user's own correlation with heavy
+  sequencer-driven load (denser haptics/touch/Hall I2C traffic under 4
+  active lanes raises the odds of whatever triggers a wedge in the first
+  place, even though this fix doesn't identify what that trigger is).
+  All 12 call sites switched to the pico-sdk's `_timeout_us` equivalents
+  (`i2c_write_timeout_us()`/`i2c_read_timeout_us()`), 5000us per
+  individual call -- generous headroom (the longest real transaction
+  here, a 6-byte Hall XYZ read at this board's 100kHz/`TILES_I2C_
+  DETECT_HZ` bus speed, takes on the order of 1ms) so a genuinely
+  working bus should never trip it, while a wedged one now degrades to
+  "this one transaction gets skipped, the loop keeps running" instead of
+  "everything stops forever." Explicitly NOT a fix for whatever wedges
+  the bus in the first place -- true I2C bus recovery (detecting the
+  stuck state, then bit-banging 9+ clock pulses to force a stuck slave
+  to release SDA, matching the NXP UM10204 spec's own recommended
+  recovery sequence) isn't implemented here, only the guarantee that a
+  wedge can no longer take the whole instrument down with it. If a
+  freeze still recurs after this, that's the next place to look --
+  correlate against which specific device (mux vs. sensor vs. haptic
+  driver) was mid-transaction, since a bounded timeout converts a silent
+  hang into information: `write_reg()`/`read_regs()`'s own return value
+  now actually means something again.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

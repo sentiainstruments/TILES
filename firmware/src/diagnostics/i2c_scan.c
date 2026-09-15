@@ -5,6 +5,15 @@
 #include "board_pins.h"
 #include "hardware/i2c.h"
 
+/* See drivers/pca9685.c's identical constant for the full "haptic motor
+ * locked on after a freeze" rationale -- this file's own probe() runs
+ * once at boot (tiles_diag_i2c_scan_expected_devices()'s only remaining
+ * call site, see main.c), but an unbounded i2c_read_blocking() here
+ * could still stall BOOT itself indefinitely against a wedged device,
+ * before the main loop -- and its own watchdog-free "just keep going"
+ * resilience -- even exists yet. */
+#define TILES_I2C_TIMEOUT_US 5000u
+
 /* Bus-scan technique: a 1-byte read of whatever register a device's
  * internal pointer currently sits on -- non-destructive (no register
  * write), and a real transaction that actually appears on the bus.
@@ -22,7 +31,7 @@
  * disconnected from the board. */
 static bool probe(i2c_inst_t *bus, uint8_t addr) {
     uint8_t dummy = 0;
-    int ret = i2c_read_blocking(bus, addr, &dummy, 1, false);
+    int ret = i2c_read_timeout_us(bus, addr, &dummy, 1, false, TILES_I2C_TIMEOUT_US);
     return ret >= 0;
 }
 

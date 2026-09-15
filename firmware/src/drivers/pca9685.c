@@ -13,9 +13,27 @@
 
 #define NUM_CHANNELS 16u
 
+/* Real feedback: a haptic motor was found locked fully on after a
+ * freeze, with the main loop otherwise looking stuck -- plain
+ * i2c_write_blocking()/i2c_read_blocking() (used here and throughout
+ * drivers/) have no timeout at all, so a single wedged I2C transaction
+ * (a real, known failure mode on a shared bus with several devices --
+ * this project's I2C1 alone has two of these PCA9685 chips plus a
+ * TCA9554) can hang the entire main loop forever, freezing tiles_
+ * haptics_scan() mid-KICK with the motor still actively driven. At
+ * 100kHz (TILES_I2C_DETECT_HZ) the longest real transaction here (a
+ * 2-byte register write) takes on the order of 200-250us -- 5ms is
+ * generous headroom (~20x), never expected to trip under a genuinely
+ * working bus, while still turning "hang forever" into "this one write
+ * gets skipped, the loop keeps running." Doesn't fix whatever wedges
+ * the bus in the first place (unaddressed -- true I2C bus recovery
+ * needs a bit-bang clock-pulse sequence this driver doesn't have), only
+ * guarantees it can't take the whole device down with it. */
+#define TILES_I2C_TIMEOUT_US 5000u
+
 static bool write_reg(i2c_inst_t *bus, uint8_t addr, uint8_t reg, uint8_t value) {
     uint8_t buf[2] = {reg, value};
-    return i2c_write_blocking(bus, addr, buf, 2, false) == 2;
+    return i2c_write_timeout_us(bus, addr, buf, 2, false, TILES_I2C_TIMEOUT_US) == 2;
 }
 
 static uint8_t channel_on_l_reg(uint8_t channel) {

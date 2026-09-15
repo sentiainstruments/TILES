@@ -286,12 +286,6 @@ static bool s_scale_menu_visible;
 static bool s_diamond_was_held;
 static bool s_diamond_press_had_conflict; /* see s_triangle_press_had_conflict's own comment -- same reasoning, watches diamond instead of triangle, guards against game_mode.h's 4-button combo */
 static bool s_scale_menu_prev_pad_touched[TILES_NUM_PADS];
-/* True while the CURRENTLY OPEN scale menu is scoped to one sequencer
- * pattern (opened from sequencer mode) rather than note_map.c's global
- * scale (every other mode) -- see scale_menu_enter()'s own comment for
- * the swap-in/swap-out this drives. */
-static bool s_scale_menu_is_per_pattern;
-static tiles_scale_mode_t s_scale_menu_saved_global_scale;
 
 /* ---- Diamond: Ableton transport remote ---------------------------------
  * See handle_diamond_transport()'s own comment for the full feature.
@@ -428,22 +422,15 @@ typedef struct {
     uint8_t length;  /* 1..24 active steps -- see OP_SEQ_MIN/MAX_LENGTH */
     /* No `channel` field here anymore -- channel is now a LANE property
      * (s_seq_lane_channel[] below), shared by all 6 of a lane's own
-     * alternatives, not something that could ever disagree between them. */
-    /* Real feedback: "changing scale on a melodic modes or other
-     * sequences should not affect other sequences that are already set
-     * up or playing meaning fully scale independent sequences," followed
-     * by "shift plus triangle in [sequencer] scale selector for that
-     * specific pattern." Each pattern keeps its OWN scale, read/written
-     * by the exact same scale-picker view every other mode's shift+
-     * triangle already opens -- see scale_menu_enter()'s own comment for
-     * how it temporarily borrows note_map.c's global scale slot to do
-     * that without a second copy of the whole picker. Only ever consulted
-     * at ARM time (see seq_handle_step_taps()'s own freeze-on-arm logic)
-     * -- once a step is armed its note is already absolute, so this
-     * changing later never retunes steps armed under a previous value,
-     * the same "fully scale independent" invariant the global scale
-     * already respects for already-armed steps. */
-    tiles_scale_mode_t scale;
+     * alternatives, not something that could ever disagree between them.
+     * No `scale` field either, not anymore -- an earlier round gave each
+     * pattern its own independently stored scale; real feedback reversed
+     * that call: "i need it to be a universal scale for now." Patterns
+     * are scale-agnostic now, same as melodic/chord mode -- see note_
+     * map.c's own tiles_note_map_quantize_to_scale() and seq_fire_note()'s
+     * call into it for how a step's frozen, stored note gets approximated
+     * to whatever the ONE global scale currently is, live, at the moment
+     * it actually plays, without ever touching this stored data. */
 } op_seq_pattern_t;
 
 /* [lane][alternative] -- see this section's own header comment. */
@@ -972,7 +959,21 @@ static void seq_fire_note(uint8_t lane, uint8_t step) {
     seq_end_current_note(lane);
     op_seq_pattern_t *pat = pattern_for_lane(lane);
     uint8_t pad = (uint8_t)(step + 1u);
-    uint8_t note = pat->step_pitch_override[step] ? pat->step_note[step] : tiles_note_map_get_note(pad);
+    /* Real feedback: "not universaly in a way that alters the underlying
+     * pattern but it alters the real time playing pattern. so no
+     * rewriting lyust aproximating to the locked scale selected." A
+     * step's OWN frozen pitch (step_note[], set once at arm/assign time --
+     * see seq_handle_step_taps()'s own comment on why it's frozen rather
+     * than a live lookup) is quantized to whatever the universal scale
+     * currently is EVERY time it actually plays, here, rather than ever
+     * being rewritten in storage -- change the scale, change how the
+     * pattern sounds, instantly and reversibly, with the underlying data
+     * exactly as programmed the whole time. The NOT-overridden branch
+     * (tiles_note_map_get_note()) needs no such treatment -- it already
+     * resolves live against the current scale on every call, never frozen
+     * in the first place. */
+    uint8_t note = pat->step_pitch_override[step] ? tiles_note_map_quantize_to_scale(pat->step_note[step])
+                                                    : tiles_note_map_get_note(pad);
     uint8_t channel = s_seq_lane_channel[lane];
     tiles_midi_note_on(channel, note, OP_SEQ_VELOCITY);
     tiles_haptics_trigger_kick(pad, OP_SEQ_VELOCITY);
@@ -1821,24 +1822,20 @@ static void handle_scale_menu_taps(void) {
     }
 }
 
-/* Real feedback: "shift plus triangle in [sequencer] scale selector for
- * that specific pattern." `per_pattern` reuses render_scale_menu()'s and
- * handle_scale_menu_taps()'s existing logic completely unchanged -- both
- * only ever read/write note_map.c's GLOBAL scale -- by temporarily
- * pointing that global slot at the current pattern's own stored scale
- * for as long as this sub-view stays open, then writing whatever the
- * player picked back into the pattern and restoring the real global
- * scale on exit (see scale_menu_exit()'s own other half of this). Same
- * swap-in/swap-out shape seq_capture_mode_enter()/_exit() already use
- * for their own scale override, just persisted into a pattern field
- * instead of discarded. */
-static void scale_menu_enter(bool per_pattern) {
+/* Real feedback: sequencer patterns tried a PER-PATTERN scale (temporarily
+ * swapping note_map.c's global scale slot while this picker was open, then
+ * writing the pick back into the pattern and restoring the real global on
+ * exit) -- real feedback reversed that call: "i need it to be a universal
+ * scale for now." One scale, note_map.c's own global, shared by melodic,
+ * chord, AND every sequencer pattern; shift+triangle always edits that
+ * single slot directly regardless of s_active_mode now, matching how
+ * melodic/chord mode already worked before sequencer mode had its own
+ * per-pattern branch. Existing pattern data is untouched by a scale
+ * change -- see seq_fire_note()'s own tiles_note_map_quantize_to_scale()
+ * call for how already-programmed steps instead get approximated to
+ * whatever's currently selected, live, at the moment they actually play. */
+static void scale_menu_enter(void) {
     s_scale_menu_visible = true;
-    s_scale_menu_is_per_pattern = per_pattern;
-    if (per_pattern) {
-        s_scale_menu_saved_global_scale = tiles_note_map_get_scale();
-        tiles_note_map_set_scale(active_pattern()->scale);
-    }
     s_scale_menu_haptic_pulse_ms = to_ms_since_boot(get_absolute_time());
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_scale_menu_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
@@ -1849,13 +1846,21 @@ static void scale_menu_enter(bool per_pattern) {
 
 static void scale_menu_exit(void) {
     s_scale_menu_visible = false;
-    if (s_scale_menu_is_per_pattern) {
-        active_pattern()->scale = tiles_note_map_get_scale();
-        tiles_note_map_set_scale(s_scale_menu_saved_global_scale);
-        s_scale_menu_is_per_pattern = false;
+    /* Real feedback: "why does pressing a pattern then a scale sewnd me
+     * back to a broken melodic layout? is the return to melodic broken?
+     * it should only do that on melodic not in other modes or sequencer
+     * mode." Sequencer mode keeps standby active for its ENTIRE duration
+     * -- render_sequencer() is rendered THROUGH that same mechanism (see
+     * set_active_mode()'s own OP_MODE_SEQUENCER branch and pattern_bank_
+     * exit()'s identical guard) -- so turning it off unconditionally here
+     * killed the step view's own rendering the instant this picker closed,
+     * even though s_active_mode was still genuinely OP_MODE_SEQUENCER.
+     * menu_exit() (the top-level mode picker) already needed this exact
+     * guard for the identical reason; this picker just never got it. */
+    if (s_active_mode != OP_MODE_SEQUENCER) {
+        tiles_lighting_set_standby_active(false);
+        tiles_buttons_set_standby_active(false);
     }
-    tiles_lighting_set_standby_active(false);
-    tiles_buttons_set_standby_active(false);
     /* See menu_exit()'s own comment (same bug, same fix, same root
      * cause) -- real feedback: "the light behabes weird for triangle,
      * when scale is selected the light stays on." Triangle now owns
@@ -1863,7 +1868,9 @@ static void scale_menu_exit(void) {
      * shift branch) and has a PERMANENT override claimed, so buttons.c's
      * refresh_all_button_leds() (run by tiles_buttons_set_standby_
      * active(false) just above) deliberately skips it -- nothing else
-     * repaints it back to off without this explicit write. */
+     * repaints it back to off without this explicit write. Unconditional
+     * regardless of the guard above -- a separate, narrower fix for a
+     * different real bug. */
     tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
 }
 
@@ -2161,18 +2168,11 @@ static void set_active_mode(tiles_op_mode_t mode) {
     }
     if (mode != OP_MODE_MELODIC) {
         /* Melodic's own sub-menu can't stay open once melodic isn't the
-         * active mode anymore. Restores the real global scale first if a
-         * per-pattern session was mid-swap (see scale_menu_enter()'s own
-         * comment) -- this bypasses the normal scale_menu_exit() call
+         * active mode anymore -- no swap to unwind now that the scale is
+         * universal (see scale_menu_enter()'s own comment), just close
+         * the view; this bypasses the normal scale_menu_exit() call
          * entirely (no LED/standby cleanup here, matching this function's
-         * existing light-touch force-close), so it has to redo that one
-         * piece itself or the swapped-in pattern scale would leak into
-         * whatever mode is being entered. */
-        if (s_scale_menu_is_per_pattern) {
-            active_pattern()->scale = tiles_note_map_get_scale();
-            tiles_note_map_set_scale(s_scale_menu_saved_global_scale);
-            s_scale_menu_is_per_pattern = false;
-        }
+         * existing light-touch force-close). */
         s_scale_menu_visible = false;
     }
     if (mode != OP_MODE_SEQUENCER) {
@@ -2345,15 +2345,15 @@ static void seq_capture_mode_enter(void) {
     if (s_pattern_bank_visible) {
         pattern_bank_exit();
     }
-    /* Same defensive reasoning, same reachability gap, for the per-
-     * pattern scale picker (shift+triangle) instead of the pattern bank
-     * -- open it, release, then a later plain diamond click enters
-     * capture mode without ever closing the picker first, and capture
-     * mode would start swapping the scale AGAIN underneath the picker's
-     * own already-in-progress swap (see scale_menu_enter()'s own
-     * comment). Calling the real scale_menu_exit() here, not just
-     * clearing the flag, is what correctly unwinds that swap before
-     * capture mode does its own. */
+    /* Same defensive reasoning, same reachability gap, for the scale
+     * picker (shift+triangle) instead of the pattern bank -- open it,
+     * release, then a later plain diamond click enters capture mode
+     * without ever closing the picker first, and capture mode's own
+     * chromatic scale swap (see seq_capture_mode_enter()'s own comment
+     * further below) would start underneath a sub-view that still thinks
+     * it owns the grid/rendering. Calling the real scale_menu_exit() here,
+     * not just clearing the flag, correctly unwinds its LED/standby state
+     * before capture mode claims the grid for itself. */
     if (s_scale_menu_visible) {
         scale_menu_exit();
     }
@@ -2580,11 +2580,10 @@ static void handle_menu_taps(void) {
  * shift+diamond instead ("i want shift plus diamond in sequencer only to
  * be the pattern selector" -- see handle_diamond_transport()'s own shift
  * branch): shift+triangle is now the scale picker UNCONDITIONALLY, no
- * per-mode branch -- just PER-PATTERN rather than global while in
- * sequencer mode specifically ("shift plus triangle in [sequencer] scale
- * selector for that specific pattern" -- see scale_menu_enter()'s own
- * comment for how that's implemented without a second copy of the whole
- * picker). A plain solo click keeps its existing meaning (toggle the
+ * per-mode branch at all -- ONE universal scale, melodic/chord/every
+ * sequencer pattern alike (an earlier per-pattern-while-in-sequencer-mode
+ * design got reversed -- see scale_menu_enter()'s own comment). A plain
+ * solo click keeps its existing meaning (toggle the
  * top-level mode picker). While any per-step edit (pitch/probability/
  * ratchet) owns the grid, the shift gesture still cancels it with no
  * change instead of opening the scale picker on top of it -- the escape
@@ -2632,11 +2631,9 @@ static void handle_triangle_click(void) {
                      * the pattern bank off THIS button entirely (see
                      * handle_diamond_transport()'s own shift branch) --
                      * shift+triangle is now the scale picker everywhere,
-                     * no per-mode branch needed at all. In sequencer mode
-                     * specifically it's PER-PATTERN, not global -- real
-                     * feedback: "shift plus triangle in [sequencer]
-                     * scale selector for that specific pattern" (see
-                     * scale_menu_enter()'s own comment for how). */
+                     * no per-mode branch needed at all, editing ONE
+                     * universal scale regardless of s_active_mode (see
+                     * scale_menu_enter()'s own comment). */
                     if (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
                         /* Still needs its own escape hatch -- real
                          * feedback: "it should be a toggle to set pitch
@@ -2650,13 +2647,13 @@ static void handle_triangle_click(void) {
                          * capture_mode_enter()'s own comment about the
                          * pattern bank: nothing stops a fresh shift+
                          * triangle tap while a capture session is already
-                         * running. Opening the per-pattern picker on top
-                         * would swap the global scale AGAIN underneath
-                         * capture mode's own chromatic override -- exit
-                         * capture mode instead of opening anything, the
-                         * same "shift+triangle cancels whatever sequencer
-                         * sub-state owns the grid" role this branch
-                         * already plays for per-step edit just above. */
+                         * running. Opening the scale picker on top would
+                         * fight capture mode's own chromatic override for
+                         * grid ownership -- exit capture mode instead of
+                         * opening anything, the same "shift+triangle
+                         * cancels whatever sequencer sub-state owns the
+                         * grid" role this branch already plays for
+                         * per-step edit just above. */
                         seq_capture_mode_exit();
                     } else if (s_scale_menu_visible) {
                         scale_menu_exit();
@@ -2670,7 +2667,7 @@ static void handle_triangle_click(void) {
                          * mode" section), so picking a scale is exactly
                          * as meaningful from chord as it always was from
                          * melodic. */
-                        scale_menu_enter(s_active_mode == OP_MODE_SEQUENCER);
+                        scale_menu_enter();
                     }
                 }
             } else if (s_menu_visible) {
@@ -3196,7 +3193,6 @@ void tiles_op_mode_init(void) {
     s_triangle_press_had_conflict = false;
     s_triangle_press_was_shift = false;
     s_scale_menu_visible = false;
-    s_scale_menu_is_per_pattern = false;
     s_pattern_bank_visible = false;
     s_diamond_was_held = false;
     s_diamond_press_had_conflict = false;
@@ -3217,10 +3213,6 @@ void tiles_op_mode_init(void) {
             }
             pat->probability_enabled = false;
             pat->length = OP_SEQ_NUM_STEPS;
-            /* Matches note_map.c's own boot default -- every pattern
-             * starts identical until its own shift+triangle scale picker
-             * (sequencer mode only) is used to customize it. */
-            pat->scale = TILES_SCALE_CHROMATIC;
         }
         s_seq_active_alt[lane] = 0u;
         /* Claims from the TOP of the 15 MPE Member Channels downward --

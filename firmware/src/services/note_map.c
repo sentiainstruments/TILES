@@ -422,8 +422,8 @@ int8_t tiles_note_map_get_key_offset(void) {
  * shared by tiles_note_map_get_note() and tiles_note_map_is_root_pad()
  * below so both always agree on exactly the same scale, including the
  * CUSTOM_* fallback. */
-static tiles_scale_table_t current_scale_table(void) {
-    tiles_scale_table_t table = scale_table(s_scale);
+static tiles_scale_table_t scale_table_with_fallback(tiles_scale_mode_t scale) {
+    tiles_scale_table_t table = scale_table(scale);
     if (table.count == 0u) {
         /* Selected scale has no real table (a reserved custom slot --
          * see note_map.h's own comment) -- fall back to chromatic rather
@@ -431,6 +431,10 @@ static tiles_scale_table_t current_scale_table(void) {
         table = scale_table(TILES_SCALE_CHROMATIC);
     }
     return table;
+}
+
+static tiles_scale_table_t current_scale_table(void) {
+    return scale_table_with_fallback(s_scale);
 }
 
 /* Folds `degree` through `table` -- the shared tail end both
@@ -552,6 +556,46 @@ uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
         note = 127;
     }
     return (uint8_t)note;
+}
+
+/* True if `note`'s pitch class (independent of octave) belongs to
+ * `table` under the current key offset -- shared by tiles_note_map_
+ * quantize_to_scale()'s own outward search below. */
+static bool note_in_scale_table(uint8_t note, tiles_scale_table_t table) {
+    int relative = (int)note - (int)TILES_NOTE_MAP_BASE_NOTE - (int)s_key_offset;
+    int pitch_class = ((relative % 12) + 12) % 12;
+    for (uint8_t i = 0; i < table.count; i++) {
+        if ((int)(table.intervals[i] % 12u) == pitch_class) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* See note_map.h's own comment. Searches outward from `note` by
+ * semitone (0, then +-1, +-2, ...) for the nearest pitch already in the
+ * current scale, preferring the lower neighbor on an equidistant tie --
+ * an arbitrary but consistent rule, since "round up" would be equally
+ * defensible. Capped at one octave (12 semitones) each direction: always
+ * terminates well before that given current_scale_table()'s own
+ * chromatic fallback guarantees at least a same-pitch match at distance
+ * 0 for a genuinely empty/corrupt scale. */
+uint8_t tiles_note_map_quantize_to_scale(uint8_t note) {
+    tiles_scale_table_t table = current_scale_table();
+    if (note_in_scale_table(note, table)) {
+        return note;
+    }
+    for (int distance = 1; distance <= 12; distance++) {
+        int down = (int)note - distance;
+        int up = (int)note + distance;
+        if (down >= 0 && note_in_scale_table((uint8_t)down, table)) {
+            return (uint8_t)down;
+        }
+        if (up <= 127 && note_in_scale_table((uint8_t)up, table)) {
+            return (uint8_t)up;
+        }
+    }
+    return note;
 }
 
 bool tiles_note_map_is_root_pad(uint8_t logical_pad) {

@@ -193,6 +193,21 @@ int8_t tiles_note_map_get_key_offset(void);
  * out-of-range pad. */
 uint8_t tiles_note_map_get_note(uint8_t logical_pad);
 
+/* Nearest MIDI note to `note` whose pitch class belongs to the currently
+ * selected scale (under the current key offset) -- `note` itself if it's
+ * already in scale. Real feedback: sequencer patterns should use ONE
+ * universal scale, not a per-pattern one, and changing that scale should
+ * NOT rewrite already-programmed step data -- "no rewriting just
+ * aproximating to the locked scale selected." services/op_mode.c's
+ * seq_fire_note() runs each step's stored (frozen) note through this at
+ * the moment it actually plays, so the underlying pattern stays exactly
+ * as programmed while what you HEAR live-follows whatever scale is
+ * currently selected. Searches outward by semitone (0, 1, 2, ...),
+ * preferring the lower neighbor on an equidistant tie, capped at one
+ * octave -- always terminates given the chromatic fallback every scale
+ * table has (see note_map.c's own scale_table_with_fallback()). */
+uint8_t tiles_note_map_quantize_to_scale(uint8_t note);
+
 /* True if this pad is currently the key's tonic (root) note -- driven by
  * services/lighting.c's idle pad coloring (real feedback: "root should
  * be blue"). Purely positional: independent of the current key offset --

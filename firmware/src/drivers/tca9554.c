@@ -3,9 +3,13 @@
 #define REG_OUTPUT_PORT 0x01u
 #define REG_CONFIG 0x03u
 
+/* See drivers/pca9685.c's identical constant for the full "haptic motor
+ * locked on after a freeze" rationale. */
+#define TILES_I2C_TIMEOUT_US 5000u
+
 static bool write_reg(tiles_tca9554_t *dev, uint8_t reg, uint8_t value) {
     uint8_t buf[2] = {reg, value};
-    int ret = i2c_write_blocking(dev->bus, dev->addr, buf, 2, false);
+    int ret = i2c_write_timeout_us(dev->bus, dev->addr, buf, 2, false, TILES_I2C_TIMEOUT_US);
     return ret == 2;
 }
 

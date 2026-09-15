@@ -31,19 +31,27 @@
  * (+/-80mT on every axis) -> 0000_0011. */
 #define SENSOR_CONFIG_2_VALUE 0x03u
 
+/* See drivers/pca9685.c's identical constant for the full "haptic motor
+ * locked on after a freeze" rationale -- tiles_tmag5273_read_xyz() runs
+ * for every one of 24 pads on every Hall scan (the highest-volume I2C
+ * traffic in this codebase, via 3 TCA9548A muxes), so an unbounded
+ * i2c_read_blocking() here is one of the most exposed paths to the same
+ * class of hang. */
+#define TILES_I2C_TIMEOUT_US 5000u
+
 static bool write_reg(i2c_inst_t *bus, uint8_t addr, uint8_t reg, uint8_t value) {
     uint8_t buf[2] = {reg, value};
-    return i2c_write_blocking(bus, addr, buf, 2, false) == 2;
+    return i2c_write_timeout_us(bus, addr, buf, 2, false, TILES_I2C_TIMEOUT_US) == 2;
 }
 
 /* Standard sequential register read (datasheet Figure 6-9): write the
  * starting register address with no STOP, then repeated-START into a
  * block read of `len` consecutive registers. */
 static bool read_regs(i2c_inst_t *bus, uint8_t addr, uint8_t reg, uint8_t *buf, size_t len) {
-    if (i2c_write_blocking(bus, addr, &reg, 1, true) != 1) {
+    if (i2c_write_timeout_us(bus, addr, &reg, 1, true, TILES_I2C_TIMEOUT_US) != 1) {
         return false;
     }
-    return i2c_read_blocking(bus, addr, buf, len, false) == (int)len;
+    return i2c_read_timeout_us(bus, addr, buf, len, false, TILES_I2C_TIMEOUT_US) == (int)len;
 }
 
 bool tiles_tmag5273_identify(i2c_inst_t *bus, uint8_t addr) {
