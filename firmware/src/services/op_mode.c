@@ -1871,37 +1871,16 @@ static void scale_menu_exit(void) {
         tiles_note_map_set_scale(s_scale_menu_saved_global_scale);
         s_scale_menu_is_per_pattern = false;
     }
-    /* Real feedback: "why does pressing a pattern then a scale sewnd me
-     * back to a broken melodic layout? ... it should only do that on
-     * melodic not in other modes or sequencer mode." Same bug, same fix,
-     * same root cause menu_exit() already got (see that function's own
-     * comment): sequencer mode keeps buttons/lighting standby-active for
-     * its ENTIRE duration (see set_active_mode()'s own OP_MODE_SEQUENCER
-     * branch, and pattern_bank_exit()'s identical guard/comment) --
-     * turning it off here unconditionally, like this function always did
-     * back when the scale picker was melodic/chord-only, would silently
-     * kill the normal step view's own rendering the instant the picker
-     * closes, falling back to services/lighting.c's DEFAULT (melodic-
-     * style root/natural/sharp) pad coloring even though s_active_mode
-     * is still genuinely OP_MODE_SEQUENCER underneath -- exactly the
-     * "broken melodic layout" while still nominally in sequencer mode
-     * that real feedback reported. Missed when the scale picker became
-     * reachable from sequencer mode too, even though menu_exit() had
-     * already needed this identical guard for the same reason. */
-    if (s_active_mode != OP_MODE_SEQUENCER) {
-        tiles_lighting_set_standby_active(false);
-        tiles_buttons_set_standby_active(false);
-    }
-    /* Real feedback: "the light behabes weird for triangle, when scale
-     * is selected the light stays on." Triangle now owns this sub-menu's
-     * LED column too (see handle_triangle_click()'s shift branch) and
-     * has a PERMANENT override claimed, so buttons.c's own refresh_all_
-     * button_leds() (run by tiles_buttons_set_standby_active(false)
-     * above, when it runs) deliberately skips it -- nothing else
-     * repaints it back to off without this explicit write. Unconditional
-     * regardless of the branch above -- this fixes triangle's OWN LED
-     * specifically, independent of whether the broader pad-grid standby
-     * state changes here or stays on for sequencer mode. */
+    tiles_lighting_set_standby_active(false);
+    tiles_buttons_set_standby_active(false);
+    /* See menu_exit()'s own comment (same bug, same fix, same root
+     * cause) -- real feedback: "the light behabes weird for triangle,
+     * when scale is selected the light stays on." Triangle now owns
+     * this sub-menu's LED column too (see handle_triangle_click()'s
+     * shift branch) and has a PERMANENT override claimed, so buttons.c's
+     * refresh_all_button_leds() (run by tiles_buttons_set_standby_
+     * active(false) just above) deliberately skips it -- nothing else
+     * repaints it back to off without this explicit write. */
     tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
 }
 
