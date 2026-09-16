@@ -124,8 +124,32 @@ static void cdc_write_raw_str(const char *s) {
 /* Total budget for one entire report dump (every cdc_write_paced() call
  * within it shares this SAME deadline, computed once by the caller) --
  * generous for the success case (a real terminal draining the port
- * finishes in a small fraction of this), but a hard stop otherwise. */
-#define DEBUG_REPORT_DUMP_TIMEOUT_MS 2000u
+ * finishes in a small fraction of this), but a hard stop otherwise.
+ * Real feedback, after this exact mechanism made the problem WORSE
+ * instead of better: "this was not as prominent of an issue before."
+ * Root cause: this used to be 2000ms -- LONGER than DEBUG_WATCHDOG_
+ * TIMEOUT_MS's own 1000ms -- and this entire dump runs synchronously
+ * inside ONE main-loop iteration, with watchdog_update() only reached
+ * at the very end of main.c's loop, after tiles_debug_mode_scan() (and
+ * so this whole dump) has already returned. If nobody was connected
+ * yet right when the auto-resumed dump fired (exactly the case right
+ * after a crash-recovery reboot, before a host-side monitor has had a
+ * chance to reconnect), the dump could burn most of its own 2-second
+ * budget waiting for FIFO room that never appeared -- comfortably
+ * exceeding the watchdog's 1-second one WHILE STILL INSIDE THIS SAME
+ * FUNCTION, triggering ANOTHER watchdog reset before the dump even
+ * finished. That reset re-arms the identical auto-resume dump on the
+ * very next boot, which could hit the exact same problem again -- a
+ * self-inflicted reset loop from the crash reporter itself, layered on
+ * top of whatever the original tud_task() freeze's own real frequency
+ * is, and entirely capable of explaining "it did it again" happening
+ * MORE often right after this feature shipped, not less. Fixed two
+ * ways, not one -- see watchdog_update() a few lines below for the
+ * more important of the two: this constant also dropped to comfortably
+ * UNDER the watchdog timeout as defense in depth, so even code that
+ * forgets to pet the watchdog during a long wait can't reproduce this
+ * class of bug against this specific timer again. */
+#define DEBUG_REPORT_DUMP_TIMEOUT_MS 400u
 
 /* Writes `s` a few bytes at a time, pumping tud_task() and flushing
  * between chunks so the USB stack actually gets a chance to drain the
@@ -146,6 +170,13 @@ static void cdc_write_raw_str(const char *s) {
  * for room that will never appear. That would be a real, ugly irony:
  * the freeze-diagnostic tool causing a NEW freeze of its own, exactly
  * the failure class this entire session has been about removing.
+ * Pets the hardware watchdog on every spin, same as main.c's own loop
+ * does once per iteration -- this loop can legitimately run for a
+ * while (waiting on a host that isn't connected yet is expected, not a
+ * hang: tud_task() is being called and real progress is being checked
+ * for on every pass), and DEBUG_REPORT_DUMP_TIMEOUT_MS's own history
+ * just above is exactly what happens when a bounded-but-slow operation
+ * like this one isn't distinguished from an actual stuck main loop.
  * Returns false the moment the shared deadline is reached (whether or
  * not this specific call finished), so the caller can stop attempting
  * the rest of the report rather than let each remaining piece burn its
@@ -158,6 +189,7 @@ static bool cdc_write_paced(const char *s, absolute_time_t deadline) {
     uint32_t sent = 0u;
     while (sent < len) {
         tud_task();
+        watchdog_update();
         if (time_reached(deadline)) {
             return false;
         }

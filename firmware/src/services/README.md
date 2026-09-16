@@ -5116,5 +5116,45 @@ not its code.
   not after a confirmed success, so a report that fails to deliver once
   (nobody connected yet) is treated as lost rather than retried on every
   subsequent debug-mode entry.
+- **The crash recorder's own reliability fixes introduced a WORSE bug
+  than the one they fixed: a self-inflicted reset loop.** Real feedback,
+  after the crash reporter had been running for a while: "it happened
+  again... this was not as prominent of an issue before." That "before"
+  is the tell -- the recovery mechanism itself had made things worse,
+  not the original `tud_task()` freeze getting more frequent on its own.
+  Root cause: `DEBUG_REPORT_DUMP_TIMEOUT_MS` (the crash-report dump's own
+  budget) was 2000ms -- LONGER than `DEBUG_WATCHDOG_TIMEOUT_MS`'s 1000ms.
+  The dump runs synchronously inside ONE main-loop iteration, and
+  `watchdog_update()` is only reached at the very end of `main.c`'s loop,
+  after `tiles_debug_mode_scan()` (and so the whole dump) has already
+  returned. Right after a crash-recovery reboot -- exactly when the
+  auto-resumed dump fires -- a host-side monitor often hasn't reconnected
+  yet, so the dump would burn most of its 2-second budget waiting for
+  CDC FIFO room that never appeared, comfortably exceeding the
+  watchdog's 1-second one WHILE STILL INSIDE THAT SAME FUNCTION CALL --
+  triggering a SECOND watchdog reset before the first dump even
+  finished. That reset re-arms the identical auto-resume dump on the
+  very next boot, which could hit the exact same problem again: a
+  reset loop with nothing to do with the original freeze, caused
+  entirely by the tool built to diagnose it.
+  **Fixed two ways, not one, on purpose**: `cdc_write_paced()` now calls
+  `watchdog_update()` on every spin of its own pumping loop, the same
+  way `main.c`'s own loop pets it once per iteration -- this loop can
+  legitimately run for a while (a host that hasn't reconnected yet is an
+  expected condition, not a hang: `tud_task()` is being called and real
+  progress is being checked for on every pass), and the watchdog should
+  only ever fire for an ACTUAL stuck main loop, not a bounded, self-
+  monitoring wait that happens to take a while. `DEBUG_REPORT_DUMP_
+  TIMEOUT_MS` also dropped to 400ms, comfortably under the watchdog's
+  1000ms, as defense in depth -- so even a future change that forgets to
+  pet the watchdog during a long wait can't reproduce this exact class
+  of bug against this specific timer again. Calling `tud_task()` in a
+  tight loop (this function's own pacing mechanism) doesn't add NEW risk
+  of triggering the original freeze either, worth noting explicitly: if
+  `tud_task()` itself is what hangs (not just returns nothing to report),
+  neither this loop's `watchdog_update()` nor `main.c`'s own would ever
+  be reached regardless of which call site triggered it, so the SAME
+  1-second watchdog timeout still catches it exactly as it would
+  anywhere else `tud_task()` is called.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
