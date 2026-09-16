@@ -6367,5 +6367,48 @@ not its code.
   assumed), and capture only ever needs that raw progression for its
   own quantization, never a belief about whether the DAW considers
   itself "playing."
+- **The pattern save/delete underglow flash still didn't show, even
+  after the previous round's debug-mode-priority fix.** Real feedback:
+  "the save pattern and dleete patter still do not do the pulse
+  underglow," re-confirming the exact gesture is otherwise right (enter
+  the bank via diamond in sequencer mode; shift+tap-and-release a cell
+  to save it, green flash twice on the pad and underglow; shift+hold
+  the same cell 3 seconds to delete it, red flash twice). The previous
+  fix (giving `tiles_op_mode_pattern_flash_underglow_color()` priority
+  over debug mode inside `tiles_lighting_service()`) was necessary but
+  not sufficient -- it fixed the priority ORDER of the one writer that
+  goes through that function, but missed that `render_pattern_bank()`
+  itself was ALSO writing the flash color straight to hardware, on its
+  own, every single `tiles_op_mode_scan()` call (via `tiles_lighting_
+  set_standby_underglow_rgb()`'s own immediate write-on-change). `main.c`
+  calls `tiles_lighting_service()` again right after every scan, and
+  with debug mode armed for nearly this entire session, its own
+  override wrote a few instructions later, every iteration, unconditionally
+  clobbering whatever `render_pattern_bank()` had just put on the strip
+  before a single frame of it could ever reach anyone's eyes. Pads never
+  had this problem because nothing else competes for them the way crash/
+  debug/pattern-flash/cross-capture all fight over underglow. Fixed by
+  making `render_pattern_bank()`'s own underglow loop stop writing the
+  flash color at all -- it now only ever writes the plain off/idle case,
+  and defers the flash entirely to `tiles_lighting_service()`'s own
+  priority chain, so there is exactly one writer for that state and
+  nothing left to race.
+- **"-"'s own solid/pulse split, corrected: it now reflects step
+  position, not `lane_running`.** Real feedback: "when the sequence is
+  stipped but not brought back to the start make the - pulse." The
+  previous round's four-state "-"/"+" LED logic used `s_seq_lane_
+  running[lane]` to distinguish "-"'s solid case from its pulsing case
+  -- but `handle_transport_and_length()`'s own double-stop gesture
+  (first "-" press pauses in place, leaving `s_seq_current_step`
+  untouched; a SECOND press while already stopped is what rewinds it to
+  0) sets `lane_running` false in BOTH cases, so that condition could
+  never actually tell "paused mid-pattern" apart from "stopped at the
+  head" -- it was testing a variable that's already false either way.
+  Fixed by keying the split on `s_seq_current_step[s_seq_edit_lane]`
+  instead: solid when stopped AND at step 0, pulsing when stopped but
+  the playhead is still sitting wherever the first "-" press left it.
+  Applied to both copies of this logic (`render_sequencer()`'s own
+  inline "-"/"+" LEDs and the shared `render_transport_toggle_leds()`
+  used by the pitch/probability/ratchet edit views) for consistency.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

@@ -1580,26 +1580,32 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
              * moved off diamond (which reverted to a plain capture-
              * pulse-or-dark indicator now that it's busy triggering
              * capture/pattern-bank access -- see handle_diamond_
-             * transport()'s own render section) onto here instead, same
-             * four states, same reasoning: real signal (tiles_midi_
-             * clock_is_running()) rather than a guess, plus this lane's
-             * own running flag layered on top. "+" keeps its established
-             * "lit means running" role, "-" its "lit means stopped"
-             * role -- solid for the two unambiguous states, pulsing
-             * (borrowed from diamond's own former shapes) for the two
-             * in-between ones ("clock's going, this lane isn't yet" on
-             * "+"; "this lane wants to run, no clock to advance against"
-             * on "-", since nothing is actually audible in that state
-             * either, matching "-"'s own established stopped-ish role). */
+             * transport()'s own render section) onto here instead. "+"
+             * keeps its established "lit means running" role: solid
+             * while this lane is actually playing, pulsing while the
+             * shared clock is going but this lane hasn't joined in,
+             * off otherwise. "-"'s own split was corrected by later real
+             * feedback: "when the sequence is stopped but not brought
+             * back to the start make the - pulse" -- the first "-" press
+             * pauses in place (s_seq_lane_running false, s_seq_current_
+             * step untouched), and only a SECOND press while already
+             * stopped rewinds it to 0 (see handle_transport_and_length()'s
+             * own comment on that double-stop gesture) -- so the correct
+             * solid/pulse split is the STEP POSITION while stopped, not
+             * lane_running (which is already false in both cases and
+             * can't tell them apart). Off entirely while the lane is
+             * running -- "-" has nothing to show then. */
             bool lane_running = s_seq_lane_running[s_seq_edit_lane];
             if (col == TILES_MINUS_BUTTON_COL) {
-                if (!transport_running && !lane_running) {
-                    level = OP_TRANSPORT_LED_LEVEL;
-                } else if (!transport_running && lane_running) {
-                    float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
-                    float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
-                    level = OP_TRANSPORT_RECORDING_PULSE_MIN +
-                            (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
+                if (!lane_running) {
+                    if (s_seq_current_step[s_seq_edit_lane] == 0u) {
+                        level = OP_TRANSPORT_LED_LEVEL;
+                    } else {
+                        float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
+                        float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
+                        level = OP_TRANSPORT_RECORDING_PULSE_MIN +
+                                (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
+                    }
                 }
             } else {
                 if (transport_running && lane_running) {
@@ -1841,23 +1847,27 @@ static void handle_edit_mode(uint32_t now_ms) {
 }
 
 /* Real feedback: "the +- transport controls shoudl be the ones with
- * the flashing logic while in sequencer mode" -- same four-state logic
- * as render_sequencer()'s own inline copy just above (see that one's
- * comment for the full reasoning), duplicated rather than shared since
- * that one has its own circle-column beat-flash handling in the same
- * loop this function was never given. */
+ * the flashing logic while in sequencer mode" -- same logic as render_
+ * sequencer()'s own inline copy just above (see that one's comment for
+ * the full reasoning, including the later correction of "-"'s own
+ * solid/pulse split to key off step position rather than lane_running),
+ * duplicated rather than shared since that one has its own circle-
+ * column beat-flash handling in the same loop this function was never
+ * given. */
 static void render_transport_toggle_leds(uint32_t now_ms, bool transport_running) {
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         float level = 0.0f;
         if (col == TILES_MINUS_BUTTON_COL) {
             bool lane_running = s_seq_lane_running[s_seq_edit_lane];
-            if (!transport_running && !lane_running) {
-                level = OP_TRANSPORT_LED_LEVEL;
-            } else if (!transport_running && lane_running) {
-                float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
-                float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
-                level = OP_TRANSPORT_RECORDING_PULSE_MIN +
-                        (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
+            if (!lane_running) {
+                if (s_seq_current_step[s_seq_edit_lane] == 0u) {
+                    level = OP_TRANSPORT_LED_LEVEL;
+                } else {
+                    float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
+                    float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
+                    level = OP_TRANSPORT_RECORDING_PULSE_MIN +
+                            (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
+                }
             }
         } else if (col == TILES_PLUS_BUTTON_COL) {
             bool lane_running = s_seq_lane_running[s_seq_edit_lane];
@@ -2670,15 +2680,25 @@ static void render_pattern_bank(uint32_t now_ms) {
         float level = (col == TILES_DIAMOND_BUTTON_COL) ? OP_TRIANGLE_LED_MENU_LEVEL : 0.0f;
         tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
+    /* Real feedback (after the first fix attempt): "the save pattern and
+     * dleete patter still do not do the pulse underglow." Root cause of
+     * THAT: this loop used to write the flash color directly to hardware
+     * here (via the standby setter's own immediate write-on-change), on
+     * every tiles_op_mode_scan() call -- but main.c's loop calls tiles_
+     * lighting_service() again right after every single scan, and
+     * THAT'S the one tiles_op_mode_pattern_flash_underglow_color() was
+     * wired into (above debug mode -- see that function's own comment).
+     * Debug mode had been armed for nearly this entire session, so its
+     * override was written a few instructions after this one, every
+     * iteration, unconditionally clobbering whatever this loop had just
+     * put on the strip before a single frame of it could ever appear --
+     * pads never had this problem since they have no such second writer.
+     * Fix: this loop now only ever writes the OFF/idle case itself, and
+     * defers to tiles_lighting_service()'s own priority chain (the
+     * already-correctly-ordered one) for the flash colors, so there is
+     * exactly one writer for that state and nothing left to race. */
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
-        if (save_flash_showing) {
-            float level = save_flash_on ? 1.0f : 0.0f;
-            if (s_pattern_flash_is_delete) {
-                tiles_lighting_set_standby_underglow_rgb(i, level, 0.0f, 0.0f);
-            } else {
-                tiles_lighting_set_standby_underglow_rgb(i, 0.0f, level, 0.0f);
-            }
-        } else {
+        if (!save_flash_showing) {
             tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
         }
     }
