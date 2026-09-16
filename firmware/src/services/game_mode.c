@@ -1448,21 +1448,37 @@ static void gm_handle_menu_selection(void) {
 }
 
 static bool gm_combo_held(void) {
-    if (tiles_expression_control_owns_pad_grid() || tiles_op_mode_owns_pad_grid()) {
+    if (tiles_expression_control_owns_pad_grid() || tiles_op_mode_has_menu_open()) {
         /* services/expression_control.h's sub-menu (circle+square held)
-         * or services/op_mode.h's mode-select menu/sequencer already owns
+         * or one of op_mode.h's own sub-views (mode-select menu, scale
+         * menu, pattern bank, per-step edit, capture mode) already owns
          * the pad grid -- SW3 (triangle) alone is op_mode.h's own click
          * trigger (SW4/diamond was, before a later real-feedback swap --
          * see op_mode.h's own note), and SW5 (square)/SW6 (circle) are
-         * two of THIS combo's
-         * four buttons, so without this guard a player deep in an
-         * already-open sub-menu/sequencer who also happens to be resting
-         * on the other buttons could accidentally toggle game mode on
-         * underneath it. Never true while a game is already active (see
-         * expression_control.c's/op_mode.c's own tiles_game_mode_is_
-         * active() guards, which keep all three features mutually
-         * exclusive), so this only ever blocks a fresh entry, never the
-         * OFF toggle. */
+         * two of THIS combo's four buttons, so without this guard a
+         * player deep in one of those sub-views who also happens to be
+         * resting on the other buttons could accidentally toggle game
+         * mode on underneath it.
+         * Real feedback: "Cant access game mode anymore ... that logic
+         * should be progressive for all combo types not just debug" --
+         * this used to be tiles_op_mode_owns_pad_grid(), which answers
+         * true for the ENTIRE time sequencer is simply the active/
+         * displayed mode, sub-view open or not (unlike debug_mode.c's
+         * own combo, which has no such gate at all and just trusts its
+         * own hold timer -- see services/debug_mode.c's tiles_debug_
+         * mode_scan()). That made this combo permanently untriggerable
+         * for as long as sequencer happened to be the displayed mode,
+         * which given how much of this project's own testing lives
+         * there, was effectively "most of the time." None of this
+         * combo's four buttons collide with anything sequencer's own
+         * plain step-view uses them for on a sustained 700ms hold (only
+         * quick clicks: triangle opens the mode menu, diamond toggles
+         * capture/pattern-bank), so narrowed to tiles_op_mode_has_menu_
+         * open() -- the actual sub-views worth protecting -- instead.
+         * Never true while a game is already active (see expression_
+         * control.c's/op_mode.c's own tiles_game_mode_is_active()
+         * guards, which keep all three features mutually exclusive), so
+         * this only ever blocks a fresh entry, never the OFF toggle. */
         return false;
     }
     return tiles_button_is_pressed(3u) && tiles_button_is_pressed(4u) && tiles_button_is_pressed(5u) &&

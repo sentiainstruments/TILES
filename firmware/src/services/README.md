@@ -6446,5 +6446,39 @@ not its code.
   never the one racing against the flash write. The two diagnostic
   prints stay in permanently (cheap, transition-only, and this is
   exactly the kind of bug they're for).
+- **Game mode's entry combo was permanently blocked for as long as
+  sequencer happened to be the displayed mode.** Real feedback: "Cant
+  access game mode anymore, probably because of button confirmation
+  combo logic for debug mode, that logic should be progressive for all
+  combo types not just debug." `game_mode.c`'s own `gm_combo_held()`
+  guarded its 4-button (triangle+diamond+square+circle) entry combo
+  with `tiles_op_mode_owns_pad_grid()`, which answers true for the
+  ENTIRE time sequencer is simply the active/displayed mode, sub-view
+  open or not -- not just while a genuine sub-view (the mode menu,
+  scale menu, pattern bank, per-step edit, capture mode) is actually
+  showing. `services/debug_mode.c`'s own combo, by contrast, has no
+  such gate at all -- it just trusts its own 8-second hold timer,
+  regardless of whatever mode is displayed, and that's held up fine
+  across this entire session's testing. None of game mode's four
+  buttons collide with anything sequencer's own plain step-view uses
+  them for on a sustained 700ms hold (only quick clicks: triangle opens
+  the mode menu, diamond toggles capture/pattern-bank), so the real
+  accidental-trigger risk the original guard was written for only ever
+  applied to the actual sub-views. Narrowed `gm_combo_held()`'s guard
+  to `tiles_op_mode_has_menu_open()` instead -- the same accessor
+  standby's idle timeout already uses for exactly this "which sub-views
+  genuinely need protecting" question -- so the combo now works
+  whenever the sequencer's plain grid is showing, matching debug mode's
+  own "just trust the hold timer" posture, while still blocking during
+  the sub-views that actually need it. Deliberately did NOT extend this
+  to `octave_control.c`'s own "-"/"+" transpose-combo guard even though
+  the same real feedback calls for "all combo types" -- that guard is
+  broader on purpose (also blocks during guitar mode, where "-"/"+"
+  are already individually live for fret control), and unlike game
+  mode's four buttons, "-"/"+" ARE already individually meaningful in
+  sequencer's own plain step-view (play/stop/rewind, length change) --
+  narrowing it the same way would risk the transpose combo firing by
+  accident during ordinary sequencer transport use, a real regression
+  this fix doesn't need to risk to fix the one thing that broke.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
