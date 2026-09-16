@@ -16,11 +16,16 @@
 #include "standby.h"
 #include "touch.h"
 
+#include "hardware/flash.h"
+#include "hardware/sync.h"
+#include "hardware/watchdog.h"
+
 #include "pico/time.h"
 
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* Real feedback: "also the mode selector has all these lights always on.
  * only availabkle modes shouyld be on meaning for now only sequencer, and
@@ -436,6 +441,14 @@ typedef struct {
 
 /* [lane][alternative] -- see this section's own header comment. */
 static op_seq_pattern_t s_seq_pattern[OP_SEQ_NUM_LANES][OP_SEQ_ALTS_PER_LANE];
+/* True iff this slot has been explicitly saved to flash at least once
+ * -- see this file's own "Pattern persistence" section. Independent of
+ * pattern_has_content() (below, in the Pattern bank section): a slot
+ * can have real, unsaved content (played since boot, never saved) or
+ * be saved-but-since-cleared; this is specifically "does flash
+ * currently hold this slot's data," not "does RAM currently hold
+ * anything interesting." */
+static bool s_pattern_slot_saved[OP_SEQ_NUM_LANES][OP_SEQ_ALTS_PER_LANE];
 /* Which alternative (0..5) each lane is CURRENTLY PLAYING -- read by every
  * lane's own independent seq_advance_clock() call, completely separate
  * from which lane the player happens to be LOOKING at right now
@@ -488,6 +501,18 @@ static bool s_seq_note_sounding[OP_SEQ_NUM_LANES];
 static uint8_t s_seq_sounding_pad[OP_SEQ_NUM_LANES]; /* 1..24, valid iff s_seq_note_sounding[lane] */
 static uint8_t s_seq_sounding_channel[OP_SEQ_NUM_LANES];
 static uint8_t s_seq_sounding_note[OP_SEQ_NUM_LANES];
+/* Real feedback: "in regular melodic mode when pattern is still
+ * playing haptics react to melodic not to the patterns in the
+ * background... only the displayed one has the haptics overide." A
+ * reversal of this file's own prior deliberate tradeoff (seq_end_
+ * current_note()'s old comment accepted background-lane haptics as
+ * "rare, momentary, cosmetic only") -- captured once at fire time
+ * (seq_lane_haptics_visible(), below), not re-checked at end time,
+ * for the same reason s_seq_sounding_channel/_note are captured
+ * rather than re-derived: the active mode or edit lane can change
+ * mid-note, and ending a note must always undo exactly what starting
+ * it actually did, never what the CURRENT state would now imply. */
+static bool s_seq_sounding_haptics[OP_SEQ_NUM_LANES];
 static uint32_t s_seq_step_started_at_pulse[OP_SEQ_NUM_LANES];
 static bool s_seq_prev_pad_touched[TILES_NUM_PADS];
 /* Real feedback: "we need to quantice to midi clock when that is
@@ -927,6 +952,15 @@ static op_seq_pattern_t *pattern_for_lane(uint8_t lane) {
 static void edit_enter(uint8_t step, uint32_t started_ms); /* defined below, used by seq_handle_step_taps()'s own hold detection */
 static void edit_enter_ratchet(uint8_t step); /* defined below, used by seq_handle_step_taps()'s own circle+touch detection */
 
+/* True iff `lane`'s own playback is the one thing actually shown on
+ * the grid right now -- sequencer mode is the active mode AND this is
+ * the lane currently being viewed/edited. See s_seq_sounding_haptics'
+ * own comment above for why this matters and why it's captured once
+ * rather than re-checked. */
+static bool seq_lane_haptics_visible(uint8_t lane) {
+    return s_active_mode == OP_MODE_SEQUENCER && lane == s_seq_edit_lane;
+}
+
 /* Uses the channel/note captured at note-on time (below), not whatever
  * pattern_for_lane(lane) currently resolves to -- correctness never
  * depends on that lane's s_seq_active_alt staying the same between a note
@@ -938,16 +972,14 @@ static void seq_end_current_note(uint8_t lane) {
         return;
     }
     tiles_midi_note_off(s_seq_sounding_channel[lane], s_seq_sounding_note[lane]);
-    /* Real, accepted edge case: haptics are a PHYSICAL pad resource, but
-     * up to 4 lanes can each independently reach "step N" (pad N+1) at
-     * the same moment -- a stop from one lane can cut a kick another lane
-     * (or capture mode, or a live touch) just started on that same
-     * physical actuator. Rare, momentary, and cosmetic only (never
-     * affects the actual MIDI note, which is fully per-lane via its own
-     * channel) -- not worth suppressing haptics for background lanes
-     * over, the same tradeoff this file already accepted for the single
-     * background pattern the previous round shipped. */
-    tiles_haptics_stop(s_seq_sounding_pad[lane]);
+    /* Only undoes the haptic if this note actually triggered one --
+     * see s_seq_sounding_haptics' own comment on why that's the fact
+     * captured at fire time, not a live re-check. The MIDI note-off
+     * just above always fires regardless -- background lanes keep
+     * sounding normally, only their HAPTIC feedback is suppressed. */
+    if (s_seq_sounding_haptics[lane]) {
+        tiles_haptics_stop(s_seq_sounding_pad[lane]);
+    }
     s_seq_note_sounding[lane] = false;
 }
 
@@ -977,7 +1009,14 @@ static void seq_fire_note(uint8_t lane, uint8_t step) {
                                                     : tiles_note_map_get_note(pad);
     uint8_t channel = s_seq_lane_channel[lane];
     tiles_midi_note_on(channel, note, OP_SEQ_VELOCITY);
-    tiles_haptics_trigger_kick(pad, OP_SEQ_VELOCITY);
+    /* Only this lane's own haptic feedback is gated -- the MIDI note
+     * above always fires regardless, so every enabled lane keeps
+     * sounding exactly as before. See s_seq_sounding_haptics' own
+     * comment. */
+    s_seq_sounding_haptics[lane] = seq_lane_haptics_visible(lane);
+    if (s_seq_sounding_haptics[lane]) {
+        tiles_haptics_trigger_kick(pad, OP_SEQ_VELOCITY);
+    }
     s_seq_note_sounding[lane] = true;
     s_seq_sounding_pad[lane] = pad;
     s_seq_sounding_channel[lane] = channel;
@@ -1875,6 +1914,125 @@ static void scale_menu_exit(void) {
     tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
 }
 
+/* ---- Pattern persistence (flash) ---------------------------------------
+ * Real feedback: "to save patterns to memory before shutdown in the
+ * pattern selector menu we click shift and the pattern. that saves
+ * it, to delete or clear pattern we hold shift and patterrn for 3
+ * seconds." The gesture itself lives in handle_pattern_bank_taps()
+ * below (shift/circle held at touch-down turns that touch into a
+ * save/delete candidate instead of the bank's normal select-on-depth
+ * gesture) -- this section is just the flash mechanics underneath it.
+ *
+ * Storage: everything (both lanes' worth of "is this slot saved" plus
+ * all 24 patterns' full step data) fits in one 4096-byte flash sector
+ * with room to spare (~2.9KB used of 4096) -- see tiles_pattern_
+ * store_t below. Lives in the LAST sector of the chip's flash
+ * (TILES_PATTERN_FLASH_OFFSET), as far as possible from the app image
+ * at the very start of flash, so the app can grow substantially before
+ * ever needing to worry about this colliding with it. A magic number +
+ * version guard against reading garbage on a never-saved-before board
+ * (flash's own erased state is all-0xFF, which won't match) or a
+ * future incompatible layout change.
+ *
+ * Real hardware constraint, not a bug: RP2040/2350 flash is memory-
+ * mapped and executed from directly (XIP) -- nothing can read
+ * instructions (or data) FROM flash while it's being erased/
+ * programmed, which means every interrupt (USB included) must stay
+ * disabled for the whole span, and hardware_flash.h's own
+ * flash_range_erase()/flash_range_program() do NOT do this
+ * automatically (confirmed reading pico-sdk's own flash.c -- they
+ * assume the caller already arranged it). pattern_store_write_all()
+ * below wraps both calls in save_and_disable_interrupts()/restore_
+ * interrupts(), the correct single-core pattern (this firmware never
+ * runs anything on core 1). Pets the watchdog immediately before and
+ * after, not during -- watchdog_update() is ordinary flash-resident
+ * code, unsafe to call from inside that same disabled window, but a
+ * 4KB erase + program on this board's own W25Q-family chip
+ * (board_init.c's own boot2_name) comfortably finishes in well under
+ * DEBUG_WATCHDOG_TIMEOUT_MS even from a cold pet. This DOES mean a
+ * save/delete causes a genuine, brief (tens of milliseconds) pause in
+ * everything -- MIDI, touch, USB -- exactly once, at the moment it's
+ * triggered; an inherent property of writing flash on this chip, not
+ * something worth working around for a deliberate, occasional action
+ * like this one. */
+#define TILES_PATTERN_STORE_MAGIC 0x454c4954u /* "TILE" -- matches services/debug_mode.c's own crash-magic convention */
+#define TILES_PATTERN_STORE_VERSION 1u
+#define TILES_PATTERN_FLASH_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    bool slot_saved[OP_SEQ_NUM_LANES][OP_SEQ_ALTS_PER_LANE];
+    op_seq_pattern_t pattern[OP_SEQ_NUM_LANES][OP_SEQ_ALTS_PER_LANE];
+} tiles_pattern_store_t;
+
+/* Rewrites the WHOLE store every time, even though only one slot
+ * usually changed -- flash can only be erased a whole sector at a
+ * time, so a partial update needs the same read-modify-write shape
+ * regardless; simpler to always start from current RAM state (already
+ * the full, correct picture) than to read-back/merge against whatever
+ * flash currently holds. static, not stack: ~2.9KB is too large to
+ * comfortably put on this main loop's own stack frame for what's
+ * already a rare, deliberate call. */
+static void pattern_store_write_all(void) {
+    static uint8_t s_write_buf[FLASH_SECTOR_SIZE];
+    memset(s_write_buf, 0, sizeof(s_write_buf));
+    tiles_pattern_store_t *store = (tiles_pattern_store_t *)s_write_buf;
+    store->magic = TILES_PATTERN_STORE_MAGIC;
+    store->version = TILES_PATTERN_STORE_VERSION;
+    memcpy(store->slot_saved, s_pattern_slot_saved, sizeof(store->slot_saved));
+    memcpy(store->pattern, s_seq_pattern, sizeof(store->pattern));
+
+    watchdog_update();
+    uint32_t prev_interrupts = save_and_disable_interrupts();
+    flash_range_erase(TILES_PATTERN_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+    flash_range_program(TILES_PATTERN_FLASH_OFFSET, s_write_buf, sizeof(s_write_buf));
+    restore_interrupts(prev_interrupts);
+    watchdog_update();
+}
+
+static void pattern_store_save_slot(uint8_t lane, uint8_t alt) {
+    s_pattern_slot_saved[lane][alt] = true;
+    pattern_store_write_all();
+    printf("[op_mode] saved lane %u pattern %u to flash\n", (unsigned)lane, (unsigned)alt);
+}
+
+static void pattern_store_clear_slot(uint8_t lane, uint8_t alt) {
+    memset(&s_seq_pattern[lane][alt], 0, sizeof(op_seq_pattern_t));
+    s_seq_pattern[lane][alt].length = OP_SEQ_NUM_STEPS;
+    for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
+        s_seq_pattern[lane][alt].step_probability_percent[i] = 100u;
+        s_seq_pattern[lane][alt].step_ratchet_count[i] = 1u;
+    }
+    s_pattern_slot_saved[lane][alt] = false;
+    pattern_store_write_all();
+    printf("[op_mode] cleared lane %u pattern %u\n", (unsigned)lane, (unsigned)alt);
+}
+
+/* Called once, from tiles_op_mode_init(), AFTER that function's own
+ * pattern-defaults loop has already run -- only ever overwrites a slot
+ * this same flash data already claims to own (slot_saved[lane][alt]),
+ * leaving every other slot at the normal fresh-boot default untouched.
+ * A plain memory-mapped read (flash is directly addressable for
+ * reading, unlike writing -- no erase/program machinery needed here at
+ * all), so unlike the write path, this is exactly as fast/safe as
+ * reading any other constant and needs no special handling. */
+static void pattern_store_load_all(void) {
+    const tiles_pattern_store_t *store = (const tiles_pattern_store_t *)(XIP_BASE + TILES_PATTERN_FLASH_OFFSET);
+    if (store->magic != TILES_PATTERN_STORE_MAGIC || store->version != TILES_PATTERN_STORE_VERSION) {
+        return; /* never saved before on this board, or an incompatible future layout */
+    }
+    memcpy(s_pattern_slot_saved, store->slot_saved, sizeof(s_pattern_slot_saved));
+    for (uint8_t lane = 0; lane < OP_SEQ_NUM_LANES; lane++) {
+        for (uint8_t alt = 0; alt < OP_SEQ_ALTS_PER_LANE; alt++) {
+            if (s_pattern_slot_saved[lane][alt]) {
+                s_seq_pattern[lane][alt] = store->pattern[lane][alt];
+            }
+        }
+    }
+    printf("[op_mode] loaded saved patterns from flash\n");
+}
+
 /* ---- Pattern bank (SW4/diamond+shift, sequencer mode only) -------------
  * Real feedback: "in sequencer mode shift plus triangle opens up the
  * pattern bajnk... sequence selector should have all 24 pads as possible
@@ -1921,6 +2079,22 @@ static void scale_menu_exit(void) {
 
 static bool s_pattern_bank_visible;
 static bool s_pattern_bank_prev_pad_touched[TILES_NUM_PADS];
+/* Save/delete hold-tracking -- see handle_pattern_bank_taps()'s own
+ * comment on the shift+touch gesture these back. Recorded once, at
+ * touch-down, matching every other modifier gesture in this file
+ * (checked at press-start, e.g. handle_diamond_transport()'s own
+ * circle_held capture) rather than continuously re-checked, so
+ * releasing shift partway through a hold that already committed to
+ * being a save/delete candidate can't flip it back into a plain
+ * select. */
+static bool s_pattern_bank_touch_started_with_shift[TILES_NUM_PADS];
+static uint32_t s_pattern_bank_touch_started_ms[TILES_NUM_PADS];
+static bool s_pattern_bank_delete_fired[TILES_NUM_PADS];
+/* Real feedback: "to delete or clear pattern we hold shift and
+ * patterrn for 3 seconds" -- matches this codebase's other established
+ * 3-second holds (services/expression_control.h's own mute combo)
+ * rather than inventing a new duration. */
+#define OP_PATTERN_DELETE_HOLD_MS 3000u
 
 static void pattern_bank_exit(void);
 
@@ -2019,16 +2193,48 @@ static void render_pattern_bank(uint32_t now_ms) {
 }
 
 /* Same touch-click + push-past-50%-selects gesture every picker in this
- * file already uses. */
-static void handle_pattern_bank_taps(void) {
+ * file already uses -- UNLESS shift/circle is already held at the
+ * moment a cell is first touched, in which case that touch becomes a
+ * save/delete candidate instead (real feedback: "in the pattern
+ * selector menu we click shift and the pattern. that saves it, to
+ * delete or clear pattern we hold shift and patterrn for 3 seconds"):
+ * a quick shift+touch (released before OP_PATTERN_DELETE_HOLD_MS)
+ * saves that slot to flash on release; holding it past that threshold
+ * clears/deletes it instead, firing once (edge-latched via s_pattern_
+ * bank_delete_fired) rather than repeatedly for as long as the hold
+ * continues, same one-shot shape this file's other hold gestures use.
+ * Shift must be down at touch-DOWN specifically, not just at some
+ * point during the touch or checked live every scan -- matches every
+ * other modifier gesture in this file (checked once, at press-start)
+ * and means letting go of shift partway through an already-committed
+ * hold can't un-arm it or fall back to a plain select. */
+static void handle_pattern_bank_taps(uint32_t now_ms) {
+    bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         uint8_t lane = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             uint8_t alt = (uint8_t)(col - TILES_GRID_MIN_COL);
             uint8_t pad = board_pad_for_row_col(row, col);
             bool touched = tiles_touch_is_touched(pad);
-            if (touched && !s_pattern_bank_prev_pad_touched[pad - 1u]) {
+            bool was_touched = s_pattern_bank_prev_pad_touched[pad - 1u];
+            if (touched && !was_touched) {
                 tiles_haptics_trigger_touch_pulse(pad);
+                s_pattern_bank_touch_started_with_shift[pad - 1u] = circle_held;
+                s_pattern_bank_touch_started_ms[pad - 1u] = now_ms;
+                s_pattern_bank_delete_fired[pad - 1u] = false;
+            }
+            if (s_pattern_bank_touch_started_with_shift[pad - 1u]) {
+                if (touched) {
+                    uint32_t held_ms = now_ms - s_pattern_bank_touch_started_ms[pad - 1u];
+                    if (held_ms >= OP_PATTERN_DELETE_HOLD_MS && !s_pattern_bank_delete_fired[pad - 1u]) {
+                        pattern_store_clear_slot(lane, alt);
+                        s_pattern_bank_delete_fired[pad - 1u] = true;
+                    }
+                } else if (was_touched && !s_pattern_bank_delete_fired[pad - 1u]) {
+                    pattern_store_save_slot(lane, alt);
+                }
+                s_pattern_bank_prev_pad_touched[pad - 1u] = touched;
+                continue;
             }
             if (touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD) {
                 if (alt != s_seq_active_alt[lane]) {
@@ -2101,6 +2307,15 @@ static void pattern_bank_enter(void) {
     s_pattern_bank_visible = true;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_pattern_bank_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+        /* A finger already resting on a pad at the exact instant the
+         * bank opens can never retroactively count as a fresh shift+
+         * touch-down (the loop above already prevents that from being
+         * misread as any kind of touch-down at all), so this is purely
+         * defensive tidiness, not a real reachable gap -- avoids ever
+         * showing a stale true from some earlier session while auditing
+         * this state later. */
+        s_pattern_bank_touch_started_with_shift[i] = false;
+        s_pattern_bank_delete_fired[i] = false;
     }
 }
 
@@ -2286,18 +2501,24 @@ static void set_active_mode(tiles_op_mode_t mode) {
  * glitch, they just hand off cleanly to whichever pad was touched most
  * recently, both for the audible note AND for which note gets written
  * into the step currently being recorded. */
-/* DISABLED FOR NOW -- real feedback: "something made it freeze and crash
- * in sequwencer mode with ableton midi clock," reported while a pattern
- * was just running (no capture-mode interaction that session), later:
- * "for now also disabel the live capture stuff." The actual confirmed
- * cause was unrelated printf() flooding in services/haptics.c's per-
- * note hot path (see that file's own history in this section's README
- * entry), not capture mode itself -- but this stays off until that fix
- * has had real playing time to prove out, per the explicit request.
- * Only the ENTRY gesture is gated (see handle_diamond_transport()'s own
- * use of this flag) -- everything else here is untouched and ready to
- * re-enable by flipping this back to 1. */
-#define OP_SEQ_CAPTURE_MODE_ENABLED 0
+/* RE-ENABLED -- real feedback: "lets re work capture mode into
+ * sequencer witgh the diamond button." Previously disabled after
+ * "something made it freeze and crash in sequwencer mode with ableton
+ * midi clock" (reported while a pattern was just running, no
+ * capture-mode interaction that session), then "for now also disabel
+ * the live capture stuff" out of caution even though the confirmed
+ * cause was unrelated printf() flooding in services/haptics.c's own
+ * per-note hot path (see that file's own history in this section's
+ * README entry), not capture mode itself. The entry gesture (diamond,
+ * plain click, in sequencer mode) is unchanged -- this flag only ever
+ * gated reachability, never the logic itself, which is why re-enabling
+ * it needed no changes here beyond flipping this back to 1 plus the
+ * rendering/quantization rework real feedback asked for alongside it
+ * (see render_seq_capture()'s and s_seq_capture_target_step's own
+ * comments). Still genuinely new to real playing time again as of this
+ * change -- worth watching closely on the next real-hardware pass,
+ * same as everything else reintroduced this session. */
+#define OP_SEQ_CAPTURE_MODE_ENABLED 1
 static tiles_scale_mode_t s_seq_capture_prev_scale;
 static bool s_seq_capture_prev_pad_touched[TILES_NUM_PADS];
 /* Accumulator for the step currently being recorded -- reset at the
@@ -2308,6 +2529,16 @@ static bool s_seq_capture_prev_pad_touched[TILES_NUM_PADS];
  * window it fell in, not a sub-step offset. */
 static uint8_t s_seq_capture_step_note;
 static bool s_seq_capture_step_armed;
+/* Real feedback: "make sure to quatize capture mode to closest step."
+ * Computed once, at the moment of touch (see seq_capture_handle_taps()
+ * below), from how far into the CURRENT step's own window the touch
+ * actually landed -- past the halfway point, the touch is nearer the
+ * step about to START than the one about to end, so it's committed
+ * there instead. Without this, a touch struck slightly early (a real,
+ * common thing -- anticipating the beat) always landed on whichever
+ * step happened to still be in progress, rounding every early hit
+ * down/backward rather than to whichever step it actually meant. */
+static uint8_t s_seq_capture_target_step;
 /* Direct-drive sounding-note state, mirroring seq_end_current_note()'s
  * own s_seq_sounding_pad/note/s_seq_note_sounding shape but kept
  * separate -- capture mode's own note is a live PERFORMANCE, not a
@@ -2416,19 +2647,36 @@ static void seq_capture_mode_exit(void) {
     printf("[op_mode] sequencer capture mode -> off\n");
 }
 
-static void seq_capture_handle_taps(void) {
+static void seq_capture_handle_taps(tiles_midi_clock_state_t clock) {
+    uint8_t lane = s_seq_edit_lane;
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         bool touched = tiles_touch_is_touched(pad);
         bool was_touched = s_seq_capture_prev_pad_touched[pad - 1u];
         if (touched && !was_touched) {
             seq_capture_end_sounding_note();
             uint8_t note = tiles_note_map_get_note(pad);
-            tiles_midi_note_on(s_seq_lane_channel[s_seq_edit_lane], note, OP_SEQ_VELOCITY);
+            tiles_midi_note_on(s_seq_lane_channel[lane], note, OP_SEQ_VELOCITY);
             tiles_haptics_trigger_kick(pad, OP_SEQ_VELOCITY);
             s_seq_capture_sounding_pad = pad;
             s_seq_capture_sounding_note = note;
             s_seq_capture_step_note = note;
             s_seq_capture_step_armed = true;
+            /* Nearest-step quantization -- see s_seq_capture_target_step's
+             * own comment. Whatever s_seq_pending_start[lane] leaves in
+             * s_seq_step_started_at_pulse[lane] pre-start is meaningless
+             * timing-wise, but harmlessly so: seq_capture_advance_clock()
+             * unconditionally discards whatever's pending the moment the
+             * quantized start actually resolves, same as it always did,
+             * so a target computed from garbage here is discarded right
+             * along with it, never actually committed anywhere. */
+            uint8_t length = active_pattern()->length;
+            if (length < 1u) {
+                length = 1u;
+            }
+            uint32_t elapsed_in_step = clock.pulse_count - s_seq_step_started_at_pulse[lane];
+            bool nearest_is_next_step = (elapsed_in_step * 2u) >= OP_SEQ_CLOCKS_PER_STEP;
+            s_seq_capture_target_step =
+                nearest_is_next_step ? (uint8_t)((s_seq_current_step[lane] + 1u) % length) : s_seq_current_step[lane];
         } else if (!touched && was_touched && pad == s_seq_capture_sounding_pad) {
             seq_capture_end_sounding_note();
         }
@@ -2477,13 +2725,25 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
     uint32_t steps_to_advance = elapsed / OP_SEQ_CLOCKS_PER_STEP;
     s_seq_step_started_at_pulse[lane] += steps_to_advance * OP_SEQ_CLOCKS_PER_STEP;
 
+    /* Commits the pending note only into the step it was actually
+     * quantized to (s_seq_capture_target_step, set at touch time -- see
+     * seq_capture_handle_taps()) -- a touch struck late in THIS step
+     * targets the NEXT one instead, and stays pending (armed, untouched
+     * here) until that boundary arrives. The step actually ending right
+     * now still gets explicitly cleared when it ISN'T the pending
+     * note's target, same as this whole pass always has -- capture mode
+     * replaces a pattern's content with exactly what got played this
+     * time, not an overdub, so a step nothing targeted must go back to
+     * unarmed rather than keep stale content from a previous pass. */
     op_seq_pattern_t *pat = active_pattern();
-    pat->step_armed[s_seq_current_step[lane]] = s_seq_capture_step_armed;
-    if (s_seq_capture_step_armed) {
+    if (s_seq_capture_step_armed && s_seq_capture_target_step == s_seq_current_step[lane]) {
+        pat->step_armed[s_seq_current_step[lane]] = true;
         pat->step_note[s_seq_current_step[lane]] = s_seq_capture_step_note;
         pat->step_pitch_override[s_seq_current_step[lane]] = true;
+        s_seq_capture_step_armed = false;
+    } else {
+        pat->step_armed[s_seq_current_step[lane]] = false;
     }
-    s_seq_capture_step_armed = false;
 
     uint8_t length = pat->length;
     if (length < 1u) {
@@ -2502,18 +2762,37 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
  * file's per-step pitch-assignment view already use, so the pad-to-note
  * layout looks and feels identical to playing melodic normally -- the
  * whole point of "turns into the regular chromatic scale" is that
- * capture mode shouldn't feel like a different instrument. */
+ * capture mode shouldn't feel like a different instrument.
+ *
+ * Later real feedback, once this could actually be tried: "it should
+ * still display the pattern playing with the leds under the scale
+ * melodic layout leds that will show like the moving sequencer will
+ * appear and be red on enabeled steps." The moving playhead above was
+ * already there; this adds the one thing it was missing -- an armed
+ * (already-recorded) step, not currently the playhead and not
+ * currently sounding, now shows OP_SEQ_DIM_RED_LEVEL, the exact same
+ * dim red render_sequencer() already uses for "armed at rest" in the
+ * normal step view (not reusing its own probability/ratchet tinting --
+ * capture mode has no access to either while recording, so a plain,
+ * untinted red is the honest answer here). Armed status now takes
+ * priority over a step's own root/natural coloring: knowing "this step
+ * already has something recorded" reads as more useful while actively
+ * recording than that pad's scale role, which still matters for every
+ * OTHER, not-yet-armed pad you might play next. */
 static void render_seq_capture(uint32_t now_ms) {
     float pulse = menu_selected_pulse_level(now_ms);
     op_seq_pattern_t *pat = active_pattern();
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         uint8_t step = (uint8_t)(pad - 1u);
         bool is_current_step = (step == s_seq_current_step[s_seq_edit_lane]) && step < pat->length;
+        bool is_armed = step < pat->length && pat->step_armed[step];
         if (pad == s_seq_capture_sounding_pad) {
             tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f);
         } else if (is_current_step) {
             tiles_lighting_set_standby_pad_rgb(pad, OP_MENU_MELODIC_R * pulse, OP_MENU_MELODIC_G * pulse,
                                                 OP_MENU_MELODIC_B * pulse);
+        } else if (is_armed) {
+            tiles_lighting_set_standby_pad_rgb(pad, OP_SEQ_DIM_RED_LEVEL, 0.0f, 0.0f);
         } else if (tiles_note_map_is_root_pad(pad)) {
             tiles_lighting_set_standby_pad_rgb(pad, OP_MENU_MELODIC_R, OP_MENU_MELODIC_G, OP_MENU_MELODIC_B);
         } else if (tiles_note_map_is_natural_pad(pad)) {
@@ -3214,6 +3493,7 @@ void tiles_op_mode_init(void) {
             }
             pat->probability_enabled = false;
             pat->length = OP_SEQ_NUM_STEPS;
+            s_pattern_slot_saved[lane][alt] = false;
         }
         s_seq_active_alt[lane] = 0u;
         /* Claims from the TOP of the 15 MPE Member Channels downward --
@@ -3248,6 +3528,14 @@ void tiles_op_mode_init(void) {
     tiles_buttons_set_override_active(TILES_DIAMOND_BUTTON_ID, true);
     tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, OP_TRANSPORT_LED_STOPPED_LEVEL);
     s_boot_relight_guard_until_ms = to_ms_since_boot(get_absolute_time()) + OP_BOOT_RELIGHT_GUARD_MS;
+    /* Must run after every pattern slot above has already been reset to
+     * its normal fresh-boot default -- only ever overwrites a slot
+     * flash itself claims to own; see pattern_store_load_all()'s own
+     * comment. A plain read, not a write, so unlike saving/clearing
+     * this needs none of that path's interrupt-disable/watchdog care --
+     * safe and cheap to do unconditionally on every boot, crash-
+     * recovery included. */
+    pattern_store_load_all();
 }
 
 void tiles_op_mode_scan(void) {
@@ -3322,6 +3610,37 @@ void tiles_op_mode_scan(void) {
     tiles_midi_clock_state_t clock = tiles_midi_clock_get_state();
     float beat_flash_level = compute_beat_flash_level(now_ms, clock);
 
+    /* Real feedback: "tap tempo should auto triggere the current
+     * pattern." tiles_midi_clock_register_tap() (midi_clock.c) already
+     * autostarts the shared clock/transport itself on the first 4-tap
+     * establishment ("tap tempo should autostart sequence when 4 taps
+     * detected even if stopped") -- but that's the CLOCK, not any
+     * specific lane; a lane only ever starts via its own explicit "+"
+     * (see handle_transport_and_length() above) or a fresh sequencer-
+     * mode entry (seq_start()). Closes that last gap for the lane
+     * actually being looked at: the same start_edge a real external
+     * Start message would also produce (clock.start_edge, consumed
+     * once per scan same as always) fires this specifically when it's
+     * tap-tempo-sourced (clock.source_is_tap_tempo) -- deliberately
+     * NOT extended to a real external Start too, since that's not what
+     * was asked for and a DAW's own Start already has its own separate
+     * transport meaning elsewhere in this file (handle_diamond_
+     * transport()) that this shouldn't second-guess. Mirrors "+"'s own
+     * fresh-start sequence above exactly (same 4 fields, same order)
+     * rather than inventing a slightly different one. Gated on
+     * sequencer mode even though handle_circle_tap() already only ever
+     * registers a tap while sequencer mode is active -- the tap and
+     * this edge landing can straddle a mode switch in principle, and
+     * this should never fire for whichever mode the player has since
+     * moved to. */
+    if (s_active_mode == OP_MODE_SEQUENCER && clock.start_edge && clock.source_is_tap_tempo &&
+        !s_seq_lane_running[s_seq_edit_lane]) {
+        s_seq_lane_running[s_seq_edit_lane] = true;
+        tiles_midi_clock_set_running(true);
+        s_seq_pending_start[s_seq_edit_lane] = true;
+        s_seq_pending_restart[s_seq_edit_lane] = false;
+    }
+
     /* Real feedback: "ok we have clashing issues on modes, mode selectro
      * shouldnt pause sequencer... no stopping on playing sequences
      * regarless of manu displayed." A pattern already running in the
@@ -3369,7 +3688,7 @@ void tiles_op_mode_scan(void) {
     }
 
     if (s_active_mode == OP_MODE_SEQUENCER && s_pattern_bank_visible) {
-        handle_pattern_bank_taps();
+        handle_pattern_bank_taps(now_ms);
         render_pattern_bank(now_ms);
         return;
     }
@@ -3385,7 +3704,7 @@ void tiles_op_mode_scan(void) {
          * playback path -- see this file's own "Sequencer capture mode"
          * section for why it needs its own advance/render entirely
          * rather than reusing seq_advance_clock()/render_sequencer(). */
-        seq_capture_handle_taps();
+        seq_capture_handle_taps(clock);
         seq_capture_advance_clock(clock);
         render_seq_capture(now_ms);
         return;
@@ -3394,6 +3713,24 @@ void tiles_op_mode_scan(void) {
     if (s_active_mode == OP_MODE_SEQUENCER) {
         seq_handle_step_taps(now_ms);
         render_sequencer(beat_flash_level, clock.running);
+    } else {
+        /* Real feedback: "make trisngle fhash if pattern is playing and
+         * we exit to a different screen than the playing pattern."
+         * render_sequencer() above already shows the moving playhead
+         * directly on the grid, so a background pattern is already
+         * visible there -- this is only needed for every OTHER mode,
+         * where nothing else on the board hints that a pattern is
+         * still audibly running behind whatever's actually displayed.
+         * Hard on/off blink, this file's own established "flash"
+         * language (see the pattern bank's own OP_PATTERN_BANK_FLASH_MS
+         * flashing red/white cells) -- deliberately not the smoother
+         * pulse language menu_selected_pulse_level() uses elsewhere for
+         * "this is the active/selected thing," since this is a
+         * different signal ("something needs your attention
+         * elsewhere"), not a selection. */
+        bool flash_on = ((now_ms / OP_PATTERN_BANK_FLASH_MS) % 2u) == 0u;
+        float level = (any_lane_running() && flash_on) ? 1.0f : 0.0f;
+        tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, level);
     }
     if (s_active_mode == OP_MODE_CHORD) {
         handle_chord_pad_taps();

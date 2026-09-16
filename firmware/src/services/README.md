@@ -5477,5 +5477,129 @@ not its code.
   themselves) -- next real step is testing whether the disconnect
   frequency changes on a different port/cable, independent of anything
   in this firmware.
+- **A batch of real feedback, all in one message, spanning capture mode,
+  haptics arbitration, tap tempo, triangle's LED, and pattern
+  persistence:** "lets re work capture mode into sewquencer witgh the
+  diamond button but it should still display the pattern oplaying
+  withthe leds unver the scale melodic layout leds that will show like
+  the moving sequencer will appear and be red on enabeled steps also
+  make sure to quatize capture mode to closest step. double check we
+  have implemented gflobal scale aproximation in all modes when a
+  scale is selected. to save patterns to memory before shutdown in the
+  pattern selector menu we click shift and the pattern. that saves it,
+  to delete or clear pattern we hold shift and patterrn for 3 seconds
+  also tap tempo should auto triggere the current pattern also make
+  trisngle fhash if pattern is playing and we exit to a different
+  screen than the playing pattern. also in regular melodic mode when
+  pattern is still playing haptics react to melodic not to the
+  patterns in the backgorund. that also goes when switching betweeen
+  enabeled patterns, only the dispalyed one has the haptics overide."
+  Taken one piece at a time:
+  - **Global scale approximation, audited, not changed**: verified
+    directly against the code rather than assumed. `tiles_note_map_
+    get_note()` (melodic/chord live play) and `tiles_note_map_
+    quantize_to_scale()` (frozen/stored pitches -- every sequencer
+    step with `step_pitch_override` set, capture-mode-recorded notes
+    included, once they play back normally) both already correctly
+    resolve against whatever scale is currently selected, live, on
+    every call. Chord mode adapts via `chord_mode_scale_table()`
+    (falls back to Ionian when the global scale isn't a 7-note
+    diatonic one, so its chords/melody always stay musically real)
+    rather than using the raw global scale directly -- a deliberate,
+    already-correct choice, not a gap. Guitar mode and capture mode's
+    OWN live-input scale (forced chromatic while active, by original
+    design: "turns into the regular chromatic scale") are the two
+    genuine, intentional exceptions -- a fretboard and a deliberate
+    "always chromatic while recording" mode aren't supposed to be
+    scale-approximated in the first place. Nothing to fix here.
+  - **Sequencer capture mode, re-enabled and reworked.** Previously
+    disabled (`OP_SEQ_CAPTURE_MODE_ENABLED 0`) after a past crash
+    report, even though the confirmed cause was unrelated (haptics.c's
+    own printf flooding, already fixed) -- flipped back to `1`, no
+    change needed to the entry gesture itself (plain diamond click,
+    already exactly what was asked for). Two real reworks alongside
+    re-enabling it: `render_seq_capture()` now shows an armed
+    (already-recorded) step as `OP_SEQ_DIM_RED_LEVEL` -- the exact dim
+    red `render_sequencer()` already uses for "armed at rest" in the
+    normal step view -- layered UNDER the existing moving-playhead
+    pulse and OVER the melodic root/natural coloring, so a step
+    already holding a note reads clearly at a glance while recording,
+    not just once you leave and check the normal view. And capture
+    mode's own quantization moved from "always the step in progress"
+    to nearest-step: `seq_capture_handle_taps()` now computes, at the
+    instant of touch, how far into the CURRENT step's window the touch
+    landed, and targets the NEXT step instead once past the halfway
+    mark (`s_seq_capture_target_step`) -- an early hit (anticipating
+    the beat, a real and common thing) used to always round backward
+    onto whichever step was about to end; now it rounds to whichever
+    step it actually meant. `seq_capture_advance_clock()`'s own commit
+    logic changed to match: only commits the pending note into the
+    step it was actually quantized to (which might still be one step
+    away), and explicitly clears whatever step IS ending right now if
+    the pending note wasn't meant for it -- preserving capture mode's
+    existing "this pass replaces the whole pattern with what you just
+    played" behavior instead of accidentally leaving stale content
+    behind. Genuinely new to real playing time again as of this
+    change (the original disable was out of caution, not a proven
+    bug) -- worth watching closely on the next hardware pass.
+  - **Haptics: only the displayed lane, not every background one.**
+    Real feedback reverses this file's own prior, explicit tradeoff
+    (`seq_end_current_note()`'s old comment accepted background-lane
+    haptics as "rare, momentary, cosmetic"). `seq_fire_note()`/`seq_
+    end_current_note()` now gate `tiles_haptics_trigger_kick()`/`_stop()`
+    on `seq_lane_haptics_visible()` (sequencer mode active AND this is
+    `s_seq_edit_lane`) -- the actual MIDI note-on/off is completely
+    unaffected, every enabled lane keeps sounding exactly as before,
+    only its physical buzz is suppressed when it isn't the one on
+    screen. Captured once at fire time into a new per-lane `s_seq_
+    sounding_haptics[]`, not re-checked at end time -- the active mode
+    or edit lane can change mid-note, and ending a note must always
+    undo exactly what starting it did, the same reasoning `s_seq_
+    sounding_channel`/`_note` already established for this exact
+    class of bug.
+  - **Tap tempo now auto-starts the pattern you're looking at, not
+    just the clock.** `tiles_midi_clock_register_tap()` already
+    autostarts the shared clock/transport on the first 4-tap
+    establishment (a previous round's real feedback), but that's the
+    CLOCK, not any specific lane -- closed with a new check in `tiles_
+    op_mode_scan()`: a `start_edge` that's specifically tap-tempo-
+    sourced (`clock.source_is_tap_tempo`) now also starts `s_seq_edit_
+    lane` if it wasn't already running, mirroring "+"'s own fresh-
+    start sequence exactly. Deliberately NOT extended to a real
+    external Start message -- only tap tempo was asked for, and a
+    DAW's own Start already has its own separate transport meaning
+    elsewhere in this file.
+  - **Triangle now flashes when a pattern is playing somewhere you
+    can't see it.** `render_sequencer()` already shows the moving
+    playhead directly on the grid, so this only fires for every OTHER
+    mode (melodic/chord/guitar) -- a hard on/off blink (this file's
+    own established "flash" language, reusing `OP_PATTERN_BANK_FLASH_
+    MS`'s timing), on whenever `any_lane_running()` is true, off the
+    instant nothing is.
+  - **Patterns can now be saved to flash and survive a power cycle.**
+    New in the "Pattern bank" (shift+diamond): holding circle down
+    from the moment a cell is first touched turns that touch into a
+    save/delete candidate instead of the bank's normal select gesture
+    -- release before 3 seconds saves that slot, holding past 3
+    seconds clears it (both to/from a new `tiles_pattern_store_t` in
+    the LAST 4096-byte sector of the chip's 4MB flash, loaded back at
+    boot in `tiles_op_mode_init()` for any slot that was ever saved).
+    Real, unavoidable hardware cost worth being explicit about: RP2040/
+    RP2350 flash is executed from directly (XIP), so nothing can read
+    from flash -- any instruction fetch, ISR included -- while it's
+    being erased/programmed; confirmed reading pico-sdk's own flash.c
+    that `flash_range_erase()`/`flash_range_program()` do NOT disable
+    interrupts for you. `pattern_store_write_all()` wraps both in
+    `save_and_disable_interrupts()`/`restore_interrupts()` (correct for
+    this single-core firmware), petting the watchdog immediately
+    before and after (never during -- `watchdog_update()` is ordinary
+    flash-resident code, unsafe to call from inside that same disabled
+    window) rather than trying to avoid the pause: a 4KB erase +
+    program on this board's own W25Q-family chip comfortably finishes
+    well under the watchdog's own timeout, but it IS a genuine, brief
+    (tens of milliseconds) freeze of everything -- MIDI, touch, USB --
+    exactly once, at the exact moment a save/delete is triggered. An
+    inherent property of writing this chip's flash, not something
+    worth engineering around for a deliberate, occasional action.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

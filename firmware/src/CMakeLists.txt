@@ -54,6 +54,7 @@ target_link_libraries(sentia_tiles_firmware
     hardware_clocks
     hardware_adc
     hardware_watchdog
+    hardware_flash
     tinyusb_device
     pico_unique_id
     pico_rand
