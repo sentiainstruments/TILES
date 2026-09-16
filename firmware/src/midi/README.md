@@ -84,4 +84,50 @@ deterministic voice-steal policy) are done — see Status below.
   **Not hardware-verified at all** -- the whole MPE implementation
   (zone-config RPN messages, per-note channel allocation, channel
   stealing) has not been tried against a real MPE-aware DAW/synth yet.
+- **Found investigating real feedback on the ongoing crash
+  investigation: "i found what causes it, its when ableton is
+  playing... i think it has to do with midi clock or tap tempo,
+  something is clashing and causing those crashers only on play."**
+  Traced `services/midi_clock.c`'s own receive loop and
+  `services/op_mode.c`'s sequencer engine (`seq_advance_clock()`,
+  ratchet handling, the tap-tempo generator) end to end looking for an
+  unbounded loop or blocking wait that would only bite once a real
+  clock is actually flowing -- all of it is correctly bounded (guard-
+  counted ratchet/virtual-pulse loops, O(1) step-advance arithmetic,
+  and the tap-tempo generator explicitly disables itself the instant
+  `tiles_midi_clock_external_active()` is true, i.e. exactly while
+  Ableton is playing) -- nothing there hangs.
+  Did find a real, separate bug in this file while looking: every
+  `send1()`/`send2()`/`send3()` call ignored `tud_midi_stream_write()`'s
+  return value. Confirmed reading TinyUSB's own `midi_device.c` that
+  this function only writes as many bytes as currently fit in its
+  64-byte TX FIFO and returns early otherwise -- under any real
+  backpressure (which "Ableton playing" plausibly causes indirectly:
+  once its clock actually starts a pattern, THIS device's own outbound
+  MIDI stops being occasional touch-driven notes and becomes
+  continuous sequencer output, several lanes at once), a message could
+  go out missing its tail bytes -- a Note-On with no velocity --
+  silently corrupting the stream with nothing here ever aware it
+  happened. Fixed by logging every truncated write (`warn_if_
+  truncated()`) instead of retrying or pumping `tud_task()` to force
+  room -- a retry-until-room loop is exactly the failure class this
+  whole session's other fixes (I2C, CDC) have been about closing, not
+  a shape worth reopening here. Explicitly NOT claimed as the crash's
+  root cause -- a dropped byte corrupts output, it doesn't freeze this
+  device by itself -- kept as its own real, independent fix.
+  Current leading hypothesis, extending this session's own earlier,
+  separately-confirmed E15 finding (see `services/README.md`'s own
+  history) rather than a new, unrelated guess: E15 is specifically a
+  Bulk-IN (device-to-host) race across SOF interrupts, and "Ableton
+  playing" is precisely the condition under which this device's own
+  Bulk-IN traffic goes from occasional (touch-driven) to continuous
+  (sequencer output, once real clock actually starts it) -- more
+  sustained Bulk-IN activity gives a rare per-transfer race far more
+  chances per second to actually land. Not proven with the same kind
+  of hard evidence the earlier USB-disconnect kernel-log finding had --
+  the concrete next step is capturing a debug-mode trace (hold
+  diamond+square+circle 8s BEFORE the next Ableton-playing test) from
+  the next actual crash, so the auto-dumped last-known trace character
+  says definitively where it hung rather than continuing to reason
+  about it from code alone.
 - DIN MIDI IN/OUT -- not built yet.

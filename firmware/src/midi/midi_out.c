@@ -2,14 +2,44 @@
 
 #include "tusb.h"
 
+#include <stdio.h>
+
 #define TILES_MIDI_CABLE_NUM 0u
+
+/* Found investigating real feedback ("something is clashing and
+ * causing those crashes only on play" -- Ableton actively playing,
+ * sending clock, presumably meaning this device's own MIDI OUTPUT is
+ * also more continuous than it is at idle): tud_midi_stream_write()
+ * (confirmed reading TinyUSB's own midi_device.c) writes only as many
+ * bytes as CURRENTLY fit in its 64-byte TX FIFO and silently returns
+ * early otherwise -- every call site here ignored that return value,
+ * so under any real backpressure (the host briefly not draining fast
+ * enough, or several messages queued back-to-back in one scan) a
+ * message could go out MISSING ITS TAIL BYTES -- a Note-On with no
+ * velocity, silently corrupting the stream a receiver has to parse,
+ * with nothing here ever aware it happened. Doesn't retry or pump
+ * tud_task() to make room -- that risks turning a dropped message into
+ * a NEW blocking wait if the host genuinely isn't draining, the exact
+ * failure class this whole session's other fixes (I2C, CDC) have been
+ * about closing, not reopening here. Logs instead: makes a real,
+ * previously-silent failure visible without adding any new way to
+ * hang. Confirmed independent of this: not itself a proven cause of
+ * the reported crash/reboot (a dropped byte corrupts output, it
+ * doesn't freeze this device), so left in as its own real, separate
+ * fix rather than a claimed answer to that. */
+static void warn_if_truncated(const char *what, uint32_t sent, uint32_t expected) {
+    if (sent != expected) {
+        printf("[midi_out] %s truncated: wrote %u/%u bytes (host not draining fast enough?)\n", what, (unsigned)sent,
+               (unsigned)expected);
+    }
+}
 
 static void send1(uint8_t status) {
     if (!tud_midi_mounted()) {
         return;
     }
     uint8_t msg[1] = {status};
-    tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg));
+    warn_if_truncated("send1", tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg)), sizeof(msg));
 }
 
 static void send2(uint8_t status, uint8_t data1) {
@@ -17,7 +47,7 @@ static void send2(uint8_t status, uint8_t data1) {
         return;
     }
     uint8_t msg[2] = {status, data1};
-    tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg));
+    warn_if_truncated("send2", tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg)), sizeof(msg));
 }
 
 static void send3(uint8_t status, uint8_t data1, uint8_t data2) {
@@ -25,7 +55,7 @@ static void send3(uint8_t status, uint8_t data1, uint8_t data2) {
         return;
     }
     uint8_t msg[3] = {status, data1, data2};
-    tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg));
+    warn_if_truncated("send3", tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg)), sizeof(msg));
 }
 
 void tiles_midi_note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
