@@ -4158,25 +4158,28 @@ static void handle_circle_tap(uint32_t now_ms) {
         s_circle_press_ms = now_ms;
         /* ARP mode (the original other half of "only active in sequencer
          * and arp mode") has been removed entirely -- see the mode enum's
-         * own comment -- so tap tempo is sequencer-only now. */
-        bool mode_ok = (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode == OP_SEQ_EDIT_NONE);
+         * own comment -- so tap tempo is sequencer-only... plus one
+         * deliberate exception. Real feedback, after an earlier round
+         * mistook this for a bug report: "thats a feature i want in
+         * melodic modes inspired by the sequencer but i only want it
+         * active when captuire mode is active." Cross-capture (melodic/
+         * chord/guitar mode's own "capture into lane 3" feature -- see
+         * this file's own "Cross-mode capture into lane 3" section)
+         * already NEEDS a tempo to even start (cross_capture_enter()'s
+         * own tap-tempo-established/external-clock gate), but once
+         * you're actually in a non-sequencer mode with it running,
+         * there was no way to tap a NEW tempo at all -- shift's tap-
+         * tempo role was sequencer-only, full stop. s_cross_capture_
+         * active is only ever true outside sequencer mode in the first
+         * place (see set_active_mode()'s own defensive exit), so this
+         * doesn't widen sequencer mode's own rule at all -- it just adds
+         * the one specific state real feedback asked for. */
+        bool mode_ok =
+            (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode == OP_SEQ_EDIT_NONE) || s_cross_capture_active;
         bool combo_conflict = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
         s_circle_press_pending_tap = mode_ok && !combo_conflict && !tiles_midi_clock_external_active(now_ms);
-        /* Diagnostic only (real feedback: "the shift diamond combo
-         * triggers an additional functionality for tap tempo on the
-         * shift button ... only if capture is on" -- mode_ok above
-         * already requires s_active_mode == OP_MODE_SEQUENCER, which
-         * the serial log confirms stays false throughout a melodic-mode
-         * capture session, so this candidacy SHOULD be false every time
-         * that's reported. Printing every press so the next test either
-         * catches mode_ok reading true when it shouldn't, or rules this
-         * exact mechanism out entirely so the search moves elsewhere. */
-        if (s_circle_press_pending_tap) {
-            printf("[op_mode] circle press -> tap-tempo candidate (mode=%d capture=%d cross_capture=%d)\n",
-                   (int)s_active_mode, (int)s_seq_capture_mode_active, (int)s_cross_capture_active);
-        }
     }
 
     if (held && s_circle_press_pending_tap &&
@@ -4574,11 +4577,14 @@ void tiles_op_mode_scan(void) {
      * transport()) that this shouldn't second-guess. Mirrors "+"'s own
      * fresh-start sequence above exactly (same 4 fields, same order)
      * rather than inventing a slightly different one. Gated on
-     * sequencer mode even though handle_circle_tap() already only ever
-     * registers a tap while sequencer mode is active -- the tap and
-     * this edge landing can straddle a mode switch in principle, and
-     * this should never fire for whichever mode the player has since
-     * moved to. */
+     * sequencer mode even though handle_circle_tap() only registers a
+     * tap in sequencer mode or while cross-capture is active (see that
+     * function's own mode_ok) -- the tap and this edge landing can
+     * straddle a mode switch in principle, and this should never fire
+     * for whichever mode the player has since moved to; cross-capture's
+     * own lane doesn't need this anyway, since seq_capture_mode_enter()
+     * already marks it running directly on entry, independent of any
+     * tap-tempo establishment edge. */
     if (s_active_mode == OP_MODE_SEQUENCER && clock.start_edge && clock.source_is_tap_tempo &&
         !s_seq_lane_running[s_seq_edit_lane]) {
         s_seq_lane_running[s_seq_edit_lane] = true;

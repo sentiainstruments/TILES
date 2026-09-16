@@ -6520,18 +6520,29 @@ not its code.
     at all, so checking it there risks a coincidental, meaningless
     match) -- this can only ever highlight melody-region/guitar-neck
     pads, matching where the doc comment says so.
-  - **"Shift becomes tap tempo" while capture is on -- NOT reproduced
-    by reading the code, so instrumented instead of guessed at.**
-    `handle_circle_tap()`'s own tap-tempo candidacy already requires
-    `s_active_mode == OP_MODE_SEQUENCER` (`mode_ok`), and the serial
-    log confirms `active_mode` genuinely stays on melodic/chord the
-    whole time cross-capture runs (no `[op_mode] active mode ->`
-    transition between "capture mode -> on" and "-> off") -- on paper
-    this candidacy should be false every time. Rather than changing
-    code with no confirmed mechanism, added a print at the exact point
-    candidacy is granted (`mode`/`capture`/`cross_capture` state
-    included) so the next test either catches `mode_ok` reading true
-    when it shouldn't, or rules this specific function out entirely so
-    the search moves elsewhere. Unresolved.
+  - **"Shift becomes tap tempo" while capture is on -- turned out to be
+    a feature request, not a bug report.** The diagnostic print added
+    to chase this as a bug never had anything to catch: real feedback
+    corrected the misread -- "youre missunderstanding tap tempo, thats
+    a feature i want in melodic modes inspired by the sequencer but i
+    only want it active when captuire mode is active. so reach into
+    sequencer mode and copy that feature into the other modes but only
+    activate it when the capture mode is on." `handle_circle_tap()`'s
+    own `mode_ok` (tap-tempo candidacy) widened from `s_active_mode ==
+    OP_MODE_SEQUENCER` to also allow `s_cross_capture_active` --
+    that flag is only ever true outside sequencer mode in the first
+    place (see `set_active_mode()`'s own defensive exit), so this
+    doesn't touch sequencer mode's own existing rule at all, it just
+    adds the one specific state that was asked for. Cross-capture
+    already REQUIRES a tempo to exist before it can even be entered
+    (`cross_capture_enter()`'s own gate), but until this fix there was
+    no way to tap a NEW one once you were actually in melodic/chord/
+    guitar mode with it running -- shift's tap-tempo role was
+    sequencer-only, full stop. The diagnostic print itself was removed
+    (nothing left to diagnose); the combo-conflict cancellation that
+    already protects every other tap-tempo press from being confused
+    with a combo (diamond/triangle/square joining mid-hold) applies
+    here unchanged, so the shift+diamond gesture that ENTERS cross-
+    capture still can't also register as its own tap.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
