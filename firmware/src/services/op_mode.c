@@ -947,6 +947,75 @@ static op_seq_pattern_t *pattern_for_lane(uint8_t lane) {
     return &s_seq_pattern[lane][s_seq_active_alt[lane]];
 }
 
+/* Real feedback: "if the sequenfcer is reduced to 16 steps then auto
+ * align the layout of the steps to the left meaning a 4x4 grid[,]
+ * anything else still ads or reduces steps in the curent full layout.
+ * thats a signle snap layout change." A special case ONLY at exactly
+ * 16 -- every other length keeps the plain linear pad==step+1 mapping,
+ * using however many of the 6 columns per row that length happens to
+ * fill (a partial last row when it doesn't divide evenly by 6, exactly
+ * as it always has). At 16 specifically, the plain mapping leaves row
+ * 3 two-thirds full and row 4 entirely dark -- an awkward shape for a
+ * genuinely common step count real hardware sequencers usually give a
+ * clean square-ish grid instead. These two functions are the ONLY
+ * place that decides this -- every touch-handling/rendering site that
+ * needs to go from a step to the pad that shows it, or a touched pad
+ * to the step it represents, goes through one of them instead of
+ * computing pad<->step directly, so the special case can never drift
+ * out of sync between what lights up and what a touch actually arms.
+ * Take the pattern explicitly rather than reading active_pattern()
+ * internally -- seq_fire_note() below needs pattern_for_lane(lane) for
+ * whichever lane is actually firing (any of the 4, not necessarily
+ * s_seq_edit_lane), and that lane's own length is what decides ITS OWN
+ * layout; every other caller in this file only ever cares about the
+ * viewed lane and just passes active_pattern() straight through. */
+static bool seq_uses_4x4_layout(const op_seq_pattern_t *pat) {
+    return pat->length == 16u;
+}
+
+/* Which pad (1..24) renders/arms `step` right now, for `pat`'s own
+ * layout. */
+static uint8_t seq_pad_for_step(const op_seq_pattern_t *pat, uint8_t step) {
+    /* step < 16u guard matters: a 4x4 layout only exists because length
+     * == 16, so step should never legitimately reach 16-23 while this
+     * is true, but a generic "walk every step 0..23" loop (edit_exit()'s
+     * own touch re-sync, for one) does so anyway, defensively, for
+     * steps that don't actually matter right now. Without this guard,
+     * row/col above would compute row 5, which board_pad_for_row_col()
+     * has no bounds checking against at all -- a real out-of-range pad
+     * number (25+) silently handed to a caller that trusts 1..24. */
+    if (seq_uses_4x4_layout(pat) && step < 16u) {
+        uint8_t row = (uint8_t)(step / 4u);
+        uint8_t col = (uint8_t)(step % 4u);
+        return board_pad_for_row_col((uint8_t)(row + 1u), (uint8_t)(col + 1u));
+    }
+    return (uint8_t)(step + 1u);
+}
+
+/* Which step `pad` represents right now, if any, for `pat`'s own
+ * layout -- false (out_step untouched) for a pad that isn't part of
+ * the grid at all, which can only happen in the 4x4 layout: the
+ * rightmost 2 columns of every row, deliberately left dark rather than
+ * mapped to steps 16-23 that wouldn't exist in a genuinely 16-long
+ * pattern anyway. Every pad is always part of the grid otherwise, even
+ * ones beyond the active length -- those still resolve to a real step
+ * index, just one render_sequencer() shows as dark/"out of the loop"
+ * same as always. */
+static bool seq_step_for_pad(const op_seq_pattern_t *pat, uint8_t pad, uint8_t *out_step) {
+    if (seq_uses_4x4_layout(pat)) {
+        uint8_t idx = (uint8_t)(pad - 1u);
+        uint8_t row = (uint8_t)(idx / 6u);
+        uint8_t col = (uint8_t)(idx % 6u);
+        if (col >= 4u) {
+            return false;
+        }
+        *out_step = (uint8_t)(row * 4u + col);
+        return true;
+    }
+    *out_step = (uint8_t)(pad - 1u);
+    return true;
+}
+
 static void edit_enter(uint8_t step, uint32_t started_ms); /* defined below, used by seq_handle_step_taps()'s own hold detection */
 static void edit_enter_ratchet(uint8_t step); /* defined below, used by seq_handle_step_taps()'s own circle+touch detection */
 
@@ -989,7 +1058,18 @@ static void seq_end_current_note(uint8_t lane) {
 static void seq_fire_note(uint8_t lane, uint8_t step) {
     seq_end_current_note(lane);
     op_seq_pattern_t *pat = pattern_for_lane(lane);
-    uint8_t pad = (uint8_t)(step + 1u);
+    /* seq_pad_for_step(pat, ...), this lane's OWN pattern -- not
+     * active_pattern()/the viewed lane's. Matters for two things below:
+     * the live note-resolve fallback (so an un-overridden step's default
+     * pitch matches wherever it visually sits in THIS lane's own 16-step
+     * 4x4 layout, if that's what this lane happens to be using, exactly
+     * the same "arm a fresh step, get the pitch of the pad you touched"
+     * rule seq_handle_step_taps() already follows) and the haptic-kick
+     * pad below -- harmless either way for a background lane (seq_lane_
+     * haptics_visible() only ever returns true for s_seq_edit_lane, so
+     * this exact pad number is never actually felt for any other one),
+     * but correct regardless of which lane this happens to be. */
+    uint8_t pad = seq_pad_for_step(pat, step);
     /* Real feedback: "not universaly in a way that alters the underlying
      * pattern but it alters the real time playing pattern. so no
      * rewriting lyust aproximating to the locked scale selected." A
@@ -1110,9 +1190,12 @@ static void seq_start(void) {
         s_seq_pending_restart[s_seq_edit_lane] = true; /* fresh entry always starts from step 0 */
     }
     s_seq_edit_mode = OP_SEQ_EDIT_NONE;
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        s_seq_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
-        s_seq_step_touch_started_ms[i] = 0u;
+    /* seq_pad_for_step(), not a bare i+1u -- see edit_exit()'s own
+     * comment on why these two arrays are step-indexed. */
+    op_seq_pattern_t *layout_pat = active_pattern();
+    for (uint8_t step = 0; step < OP_SEQ_NUM_STEPS; step++) {
+        s_seq_prev_pad_touched[step] = tiles_touch_is_touched(seq_pad_for_step(layout_pat, step));
+        s_seq_step_touch_started_ms[step] = 0u;
     }
 }
 
@@ -1128,7 +1211,16 @@ static void seq_start(void) {
 static void seq_handle_step_taps(uint32_t now_ms) {
     op_seq_pattern_t *pat = active_pattern();
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-        uint8_t step = (uint8_t)(pad - 1u);
+        uint8_t step;
+        /* Real feedback: "if the sequenfcer is reduced to 16 steps then
+         * auto align the layout... 4x4 grid" -- see seq_step_for_pad()'s
+         * own comment. A pad outside the active grid in that layout
+         * (the rightmost 2 columns of every row) simply isn't part of
+         * the step grid at all right now, same as it visually shows
+         * dark -- skipped here rather than tracked/armed. */
+        if (!seq_step_for_pad(pat, pad, &step)) {
+            continue;
+        }
         bool touched = tiles_touch_is_touched(pad);
         bool was_touched = s_seq_prev_pad_touched[step];
         if (touched && !was_touched) {
@@ -1324,7 +1416,16 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             uint8_t pad = board_pad_for_row_col(row, col);
-            uint8_t step = (uint8_t)(pad - 1u);
+            uint8_t step;
+            /* Real feedback: "if the sequenfcer is reduced to 16 steps
+             * then auto align the layout... 4x4 grid" -- see seq_step_
+             * for_pad()'s own comment. The rightmost 2 columns of every
+             * row simply aren't part of the grid at all in that layout,
+             * dark same as a step beyond the active length always was. */
+            if (!seq_step_for_pad(pat, pad, &step)) {
+                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
+                continue;
+            }
             bool is_current = (step == s_seq_current_step[s_seq_edit_lane]);
             if (length_flashing) {
                 /* See OP_SEQ_LENGTH_FLASH_DURATION_MS's own comment --
@@ -1453,10 +1554,16 @@ static void edit_exit(void) {
     /* Re-syncs seq_handle_step_taps()'s own touch tracking so a pad
      * that's still touched the instant control hands back doesn't misread
      * as a fresh arm-toggle -- same pattern this file already uses
-     * whenever a sub-view that owned the grid closes. */
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        s_seq_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
-        s_seq_step_touch_started_ms[i] = 0u;
+     * whenever a sub-view that owned the grid closes.
+     * s_seq_prev_pad_touched[]/s_seq_step_touch_started_ms[] are indexed
+     * by STEP, not raw pad number (see seq_handle_step_taps()'s own use)
+     * -- seq_pad_for_step(), not a bare i+1u, so this stays correct in
+     * the 16-step 4x4 layout too, where they're no longer the same
+     * value. */
+    op_seq_pattern_t *layout_pat = active_pattern();
+    for (uint8_t step = 0; step < OP_SEQ_NUM_STEPS; step++) {
+        s_seq_prev_pad_touched[step] = tiles_touch_is_touched(seq_pad_for_step(layout_pat, step));
+        s_seq_step_touch_started_ms[step] = 0u;
     }
 }
 
@@ -1509,7 +1616,11 @@ static uint8_t ratchet_count_from_depth(uint16_t depth) {
  * but unlike pitch, there's no second pad to also reach for, so it never
  * has pitch's original "two fingers, one of them pinned down" problem. */
 static void handle_edit_mode(uint32_t now_ms) {
-    uint8_t edit_pad = (uint8_t)(s_seq_edit_step + 1u);
+    /* seq_pad_for_step(), not a raw +1u -- see that function's own
+     * comment on the 16-step 4x4 layout; must resolve to the SAME
+     * physical pad the step actually renders/armed at right now, or
+     * touch release detection below would watch the wrong sensor. */
+    uint8_t edit_pad = seq_pad_for_step(active_pattern(), s_seq_edit_step);
     bool edit_pad_touched = tiles_touch_is_touched(edit_pad);
 
     if (s_seq_edit_mode == OP_SEQ_EDIT_PITCH) {
@@ -1607,8 +1718,9 @@ static void render_transport_toggle_leds(bool transport_running) {
 static void render_pitch_edit(uint32_t now_ms, bool transport_running) {
     float pulse = menu_selected_pulse_level(now_ms);
     op_seq_pattern_t *pat = active_pattern();
-    uint8_t current_note = pat->step_pitch_override[s_seq_edit_step] ? pat->step_note[s_seq_edit_step]
-                                                                      : tiles_note_map_get_note((uint8_t)(s_seq_edit_step + 1u));
+    uint8_t current_note = pat->step_pitch_override[s_seq_edit_step]
+                                ? pat->step_note[s_seq_edit_step]
+                                : tiles_note_map_get_note(seq_pad_for_step(pat, s_seq_edit_step));
 
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         if (tiles_note_map_get_note(pad) == current_note) {
@@ -2445,10 +2557,12 @@ static void pattern_bank_exit(void) {
      * while the bank owned the grid) and misread it as a fresh arm-toggle
      * touch landing on the NEWLY selected pattern. Exact same fix
      * edit_exit() already applies for the identical reason -- see that
-     * function's own comment. */
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        s_seq_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
-        s_seq_step_touch_started_ms[i] = 0u;
+     * function's own comment -- including seq_pad_for_step(), not a
+     * bare i+1u, for the same 16-step 4x4-layout reason. */
+    op_seq_pattern_t *layout_pat = active_pattern();
+    for (uint8_t step = 0; step < OP_SEQ_NUM_STEPS; step++) {
+        s_seq_prev_pad_touched[step] = tiles_touch_is_touched(seq_pad_for_step(layout_pat, step));
+        s_seq_step_touch_started_ms[step] = 0u;
     }
     /* Deliberately does NOT touch standby_active, unlike scale_menu_
      * exit() -- sequencer mode already keeps buttons/lighting standby-
@@ -2911,9 +3025,18 @@ static void render_seq_capture(uint32_t now_ms) {
     float pulse = menu_selected_pulse_level(now_ms);
     op_seq_pattern_t *pat = active_pattern();
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-        uint8_t step = (uint8_t)(pad - 1u);
-        bool is_current_step = (step == s_seq_current_step[s_seq_edit_lane]) && step < pat->length;
-        bool is_armed = step < pat->length && pat->step_armed[step];
+        /* Real feedback: "if the sequenfcer is reduced to 16 steps then
+         * auto align the layout... 4x4 grid" -- see seq_step_for_pad()'s
+         * own comment. Unlike render_sequencer()/seq_handle_step_taps(),
+         * a pad outside the active grid in that layout still needs its
+         * normal note coloring below (capture mode plays a note from
+         * ANY of the 24 pads regardless of the step-grid layout) -- only
+         * the step-cursor/armed highlighting is gated on has_step, not
+         * skipped entirely. */
+        uint8_t step = 0u;
+        bool has_step = seq_step_for_pad(pat, pad, &step);
+        bool is_current_step = has_step && (step == s_seq_current_step[s_seq_edit_lane]) && step < pat->length;
+        bool is_armed = has_step && step < pat->length && pat->step_armed[step];
         if (pad == s_seq_capture_sounding_pad) {
             tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f);
         } else if (is_current_step) {

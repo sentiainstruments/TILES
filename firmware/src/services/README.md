@@ -6137,5 +6137,36 @@ not its code.
     way to actually change an already-frozen step's pitch; capture
     mode's own commit is unaffected -- playing a step live is
     intentionally always "what you just played," not frozen history.
+- **A 16-step pattern now snaps its step grid to a clean 4x4 in the
+  top-left instead of spilling awkwardly across 2.67 rows of 6.** Real
+  feedback: "if the sequenfcer is reduced to 16 steps then auto align
+  the layout of the steps to the left meaning a 4x4 grid[,] anything
+  else still ads or reduces steps in the curent full layout. thats a
+  signle snap layout change." Exactly one special case, at length ==
+  16 -- every other length keeps the existing plain linear pad==step+1
+  mapping, filling however many of the 6 columns per row it happens to
+  (a partial last row when it doesn't divide evenly, same as always).
+  Three new small helpers (`seq_uses_4x4_layout()`/`seq_pad_for_step()`/
+  `seq_step_for_pad()`, each taking the pattern explicitly rather than
+  assuming the viewed lane -- `seq_fire_note()` needs a background
+  lane's OWN length, not necessarily s_seq_edit_lane's) are now the only
+  place that decides step<->pad, replacing every direct `pad-1u`/
+  `step+1u` computation across rendering (`render_sequencer()`,
+  `render_seq_capture()`, `render_pitch_edit()`), touch handling
+  (`seq_handle_step_taps()`, `handle_edit_mode()`'s edit_pad), the
+  playback engine's own live-note-fallback and haptic-kick pad
+  (`seq_fire_note()`), and the three "resync touch tracking so a
+  still-touched pad doesn't misread as fresh" loops (`edit_exit()`,
+  `seq_start()`, `pattern_bank_exit()`) that used to assume pad number
+  and array index were always the same value. Caught auditing this
+  before it ever shipped: `seq_pad_for_step()` guards `step < 16u`
+  explicitly -- a couple of those resync loops walk all 24 steps
+  unconditionally regardless of length, and without the guard, a step
+  in the 16-23 range would compute a nonexistent row 5 with no bounds
+  checking at all, handing an invalid pad number (25+) to a caller that
+  trusts 1..24. Since `render_sequencer()` reads the pattern's length
+  fresh every single frame, the layout snaps immediately the instant
+  length crosses to or from 16 -- no separate "on length change"
+  trigger needed at all.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
