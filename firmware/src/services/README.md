@@ -6185,5 +6185,57 @@ not its code.
   on the fix most directly backed by reading the actual mechanism start
   to finish rather than a bounded-but-still-hanging guess. Worth
   treating as genuinely promising, not yet as closed.
+- **Sequencer steps can hold more than one note now -- capped at 2,
+  not because 2 is the musically right number, but because 2 is the
+  actual flash-capacity ceiling.** Real feedback: "sequencer real time
+  and note select should allow for multiple notes per step so if i
+  play a cluster of notes we should be able to save those in that
+  single step." `op_seq_pattern_t`'s `step_note[]` (one note) became
+  `step_notes[][2]` + `step_note_count[]`, touching every layer: the
+  playback engine (`seq_fire_note()`/`seq_end_current_note()` now loop
+  over a lane's whole cluster, one Note-On/Off per note but still one
+  haptic kick per STEP, not per note -- a chord is one physical
+  strike), capture mode (a NEW touch now sounds ALONGSIDE whatever's
+  already held instead of cutting it off first -- `seq_capture_end_
+  sounding_note()` split into `_end_one_sounding_note(pad)`/`_end_all_
+  sounding_notes()` so lifting one finger only ends that one note),
+  and the manual per-step pitch picker. That last one needed its own
+  small interaction rewrite: a plain single-tap-commits-and-closes
+  gesture can't build a multi-note chord, but real feedback had
+  ALREADY explicitly rejected a hold-to-close gesture ("it should be a
+  toggle... not a momentary thing") for the original single-note
+  version. Resolved by repurposing a gesture this view's own header
+  comment already anticipated as a harmless no-op -- tapping the
+  step's OWN pad again -- into the explicit close a cluster genuinely
+  needs; tapping any OTHER pad now adds it to (or, if already present,
+  removes it from) a growing cluster instead, closing nothing.
+  The flash-capacity story is the real story here, and worth being
+  honest about: `tiles_pattern_store_t` (all 24 patterns across 4
+  lanes x 6 alternatives) has to fit in exactly one 4096-byte flash
+  sector -- the erase+program sequence runs with interrupts disabled
+  and nothing able to pet the watchdog partway through (flash-resident
+  code, including `watchdog_update()` itself, can't execute while
+  flash is mid-erase/program), so a bigger region risks that whole
+  window exceeding the watchdog timeout on a slow chip, not something
+  to gamble on mid-way through a session about hunting exactly this
+  class of timing bug. Packed the store's own `slot_saved` bool[4][6]
+  down to a bitmask specifically to claw back header room, and even
+  then, 2 notes per step is the actual largest value that fits -- 3
+  overflows by 572 bytes, confirmed empirically. A `_Static_assert`
+  right after the store struct now makes any future overflow a hard
+  compile error instead of the compiler warning that was the only
+  thing catching THIS one while building the feature.
+  `TILES_PATTERN_STORE_VERSION` bumped to 2 for the layout change --
+  existing saved patterns are lost across this specific update, not
+  corrupted, same safe fallback a first-ever boot already gets.
+- **Real feedback: "for concistency i wanna swap in sequencer mode the
+  diamond with shift to capture and the diamond alone to pattern
+  selectror."** Shift+diamond now means capture, plain diamond means
+  the pattern bank -- the reverse of before. Motivation stated
+  directly: consistency with a NEW cross-mode "capture into lane 3"
+  feature, requested in this same testing round and not yet built as
+  of this entry, which will also use shift+diamond -- one gesture, one
+  meaning, everywhere, rather than capture meaning shift+diamond
+  outside sequencer mode but plain diamond inside it.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

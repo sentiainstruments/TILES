@@ -455,10 +455,40 @@ static uint32_t s_beat_flash_start_ms;
  * 4 leaves each sub-hit at least 1 full clock pulse apart even at the max. */
 #define OP_SEQ_MAX_RATCHET 4u
 
+/* Real feedback: "sequencer real time and note select should allow for
+ * multiple notes per step so if i play a cluster of notes we should be
+ * able to save those in that single step." 2, not something more
+ * generous like a full hand-cluster or chord mode's own 4 voices, is a
+ * hard flash-capacity ceiling, not a musical judgment call: the whole
+ * pattern store (tiles_pattern_store_t -- all 24 patterns across 4
+ * lanes x 6 alternatives) has to fit in exactly one 4096-byte flash
+ * sector (see TILES_PATTERN_FLASH_OFFSET's own comment for why it's
+ * one sector specifically -- the erase+program sequence runs with
+ * interrupts disabled and nothing able to pet the watchdog partway
+ * through, and a bigger region risks that whole window exceeding the
+ * watchdog timeout on a slow flash chip). Even after packing this
+ * store's own slot_saved bool[4][6] down to a bitmask specifically to
+ * claw back header room (see tiles_pattern_store_t's own comment), 2
+ * is the actual largest value that fits -- 3 overflows by 572 bytes,
+ * confirmed empirically, not estimated. The _Static_assert right after
+ * that struct's definition below exists specifically so this can never
+ * silently regress if either constant ever changes again.
+ * step_note_count[i] == 0 means "nothing recorded" even if step_armed[i]
+ * is true (an armed-but-empty step, reachable via the plain tap-to-arm
+ * path below, which arms first and only fills in a note on first pitch
+ * assignment) -- seq_fire_note() below treats that case as silent,
+ * matching how an unarmed step already behaves, rather than a special
+ * case of its own. */
+#define OP_SEQ_MAX_NOTES_PER_STEP 2u
+
 typedef struct {
     bool step_armed[OP_SEQ_NUM_STEPS];
     bool step_pitch_override[OP_SEQ_NUM_STEPS];
-    uint8_t step_note[OP_SEQ_NUM_STEPS];             /* only meaningful if step_pitch_override[i] */
+    /* step_notes[i][0..step_note_count[i]-1] are the notes this step
+     * plays, only meaningful if step_pitch_override[i]; see
+     * OP_SEQ_MAX_NOTES_PER_STEP's own comment. */
+    uint8_t step_notes[OP_SEQ_NUM_STEPS][OP_SEQ_MAX_NOTES_PER_STEP];
+    uint8_t step_note_count[OP_SEQ_NUM_STEPS];
     uint8_t step_probability_percent[OP_SEQ_NUM_STEPS]; /* 0-100, default 100 -- only applied if probability_enabled */
     uint8_t step_ratchet_count[OP_SEQ_NUM_STEPS];    /* 1..OP_SEQ_MAX_RATCHET, default 1 (no ratchet), always applied */
     /* Real feedback: "yes per step probablility but we should be able to
@@ -557,7 +587,10 @@ static uint8_t s_seq_current_step[OP_SEQ_NUM_LANES]; /* 0..23 */
 static bool s_seq_note_sounding[OP_SEQ_NUM_LANES];
 static uint8_t s_seq_sounding_pad[OP_SEQ_NUM_LANES]; /* 1..24, valid iff s_seq_note_sounding[lane] */
 static uint8_t s_seq_sounding_channel[OP_SEQ_NUM_LANES];
-static uint8_t s_seq_sounding_note[OP_SEQ_NUM_LANES];
+/* This step's whole fired cluster -- see OP_SEQ_MAX_NOTES_PER_STEP's
+ * own comment. Valid entries are [0..s_seq_sounding_note_count[lane]-1]. */
+static uint8_t s_seq_sounding_notes[OP_SEQ_NUM_LANES][OP_SEQ_MAX_NOTES_PER_STEP];
+static uint8_t s_seq_sounding_note_count[OP_SEQ_NUM_LANES];
 /* Real feedback: "in regular melodic mode when pattern is still
  * playing haptics react to melodic not to the patterns in the
  * background... only the displayed one has the haptics overide." A
@@ -1038,16 +1071,23 @@ static void seq_end_current_note(uint8_t lane) {
     if (!s_seq_note_sounding[lane]) {
         return;
     }
-    tiles_midi_note_off(s_seq_sounding_channel[lane], s_seq_sounding_note[lane]);
+    /* Every note this step's cluster fired gets its own Note-Off --
+     * see s_seq_sounding_notes[]'s own declaration comment. */
+    for (uint8_t i = 0; i < s_seq_sounding_note_count[lane]; i++) {
+        tiles_midi_note_off(s_seq_sounding_channel[lane], s_seq_sounding_notes[lane][i]);
+    }
     /* Only undoes the haptic if this note actually triggered one --
      * see s_seq_sounding_haptics' own comment on why that's the fact
      * captured at fire time, not a live re-check. The MIDI note-off
      * just above always fires regardless -- background lanes keep
-     * sounding normally, only their HAPTIC feedback is suppressed. */
+     * sounding normally, only their HAPTIC feedback is suppressed. One
+     * kick/stop per STEP, not per note in its cluster -- a chord is
+     * still one physical strike. */
     if (s_seq_sounding_haptics[lane]) {
         tiles_haptics_stop(s_seq_sounding_pad[lane]);
     }
     s_seq_note_sounding[lane] = false;
+    s_seq_sounding_note_count[lane] = 0u;
 }
 
 /* Fires ONE note for `step` on `lane` -- shared by seq_enter_step() (the
@@ -1083,14 +1123,37 @@ static void seq_fire_note(uint8_t lane, uint8_t step) {
      * (tiles_note_map_get_note()) needs no such treatment -- it already
      * resolves live against the current scale on every call, never frozen
      * in the first place. */
-    uint8_t note = pat->step_pitch_override[step] ? tiles_note_map_quantize_to_scale(pat->step_note[step])
-                                                    : tiles_note_map_get_note(pad);
     uint8_t channel = s_seq_lane_channel[lane];
-    tiles_midi_note_on(channel, note, OP_SEQ_VELOCITY);
-    /* Only this lane's own haptic feedback is gated -- the MIDI note
-     * above always fires regardless, so every enabled lane keeps
+    /* Real feedback: "sequencer real time and note select should allow
+     * for multiple notes per step." Every note in this step's cluster
+     * fires together -- an unarmed/not-yet-overridden step still falls
+     * back to a single live-resolved note from its own pad, same as
+     * before (there's no "cluster" to speak of until one's actually
+     * been recorded). count capped defensively against a corrupt/
+     * future-format value rather than trusting stored flash data blindly
+     * for a loop bound. */
+    uint8_t count;
+    if (pat->step_pitch_override[step]) {
+        count = pat->step_note_count[step];
+        if (count > OP_SEQ_MAX_NOTES_PER_STEP) {
+            count = OP_SEQ_MAX_NOTES_PER_STEP;
+        }
+        for (uint8_t i = 0; i < count; i++) {
+            uint8_t note = tiles_note_map_quantize_to_scale(pat->step_notes[step][i]);
+            tiles_midi_note_on(channel, note, OP_SEQ_VELOCITY);
+            s_seq_sounding_notes[lane][i] = note;
+        }
+    } else {
+        uint8_t note = tiles_note_map_get_note(pad);
+        tiles_midi_note_on(channel, note, OP_SEQ_VELOCITY);
+        s_seq_sounding_notes[lane][0] = note;
+        count = 1u;
+    }
+    /* Only this lane's own haptic feedback is gated -- the MIDI notes
+     * above always fire regardless, so every enabled lane keeps
      * sounding exactly as before. See s_seq_sounding_haptics' own
-     * comment. */
+     * comment. One kick, not one per note in the cluster -- a chord is
+     * still one physical strike. */
     s_seq_sounding_haptics[lane] = seq_lane_haptics_visible(lane);
     if (s_seq_sounding_haptics[lane]) {
         tiles_haptics_trigger_kick(pad, OP_SEQ_VELOCITY);
@@ -1098,7 +1161,7 @@ static void seq_fire_note(uint8_t lane, uint8_t step) {
     s_seq_note_sounding[lane] = true;
     s_seq_sounding_pad[lane] = pad;
     s_seq_sounding_channel[lane] = channel;
-    s_seq_sounding_note[lane] = note;
+    s_seq_sounding_note_count[lane] = count;
 }
 
 /* Real feedback: "yes per step probablility but we should be able to
@@ -1288,7 +1351,14 @@ static void seq_handle_step_taps(uint32_t now_ms) {
                      * later re-freezes it fresh at THAT moment's scale,
                      * which is correct: that's a deliberate new edit,
                      * not a passive drift. */
-                    pat->step_note[step] = tiles_note_map_get_note(pad);
+                    /* Single note -- a plain tap-to-arm is a quick
+                     * toggle, not the "hold a cluster" gesture that
+                     * actually builds a multi-note chord (see
+                     * handle_edit_mode()'s own pitch-edit rewrite and
+                     * seq_capture_handle_taps() for the two gestures
+                     * that do). */
+                    pat->step_notes[step][0] = tiles_note_map_get_note(pad);
+                    pat->step_note_count[step] = 1u;
                     pat->step_pitch_override[step] = true;
                 }
             }
@@ -1657,11 +1727,57 @@ static void handle_edit_mode(uint32_t now_ms) {
             bool was_touched = s_pitch_edit_prev_pad_touched[pad - 1u];
             if (touched && !was_touched) {
                 op_seq_pattern_t *pat = active_pattern();
+                if (pad == edit_pad) {
+                    /* Real feedback: "sequencer real time and note
+                     * select should allow for multiple notes per step."
+                     * Tapping any OTHER pad first (below) now ADDS to --
+                     * or, if already present, removes from -- a growing
+                     * cluster instead of committing and closing
+                     * immediately the way a single-note pick used to;
+                     * tapping THIS step's own pad is what actually
+                     * closes now. Repurposes exactly the gesture this
+                     * function's own header comment already anticipated
+                     * as a harmless no-op ("tapping your own step again
+                     * re-commits it to its own current note") into the
+                     * explicit close a multi-note cluster genuinely
+                     * needs -- a hold-to-close gesture was already
+                     * explicitly rejected: "it should be a toggle to set
+                     * pitch... not a momentary thing." A step nothing
+                     * was ever added to still needs SOME note on close,
+                     * so this falls back to its own live-resolved note,
+                     * same as an unarmed step already would. */
+                    if (pat->step_note_count[s_seq_edit_step] == 0u) {
+                        pat->step_notes[s_seq_edit_step][0] = tiles_note_map_get_note(edit_pad);
+                        pat->step_note_count[s_seq_edit_step] = 1u;
+                    }
+                    pat->step_pitch_override[s_seq_edit_step] = true;
+                    tiles_haptics_trigger_touch_pulse(pad);
+                    edit_exit();
+                    return; /* grid ownership just changed under this loop -- stop iterating it */
+                }
+                uint8_t note = tiles_note_map_get_note(pad);
+                uint8_t count = pat->step_note_count[s_seq_edit_step];
+                bool removed = false;
+                for (uint8_t i = 0; i < count; i++) {
+                    if (pat->step_notes[s_seq_edit_step][i] == note) {
+                        for (uint8_t j = i; (uint8_t)(j + 1u) < count; j++) {
+                            pat->step_notes[s_seq_edit_step][j] = pat->step_notes[s_seq_edit_step][j + 1u];
+                        }
+                        pat->step_note_count[s_seq_edit_step] = (uint8_t)(count - 1u);
+                        removed = true;
+                        break;
+                    }
+                }
+                if (!removed && count < OP_SEQ_MAX_NOTES_PER_STEP) {
+                    pat->step_notes[s_seq_edit_step][count] = note;
+                    pat->step_note_count[s_seq_edit_step] = (uint8_t)(count + 1u);
+                }
                 pat->step_pitch_override[s_seq_edit_step] = true;
-                pat->step_note[s_seq_edit_step] = tiles_note_map_get_note(pad);
                 tiles_haptics_trigger_touch_pulse(pad);
-                edit_exit();
-                return; /* grid ownership just changed under this loop -- stop iterating it */
+                /* Stays open -- see the edit_pad branch above for what
+                 * actually closes this view now. */
+                s_pitch_edit_prev_pad_touched[pad - 1u] = touched;
+                return;
             }
             s_pitch_edit_prev_pad_touched[pad - 1u] = touched;
         }
@@ -1718,12 +1834,28 @@ static void render_transport_toggle_leds(bool transport_running) {
 static void render_pitch_edit(uint32_t now_ms, bool transport_running) {
     float pulse = menu_selected_pulse_level(now_ms);
     op_seq_pattern_t *pat = active_pattern();
-    uint8_t current_note = pat->step_pitch_override[s_seq_edit_step]
-                                ? pat->step_note[s_seq_edit_step]
-                                : tiles_note_map_get_note(seq_pad_for_step(pat, s_seq_edit_step));
+    /* Real feedback: "sequencer real time and note select should allow
+     * for multiple notes per step" -- highlights every pad in the
+     * CURRENT cluster now, not just one. An un-overridden step (nothing
+     * added to it yet at all) still previews its own live-resolved
+     * fallback note, same as before. */
+    uint8_t cluster_count = pat->step_pitch_override[s_seq_edit_step] ? pat->step_note_count[s_seq_edit_step] : 1u;
+    uint8_t fallback_note = tiles_note_map_get_note(seq_pad_for_step(pat, s_seq_edit_step));
 
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-        if (tiles_note_map_get_note(pad) == current_note) {
+        uint8_t note = tiles_note_map_get_note(pad);
+        bool in_cluster = false;
+        if (pat->step_pitch_override[s_seq_edit_step]) {
+            for (uint8_t i = 0; i < cluster_count; i++) {
+                if (pat->step_notes[s_seq_edit_step][i] == note) {
+                    in_cluster = true;
+                    break;
+                }
+            }
+        } else {
+            in_cluster = (note == fallback_note);
+        }
+        if (in_cluster) {
             tiles_lighting_set_standby_pad_rgb(pad, pulse, pulse, pulse);
         } else if (tiles_note_map_is_root_pad(pad)) {
             tiles_lighting_set_standby_pad_rgb(pad, OP_MENU_MELODIC_R * OP_SCALE_AVAILABLE_LEVEL,
@@ -2116,15 +2248,63 @@ static void scale_menu_exit(void) {
  * something worth working around for a deliberate, occasional action
  * like this one. */
 #define TILES_PATTERN_STORE_MAGIC 0x454c4954u /* "TILE" -- matches services/debug_mode.c's own crash-magic convention */
-#define TILES_PATTERN_STORE_VERSION 1u
+/* Bumped for the multi-note-per-step change (op_seq_pattern_t's
+ * step_note[]->step_notes[][]/step_note_count[] -- see that struct's
+ * own comment) -- a real layout change, not just new fields appended,
+ * so version 1 flash data must never be reinterpreted against it.
+ * pattern_store_load_all()'s own version check already treats any
+ * mismatch as "never saved before on this board," the same safe
+ * fallback a first-ever boot gets -- existing saved patterns are lost
+ * across this specific update, not corrupted. */
+#define TILES_PATTERN_STORE_VERSION 2u
 #define TILES_PATTERN_FLASH_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
 
 typedef struct {
     uint32_t magic;
     uint32_t version;
-    bool slot_saved[OP_SEQ_NUM_LANES][OP_SEQ_ALTS_PER_LANE];
+    /* One bit per [lane][alt] slot (24 of the 32 bits used) -- packed
+     * rather than a plain bool[4][6] (24 bytes) specifically to claw
+     * back the header room OP_SEQ_MAX_NOTES_PER_STEP going from 1 to 2
+     * needed (see that constant's own comment): the whole store must
+     * fit in one 4096-byte flash sector, and this struct was landing 16
+     * bytes over that budget at N=2 before this -- see pattern_store_
+     * pack_slot_saved()/_unpack_slot_saved() below for the conversion,
+     * kept out of this struct itself so s_pattern_slot_saved (the
+     * actual runtime array, used constantly, indexed directly) never
+     * has to change shape just to satisfy the on-flash layout. */
+    uint32_t slot_saved_mask;
     op_seq_pattern_t pattern[OP_SEQ_NUM_LANES][OP_SEQ_ALTS_PER_LANE];
 } tiles_pattern_store_t;
+
+/* Must fit in exactly one flash sector -- see TILES_PATTERN_FLASH_
+ * OFFSET's own comment for why growing this to span a second sector
+ * isn't a safe fallback for a future overflow, and OP_SEQ_MAX_NOTES_
+ * PER_STEP's own comment for how tight this already is at 2. A hard
+ * compile error here beats a silent memcpy() past the end of
+ * pattern_store_write_all()'s own write buffer -- exactly what
+ * happened, caught only by a compiler warning, while building this
+ * feature in the first place. */
+_Static_assert(sizeof(tiles_pattern_store_t) <= FLASH_SECTOR_SIZE, "tiles_pattern_store_t no longer fits in one flash sector");
+
+static uint32_t pattern_store_pack_slot_saved(void) {
+    uint32_t mask = 0u;
+    for (uint8_t lane = 0; lane < OP_SEQ_NUM_LANES; lane++) {
+        for (uint8_t alt = 0; alt < OP_SEQ_ALTS_PER_LANE; alt++) {
+            if (s_pattern_slot_saved[lane][alt]) {
+                mask |= (uint32_t)1u << (lane * OP_SEQ_ALTS_PER_LANE + alt);
+            }
+        }
+    }
+    return mask;
+}
+
+static void pattern_store_unpack_slot_saved(uint32_t mask) {
+    for (uint8_t lane = 0; lane < OP_SEQ_NUM_LANES; lane++) {
+        for (uint8_t alt = 0; alt < OP_SEQ_ALTS_PER_LANE; alt++) {
+            s_pattern_slot_saved[lane][alt] = (mask & ((uint32_t)1u << (lane * OP_SEQ_ALTS_PER_LANE + alt))) != 0u;
+        }
+    }
+}
 
 /* Rewrites the WHOLE store every time, even though only one slot
  * usually changed -- flash can only be erased a whole sector at a
@@ -2140,7 +2320,7 @@ static void pattern_store_write_all(void) {
     tiles_pattern_store_t *store = (tiles_pattern_store_t *)s_write_buf;
     store->magic = TILES_PATTERN_STORE_MAGIC;
     store->version = TILES_PATTERN_STORE_VERSION;
-    memcpy(store->slot_saved, s_pattern_slot_saved, sizeof(store->slot_saved));
+    store->slot_saved_mask = pattern_store_pack_slot_saved();
     memcpy(store->pattern, s_seq_pattern, sizeof(store->pattern));
 
     watchdog_update();
@@ -2205,7 +2385,7 @@ static void pattern_store_load_all(void) {
     if (store->magic != TILES_PATTERN_STORE_MAGIC || store->version != TILES_PATTERN_STORE_VERSION) {
         return; /* never saved before on this board, or an incompatible future layout */
     }
-    memcpy(s_pattern_slot_saved, store->slot_saved, sizeof(s_pattern_slot_saved));
+    pattern_store_unpack_slot_saved(store->slot_saved_mask);
     for (uint8_t lane = 0; lane < OP_SEQ_NUM_LANES; lane++) {
         for (uint8_t alt = 0; alt < OP_SEQ_ALTS_PER_LANE; alt++) {
             if (s_pattern_slot_saved[lane][alt]) {
@@ -2516,7 +2696,9 @@ static void pattern_bank_enter(void) {
      * TOGGLE that can sit open with no pad touched (release the
      * originally-held step and it just waits, see this file's own
      * "Per-step editing" section) -- easy to leave open, then reach for
-     * shift+diamond with a free hand. Without this, tiles_op_mode_scan()'s
+     * this pattern-bank gesture (plain diamond, no shift, as of the
+     * diamond/shift swap -- see handle_diamond_transport()'s own
+     * comment) with a free hand. Without this, tiles_op_mode_scan()'s
      * dispatch (which checks s_pattern_bank_visible before s_seq_edit_
      * mode) would show the bank while the edit view stayed silently
      * "open" underneath, popping back up the instant the bank closes. */
@@ -2755,35 +2937,66 @@ static bool s_seq_capture_prev_pad_touched[TILES_NUM_PADS];
  * step data the moment the NEXT step boundary arrives (see
  * seq_capture_advance_clock() below). This is what makes capture
  * "quantized": a touch's real timing only ever determines WHICH step's
- * window it fell in, not a sub-step offset. */
-static uint8_t s_seq_capture_step_note;
-static bool s_seq_capture_step_armed;
+ * window it fell in, not a sub-step offset.
+ * Real feedback: "sequencer real time and note select should allow for
+ * multiple notes per step so if i play a cluster of notes we should be
+ * able to save those in that single step." Grows as more touches land
+ * while still targeting the SAME step (see seq_capture_handle_taps())
+ * instead of the single note this used to hold -- a touch resolving to
+ * a DIFFERENT target step starts a fresh cluster instead of appending
+ * to a stale one. count == 0 means nothing armed at all, replacing the
+ * old separate bool. */
+static uint8_t s_seq_capture_armed_notes[OP_SEQ_MAX_NOTES_PER_STEP];
+static uint8_t s_seq_capture_armed_count;
 /* Real feedback: "make sure to quatize capture mode to closest step."
- * Computed once, at the moment of touch (see seq_capture_handle_taps()
- * below), from how far into the CURRENT step's own window the touch
- * actually landed -- past the halfway point, the touch is nearer the
- * step about to START than the one about to end, so it's committed
- * there instead. Without this, a touch struck slightly early (a real,
- * common thing -- anticipating the beat) always landed on whichever
- * step happened to still be in progress, rounding every early hit
- * down/backward rather than to whichever step it actually meant. */
+ * Computed once, at the moment of the FIRST touch starting a new
+ * cluster (see seq_capture_handle_taps() below), from how far into the
+ * CURRENT step's own window that touch actually landed -- past the
+ * halfway point, the touch is nearer the step about to START than the
+ * one about to end, so it's committed there instead. Without this, a
+ * touch struck slightly early (a real, common thing -- anticipating the
+ * beat) always landed on whichever step happened to still be in
+ * progress, rounding every early hit down/backward rather than to
+ * whichever step it actually meant. */
 static uint8_t s_seq_capture_target_step;
 /* Direct-drive sounding-note state, mirroring seq_end_current_note()'s
  * own s_seq_sounding_pad/note/s_seq_note_sounding shape but kept
- * separate -- capture mode's own note is a live PERFORMANCE, not a
- * scheduled playback note, and the two must never be confused for each
- * other. 0 (never a valid pad number) means nothing is currently
- * sounding. */
-static uint8_t s_seq_capture_sounding_pad;
-static uint8_t s_seq_capture_sounding_note;
+ * separate -- capture mode's own notes are a live PERFORMANCE, not
+ * scheduled playback, and the two must never be confused for each
+ * other. Multiple entries now (see OP_SEQ_MAX_NOTES_PER_STEP's own
+ * comment) -- a held cluster should all sound together, and releasing
+ * one finger should only end THAT note, not the whole chord. */
+static uint8_t s_seq_capture_live_pads[OP_SEQ_MAX_NOTES_PER_STEP];
+static uint8_t s_seq_capture_live_notes[OP_SEQ_MAX_NOTES_PER_STEP];
+static uint8_t s_seq_capture_live_count;
 
-static void seq_capture_end_sounding_note(void) {
-    if (s_seq_capture_sounding_pad == 0u) {
+/* Ends just the ONE live note `pad` owns, if any -- a no-op if `pad`
+ * isn't currently sounding (already released, or never was). */
+static void seq_capture_end_one_sounding_note(uint8_t pad) {
+    for (uint8_t i = 0; i < s_seq_capture_live_count; i++) {
+        if (s_seq_capture_live_pads[i] != pad) {
+            continue;
+        }
+        tiles_midi_note_off(s_seq_lane_channel[s_seq_edit_lane], s_seq_capture_live_notes[i]);
+        tiles_haptics_stop(pad);
+        for (uint8_t j = i; (uint8_t)(j + 1u) < s_seq_capture_live_count; j++) {
+            s_seq_capture_live_pads[j] = s_seq_capture_live_pads[j + 1u];
+            s_seq_capture_live_notes[j] = s_seq_capture_live_notes[j + 1u];
+        }
+        s_seq_capture_live_count--;
         return;
     }
-    tiles_midi_note_off(s_seq_lane_channel[s_seq_edit_lane], s_seq_capture_sounding_note);
-    tiles_haptics_stop(s_seq_capture_sounding_pad);
-    s_seq_capture_sounding_pad = 0u;
+}
+
+/* Ends every currently-live capture note at once -- capture mode
+ * exiting, or the pattern otherwise needing a clean slate, same as a
+ * hand lifting off the whole cluster together. */
+static void seq_capture_end_all_sounding_notes(void) {
+    for (uint8_t i = 0; i < s_seq_capture_live_count; i++) {
+        tiles_midi_note_off(s_seq_lane_channel[s_seq_edit_lane], s_seq_capture_live_notes[i]);
+        tiles_haptics_stop(s_seq_capture_live_pads[i]);
+    }
+    s_seq_capture_live_count = 0u;
 }
 
 /* Only ever called while s_active_mode is ALREADY OP_MODE_SEQUENCER --
@@ -2850,8 +3063,8 @@ static void seq_capture_mode_enter(void) {
     s_seq_capture_mode_active = true;
     s_seq_capture_prev_scale = tiles_note_map_get_scale();
     tiles_note_map_set_scale(TILES_SCALE_CHROMATIC);
-    s_seq_capture_step_armed = false;
-    s_seq_capture_sounding_pad = 0u;
+    s_seq_capture_armed_count = 0u;
+    s_seq_capture_live_count = 0u;
     /* Real bug caught auditing this: seq_capture_advance_clock() only
      * ever checks the SHARED clock's own running state, never this
      * lane's own s_seq_lane_running -- so exiting capture mode used to
@@ -2878,7 +3091,7 @@ static void seq_capture_mode_exit(void) {
     if (!s_seq_capture_mode_active) {
         return;
     }
-    seq_capture_end_sounding_note();
+    seq_capture_end_all_sounding_notes();
     s_seq_capture_mode_active = false;
     tiles_note_map_set_scale(s_seq_capture_prev_scale);
     printf("[op_mode] sequencer capture mode -> off\n");
@@ -2890,14 +3103,23 @@ static void seq_capture_handle_taps(tiles_midi_clock_state_t clock) {
         bool touched = tiles_touch_is_touched(pad);
         bool was_touched = s_seq_capture_prev_pad_touched[pad - 1u];
         if (touched && !was_touched) {
-            seq_capture_end_sounding_note();
+            /* Real feedback: "sequencer real time and note select
+             * should allow for multiple notes per step so if i play a
+             * cluster of notes we should be able to save those in that
+             * single step." Every new touch now sounds ALONGSIDE
+             * whatever's already held (a real chord/cluster) instead of
+             * cutting the previous one off first -- see this file's own
+             * seq_capture_end_one_sounding_note() for how a single
+             * finger lifting only ends its OWN note now, not the whole
+             * cluster. */
             uint8_t note = tiles_note_map_get_note(pad);
             tiles_midi_note_on(s_seq_lane_channel[lane], note, OP_SEQ_VELOCITY);
             tiles_haptics_trigger_kick(pad, OP_SEQ_VELOCITY);
-            s_seq_capture_sounding_pad = pad;
-            s_seq_capture_sounding_note = note;
-            s_seq_capture_step_note = note;
-            s_seq_capture_step_armed = true;
+            if (s_seq_capture_live_count < OP_SEQ_MAX_NOTES_PER_STEP) {
+                s_seq_capture_live_pads[s_seq_capture_live_count] = pad;
+                s_seq_capture_live_notes[s_seq_capture_live_count] = note;
+                s_seq_capture_live_count++;
+            }
             /* Nearest-step quantization -- see s_seq_capture_target_step's
              * own comment. Whatever s_seq_pending_start[lane] leaves in
              * s_seq_step_started_at_pulse[lane] pre-start is meaningless
@@ -2912,10 +3134,23 @@ static void seq_capture_handle_taps(tiles_midi_clock_state_t clock) {
             }
             uint32_t elapsed_in_step = clock.pulse_count - s_seq_step_started_at_pulse[lane];
             bool nearest_is_next_step = (elapsed_in_step * 2u) >= OP_SEQ_CLOCKS_PER_STEP;
-            s_seq_capture_target_step =
+            uint8_t target =
                 nearest_is_next_step ? (uint8_t)((s_seq_current_step[lane] + 1u) % length) : s_seq_current_step[lane];
-        } else if (!touched && was_touched && pad == s_seq_capture_sounding_pad) {
-            seq_capture_end_sounding_note();
+            /* Same target as whatever's already accumulating -- this
+             * touch is another note in the SAME cluster, append. A
+             * different (or no) target yet -- this is the first touch
+             * of a fresh cluster, replacing whatever stale one was
+             * pending (already committed or abandoned by now). */
+            if (s_seq_capture_armed_count == 0u || s_seq_capture_target_step != target) {
+                s_seq_capture_target_step = target;
+                s_seq_capture_armed_count = 0u;
+            }
+            if (s_seq_capture_armed_count < OP_SEQ_MAX_NOTES_PER_STEP) {
+                s_seq_capture_armed_notes[s_seq_capture_armed_count] = note;
+                s_seq_capture_armed_count++;
+            }
+        } else if (!touched && was_touched) {
+            seq_capture_end_one_sounding_note(pad);
         }
         s_seq_capture_prev_pad_touched[pad - 1u] = touched;
     }
@@ -2937,7 +3172,7 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
     if (clock.start_edge) {
         s_seq_current_step[lane] = 0u;
         s_seq_step_started_at_pulse[lane] = clock.pulse_count;
-        s_seq_capture_step_armed = false;
+        s_seq_capture_armed_count = 0u;
         s_seq_pending_start[lane] = false;
         return;
     }
@@ -2954,7 +3189,7 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
         s_seq_pending_start[lane] = false;
         s_seq_current_step[lane] = 0u;
         s_seq_step_started_at_pulse[lane] = clock.pulse_count;
-        s_seq_capture_step_armed = false;
+        s_seq_capture_armed_count = 0u;
         return;
     }
 
@@ -2980,11 +3215,19 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
      * pattern only ever ADDS/overwrites the specific steps actually
      * played this time; it never silently erases everything else. */
     op_seq_pattern_t *pat = active_pattern();
-    if (s_seq_capture_step_armed && s_seq_capture_target_step == s_seq_current_step[lane]) {
-        pat->step_armed[s_seq_current_step[lane]] = true;
-        pat->step_note[s_seq_current_step[lane]] = s_seq_capture_step_note;
-        pat->step_pitch_override[s_seq_current_step[lane]] = true;
-        s_seq_capture_step_armed = false;
+    if (s_seq_capture_armed_count > 0u && s_seq_capture_target_step == s_seq_current_step[lane]) {
+        uint8_t step = s_seq_current_step[lane];
+        uint8_t count = s_seq_capture_armed_count;
+        if (count > OP_SEQ_MAX_NOTES_PER_STEP) {
+            count = OP_SEQ_MAX_NOTES_PER_STEP;
+        }
+        pat->step_armed[step] = true;
+        pat->step_pitch_override[step] = true;
+        for (uint8_t i = 0; i < count; i++) {
+            pat->step_notes[step][i] = s_seq_capture_armed_notes[i];
+        }
+        pat->step_note_count[step] = count;
+        s_seq_capture_armed_count = 0u;
     }
 
     uint8_t length = pat->length;
@@ -3037,7 +3280,14 @@ static void render_seq_capture(uint32_t now_ms) {
         bool has_step = seq_step_for_pad(pat, pad, &step);
         bool is_current_step = has_step && (step == s_seq_current_step[s_seq_edit_lane]) && step < pat->length;
         bool is_armed = has_step && step < pat->length && pat->step_armed[step];
-        if (pad == s_seq_capture_sounding_pad) {
+        bool is_live = false;
+        for (uint8_t i = 0; i < s_seq_capture_live_count; i++) {
+            if (s_seq_capture_live_pads[i] == pad) {
+                is_live = true;
+                break;
+            }
+        }
+        if (is_live) {
             tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f);
         } else if (is_current_step) {
             tiles_lighting_set_standby_pad_rgb(pad, OP_MENU_MELODIC_R * pulse, OP_MENU_MELODIC_G * pulse,
@@ -3358,34 +3608,43 @@ static void handle_diamond_transport(uint32_t now_ms) {
     if (!held && s_diamond_was_held) {
         if (!s_diamond_press_had_conflict) {
             if (sequencer_active) {
-                /* Real feedback: "capture mode is triggered by diamond
-                 * in sequencer mode... shift diamond does pattern
-                 * picker." Plain click is a simple toggle now -- no hold
-                 * needed at all, since shift alone already cleanly
-                 * separates this from the pattern bank below. */
+                /* Real feedback: "for concistency i wanna swap in
+                 * sequencer mode the diamond with shift to capture and
+                 * the diamond alone to pattern selector." Swapped from
+                 * the original "capture mode is triggered by diamond in
+                 * sequencer mode... shift diamond does pattern picker"
+                 * -- shift+diamond now means capture EVERYWHERE, matching
+                 * the same gesture this file's own cross-mode "capture
+                 * into lane 3" feature uses outside sequencer mode (see
+                 * that feature's own section), instead of meaning
+                 * capture only here and pattern-bank there. Plain click
+                 * (no shift) is a simple toggle now -- no hold needed at
+                 * all, since shift alone already cleanly separates this
+                 * from capture above. */
                 if (s_diamond_press_was_shift) {
-                    if (s_pattern_bank_visible) {
-                        pattern_bank_exit();
-                    } else {
-                        pattern_bank_enter();
+                    if (s_seq_capture_mode_active) {
+                        seq_capture_mode_exit();
+                    } else if (OP_SEQ_CAPTURE_MODE_ENABLED &&
+                               (tiles_midi_clock_tap_tempo_established() || tiles_midi_clock_external_active(now_ms))) {
+                        /* Real gap caught auditing this: without this
+                         * gate, capture mode could be entered with no
+                         * tempo at all -- seq_capture_advance_clock()
+                         * would then just sit inert forever (it needs
+                         * clock.running, same as "+" already requires
+                         * below), so live touches would audibly sound
+                         * but NEVER actually commit into the pattern,
+                         * with no indication anything was wrong. Same
+                         * tempo-exists check "+" already uses one level
+                         * up (see handle_transport_and_length()'s own
+                         * sequencer branch) -- a diamond click is simply
+                         * a no-op until a tempo genuinely exists, exactly
+                         * like "+" already is. */
+                        seq_capture_mode_enter();
                     }
-                } else if (s_seq_capture_mode_active) {
-                    seq_capture_mode_exit();
-                } else if (OP_SEQ_CAPTURE_MODE_ENABLED &&
-                           (tiles_midi_clock_tap_tempo_established() || tiles_midi_clock_external_active(now_ms))) {
-                    /* Real gap caught auditing this: without this gate,
-                     * capture mode could be entered with no tempo at all
-                     * -- seq_capture_advance_clock() would then just sit
-                     * inert forever (it needs clock.running, same as "+"
-                     * already requires below), so live touches would
-                     * audibly sound but NEVER actually commit into the
-                     * pattern, with no indication anything was wrong.
-                     * Same tempo-exists check "+" already uses one level
-                     * up (see handle_transport_and_length()'s own
-                     * sequencer branch) -- a diamond click is simply a
-                     * no-op until a tempo genuinely exists, exactly like
-                     * "+" already is. */
-                    seq_capture_mode_enter();
+                } else if (s_pattern_bank_visible) {
+                    pattern_bank_exit();
+                } else {
+                    pattern_bank_enter();
                 }
             } else if (s_diamond_record_armed) {
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 127u);
@@ -3597,13 +3856,14 @@ static void handle_circle_tap(uint32_t now_ms) {
     if (held && s_circle_press_pending_tap &&
         (tiles_button_is_pressed(TILES_MINUS_BUTTON_ID) || tiles_button_is_pressed(TILES_PLUS_BUTTON_ID) ||
          tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) || any_pad_touched())) {
-        /* This hold became a length-adjust/ratchet-edit combo, or the
-         * pattern-bank combo (shift+diamond -- diamond joining mid-hold
-         * still means a genuine 2-button combo is forming here, same
-         * "circle pressed first, then the other button joins" ordering
-         * length-adjust already needed this exact fix for, even though
-         * shift+diamond's own meaning moved to the pattern bank) --
-         * cancel candidacy so it doesn't ALSO register as a spurious tap. */
+        /* This hold became a length-adjust/ratchet-edit combo, or a
+         * diamond combo (pattern bank or capture, whichever shift is
+         * currently pointing at -- see handle_diamond_transport()'s own
+         * comment on the swap) -- diamond joining mid-hold still means
+         * a genuine 2-button combo is forming here, same "circle
+         * pressed first, then the other button joins" ordering length-
+         * adjust already needed this exact fix for. Cancel candidacy so
+         * it doesn't ALSO register as a spurious tap. */
         s_circle_press_pending_tap = false;
     }
 
@@ -3815,7 +4075,7 @@ void tiles_op_mode_init(bool crash_recovered) {
             for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
                 pat->step_armed[i] = false;
                 pat->step_pitch_override[i] = false;
-                pat->step_note[i] = 0u;
+                pat->step_note_count[i] = 0u;
                 pat->step_probability_percent[i] = 100u;
                 pat->step_ratchet_count[i] = 1u;
             }
