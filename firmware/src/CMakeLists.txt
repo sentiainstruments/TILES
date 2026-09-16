@@ -10,6 +10,7 @@ add_executable(sentia_tiles_firmware
     drivers/tmag5273.c
     drivers/pca9685.c
     drivers/mpr121.c
+    drivers/i2c_bus.c
     services/lighting.c
     services/hall.c
     services/buttons.c

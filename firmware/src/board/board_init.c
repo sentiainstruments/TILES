@@ -3,6 +3,7 @@
 
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
+#include "pico/time.h"
 
 static void init_output(uint gpio, bool initial_high) {
     gpio_init(gpio);
@@ -93,6 +94,54 @@ void board_i2c_init(void) {
 void board_i2c_set_run_speed(void) {
     i2c_set_baudrate(i2c0, TILES_I2C_RUN_HZ);
     i2c_set_baudrate(i2c1, TILES_I2C_RUN_HZ);
+}
+
+/* See board_init.h for the full rationale. Bit-bang recovery timing:
+ * 5us per half-period (~100kHz recovery clock) -- not timing-critical
+ * since no real data is being transferred, just nudging a stuck slave,
+ * so this is deliberately slower/safer than either bus's actual run
+ * speed rather than tuned to it. */
+#define RECOVERY_HALF_PERIOD_US 5u
+#define RECOVERY_MAX_CLOCK_PULSES 9u
+
+void board_i2c_recover_bus(i2c_inst_t *bus) {
+    uint sda_pin = (bus == i2c0) ? TILES_GPIO_I2C0_SDA : TILES_GPIO_I2C1_SDA;
+    uint scl_pin = (bus == i2c0) ? TILES_GPIO_I2C0_SCL : TILES_GPIO_I2C1_SCL;
+
+    gpio_set_function(sda_pin, GPIO_FUNC_SIO);
+    gpio_set_function(scl_pin, GPIO_FUNC_SIO);
+    /* Pre-arm the output value both lines will drive once switched to
+     * GPIO_OUT below to false, once, up front -- from here on, "drive"
+     * means gpio_set_dir(..., GPIO_OUT) and "release" means
+     * gpio_set_dir(..., GPIO_IN) (the pull-ups board_i2c_init() already
+     * enabled bring it back high), exactly matching real open-drain I2C
+     * electrical behavior so this can never drive a hard high against
+     * another device. */
+    gpio_put(sda_pin, false);
+    gpio_put(scl_pin, false);
+    gpio_set_dir(sda_pin, GPIO_IN);
+    gpio_set_dir(scl_pin, GPIO_IN);
+
+    for (uint pulse = 0; pulse < RECOVERY_MAX_CLOCK_PULSES && !gpio_get(sda_pin); pulse++) {
+        gpio_set_dir(scl_pin, GPIO_OUT);
+        sleep_us(RECOVERY_HALF_PERIOD_US);
+        gpio_set_dir(scl_pin, GPIO_IN);
+        sleep_us(RECOVERY_HALF_PERIOD_US);
+    }
+
+    /* Manual STOP condition regardless of whether SDA ever freed up
+     * above -- SDA released (high) while SCL is high -- so a downstream
+     * device left mid-transaction sees a clean end to it either way. */
+    gpio_set_dir(sda_pin, GPIO_OUT);
+    sleep_us(RECOVERY_HALF_PERIOD_US);
+    gpio_set_dir(scl_pin, GPIO_IN);
+    sleep_us(RECOVERY_HALF_PERIOD_US);
+    gpio_set_dir(sda_pin, GPIO_IN);
+    sleep_us(RECOVERY_HALF_PERIOD_US);
+
+    gpio_set_function(sda_pin, GPIO_FUNC_I2C);
+    gpio_set_function(scl_pin, GPIO_FUNC_I2C);
+    i2c_init(bus, TILES_I2C_RUN_HZ);
 }
 
 void board_pca9685_enable_outputs(void) {

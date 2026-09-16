@@ -5,13 +5,20 @@
 #include "board_pins.h"
 #include "hardware/i2c.h"
 
-/* See drivers/pca9685.c's identical constant for the full "haptic motor
- * locked on after a freeze" rationale -- this file's own probe() runs
- * once at boot (tiles_diag_i2c_scan_expected_devices()'s only remaining
- * call site, see main.c), but an unbounded i2c_read_blocking() here
- * could still stall BOOT itself indefinitely against a wedged device,
- * before the main loop -- and its own watchdog-free "just keep going"
- * resilience -- even exists yet. */
+/* Deliberately NOT using drivers/i2c_bus.h's tiles_i2c_read() here,
+ * unlike every driver in drivers/: this file's own probe() runs once at
+ * boot, at TILES_I2C_DETECT_HZ (100kHz) -- BEFORE board_i2c_set_run_
+ * speed() raises both buses to their real 400kHz run speed (see
+ * main.c's call order). board_i2c_recover_bus() (i2c_bus.c's own
+ * failure path) always re-inits at TILES_I2C_RUN_HZ, which would be
+ * correct once running but wrong called from here: a recovery mid-scan
+ * would jump the bus to run speed before device discovery at the
+ * conservative detect speed has even finished, defeating the reason a
+ * separate detect speed exists. A plain timeout is still exactly right
+ * for this file's own purpose (a wedged device stalling BOOT itself
+ * indefinitely, before the main loop -- and its own watchdog-free "just
+ * keep going" resilience -- even exists yet), just without the recovery
+ * half. */
 #define TILES_I2C_TIMEOUT_US 5000u
 
 /* Bus-scan technique: a 1-byte read of whatever register a device's

@@ -1,5 +1,7 @@
 #include "mpr121.h"
 
+#include "i2c_bus.h"
+
 #include <stddef.h>
 
 /* Register addresses, MPR121 datasheet Rev 4 Sections 5.2-5.13. */
@@ -50,24 +52,21 @@
  * feeling twitchy instead of sticky. */
 #define RELEASE_THRESHOLD 9u
 
-/* See drivers/pca9685.c's identical constant for the full "haptic
- * motor locked on after a freeze" rationale -- this file's own
- * tiles_mpr121_read_touched() runs every single main-loop scan (touch
- * is polled continuously, unlike most other drivers' occasional
- * writes), so an unbounded i2c_read_blocking() here is if anything an
- * even more exposed path to the same class of hang. */
-#define TILES_I2C_TIMEOUT_US 5000u
+/* This file's own tiles_mpr121_read_touched() runs every single
+ * main-loop scan (touch is polled continuously, unlike most other
+ * drivers' occasional writes) -- one of the most exposed call sites to
+ * whatever drivers/i2c_bus.h guards against, tiles_i2c_read() included. */
 
 static bool write_reg(i2c_inst_t *bus, uint8_t addr, uint8_t reg, uint8_t value) {
     uint8_t buf[2] = {reg, value};
-    return i2c_write_timeout_us(bus, addr, buf, 2, false, TILES_I2C_TIMEOUT_US) == 2;
+    return tiles_i2c_write(bus, addr, buf, 2, false);
 }
 
 static bool read_regs(i2c_inst_t *bus, uint8_t addr, uint8_t reg, uint8_t *buf, size_t len) {
-    if (i2c_write_timeout_us(bus, addr, &reg, 1, true, TILES_I2C_TIMEOUT_US) != 1) {
+    if (!tiles_i2c_write(bus, addr, &reg, 1, true)) {
         return false;
     }
-    return i2c_read_timeout_us(bus, addr, buf, len, false, TILES_I2C_TIMEOUT_US) == (int)len;
+    return tiles_i2c_read(bus, addr, buf, len, false);
 }
 
 bool tiles_mpr121_init(tiles_mpr121_t *dev, i2c_inst_t *bus, uint8_t addr) {

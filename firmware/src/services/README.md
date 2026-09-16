@@ -5265,5 +5265,87 @@ not its code.
   a deliberate, separate tradeoff (a shorter timeout risks false-
   positive resets on a legitimately busy loop iteration) rather than a
   bug -- not changed here.
+- **Real feedback pushed back on the whole USB-erratum theory of the
+  case, correctly: "still we need to re evaluate whatever we are
+  missing to solve this issue even a usb data issue shoudnt cause the
+  crash."** Right -- a USB bus-reset is a normal, constant event (host
+  sleep/wake, hub renegotiation, marginal signal); a well-behaved USB
+  stack shrugs it off, it doesn't freeze the MCU. That reframed the
+  question from "is the E15 erratum real" (yes, and still open) to "what
+  in THIS codebase's own reaction to it can hang," and led somewhere new
+  and, this time, concretely fixable: an I2C bus wedge, not a USB one.
+  `drivers/pca9685.c` already carried a real, past incident (a haptic
+  motor locked fully on after a freeze) and its own honest fix at the
+  time -- switch every driver from unbounded `i2c_write_blocking()`/
+  `i2c_read_blocking()` to the 5ms-bounded `_timeout_us()` variants --
+  plus an explicit, never-acted-on caveat: **"Doesn't fix whatever
+  wedges the bus in the first place... true I2C bus recovery needs a
+  bit-bang clock-pulse sequence this driver doesn't have."** Revisiting
+  that caveat directly, against this project's actual vendored pico-sdk
+  (tag `2.3.0`) source rather than assumption, turned up two real,
+  confirmed gaps that together reopen the exact "hang forever" failure
+  the timeout fix believed it had already closed:
+  1. `i2c_read_blocking_internal()` (`hardware_i2c/i2c.c`) waits for TX
+     FIFO room to submit the read-request byte BEFORE any of its
+     timeout-checked waits even start -- `while (!i2c_get_write_
+     available(i2c)) tight_loop_contents();` (inlined from `hardware/
+     i2c.h:430`) -- and that specific wait passes no timeout check at
+     all, regardless of the `_timeout_us` argument the caller passed.
+     If the TX FIFO is ever left stuck full, this hangs forever, for
+     reads only.
+  2. Neither `i2c_write_timeout_us()` nor `i2c_read_timeout_us()` cleans
+     up the peripheral when THEIR OWN timeout fires (as opposed to a
+     hardware-reported abort) -- deliberately, per the SDK's own
+     structure (nothing safe to clean up if the transaction might still
+     be live on the wire) -- but the side effect is that whatever
+     originally wedged the bus is never cleared, exactly matching the
+     pca9685.c comment's own caveat. That leftover state is a very
+     plausible way to leave the TX FIFO stuck full for gap 1 above to
+     then hang on.
+  Both gaps sit specifically on the READ path, and this codebase's own
+  comments already, independently, called out its two read call sites
+  as the highest-exposure spots in the whole tree: `drivers/mpr121.c`
+  ("touch is polled continuously... an even more exposed path") and
+  `drivers/tmag5273.c` ("the highest-volume I2C traffic in this
+  codebase" -- 24 pads x every Hall scan, via 3 `TCA9548A` muxes on
+  `drivers/tca9548a.c`, itself flagged as "one of the most exposed
+  paths" for the exact same reason). `board_pins.h` confirms touch and
+  Hall share I2C0; haptics and the LED mux share I2C1 -- a wedge from
+  any device can affect any other device on the same bus, not just the
+  one that caused it.
+  **Fixed with the actual thing the past comment asked for and never
+  got**: a new `drivers/i2c_bus.c`/`.h` (`tiles_i2c_write()`/
+  `tiles_i2c_read()`) now sits between every one of the 5 chip drivers
+  and the raw pico-sdk calls -- closing gap 1 by checking `i2c_get_
+  write_available()` itself, against its own deadline, before ever
+  calling into the SDK's vulnerable read function, and closing gap 2 by
+  calling a new `board_i2c_recover_bus()` (`board/board_init.c`) on ANY
+  transaction failure, read or write. That function is the actual
+  bit-bang bus-recovery sequence the original caveat named and never
+  built: takes the bus's SDA/SCL pins back as plain open-drain-style
+  GPIO, pulses SCL up to 9 times watching for SDA to release (the
+  standard recovery bound for a slave stuck mid-byte, NXP UM10204
+  3.1.16), drives a manual STOP regardless, then restores I2C function
+  and re-`i2c_init()`s the peripheral (which also resets its internal
+  FIFOs via the RESETS block, independent of the external wire state).
+  Deliberately NOT applied to `diagnostics/i2c_scan.c`'s own boot-time
+  probe: it runs at `TILES_I2C_DETECT_HZ` (100kHz), before `board_i2c_
+  set_run_speed()` raises both buses to their real 400kHz -- recovering
+  mid-scan would jump straight to run speed before device discovery at
+  the deliberately conservative detect speed has finished. A plain
+  timeout (no recovery) is still exactly right there; the file now says
+  so explicitly instead of leaving that as an unexplained inconsistency.
+  Honest framing, matching how this session has treated every other
+  finding: this explains a real, confirmed, previously-unaddressed gap
+  that plausibly accounts for at least the `tiles_lighting_service()`-
+  and touch/Hall-adjacent freezes, and directly satisfies "even a usb
+  data issue shouldn't cause the crash" -- it doesn't; a USB glitch and
+  an I2C wedge are best understood as two independent symptoms of
+  whatever the actual shared electrical trigger is, not one causing the
+  other. It does NOT identify that original shared trigger, and does
+  NOT retroactively prove every past freeze was this specific mechanism
+  rather than (or in addition to) the still-open USB E15 erratum class --
+  that needs the same real-hardware soak test this whole investigation
+  has run on every other change.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
