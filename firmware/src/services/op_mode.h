@@ -115,15 +115,18 @@
  * hue, this file's one "selected" language, matching the same rule
  * services/expression_control.h's sub-menu uses.
  *
- * ---- Chord: selectable, not yet implemented ------------------------------
- * Real feedback named chord mode explicitly as "not implemented yet" --
- * still a real planned mode (not removed, unlike arp), just correctly
- * marked unavailable in the picker for now (see above). Selecting it
- * anyway (were its slot ever made available again) wouldn't claim the pad
- * grid -- see tiles_op_mode_owns_pad_grid() below -- so touching pads
- * would keep playing completely normal melodic notes underneath until
- * its real logic is built. A deliberate, honest stub, not a guess
- * dressed up as a feature.
+ * ---- Chord: built, but still not selectable from the picker -------------
+ * Originally named explicitly as "not implemented yet" when the picker
+ * itself was built -- that's now stale: chord mode's own chord-strip
+ * pads (columns 1-2) have a real implementation (op_mode.c's own
+ * handle_chord_pad_taps()/chord_pad_strike(), see that section's own
+ * header for the current triad+bass, velocity-sensitive design and its
+ * real-feedback history). Still correctly marked unavailable in the
+ * picker for now (see above) -- a separate, deliberate "not yet
+ * offered as a mode to switch into" decision, not "doesn't work yet."
+ * Melody-region pads (columns 3-6) already play normally through the
+ * usual services/expression.c pipeline, same as melodic mode's own
+ * grid, whether or not chord mode is ever reachable from the picker.
  *
  * ---- Guitar/bass fret mode ------------------------------------------------
  * Real feedback: "lets imoplenment for note mode a guitar fret mode for 4

@@ -595,7 +595,25 @@ void tiles_expression_control_scan(void) {
     }
 
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-    bool combo_held = circle_held && square_held;
+    /* Real feedback: "fix combo presses like game mode enter triggering
+     * accidentaly the haptic mute or debug mode triggering haptic
+     * mute... combo presses should evaluate the complete combo not
+     * execute multiple different combos at once." The guard just above
+     * (triangle+diamond both held) already skips this whole function
+     * during game_mode.c's own 4-button entry combo, but only THAT
+     * combo -- it does nothing for services/debug_mode.c's own
+     * diamond+square+circle hold (deliberately excludes triangle, see
+     * that file's own comment, precisely so it wouldn't collide with
+     * game_mode's combo), which still satisfies circle_held&&square_
+     * held for its entire duration -- EXPRESSION_MUTE_HOLD_MS (2s) is
+     * shorter than debug mode's own 8s hold, so every attempt to enter
+     * debug mode was also toggling mute partway through. Requiring
+     * diamond AND triangle to BOTH be up, not just checked together,
+     * makes this combo evaluate its own COMPLETE, exact button set --
+     * closes the debug-mode gap directly and is strictly stronger
+     * defense-in-depth for the game-mode case already handled above. */
+    bool combo_held = circle_held && square_held && !tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) &&
+                       !tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
     bool square_alone_held = square_held && !circle_held;
 
     if (square_held && !s_square_was_held) {

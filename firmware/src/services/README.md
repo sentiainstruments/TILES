@@ -5690,5 +5690,91 @@ not its code.
   contributor to the crash itself -- MIDI clock desync and a firmware
   hang are different failure classes -- but a real, independently
   worth-fixing bug regardless, found investigating the same report.
+- **A six-item batch of real feedback on capture mode, sequencer
+  visuals, per-step probability, chord mode, and button-combo
+  conflicts, all from one message, requested before the next round of
+  crash testing:**
+  - **Capture mode is additive again, not a replace.** "its
+    additive and accumulates. i[t] shouldnt just override empty
+    space. it a[d]ds whatever is being played on top not cle[a]ring
+    previous steps" -- corrects this session's OWN earlier assumption
+    (the previous entry above's "capture mode replaces a pattern's
+    content with exactly what got played this time, not an overdub").
+    `seq_capture_advance_clock()`'s commit no longer clears a step it
+    didn't target this pass -- an untouched step now keeps whatever it
+    already held, from an earlier capture pass or a manual arm,
+    unconditionally.
+  - **Triangle's background-pattern indicator is a slow pulse now, not
+    a fast blink.** "the flashing of triangel is too fast... it should
+    be a pulsing like the deep sleep pulse." New `background_pattern_
+    pulse_level()`, same 3000ms pacing as `services/standby.c`'s own
+    deep-sleep pulse (not shared code, same "same convention, separate
+    copy" precedent as this file's other pulse shapes), brightness
+    range raised to something a button LED actually needs to be seen.
+  - **Save/delete now flash to confirm.** "we need a flash in green to
+    confirm when a pattern is saved. flash green twice in underglow
+    and pad. and for delete flash red twice." `pattern_store_save_
+    slot()`/`_clear_slot()` now arm a short (`OP_PATTERN_FLASH_TOTAL_
+    MS`, two full on/off cycles) override that `render_pattern_bank()`
+    checks first, ahead of every other per-cell/underglow state --
+    green for save, red for delete, on the one cell actually acted on
+    plus all 4 underglow anchors.
+  - **Per-step probability actually does something now.** "the chance
+    porcentage when holding a step is not functioning properly its
+    not adctually doing the chance." Root cause: `seq_enter_step()`'s
+    probability roll was always correctly gated on `pat->probability_
+    enabled`, but the ONLY thing that ever set that flag true was a
+    circle-click on the pattern/channel picker this session's own
+    "Sub-menu made universal" round removed outright (see that
+    entry, much earlier in this file) -- with no replacement access
+    point, it had stayed permanently false, for every pattern, ever
+    since. Every dialed-in percentage was being faithfully stored and
+    rendered but never once consulted at playback time. Fixed at the
+    one place a percentage can be dialed in at all: entering the
+    per-step probability editor (holding a step past `OP_SEQ_
+    PROBABILITY_HOLD_MS`) now also sets `probability_enabled = true`
+    on that pattern -- deliberately never auto-disabled again, same
+    "master switch a performer can flip back to fully deterministic"
+    framing the field's own comment already established.
+  - **Chord mode simplified to velocity-sensitive triad + bass.** "the
+    tap and then complex chord is not working nice so lets simplify
+    to velocity sensitive chords with bass note not dual type of
+    chord or light tap to chord." Removed the two-tier, live-morphing-
+    by-depth design (a light tap gave a plain triad, pressing past
+    halfway escalated to a full rootless-jazz voicing) entirely, not
+    tuned -- every chord pad now always plays the same 4-voice shape
+    (bass + root + fifth + an octave-raised third). In its place, real
+    strike velocity: new `tiles_expression_velocity_from_strike()`
+    (`services/expression.h`) exposes that file's own already-tuned
+    velocity curve so chord mode doesn't have to separately guess and
+    tune a second one, and a new `TILES_EXPRESSION_MIN_STRIKE_DEPTH_
+    DELTA` constant (which `expression.c`'s own `MIN_STRIKE_DEPTH_
+    DELTA` is now defined FROM, not duplicated alongside, so the two
+    can never drift apart) is the exact crossing point that curve is
+    calibrated against. `handle_chord_pad_taps()` now mirrors
+    `expression.c`'s own touch-start/peak-depth strike tracking,
+    deliberately without that file's extra post-crossing follow-
+    through wait (real Hall depth crosses a meaningful threshold
+    within single-digit milliseconds of a genuine press, well under
+    perceptible latency) or its release-triggered fallback commit (a
+    touch that never crosses just stays silent -- simpler, an accepted
+    difference for a chord pad vs. a single melodic note).
+  - **Button combos now require their own complete, exact set.**
+    "fix combo presses like game mode enter triggering accidentaly
+    the haptic mute or debug mode triggering haptic mute. combo
+    presses should evaluate the complete combo not execute multiple
+    different combos at once." `services/expression_control.c`'s own
+    mute combo (`circle_held && square_held`) had no exclusion of
+    diamond or triangle at all -- an EARLIER real-feedback fix already
+    skips this file's whole scan while triangle+diamond are BOTH held
+    (game_mode.c's own 4-button entry combo), but `services/debug_
+    mode.c`'s own diamond+square+circle hold (deliberately excludes
+    triangle, precisely to avoid colliding with THAT combo) was never
+    covered -- and since `EXPRESSION_MUTE_HOLD_MS` (2s) is shorter than
+    debug mode's own 8s hold, every attempt to enter debug mode was
+    also toggling mute partway through. `combo_held` now additionally
+    requires diamond AND triangle to both be up, not just checked
+    together -- closes the debug-mode gap directly and is strictly
+    stronger defense-in-depth for the already-handled game-mode case.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

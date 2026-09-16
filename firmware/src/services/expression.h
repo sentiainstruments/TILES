@@ -110,3 +110,36 @@ void tiles_expression_set_muted(bool muted);
  * haptic stop) and resets every pad to PAD_STATE_IDLE regardless of
  * where it was, closing the gap the fresh-touch gate alone couldn't. */
 void tiles_expression_force_release_all(void);
+
+/* Exposed for services/op_mode.c's own chord-mode strikes -- real
+ * feedback: "lets simplify to velocity sensitive chords." Chord pads
+ * are driven directly by op_mode.c, bypassing this file's own per-pad
+ * PAD_STATE_AWAITING_STRIKE machinery entirely (same reason chord
+ * pads never go through tiles_note_map_get_note() either -- see that
+ * function's own chord-region comment), so there's no existing
+ * strike-velocity signal for them to read; this lets that file reuse
+ * the SAME already-tuned curve (this file's own velocity_from_strike(),
+ * "Velocity" section) instead of inventing and separately tuning a
+ * second one.
+ * `strike_time_ms`: elapsed time from touch-down to the sample where
+ * `peak_depth` first reached TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA
+ * (below) -- speed of travel to that threshold, not total hold time.
+ * `peak_depth`: the highest Hall depth reading seen up to that same
+ * moment (a strike can spring back before a reading taken later would
+ * still show it past threshold -- see this file's own peak_depth
+ * comment for why the PEAK matters, not "whatever depth is showing
+ * right now"). Both must be measured against
+ * TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA specifically -- this
+ * function's own internal scoring is calibrated relative to that exact
+ * crossing point, not a generic "how deep" input. */
+uint8_t tiles_expression_velocity_from_strike(uint32_t strike_time_ms, float peak_depth);
+
+/* The exact threshold tiles_expression_velocity_from_strike() above
+ * expects `peak_depth` to be measured against -- see that function's
+ * own comment. Single source of truth: this file's own MIN_STRIKE_
+ * DEPTH_DELTA (used throughout its "Velocity" section) is defined
+ * FROM this constant, not the other way around, specifically so the
+ * two can never drift apart -- a caller measuring peak_depth against
+ * a different value here would silently miscalibrate the shared
+ * curve. */
+#define TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA 150.0f

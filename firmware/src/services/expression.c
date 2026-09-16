@@ -101,7 +101,7 @@
  * velocity-sensitive keybeds already work: speed of travel IS the
  * standard velocity signal, not a bug), while a slow, light press now
  * finally gets to register at all instead of being silently dropped. */
-#define MIN_STRIKE_DEPTH_DELTA 150.0f
+#define MIN_STRIKE_DEPTH_DELTA TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA
 
 /* Retrigger threshold for a held note -- real feedback: "contact with
  * pad has to be broken for retrigger, that's bad." Raw depth (already
@@ -1677,6 +1677,13 @@ static uint8_t velocity_from_strike(uint32_t strike_time_ms, float peak_depth) {
         vel = 127;
     }
     return (uint8_t)vel;
+}
+
+/* Thin public wrapper -- see this function's own declaration in
+ * expression.h for why services/op_mode.c needs it and what its two
+ * inputs must be measured against. */
+uint8_t tiles_expression_velocity_from_strike(uint32_t strike_time_ms, float peak_depth) {
+    return velocity_from_strike(strike_time_ms, peak_depth);
 }
 
 static uint8_t aftertouch_from_depth(uint16_t depth) {

@@ -4,6 +4,7 @@
 #include "board_pins.h"
 #include "buttons.h"
 #include "debug_mode.h"
+#include "expression.h"
 #include "expression_control.h"
 #include "game_mode.h"
 #include "hall.h"
@@ -180,6 +181,25 @@ static float menu_selected_pulse_level(uint32_t now_ms) {
     float phase = (float)now_ms / OP_MENU_SELECTED_PULSE_PERIOD_MS;
     float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
     return OP_MENU_SELECTED_PULSE_MIN + (OP_MENU_SELECTED_PULSE_MAX - OP_MENU_SELECTED_PULSE_MIN) * raw;
+}
+
+/* Real feedback: "it should be a pulsing like the deep sleep pulse" --
+ * same slow pacing as services/standby.c's own DEEP_SLEEP_PULSE_
+ * PERIOD_MS (3000ms), not shared code (same "not shared, just the same
+ * convention" precedent as menu_selected_pulse_level() above already
+ * follows relative to services/standby.c's animations), min/max raised
+ * to a genuinely visible button-LED range instead of that pulse's own
+ * barely-there idle-pad brightness. Used for "something's happening in
+ * the background," deliberately calmer/slower than menu_selected_
+ * pulse_level()'s own faster, brighter "this is active right now." */
+#define OP_BACKGROUND_PULSE_PERIOD_MS 3000.0f
+#define OP_BACKGROUND_PULSE_MIN 0.0f
+#define OP_BACKGROUND_PULSE_MAX 1.0f
+
+static float background_pattern_pulse_level(uint32_t now_ms) {
+    float phase = (float)now_ms / OP_BACKGROUND_PULSE_PERIOD_MS;
+    float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
+    return OP_BACKGROUND_PULSE_MIN + (OP_BACKGROUND_PULSE_MAX - OP_BACKGROUND_PULSE_MIN) * raw;
 }
 
 /* Real feedback: "when you touch but not click in menu make a strong
@@ -708,80 +728,49 @@ static bool s_plus_used_as_combo;
                                  once while chords are also held -- an
                                  accepted edge case, not worth shrinking
                                  live MPE polyphony to avoid. */
-#define OP_CHORD_VELOCITY 100u /* fixed -- chord pads are triggered
-                                   directly here, bypassing services/
-                                   expression.c entirely, so there's no
-                                   real strike-velocity signal to read;
-                                   matches this file's own OP_SEQ_VELOCITY
-                                   precedent for the identical reason. */
 static bool s_chord_pad_touched[TILES_NUM_PADS];
 static bool s_chord_pad_sounding[TILES_NUM_PADS];
 
-/* ---- Pressure-tiered chord voicing --------------------------------------
- * Real feedback, chord mode heard on real hardware: "make the chords
- * with inversions to make them feel more musical, take insouration from
- * the [Omnichord]" tried an ADAPTIVE approach first (each new chord
- * re-voiced toward wherever the previous one sounded) -- real feedback
- * after living with it: "we are having issues with the chords drifting
- * positions in certain sequences of presses," confirmed again once
- * pressure-tiers were asked for and still hadn't landed: "the preassure
- * dependant chord type is not working and we still have this situation
- * when the chord shapes evolve in a way that transports the chords to
- * different parts of the range. we need consistent predictable shapes."
- * Replaced entirely with a STATIC design -- every voicing below is a
- * pure function of (root pad, chord quality, press depth), never of
- * whatever played before it. The old adaptive re-voicing (`tiles_note_
- * map_nearest_pitch_class()`, `s_chord_voice_anchor_*`) is gone outright,
- * not tuned -- it was the drift's actual root cause, not a side effect
- * of it.
- * Two depth tiers now (simplified from an original three-tier pass --
- * real feedback: "lets simplify to basic tirads and anything past 50%
- * press jazz chord"), chosen live off each pad's own Hall depth while
- * held (morphs both directions -- press harder mid-hold to escalate,
- * ease off to revert, same held note). Both tiers share the SAME
- * per-voice register conventions (root/fifth at the chord register,
- * third always raised an octave for an open spread, bass always one
- * more octave below root) -- only which voices are PRESENT changes tier
- * to tier, never how any one voice is registered, so a tier change reads
- * as "notes added/removed," not "the whole chord jumped range."
- * Quality (major/minor/diminished) is read directly off the actual
- * root-to-third and root-to-fifth intervals `tiles_note_map_get_chord_
- * notes()` returns, not hardcoded per scale degree, so it automatically
- * tracks whichever diatonic mode is currently selected: diminished
- * degrees cap at triad+7th past 50% (a real, safe, standard diminished/
- * half-diminished 7th -- needs no chromatic alteration) rather than the
- * full rootless-jazz treatment, since a diminished chord's own natural
- * 9th/11th/13th tensions need alteration this diatonic-only system
- * doesn't attempt -- adding them untreated would reintroduce exactly the
- * clashes this design is trying to avoid; major-quality chords get a
- * 13th as their top jazz tension, minor-quality get an 11th instead --
- * a natural (perfect) 11th a minor 9th above a MAJOR 3rd is jazz
- * harmony's textbook "avoid note" (a harsh half-step-adjacent clash once
- * octave-reduced), so it's only ever added where the 3rd is minor and
- * that clash can't occur. */
-typedef enum {
-    OP_CHORD_TIER_TAP = 0,
-    OP_CHORD_TIER_JAZZ,
-} op_chord_tier_t;
+/* ---- Chord voicing: fixed triad + bass, velocity from strike speed -----
+ * Real feedback, chord mode heard on real hardware, across several
+ * rounds: an ADAPTIVE voicing drifted ("the chord shapes evolve... it
+ * transports the chords to different parts of the range"), replaced
+ * with a STATIC, pressure-TIERED design instead -- a light tap gave a
+ * plain triad, pressing past halfway escalated live to a full rootless
+ * jazz voicing, morphing both ways within the same held note. Once
+ * that could actually be tried: "the tap and then complex chord is not
+ * working nice so lets simplify to velocity sensitive chords with bass
+ * note not dual type of chord or light tap to chord." Collapsed to ONE
+ * consistent voicing per pad -- always the plain triad+bass shape the
+ * old tier system's own "tap" case used, the jazz escalation removed
+ * outright, not tuned -- with STRIKE VELOCITY (how fast the touch
+ * reached a real press -- standard "speed of travel" velocity-
+ * sensitive-keybed convention, the exact same already-tuned curve
+ * services/expression.c's own melodic notes use, see tiles_expression_
+ * velocity_from_strike()) now doing what depth used to: never which
+ * notes play, only how loud. Quality (major/minor/diminished) is still
+ * read directly off the actual root-to-third/root-to-fifth intervals
+ * tiles_note_map_get_chord_notes() returns, not hardcoded per scale
+ * degree, so it automatically tracks whichever diatonic mode is
+ * selected -- unchanged from before, it just no longer changes which
+ * voices are present, only open_third's own interval. */
 
-/* Same ~900 full-scale reference OP_MENU_SELECT_DEPTH_THRESHOLD's own
- * comment already established -- reused verbatim, deliberately not
- * incidentally: "regular push tensions" (from the original three-tier
- * spec) and this simplified "anything past 50%" both land on the same
- * "past halfway" gesture this file's pickers already use for "select/
- * commit." */
 /* Root note pushed one extra octave down from the chord register for
  * the dedicated bass voice, on top of note_map.c's own CHORD_OCTAVE_
  * DOWN_SEMITONES -- real feedback: "octave lower bass note." */
 #define OP_CHORD_BASS_EXTRA_OCTAVE_SEMITONES 12
-/* Bass + up to 4 upper voices (the diminished-capped jazz tier's root/
- * fifth/third/seventh, and the major/minor rootless jazz tier's third/
- * seventh/ninth/top-tension, are both the largest sets any tier uses). */
-#define OP_CHORD_MAX_VOICES 5u
+#define OP_CHORD_NUM_VOICES 4u /* bass + root + fifth + open_third, always */
 
-static op_chord_tier_t s_chord_pad_tier[TILES_NUM_PADS]; /* only meaningful while s_chord_pad_sounding[pad] */
-static uint8_t s_chord_pad_notes[TILES_NUM_PADS][OP_CHORD_MAX_VOICES];
-static uint8_t s_chord_pad_note_count[TILES_NUM_PADS];
+static uint8_t s_chord_pad_notes[TILES_NUM_PADS][OP_CHORD_NUM_VOICES];
+/* Strike-velocity tracking, one independent copy per chord pad --
+ * mirrors services/expression.c's own PAD_STATE_AWAITING_STRIKE
+ * bookkeeping (touch-start timestamp, peak depth reached since then)
+ * closely enough to feed its already-tuned velocity curve -- see
+ * handle_chord_pad_taps()'s own comment for the two ways this
+ * deliberately simplifies that file's fuller state machine. */
+static uint32_t s_chord_pad_touch_start_ms[TILES_NUM_PADS];
+static float s_chord_pad_peak_depth[TILES_NUM_PADS];
+static bool s_chord_pad_awaiting_strike[TILES_NUM_PADS];
 
 static uint8_t clamp_midi_note(int note) {
     if (note < 0) {
@@ -793,95 +782,45 @@ static uint8_t clamp_midi_note(int note) {
     return (uint8_t)note;
 }
 
-static op_chord_tier_t chord_tier_for_depth(float depth) {
-    if (depth >= OP_MENU_SELECT_DEPTH_THRESHOLD) {
-        return OP_CHORD_TIER_JAZZ;
-    }
-    return OP_CHORD_TIER_TAP;
-}
-
-/* Builds `tier`'s note set for the diatonic stack `raw` already returned
- * (root/3rd/5th/7th/9th/11th/13th, see tiles_note_map_get_chord_notes()'s
- * own comment) into `out_notes`, returning how many voices it wrote --
- * see this section's own header comment for the full tier/quality
- * design this implements. */
-static uint8_t build_chord_voicing(const uint8_t raw[TILES_NOTE_MAP_CHORD_NUM_NOTES], op_chord_tier_t tier,
-                                    uint8_t out_notes[OP_CHORD_MAX_VOICES]) {
+/* Always the same 4-voice shape now -- see this section's own header
+ * comment. */
+static void build_chord_voicing(const uint8_t raw[TILES_NOTE_MAP_CHORD_NUM_NOTES],
+                                 uint8_t out_notes[OP_CHORD_NUM_VOICES]) {
     uint8_t root = raw[0];
     uint8_t third = raw[1];
     uint8_t fifth = raw[2];
-    uint8_t seventh = raw[3];
-    uint8_t ninth = raw[4];
-    uint8_t eleventh = raw[5];
-    uint8_t thirteenth = raw[6];
 
     uint8_t bass = clamp_midi_note((int)root - OP_CHORD_BASS_EXTRA_OCTAVE_SEMITONES);
     uint8_t open_third = clamp_midi_note((int)third + 12);
 
-    int third_interval = (int)third - (int)root;
-    int fifth_interval = (int)fifth - (int)root;
-    bool is_diminished = (fifth_interval == 6);
-    bool is_minor = !is_diminished && (third_interval == 3);
-
-    uint8_t n = 0;
-    out_notes[n++] = bass;
-    if (tier == OP_CHORD_TIER_TAP) {
-        /* Basic triad -- real feedback: "basic tirads." */
-        out_notes[n++] = root;
-        out_notes[n++] = fifth;
-        out_notes[n++] = open_third;
-    } else if (is_diminished) {
-        /* Capped short of the rootless jazz treatment below -- see this
-         * section's own header comment for why. Still genuinely "more"
-         * than the triad (a real, safe diminished/half-diminished 7th),
-         * not just the plain triad again. */
-        out_notes[n++] = root;
-        out_notes[n++] = fifth;
-        out_notes[n++] = open_third;
-        out_notes[n++] = seventh;
-    } else {
-        /* Rootless jazz upper structure -- real feedback: "anything past
-         * 50% press jazz chord." Root and fifth deliberately DROPPED
-         * here, not just added-to -- the bass voice already states the
-         * root, so the upper structure is free to be guide-tones-plus-
-         * tensions only, the same "bass covers the root, the chordal
-         * instrument voices it rootless" shape real jazz piano/guitar
-         * voicings use. */
-        out_notes[n++] = open_third;
-        out_notes[n++] = seventh;
-        out_notes[n++] = ninth;
-        out_notes[n++] = is_minor ? eleventh : thirteenth;
-    }
-    return n;
+    out_notes[0] = bass;
+    out_notes[1] = root;
+    out_notes[2] = fifth;
+    out_notes[3] = open_third;
 }
 
 static void chord_pad_note_off(uint8_t pad) {
     if (!s_chord_pad_sounding[pad - 1u]) {
         return;
     }
-    for (uint8_t i = 0; i < s_chord_pad_note_count[pad - 1u]; i++) {
+    for (uint8_t i = 0; i < OP_CHORD_NUM_VOICES; i++) {
         tiles_midi_note_off(OP_CHORD_CHANNEL, s_chord_pad_notes[pad - 1u][i]);
     }
     tiles_haptics_stop(pad);
     s_chord_pad_sounding[pad - 1u] = false;
 }
 
-/* Strikes `pad` fresh at `tier` -- shared by the initial touch-down and
- * by handle_chord_pad_taps()'s own live tier-change retrigger, so both
- * go through identical logic (end whatever that pad had sounding first,
- * every time, matching this file's own seq_fire_note()-style "always
- * clean up before striking again" precedent). */
-static void chord_pad_strike(uint8_t pad, op_chord_tier_t tier) {
+/* Strikes `pad` fresh at `velocity` -- called once a strike has
+ * actually been measured (see handle_chord_pad_taps() below). */
+static void chord_pad_strike(uint8_t pad, uint8_t velocity) {
     chord_pad_note_off(pad);
     uint8_t raw[TILES_NOTE_MAP_CHORD_NUM_NOTES];
     tiles_note_map_get_chord_notes(pad, raw);
-    uint8_t count = build_chord_voicing(raw, tier, s_chord_pad_notes[pad - 1u]);
-    s_chord_pad_note_count[pad - 1u] = count;
-    for (uint8_t i = 0; i < count; i++) {
-        tiles_midi_note_on(OP_CHORD_CHANNEL, s_chord_pad_notes[pad - 1u][i], OP_CHORD_VELOCITY);
+    build_chord_voicing(raw, s_chord_pad_notes[pad - 1u]);
+    for (uint8_t i = 0; i < OP_CHORD_NUM_VOICES; i++) {
+        tiles_midi_note_on(OP_CHORD_CHANNEL, s_chord_pad_notes[pad - 1u][i], velocity);
     }
-    s_chord_pad_tier[pad - 1u] = tier;
-    tiles_haptics_trigger_kick(pad, OP_CHORD_VELOCITY);
+    tiles_haptics_trigger_kick(pad, velocity);
     s_chord_pad_sounding[pad - 1u] = true;
 }
 
@@ -889,34 +828,56 @@ static void chord_pad_strike(uint8_t pad, op_chord_tier_t tier) {
  * mode stops being the active mode (set_active_mode() below), the same
  * "clean up whatever's sounding the instant a mode hands off control"
  * rule this file's own seq_end_current_note()/set_active_mode() pairing
- * already established for the sequencer. */
+ * already established for the sequencer. Also clears any in-flight
+ * strike measurement -- a touch that was mid-way to becoming a chord
+ * when the mode changed shouldn't retroactively fire once it's gone. */
 static void chord_end_all_notes(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         chord_pad_note_off(pad);
+        s_chord_pad_awaiting_strike[pad - 1u] = false;
     }
 }
 
-static void handle_chord_pad_taps(void) {
+/* Real feedback: "lets simplify to velocity sensitive chords with bass
+ * note." Mirrors services/expression.c's own strike-detection shape
+ * (touch-start timestamp, peak Hall depth tracked every scan until it
+ * first crosses TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA) closely
+ * enough to feed that file's already-tuned tiles_expression_velocity_
+ * from_strike() curve, deliberately simplified two ways: no extra
+ * VELOCITY_FOLLOWTHROUGH_MS wait after crossing (real Hall depth under
+ * an actual finger press crosses a meaningful threshold within single-
+ * digit milliseconds of first contact, well under perceptible latency,
+ * so skipping that refinement keeps chords feeling as immediate as the
+ * old always-fires-on-touch-down design while still measuring a real
+ * strike speed instead of guessing one), and no release-triggered
+ * fallback commit for a touch that never crosses the threshold (it
+ * just stays silent -- simpler than services/expression.c's own rule,
+ * an accepted difference for a chord pad rather than a single note). */
+static void handle_chord_pad_taps(uint32_t now_ms) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         if (!tiles_note_map_is_chord_region_pad(pad)) {
             continue;
         }
         bool touched = tiles_touch_is_touched(pad);
         if (touched && !s_chord_pad_touched[pad - 1u]) {
-            chord_pad_strike(pad, chord_tier_for_depth((float)tiles_hall_get_depth(pad)));
-        } else if (touched) {
-            /* Real feedback: "regular push tensions, max preassure or
-             * hard push complex jazz chord" -- live, continuous, morphs
-             * BOTH ways within the same held note (confirmed: pressing
-             * harder escalates, easing off reverts). Only re-strikes on
-             * an actual tier CHANGE, not every scan -- a steady hold
-             * produces one clean strike, not a retrigger storm. */
-            op_chord_tier_t tier = chord_tier_for_depth((float)tiles_hall_get_depth(pad));
-            if (tier != s_chord_pad_tier[pad - 1u]) {
-                chord_pad_strike(pad, tier);
+            s_chord_pad_touch_start_ms[pad - 1u] = now_ms;
+            s_chord_pad_peak_depth[pad - 1u] = (float)tiles_hall_get_depth(pad);
+            s_chord_pad_awaiting_strike[pad - 1u] = true;
+        } else if (touched && s_chord_pad_awaiting_strike[pad - 1u]) {
+            float depth = (float)tiles_hall_get_depth(pad);
+            if (depth > s_chord_pad_peak_depth[pad - 1u]) {
+                s_chord_pad_peak_depth[pad - 1u] = depth;
             }
-        } else if (s_chord_pad_touched[pad - 1u]) {
+            if (s_chord_pad_peak_depth[pad - 1u] >= TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA) {
+                uint32_t strike_time_ms = now_ms - s_chord_pad_touch_start_ms[pad - 1u];
+                uint8_t velocity =
+                    tiles_expression_velocity_from_strike(strike_time_ms, s_chord_pad_peak_depth[pad - 1u]);
+                chord_pad_strike(pad, velocity);
+                s_chord_pad_awaiting_strike[pad - 1u] = false;
+            }
+        } else if (!touched && s_chord_pad_touched[pad - 1u]) {
             chord_pad_note_off(pad);
+            s_chord_pad_awaiting_strike[pad - 1u] = false;
         }
         s_chord_pad_touched[pad - 1u] = touched;
     }
@@ -1491,6 +1452,26 @@ static void handle_edit_mode(uint32_t now_ms) {
              * escalates exactly like services/standby.h's own circle-hold
              * (4s screensaver -> 8s deep sleep) rather than a new gesture. */
             s_seq_edit_mode = OP_SEQ_EDIT_PROBABILITY;
+            /* Real bug found from real feedback: "the chance porcentage
+             * when holding a step is not functioning properly its not
+             * adctually doing the chance." Root cause: seq_enter_step()
+             * only ever rolls probability when active_pattern()->
+             * probability_enabled is true (see that function's own
+             * check), but the ONLY thing that used to set it true was a
+             * circle-click on the now-removed pattern/channel picker --
+             * see this file's own "Pattern/channel picker: REMOVED"
+             * section -- so it has stayed permanently false, for every
+             * pattern, since that picker's removal: every dialed-in
+             * percentage below was being faithfully stored and rendered
+             * but never actually consulted at playback time. Entering
+             * this edit view is itself a deliberate, unambiguous "I want
+             * this step's chance to matter" signal, so it's the natural
+             * place to also turn the master switch on -- no separate
+             * access point needed. Never turned back off automatically;
+             * matches this struct's own "master switch a performer can
+             * flip a whole pattern back to fully deterministic" framing
+             * closer than an implicit auto-disable would. */
+            active_pattern()->probability_enabled = true;
             return;
         }
         for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
@@ -1991,10 +1972,28 @@ static void pattern_store_write_all(void) {
     watchdog_update();
 }
 
+/* Real feedback: "we need a flash in green to confirm when a pattern
+ * is saved. flash green twice in underglow and pad. and for delete
+ * flash red twice in pad and underglow." render_pattern_bank() (below)
+ * checks this every frame it draws and, while active, overrides BOTH
+ * the one cell just acted on and every underglow anchor to blink
+ * green/red twice before falling back to the bank's own normal
+ * per-cell rendering -- see that function's own comment for the exact
+ * blink timing. */
+static bool s_pattern_flash_active;
+static bool s_pattern_flash_is_delete; /* false = green (saved), true = red (deleted) */
+static uint32_t s_pattern_flash_start_ms;
+static uint8_t s_pattern_flash_pad; /* 1..24, the one cell just saved/deleted */
+
 static void pattern_store_save_slot(uint8_t lane, uint8_t alt) {
     s_pattern_slot_saved[lane][alt] = true;
     pattern_store_write_all();
     printf("[op_mode] saved lane %u pattern %u to flash\n", (unsigned)lane, (unsigned)alt);
+    s_pattern_flash_active = true;
+    s_pattern_flash_is_delete = false;
+    s_pattern_flash_start_ms = to_ms_since_boot(get_absolute_time());
+    s_pattern_flash_pad =
+        board_pad_for_row_col((uint8_t)(lane + TILES_GRID_MIN_ROW + 1u), (uint8_t)(alt + TILES_GRID_MIN_COL));
 }
 
 static void pattern_store_clear_slot(uint8_t lane, uint8_t alt) {
@@ -2007,6 +2006,11 @@ static void pattern_store_clear_slot(uint8_t lane, uint8_t alt) {
     s_pattern_slot_saved[lane][alt] = false;
     pattern_store_write_all();
     printf("[op_mode] cleared lane %u pattern %u\n", (unsigned)lane, (unsigned)alt);
+    s_pattern_flash_active = true;
+    s_pattern_flash_is_delete = true;
+    s_pattern_flash_start_ms = to_ms_since_boot(get_absolute_time());
+    s_pattern_flash_pad =
+        board_pad_for_row_col((uint8_t)(lane + TILES_GRID_MIN_ROW + 1u), (uint8_t)(alt + TILES_GRID_MIN_COL));
 }
 
 /* Called once, from tiles_op_mode_init(), AFTER that function's own
@@ -2156,8 +2160,32 @@ static bool pattern_has_content(const op_seq_pattern_t *pat) {
  *   not it's currently picked for its lane -- that lane's own dim
  *   identity color (lane_color()).
  * - Otherwise (genuinely empty, not selected, not playing) -- OFF. */
+/* Real feedback: "we need a flash in green to confirm when a pattern
+ * is saved. flash green twice in underglow and pad. and for delete
+ * flash red twice in pad and underglow." Two full on/off cycles,
+ * timed independently of OP_PATTERN_BANK_FLASH_MS's own selection-
+ * indicator blink just above -- this one needs to actually FINISH
+ * (stop on its own after exactly twice), not blink for as long as some
+ * ongoing state stays true. */
+#define OP_PATTERN_FLASH_BLINK_MS 150u
+#define OP_PATTERN_FLASH_COUNT 2u
+#define OP_PATTERN_FLASH_TOTAL_MS (OP_PATTERN_FLASH_BLINK_MS * 2u * OP_PATTERN_FLASH_COUNT)
+
 static void render_pattern_bank(uint32_t now_ms) {
     bool flash_on = ((now_ms / OP_PATTERN_BANK_FLASH_MS) % 2u) == 0u;
+
+    bool save_flash_showing = false;
+    bool save_flash_on = false;
+    if (s_pattern_flash_active) {
+        uint32_t elapsed = now_ms - s_pattern_flash_start_ms;
+        if (elapsed >= OP_PATTERN_FLASH_TOTAL_MS) {
+            s_pattern_flash_active = false;
+        } else {
+            save_flash_showing = true;
+            save_flash_on = ((elapsed / OP_PATTERN_FLASH_BLINK_MS) % 2u) == 0u;
+        }
+    }
+
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         uint8_t lane = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
         float lr, lg, lb;
@@ -2166,7 +2194,18 @@ static void render_pattern_bank(uint32_t now_ms) {
             uint8_t alt = (uint8_t)(col - TILES_GRID_MIN_COL);
             uint8_t pad = board_pad_for_row_col(row, col);
             bool is_active = (alt == s_seq_active_alt[lane]);
-            if (is_active && lane == s_seq_edit_lane) {
+            if (save_flash_showing && pad == s_pattern_flash_pad) {
+                /* Takes priority over every other cell state below --
+                 * confirming a save/delete just happened matters more,
+                 * for this brief window, than this cell's own normal
+                 * selected/playing/has-content status. */
+                float level = save_flash_on ? 1.0f : 0.0f;
+                if (s_pattern_flash_is_delete) {
+                    tiles_lighting_set_standby_pad_rgb(pad, level, 0.0f, 0.0f);
+                } else {
+                    tiles_lighting_set_standby_pad_rgb(pad, 0.0f, level, 0.0f);
+                }
+            } else if (is_active && lane == s_seq_edit_lane) {
                 float level = flash_on ? 1.0f : 0.0f;
                 tiles_lighting_set_standby_pad_rgb(pad, level, 0.0f, 0.0f);
             } else if (is_active && s_seq_lane_running[lane]) {
@@ -2188,7 +2227,16 @@ static void render_pattern_bank(uint32_t now_ms) {
         tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
-        tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+        if (save_flash_showing) {
+            float level = save_flash_on ? 1.0f : 0.0f;
+            if (s_pattern_flash_is_delete) {
+                tiles_lighting_set_standby_underglow_rgb(i, level, 0.0f, 0.0f);
+            } else {
+                tiles_lighting_set_standby_underglow_rgb(i, 0.0f, level, 0.0f);
+            }
+        } else {
+            tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
+        }
     }
 }
 
@@ -2729,20 +2777,22 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
      * quantized to (s_seq_capture_target_step, set at touch time -- see
      * seq_capture_handle_taps()) -- a touch struck late in THIS step
      * targets the NEXT one instead, and stays pending (armed, untouched
-     * here) until that boundary arrives. The step actually ending right
-     * now still gets explicitly cleared when it ISN'T the pending
-     * note's target, same as this whole pass always has -- capture mode
-     * replaces a pattern's content with exactly what got played this
-     * time, not an overdub, so a step nothing targeted must go back to
-     * unarmed rather than keep stale content from a previous pass. */
+     * here) until that boundary arrives.
+     * Real feedback correcting this file's own prior assumption here:
+     * "capture mode['s]... additive and accumulates. i[t] shouldnt just
+     * override empty space. it a[d]ds whatever is being played on top
+     * not cle[a]ring previous steps." A step nothing targeted THIS pass
+     * is left completely untouched now -- whatever it already held
+     * (from an earlier capture pass, or manually armed beforehand)
+     * stays exactly as it was. Capturing a new melody over an existing
+     * pattern only ever ADDS/overwrites the specific steps actually
+     * played this time; it never silently erases everything else. */
     op_seq_pattern_t *pat = active_pattern();
     if (s_seq_capture_step_armed && s_seq_capture_target_step == s_seq_current_step[lane]) {
         pat->step_armed[s_seq_current_step[lane]] = true;
         pat->step_note[s_seq_current_step[lane]] = s_seq_capture_step_note;
         pat->step_pitch_override[s_seq_current_step[lane]] = true;
         s_seq_capture_step_armed = false;
-    } else {
-        pat->step_armed[s_seq_current_step[lane]] = false;
     }
 
     uint8_t length = pat->length;
@@ -3746,19 +3796,26 @@ void tiles_op_mode_scan(void) {
          * visible there -- this is only needed for every OTHER mode,
          * where nothing else on the board hints that a pattern is
          * still audibly running behind whatever's actually displayed.
-         * Hard on/off blink, this file's own established "flash"
-         * language (see the pattern bank's own OP_PATTERN_BANK_FLASH_MS
-         * flashing red/white cells) -- deliberately not the smoother
-         * pulse language menu_selected_pulse_level() uses elsewhere for
-         * "this is the active/selected thing," since this is a
-         * different signal ("something needs your attention
-         * elsewhere"), not a selection. */
-        bool flash_on = ((now_ms / OP_PATTERN_BANK_FLASH_MS) % 2u) == 0u;
-        float level = (any_lane_running() && flash_on) ? 1.0f : 0.0f;
+         * Originally a hard on/off blink (this file's own "flash"
+         * language, matching the pattern bank's own flashing red/white
+         * cells) -- real feedback after trying it: "the flashing of
+         * triangel is too fast for when sequencer is in the background
+         * it should be a pulsing like the deep sleep pulse." Reworked
+         * to a smooth sine pulse at services/standby.c's own deep-sleep
+         * pacing (DEEP_SLEEP_PULSE_PERIOD_MS, 3000ms -- not shared code,
+         * same "not shared, just the same convention" precedent this
+         * codebase already uses for its OTHER pulse shapes, since that
+         * one's own min/max are tuned for a barely-visible IDLE pad, not
+         * a button meant to actually draw attention) -- deliberately
+         * still not menu_selected_pulse_level()'s own faster, brighter
+         * 900ms pulse, which means "this is the active/selected thing
+         * right now"; a background pattern is a calmer, lower-urgency
+         * signal than that. */
+        float level = any_lane_running() ? background_pattern_pulse_level(now_ms) : 0.0f;
         tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, level);
     }
     if (s_active_mode == OP_MODE_CHORD) {
-        handle_chord_pad_taps();
+        handle_chord_pad_taps(now_ms);
     }
     /* Guitar mode needs nothing further here -- handle_transport_and_
      * length() above already handles its "-"/"+" fret-shift, and its
