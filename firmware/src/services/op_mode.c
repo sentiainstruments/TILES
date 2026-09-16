@@ -3272,13 +3272,57 @@ static void handle_diamond_transport(uint32_t now_ms) {
     }
 
     if (sequencer_active) {
-        /* Real feedback: "this makes the diamond flash glow" for capture
-         * mode, still true -- reuses menu_selected_pulse_level() (this
-         * file's own established "selected" pulse, e.g. the scale
-         * picker's). No DAW-transport states apply here at all anymore
-         * (see this function's own header comment), so there's nothing
-         * else to check -- off otherwise. */
-        float led_level = s_seq_capture_mode_active ? menu_selected_pulse_level(now_ms) : 0.0f;
+        /* Real feedback: "the play light indicator is working [outside
+         * sequencer, i.e. the -/+ toggle LEDs render_transport_toggle_
+         * leds() already drives from clock.running]... paired to
+         * transport in ableton. pull from there for the diamond." Real
+         * signal (tiles_midi_clock_is_running(), driven by an actual
+         * incoming/tap-tempo clock) instead of s_transport_playing's own
+         * guess -- see that flag's own declaration comment on why a
+         * guess about Ableton's ACTUAL state can drift wrong, unlike a
+         * clock signal genuinely being received or not. Capture mode's
+         * own pulse still takes priority while it's actually active --
+         * unrelated to transport, and still worth its own distinct
+         * signal on the same LED. Four states below, real feedback:
+         * "pulsing tho if ableton is playing but sequence is stopped,
+         * hold solid only when sequencer is playing as well. stop pulse
+         * if sequence is paused and solid stop if sequence is fully
+         * stopped from head and ableton is not playing" -- mapped onto
+         * this file's own existing per-lane state: "paused" is s_seq_
+         * lane_running[edit_lane] still true while the shared clock
+         * itself isn't ticking (this lane wants to keep going, just has
+         * no clock to advance against right now -- see seq_advance_
+         * clock()'s own "!clock.running... leaves that flag alone"
+         * comment); "fully stopped from head" is that same flag false. */
+        float led_level;
+        if (s_seq_capture_mode_active) {
+            led_level = menu_selected_pulse_level(now_ms);
+        } else {
+            bool clock_running = tiles_midi_clock_is_running();
+            bool lane_running = s_seq_lane_running[s_seq_edit_lane];
+            if (clock_running && lane_running) {
+                led_level = OP_TRANSPORT_LED_PLAYING_LEVEL;
+            } else if (clock_running) {
+                /* Ableton (or tap tempo) is going, this lane isn't part
+                 * of it yet -- same shape triangle's own background-
+                 * pattern indicator already uses for "active, just not
+                 * what's currently shown," a good semantic match here
+                 * too: something IS moving, just not this. */
+                led_level = background_pattern_pulse_level(now_ms);
+            } else if (lane_running) {
+                /* Paused, waiting for a clock -- same dim, patient shape
+                 * as the recording pulse just below, reused rather than
+                 * shared (see this file's own precedent elsewhere for
+                 * separate copies of one pulse shape over a parameterized
+                 * helper). */
+                float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
+                float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
+                led_level = OP_TRANSPORT_RECORDING_PULSE_MIN +
+                            (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
+            } else {
+                led_level = OP_TRANSPORT_LED_STOPPED_LEVEL;
+            }
+        }
         tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, led_level);
     } else {
         /* Four-state DAW-transport LED language -- real feedback: "armed
@@ -3289,7 +3333,13 @@ static void handle_diamond_transport(uint32_t now_ms) {
          * recording/playing; recording overrides playing (both can be
          * true at once -- recording implies playing, see s_transport_
          * recording's own comment -- and recording's own pulse is what
-         * should show). */
+         * should show). Playing (bottom two cases) now reads tiles_midi_
+         * clock_is_running() instead of s_transport_playing -- same "pull
+         * from the real signal" fix as sequencer mode above, for the
+         * same reason. s_transport_playing itself stays (still needed to
+         * decide what a click sends -- Stop vs Play/Record -- which is
+         * inherently about intent, not something a clock signal alone
+         * could ever answer), just no longer drives this LED directly. */
         float led_level;
         if (s_diamond_record_armed) {
             uint32_t cycle_ms =
@@ -3304,7 +3354,7 @@ static void handle_diamond_transport(uint32_t now_ms) {
             float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
             led_level = OP_TRANSPORT_RECORDING_PULSE_MIN +
                         (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
-        } else if (s_transport_playing) {
+        } else if (tiles_midi_clock_is_running()) {
             led_level = OP_TRANSPORT_LED_PLAYING_LEVEL;
         } else {
             led_level = OP_TRANSPORT_LED_STOPPED_LEVEL;

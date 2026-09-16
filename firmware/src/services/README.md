@@ -5899,5 +5899,46 @@ not its code.
   the call despite its own timeout. Not yet resolved -- this is the
   clearest lead the whole investigation has produced, and the next
   capture should finally answer which half of the bisection it is.
+- **Diamond's transport LED now shows the real clock signal, not this
+  device's own guess about Ableton -- and sequencer mode gets a genuine
+  four-state indicator instead of showing nothing.** Real feedback: "the
+  play light indicator is working[,] wherever youre getting th eplay
+  indicator from is good and paiored to transport in ableton. pull from
+  there for the diamond in other play modes." The "already good" signal
+  is `tiles_midi_clock_is_running()` -- already what `render_transport_
+  toggle_leds()` drives the "-"/"+"  LEDs from in sequencer mode, a REAL
+  reflection of an actual incoming/tap-tempo clock, unlike `s_transport_
+  playing` (this device's own belief about what it last told Ableton,
+  which can silently drift wrong -- see that flag's own declaration
+  comment). `handle_diamond_transport()`'s non-sequencer render now
+  checks `tiles_midi_clock_is_running()` instead of `s_transport_
+  playing` for the playing/stopped LED levels -- `s_transport_playing`
+  itself stays (a click still needs to know whether to send Play or Stop,
+  which is about intent, not something a clock signal alone answers),
+  it just no longer drives the LED. Sequencer mode's own diamond LED
+  used to show only capture mode's pulse or nothing at all -- real
+  feedback added a genuine four-state language on top: "pulsing tho if
+  ableton is playing but sequence is stopped[,] hold solid only when
+  sequencer is playing as well. stop pulse if sequence is paused and
+  solid stop if sequence is fully stopped from head and ableton is not
+  playing." Mapped onto existing state, no new flags needed: "paused" is
+  `s_seq_lane_running[s_seq_edit_lane]` still true while the shared clock
+  itself isn't ticking (this lane wants to keep going, just has nothing
+  to advance against right now -- exactly what `seq_advance_clock()`'s
+  own "leaves that flag alone" comment already describes), "fully
+  stopped from head" is that same flag false. Solid play reuses
+  `OP_TRANSPORT_LED_PLAYING_LEVEL`, solid stop reuses `OP_TRANSPORT_LED_
+  STOPPED_LEVEL`, the "clock going, this lane isn't" pulse reuses
+  `background_pattern_pulse_level()` (triangle's own "active elsewhere"
+  shape -- a good semantic match), and "paused" reuses the recording
+  pulse's exact dim shape (a second copy, not a shared call -- matches
+  this file's own established precedent of separate copies over one
+  parameterized pulse helper). Capture mode's own pulse still takes
+  priority over all four while actually active, checked first.
+  Separately confirmed, no change needed: chord mode's velocity request
+  from this same message ("chord mode should be velocity sensitive") was
+  already correctly wired from the earlier chord-mode redesign --
+  `chord_pad_strike()` already sends every voice's Note-On with the real
+  computed strike velocity, not a fixed value.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
