@@ -460,6 +460,32 @@ static void write_cross_capture_underglow(void) {
     tiles_debug_trace('x');
 }
 
+/* Real feedback: "touching the pad with shift is doing the delete and
+ * save but the led indication is not working there is no underglow
+ * and no pad flash confirmation either." See services/op_mode.h's own
+ * tiles_op_mode_pattern_flash_underglow_color() comment for the root
+ * cause -- debug mode's own override below was unconditionally
+ * swallowing this confirmation the whole time it was armed. Reads the
+ * color that function already resolved (same two-blink timing
+ * op_mode.c's own render_pattern_bank() shows on the pad, computed
+ * once there rather than a second copy here) instead of owning any
+ * pulse-shape math of its own, unlike every OTHER function in this
+ * priority chain -- this one's timing is inherently tied to a specific
+ * pad's own flash cycle, not an independent ambient pulse. */
+static void write_pattern_flash_underglow(float r, float g, float b) {
+    uint8_t level_r = underglow_channel_level(r);
+    uint8_t level_g = underglow_channel_level(g);
+    uint8_t level_b = underglow_channel_level(b);
+    uint32_t pixel = tiles_sk6805_pack_rgb(level_r, level_g, level_b);
+    uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
+    for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
+        pixels[i] = pixel;
+    }
+    tiles_debug_trace('w');
+    tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
+    tiles_debug_trace('x');
+}
+
 static void write_underglow(void) {
     uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
@@ -559,8 +585,18 @@ void tiles_lighting_service(void) {
      * see; debug mode being on is something the person already knows,
      * since they're the one who turned it on. */
     bool underglow_override_active = false;
+    float pattern_flash_r, pattern_flash_g, pattern_flash_b;
     if (tiles_crash_indicator_is_active()) {
         write_crash_underglow();
+        underglow_override_active = true;
+    } else if (tiles_op_mode_pattern_flash_underglow_color(&pattern_flash_r, &pattern_flash_g, &pattern_flash_b)) {
+        /* Above debug mode specifically -- real feedback found debug
+         * mode's own override (checked just below) was unconditionally
+         * swallowing this confirmation the whole time it was armed,
+         * which is most of this session. A brief (600ms), directly-
+         * caused-by-what-the-person-just-did confirmation outranks an
+         * ambient "recording is on" pulse for that short window. */
+        write_pattern_flash_underglow(pattern_flash_r, pattern_flash_g, pattern_flash_b);
         underglow_override_active = true;
     } else if (tiles_debug_mode_is_active()) {
         write_debug_underglow();

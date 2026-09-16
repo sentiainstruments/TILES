@@ -374,3 +374,16 @@ bool tiles_op_mode_sequencer_channel_is_reserved(uint8_t channel);
  * already renders it, so it can't claim standby_active the way
  * sequencer mode's own (visually replacing) capture render does. */
 bool tiles_op_mode_cross_capture_is_active(void);
+
+/* True while the pattern bank's own save/delete confirmation flash is
+ * currently showing, with *out_r/*out_g/*out_b set to the color it
+ * wants underglow to show RIGHT NOW (already resolved through its own
+ * two-blink timing -- see op_mode.c's own OP_PATTERN_FLASH_* section)
+ * -- false (out params untouched) otherwise. services/lighting.c
+ * checks this ABOVE debug mode's own underglow override: real
+ * feedback found debug mode (armed for nearly this entire session)
+ * was unconditionally swallowing this confirmation's green/red the
+ * whole time it was on, since debug mode's own magenta pulse otherwise
+ * takes priority over the plain write_underglow() path this
+ * confirmation would normally show through. */
+bool tiles_op_mode_pattern_flash_underglow_color(float *out_r, float *out_g, float *out_b);

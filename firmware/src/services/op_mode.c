@@ -1574,13 +1574,40 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
         if (col == TILES_CIRCLE_BUTTON_COL) {
             /* Real feedback: "flash that light as the tempo." */
             level = beat_flash_level;
-        } else if (col == TILES_MINUS_BUTTON_COL) {
-            /* Real feedback: "the led for start and top shoukld light up
-             * as toggles respectively" -- exactly one of stop/start is
-             * ever lit, reflecting current transport state. */
-            level = transport_running ? 0.0f : OP_TRANSPORT_LED_LEVEL;
-        } else if (col == TILES_PLUS_BUTTON_COL) {
-            level = transport_running ? OP_TRANSPORT_LED_LEVEL : 0.0f;
+        } else if (col == TILES_MINUS_BUTTON_COL || col == TILES_PLUS_BUTTON_COL) {
+            /* Real feedback: "the +- transport controls shoudl be the
+             * ones with the flashing logic while in sequencer mode" --
+             * moved off diamond (which reverted to a plain capture-
+             * pulse-or-dark indicator now that it's busy triggering
+             * capture/pattern-bank access -- see handle_diamond_
+             * transport()'s own render section) onto here instead, same
+             * four states, same reasoning: real signal (tiles_midi_
+             * clock_is_running()) rather than a guess, plus this lane's
+             * own running flag layered on top. "+" keeps its established
+             * "lit means running" role, "-" its "lit means stopped"
+             * role -- solid for the two unambiguous states, pulsing
+             * (borrowed from diamond's own former shapes) for the two
+             * in-between ones ("clock's going, this lane isn't yet" on
+             * "+"; "this lane wants to run, no clock to advance against"
+             * on "-", since nothing is actually audible in that state
+             * either, matching "-"'s own established stopped-ish role). */
+            bool lane_running = s_seq_lane_running[s_seq_edit_lane];
+            if (col == TILES_MINUS_BUTTON_COL) {
+                if (!transport_running && !lane_running) {
+                    level = OP_TRANSPORT_LED_LEVEL;
+                } else if (!transport_running && lane_running) {
+                    float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
+                    float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
+                    level = OP_TRANSPORT_RECORDING_PULSE_MIN +
+                            (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
+                }
+            } else {
+                if (transport_running && lane_running) {
+                    level = OP_TRANSPORT_LED_LEVEL;
+                } else if (transport_running && !lane_running) {
+                    level = background_pattern_pulse_level(now_ms);
+                }
+            }
         }
         tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
@@ -1813,13 +1840,32 @@ static void handle_edit_mode(uint32_t now_ms) {
     }
 }
 
-static void render_transport_toggle_leds(bool transport_running) {
+/* Real feedback: "the +- transport controls shoudl be the ones with
+ * the flashing logic while in sequencer mode" -- same four-state logic
+ * as render_sequencer()'s own inline copy just above (see that one's
+ * comment for the full reasoning), duplicated rather than shared since
+ * that one has its own circle-column beat-flash handling in the same
+ * loop this function was never given. */
+static void render_transport_toggle_leds(uint32_t now_ms, bool transport_running) {
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         float level = 0.0f;
         if (col == TILES_MINUS_BUTTON_COL) {
-            level = transport_running ? 0.0f : OP_TRANSPORT_LED_LEVEL;
+            bool lane_running = s_seq_lane_running[s_seq_edit_lane];
+            if (!transport_running && !lane_running) {
+                level = OP_TRANSPORT_LED_LEVEL;
+            } else if (!transport_running && lane_running) {
+                float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
+                float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
+                level = OP_TRANSPORT_RECORDING_PULSE_MIN +
+                        (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
+            }
         } else if (col == TILES_PLUS_BUTTON_COL) {
-            level = transport_running ? OP_TRANSPORT_LED_LEVEL : 0.0f;
+            bool lane_running = s_seq_lane_running[s_seq_edit_lane];
+            if (transport_running && lane_running) {
+                level = OP_TRANSPORT_LED_LEVEL;
+            } else if (transport_running && !lane_running) {
+                level = background_pattern_pulse_level(now_ms);
+            }
         }
         tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
@@ -1867,7 +1913,7 @@ static void render_pitch_edit(uint32_t now_ms, bool transport_running) {
             tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
         }
     }
-    render_transport_toggle_leds(transport_running);
+    render_transport_toggle_leds(now_ms, transport_running);
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
         tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
     }
@@ -1877,7 +1923,7 @@ static void render_pitch_edit(uint32_t now_ms, bool transport_running) {
  * directly proportional to the live value, so pressing deeper/shallower
  * gives immediate, legible visual feedback of exactly what Hall depth is
  * currently dialing in. */
-static void render_value_meter(uint8_t lit_count, float r, float g, float b, bool transport_running) {
+static void render_value_meter(uint32_t now_ms, uint8_t lit_count, float r, float g, float b, bool transport_running) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         if (pad <= lit_count) {
             tiles_lighting_set_standby_pad_rgb(pad, r, g, b);
@@ -1885,7 +1931,7 @@ static void render_value_meter(uint8_t lit_count, float r, float g, float b, boo
             tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
         }
     }
-    render_transport_toggle_leds(transport_running);
+    render_transport_toggle_leds(now_ms, transport_running);
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
         tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
     }
@@ -1900,13 +1946,13 @@ static void render_edit_mode(uint32_t now_ms, bool transport_running) {
     case OP_SEQ_EDIT_PROBABILITY: {
         uint8_t percent = active_pattern()->step_probability_percent[s_seq_edit_step];
         uint8_t lit = (uint8_t)((uint32_t)percent * TILES_NUM_PADS / 100u);
-        render_value_meter(lit, 1.0f, 0.8f, 0.0f, transport_running); /* amber */
+        render_value_meter(now_ms, lit, 1.0f, 0.8f, 0.0f, transport_running); /* amber */
         break;
     }
     case OP_SEQ_EDIT_RATCHET: {
         uint8_t count = active_pattern()->step_ratchet_count[s_seq_edit_step];
         uint8_t lit = (uint8_t)((uint32_t)count * TILES_NUM_PADS / OP_SEQ_MAX_RATCHET);
-        render_value_meter(lit, 0.0f, 0.4f, 1.0f, transport_running); /* blue */
+        render_value_meter(now_ms, lit, 0.0f, 0.4f, 1.0f, transport_running); /* blue */
         break;
     }
     default:
@@ -2529,6 +2575,45 @@ static bool pattern_has_content(const op_seq_pattern_t *pat) {
 #define OP_PATTERN_FLASH_BLINK_MS 150u
 #define OP_PATTERN_FLASH_COUNT 2u
 #define OP_PATTERN_FLASH_TOTAL_MS (OP_PATTERN_FLASH_BLINK_MS * 2u * OP_PATTERN_FLASH_COUNT)
+
+/* Real feedback: "touching the pad with shift is doing the delete and
+ * save but the led indication is not working there is no underglow
+ * and no pad flash confirmation either." The pad half was already
+ * correct (render_pattern_bank() below has always set it); the
+ * underglow half never had a real chance to show at all -- services/
+ * lighting.c's own tiles_lighting_service() only ever calls the plain
+ * write_underglow() that WOULD have shown this while NEITHER crash nor
+ * debug mode's own overrides are active, and debug mode has been armed
+ * for nearly this entire session specifically to catch crash reports.
+ * Whenever it's on, its magenta pulse unconditionally owns underglow,
+ * silently swallowing this confirmation's green/red the whole time,
+ * exactly matching what was reported. Read-only (unlike render_
+ * pattern_bank()'s own copy of this same elapsed/blink math, this one
+ * deliberately does NOT clear s_pattern_flash_active on expiry -- that
+ * stays render_pattern_bank()'s own job, since it's the one guaranteed
+ * to run every scan the bank is actually visible; this getter might be
+ * called from services/lighting.c at a different point in the same
+ * scan, or not at all if the bank isn't even open). */
+bool tiles_op_mode_pattern_flash_underglow_color(float *out_r, float *out_g, float *out_b) {
+    if (!s_pattern_flash_active) {
+        return false;
+    }
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    uint32_t elapsed = now_ms - s_pattern_flash_start_ms;
+    if (elapsed >= OP_PATTERN_FLASH_TOTAL_MS) {
+        return false;
+    }
+    float level = ((elapsed / OP_PATTERN_FLASH_BLINK_MS) % 2u) == 0u ? 1.0f : 0.0f;
+    if (s_pattern_flash_is_delete) {
+        *out_r = level;
+        *out_g = 0.0f;
+    } else {
+        *out_r = 0.0f;
+        *out_g = level;
+    }
+    *out_b = 0.0f;
+    return true;
+}
 
 static void render_pattern_bank(uint32_t now_ms) {
     bool flash_on = ((now_ms / OP_PATTERN_BANK_FLASH_MS) % 2u) == 0u;
@@ -3857,57 +3942,19 @@ static void handle_diamond_transport(uint32_t now_ms) {
     }
 
     if (sequencer_active) {
-        /* Real feedback: "the play light indicator is working [outside
-         * sequencer, i.e. the -/+ toggle LEDs render_transport_toggle_
-         * leds() already drives from clock.running]... paired to
-         * transport in ableton. pull from there for the diamond." Real
-         * signal (tiles_midi_clock_is_running(), driven by an actual
-         * incoming/tap-tempo clock) instead of s_transport_playing's own
-         * guess -- see that flag's own declaration comment on why a
-         * guess about Ableton's ACTUAL state can drift wrong, unlike a
-         * clock signal genuinely being received or not. Capture mode's
-         * own pulse still takes priority while it's actually active --
-         * unrelated to transport, and still worth its own distinct
-         * signal on the same LED. Four states below, real feedback:
-         * "pulsing tho if ableton is playing but sequence is stopped,
-         * hold solid only when sequencer is playing as well. stop pulse
-         * if sequence is paused and solid stop if sequence is fully
-         * stopped from head and ableton is not playing" -- mapped onto
-         * this file's own existing per-lane state: "paused" is s_seq_
-         * lane_running[edit_lane] still true while the shared clock
-         * itself isn't ticking (this lane wants to keep going, just has
-         * no clock to advance against right now -- see seq_advance_
-         * clock()'s own "!clock.running... leaves that flag alone"
-         * comment); "fully stopped from head" is that same flag false. */
-        float led_level;
-        if (s_seq_capture_mode_active) {
-            led_level = menu_selected_pulse_level(now_ms);
-        } else {
-            bool clock_running = tiles_midi_clock_is_running();
-            bool lane_running = s_seq_lane_running[s_seq_edit_lane];
-            if (clock_running && lane_running) {
-                led_level = OP_TRANSPORT_LED_PLAYING_LEVEL;
-            } else if (clock_running) {
-                /* Ableton (or tap tempo) is going, this lane isn't part
-                 * of it yet -- same shape triangle's own background-
-                 * pattern indicator already uses for "active, just not
-                 * what's currently shown," a good semantic match here
-                 * too: something IS moving, just not this. */
-                led_level = background_pattern_pulse_level(now_ms);
-            } else if (lane_running) {
-                /* Paused, waiting for a clock -- same dim, patient shape
-                 * as the recording pulse just below, reused rather than
-                 * shared (see this file's own precedent elsewhere for
-                 * separate copies of one pulse shape over a parameterized
-                 * helper). */
-                float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
-                float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
-                led_level = OP_TRANSPORT_RECORDING_PULSE_MIN +
-                            (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
-            } else {
-                led_level = OP_TRANSPORT_LED_STOPPED_LEVEL;
-            }
-        }
+        /* Real feedback: "the +- transport controls shoudl be the ones
+         * with the flashing logic while in sequencer mode" -- the four-
+         * state transport display that USED to live here moved to
+         * render_sequencer()'s/render_transport_toggle_leds()'s own "-"/
+         * "+" LEDs instead (see either one's own comment for the full
+         * four-state mapping); diamond's own role in sequencer mode is
+         * triggering capture/pattern-bank access now (see this
+         * function's own diamond/shift-swap comment above), not passively
+         * displaying transport state, so back to a plain "capture pulse
+         * while active, dark otherwise" indicator -- no DAW-transport
+         * states apply here at all, matching the pattern-bank branch's
+         * own equally simple LED just above it. */
+        float led_level = s_seq_capture_mode_active ? menu_selected_pulse_level(now_ms) : 0.0f;
         tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, led_level);
     } else {
         /* Four-state DAW-transport LED language -- real feedback: "armed

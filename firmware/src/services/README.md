@@ -6301,5 +6301,44 @@ not its code.
   the multi-note-per-step work above in the same pass -- worth watching
   closely on the next real-hardware round, same as everything else
   reintroduced or newly built this session.
+- **Two LED fixes, both real feedback caught right after the previous
+  round shipped:**
+  - **The pattern save/delete confirmation's underglow half was never
+    actually reaching hardware, for almost this entire session.** "the
+    led indication is not working there is no underglow and no pad
+    flash confirmation either" (the pad half turned out fine on
+    inspection -- likely just hard to notice with a finger physically
+    covering the one pad that's flashing during the gesture itself).
+    Root cause, found by re-tracing `tiles_lighting_service()`'s own
+    priority chain rather than the save/delete logic itself (which was
+    already correct): debug mode's own magenta underglow override --
+    armed for nearly this entire session specifically to catch crash
+    reports -- unconditionally owns underglow whenever it's on, and the
+    plain `write_underglow()` path this confirmation normally shows
+    through never got a chance to run underneath it. New `tiles_op_
+    mode_pattern_flash_underglow_color()` (`services/op_mode.h`/`.c`)
+    exposes the confirmation's already-resolved color (reusing
+    `render_pattern_bank()`'s own two-blink timing, not a second copy of
+    that math), checked in the priority chain ABOVE debug mode -- a
+    brief (600ms), directly-caused-by-what-you-just-did confirmation
+    outranks an ambient "recording is on" pulse for that short window.
+  - **Moved the four-state transport indicator off diamond, onto "-"/
+    "+".** "the +- transport controls shoudl be the ones with the
+    flashing logic while in sequencer mode." Diamond's role in
+    sequencer mode is triggering capture/pattern-bank access now (this
+    same session's earlier diamond/shift swap), not passively
+    displaying transport state -- it reverted to a plain "capture pulse
+    while active, dark otherwise" indicator, the same shape the
+    pattern-bank branch right next to it already uses. The four states
+    (solid/pulse x play/stop) moved to `render_sequencer()`'s own "-"/
+    "+" LEDs and `render_transport_toggle_leds()` (shared by the pitch/
+    probability/ratchet edit views, needed a new `now_ms` parameter to
+    carry the pulse timing) instead: "+" keeps its established "lit
+    means running" role (solid when this lane's genuinely playing,
+    pulsing when the clock's going but this lane isn't part of it yet),
+    "-" keeps "lit means stopped" (solid when fully stopped, pulsing
+    when this lane wants to run but has no clock to advance against --
+    nothing's actually audible in that state either, matching "-"'s own
+    stopped-ish role).
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
