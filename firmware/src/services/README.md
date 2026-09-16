@@ -5156,5 +5156,72 @@ not its code.
   be reached regardless of which call site triggered it, so the SAME
   1-second watchdog timeout still catches it exactly as it would
   anywhere else `tud_task()` is called.
+- **Two-board comparison test (same firmware, same computer, different
+  ports) narrowed the freeze further, and a sharp real-feedback question
+  found a second genuine bug along the way.** Real feedback: "board 1
+  crashed alone while running animations but board 2 didnt... then
+  board 2 crashed a min later." Two different physical boards, same
+  build, failing independently -- rules out a defect specific to one
+  unit. Switching board 2 to a proper standard 3A/12V external supply
+  (dedicated port, alongside USB) did NOT stop the crash, ruling out
+  power delivery from the computer's own USB ports as the cause. Board
+  1's own crash-report ring showed a DIFFERENT last character than every
+  prior capture (`L`, `tiles_lighting_service()`, not `T`/`tud_task()`) --
+  consistent with a real electrical/USB event manifesting wherever the
+  CPU happened to be doing hardware I/O at that moment, rather than one
+  specific software bug in one specific function. Both of the captures
+  where the moment just before the freeze was actually visible (board
+  2's second, board 1's second) showed the identical `[power->FAULT]`
+  signature immediately preceding it -- and `power.c`'s own `raw_mode_
+  from_pins()` shows FAULT requires `tud_mounted() == false`, meaning a
+  REAL USB bus-reset/disconnect event is genuinely occurring each time,
+  not a software artifact.
+  Online research confirmed this general class -- a Bulk-IN endpoint
+  double-buffering race across SOF interrupts on the RP2040/2350's
+  shared USB peripheral silicon, "errata E15" -- is real, documented,
+  and still actively being found and fixed upstream (an UNMERGED
+  hathach/tinyusb PR fixing a specific E15 sub-bug in a newer, refactored
+  `dcd_rp2040.c` than this project's own Dec-2024 vendored copy uses,
+  confirmed by direct diff comparison not to transplant cleanly onto
+  this older code's different `ep->pending`/`hw_endpoint_start_next_
+  buffer()` approach). Also confirmed directly against the actual
+  compiler invocation (not assumed) that this vendored copy's OWN E15
+  mitigation (`TUD_OPT_RP2040_USB_DEVICE_UFRAME_FIX`, gating a real
+  workaround block in `dcd_rp2040.c`'s SOF handler) is already compiled
+  in via the normal `tinyusb_device` CMake link, contrary to an initial
+  worry that it might simply be unset. Whether this specific project's
+  older buffer-management implementation has its own analogous,
+  not-yet-found bug in the same general area remains a genuinely open
+  question -- narrowed a great deal (a real, named erratum class,
+  actively receiving fixes upstream even now, not an exotic guess), but
+  not yet a proven, fixed root cause.
+  **A second real bug found while chasing this, independent of the
+  freeze itself**: real feedback pushed back hard and correctly on
+  accepting watchdog-recovery as good enough -- "why would it reboot if
+  power is table. it might loose conection but not reboot" -- a
+  genuinely sharp point: a USB disconnect on its own should never
+  require a full CPU reset; something in the recovery PATH itself was
+  making a bad situation worse. Investigating that turned up `services/
+  boot_sequence.c`'s own power-on animation, which had been blocking on
+  `sleep_ms()` for its entire ~4.7 second duration (`RAIN_DURATION_MS` +
+  `FADE_DURATION_MS` + `PULSE_TOTAL_MS`) on EVERY single boot, watchdog-
+  recovery included -- built on the exact same wrong assumption
+  (services/boot_sequence.h's own now-corrected comment: "TinyUSB's own
+  background IRQ task keeps USB alive regardless of what the main loop
+  is doing") that `main.c`'s own `tud_task()` comment had already found
+  and fixed for the MAIN loop, right at the start of this whole session,
+  just never carried over to this file. Meaning USB got ZERO service for
+  ~4.7s on every fresh power-on too, not just crash recovery -- exactly
+  when a host is actively trying to enumerate the device and needs the
+  MOST attention. Fixed two ways: a new `boot_frame_delay()` pumps `tud_
+  task()` throughout each animation frame's own pacing wait instead of
+  sleeping blind (so the animation itself no longer starves USB, for a
+  normal power-on too), AND `main.c` now skips the animation (and its
+  Hall-baseline recapture, whose own "a few settled seconds since a
+  just-power-cycled MCU" justification doesn't apply after a WARM reset
+  where the sensors never lost power) entirely on a confirmed crash-
+  recovery boot via `watchdog_enable_caused_reboot()`, so recovery is
+  bounded by USB re-enumeration time alone, not that plus a second
+  ~4.7s animation nobody asked to sit through twice.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

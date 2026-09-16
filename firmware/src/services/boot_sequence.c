@@ -8,9 +8,34 @@
 
 #include "pico/time.h"
 
+#include "tusb.h"
+
 #include <math.h>
 
 #define BOOT_FRAME_INTERVAL_MS 30u
+
+/* Real feedback, tracking down why a crash-recovery reboot felt so
+ * disruptive: "why would it reboot if power is tabl[e]... it might
+ * loose conection but not reboot." This file's own header claims
+ * "TinyUSB's own background IRQ task keeps USB alive regardless of
+ * what the main loop is doing" -- the EXACT same assumption main.c's
+ * own tud_task() comment already found and corrected earlier this
+ * session (PICO_STDIO_USB_ENABLE_IRQ_BACKGROUND_TASK defaults to 0
+ * once tinyusb_device is linked directly, which this project does).
+ * That means every plain sleep_ms(BOOT_FRAME_INTERVAL_MS) call this
+ * file used to make (run_phase1_rain()/_phase2_fade()/_phase3_magenta_
+ * pulse(), ~4.7s combined) left USB completely unserviced for that
+ * entire span, on EVERY boot -- including a fresh power-on, exactly
+ * when the host is actively trying to enumerate the device and USB
+ * needs the MOST attention, not the least. Same 30ms pacing as before,
+ * just pumping tud_task() throughout the wait instead of sleeping
+ * through it blind. */
+static void boot_frame_delay(void) {
+    absolute_time_t deadline = make_timeout_time_ms(BOOT_FRAME_INTERVAL_MS);
+    do {
+        tud_task();
+    } while (!time_reached(deadline));
+}
 
 static float clamp01(float v) {
     if (v < 0.0f) {
@@ -158,7 +183,7 @@ static void run_phase1_rain(void) {
         if (done) {
             break;
         }
-        sleep_ms(BOOT_FRAME_INTERVAL_MS);
+        boot_frame_delay();
     }
 }
 
@@ -174,7 +199,7 @@ static void run_phase2_fade(void) {
         if (done) {
             break;
         }
-        sleep_ms(BOOT_FRAME_INTERVAL_MS);
+        boot_frame_delay();
     }
 }
 
@@ -212,7 +237,7 @@ static void run_phase3_magenta_pulse(void) {
         if (done) {
             break;
         }
-        sleep_ms(BOOT_FRAME_INTERVAL_MS);
+        boot_frame_delay();
     }
 }
 

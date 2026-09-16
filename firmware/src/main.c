@@ -180,11 +180,31 @@ int main(void) {
         printf("[hall] one or more pads failed sensor init -- see per-pad status\n");
     }
 
-    /* Power-on animation (~4s, blocking) -- also re-captures the Hall
-     * rest baseline right as it ends, now that a few settled seconds
-     * have passed since tiles_hall_init()'s very-first-instant capture
-     * above. See services/boot_sequence.h. */
-    if (!tiles_boot_sequence_run()) {
+    /* Real feedback: "the reboot is not acceptable since it takes too
+     * long... why would it reboot if power is tabl[e]. it might loose
+     * conection but not reboot." While the underlying hang that makes
+     * the watchdog reset in the first place is still being tracked down
+     * (see services/README.md's own history), a crash-recovery reboot
+     * should get back to USABLE as fast as USB re-enumeration itself
+     * takes, not that PLUS this animation's own ~4.7s on top -- even
+     * now that it correctly pumps tud_task() throughout (see boot_
+     * sequence.c/.h's own history just below), that's still real wall-
+     * clock time nobody asked to sit through a second time.
+     * watchdog_enable_caused_reboot() is a raw hardware scratch-register
+     * read -- safe to call this early, before services/debug_mode.c's
+     * own tiles_debug_mode_init() (which checks the exact same thing,
+     * later, for its own crash-snapshot purposes) has even run yet.
+     * Skipping the Hall-baseline recapture this animation would
+     * otherwise also do is correct here, not just incidental to
+     * skipping the animation: that recapture's own justification (a
+     * few settled seconds since a just-power-cycled MCU) doesn't apply
+     * after a WARM reset at all -- the sensors never lost power, so the
+     * baseline tiles_hall_init() already captured a moment ago this
+     * exact boot is exactly as valid as one taken 4 more seconds from
+     * now would be. */
+    if (watchdog_enable_caused_reboot()) {
+        printf("[boot_sequence] skipped -- crash-recovery reboot, not a fresh power-on\n");
+    } else if (!tiles_boot_sequence_run()) {
         printf("[boot_sequence] post-animation Hall baseline re-capture failed for at least one pad\n");
     }
 

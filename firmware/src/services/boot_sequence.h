@@ -34,11 +34,23 @@
  * animation was going to take that long anyway.
  *
  * Blocking by design: nothing else needs to run while this plays (no
- * touch/MIDI/etc. matters yet, and TinyUSB's own background IRQ task
- * keeps USB alive regardless of what the main loop is doing -- see
- * midi/usb_device.c), so a tight sleep_ms()-paced loop is simpler than
+ * touch/MIDI/etc. matters yet), so a tight loop is simpler than
  * threading this through the main loop's per-iteration scan functions
- * the way standby.c's animations have to be.
+ * the way standby.c's animations have to be. NOT a plain sleep_ms(),
+ * though, not anymore -- real feedback tracking down why a crash-
+ * recovery reboot felt so disruptive caught this file's own PREVIOUS
+ * claim here ("TinyUSB's own background IRQ task keeps USB alive
+ * regardless of what the main loop is doing") as the exact same wrong
+ * assumption main.c's own tud_task() comment already had to correct
+ * for the main loop itself: PICO_STDIO_USB_ENABLE_IRQ_BACKGROUND_TASK
+ * defaults to 0 once tinyusb_device is linked directly, which this
+ * project does, so nothing services USB during a plain sleep_ms() at
+ * all. boot_frame_delay() (see boot_sequence.c) pumps tud_task()
+ * throughout each frame's own pacing wait instead -- this animation
+ * used to leave USB completely unserviced for its own entire ~4.7s
+ * duration, on every single boot, including the fresh power-on where
+ * the host is actively trying to enumerate the device and needs the
+ * MOST attention, not the least.
  *
  * Reuses the exact same standby-active rendering path standby.c's
  * animations use (tiles_lighting_set_standby_active(),
