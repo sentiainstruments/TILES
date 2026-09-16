@@ -5940,5 +5940,60 @@ not its code.
   already correctly wired from the earlier chord-mode redesign --
   `chord_pad_strike()` already sends every voice's Note-On with the real
   computed strike velocity, not a fixed value.
+- **The 'x' bisection landed: the freeze is genuinely INSIDE
+  `tiles_sk6805_write()`, not after it -- meaning its own 5ms timeout
+  isn't actually bounding the wait.** Next live-testing crash after the
+  'x' trace shipped. One board's report cut off at exactly `...YLw`
+  again -- still no 'x' anywhere, meaning the hang happens strictly
+  BETWEEN the 'w' trace and the 'x' trace, i.e. inside `drivers/
+  sk6805.c`'s `tiles_sk6805_write()` itself, on the underglow path
+  (4-pixel write) specifically, same as the previous capture. This
+  matters a lot: `sk6805_put_blocking_with_timeout()`'s own wait loop
+  checks `time_reached(deadline)` every spin, bounded to 5ms -- for it
+  to still be stuck when the FULL 1000ms watchdog window expires, either
+  that timer check itself isn't running (execution never gets back to
+  it), or something is stalling at a lower level than software can
+  intervene at, most plausibly a hung bus transaction reading/writing
+  the PIO peripheral's own registers directly -- a genuine hardware-
+  level stall would explain why a correctly-written software timeout
+  can't help: the CPU can't execute the NEXT instruction (including the
+  timeout check) until that transaction resolves, and if it never does,
+  neither does anything downstream of it. Checked and ruled out as
+  contributing factors: no other PIO consumer anywhere in this firmware
+  (`s_pad_chain`/`s_underglow_chain` are the only two `pio0` state
+  machines that exist, confirmed by grep), and no application-registered
+  interrupt handler exists either (TinyUSB's own internal USB IRQ is the
+  only one, not something this codebase's own code touches directly).
+  Added one more layer of resolution since the existing 'w'/'x' pair
+  only bisects "before this call" from "after it," not WHERE inside it:
+  `tiles_sk6805_write()` (drivers/sk6805.c) now traces 'p' before each
+  individual pixel's own write attempt, and 'q' once the per-pixel loop
+  fully exits (before the trailing 300us reset/latch `sleep_us()`) --
+  counting 'p's in the next report pins down exactly which pixel index
+  it dies on, and whether 'q' shows up at all separates "stuck inside
+  the PIO wait" from "stuck in the latch delay instead." This is a
+  deliberate, temporary exception to drivers/ never depending on
+  services/ (see the new include's own comment in sk6805.c) --
+  restructuring the caller to push pixels one at a time instead would
+  have corrupted the reset/latch timing (that delay must run once, after
+  the LAST pixel, not after each one), so reaching into the driver
+  directly was the only way to get this resolution without a real
+  behavior change alongside it.
+  Separately, and operationally important: THE SAME test round's OTHER
+  board's crash report showed NEITHER 'x' NOR the underlying 'w'/'i'
+  pattern change at all -- its ring looked exactly like reports from
+  BEFORE the 'x' trace shipped, strongly suggesting that whichever
+  physical board answered to bus 2 at flash time is not the same
+  physical board that answered to bus 2 during this test (macOS/
+  picotool bus/address numbers are not guaranteed stable across a
+  replug, and real feedback separately reported the boards being
+  unplugged/replugged around this same test round while chasing a
+  still-open, separate lead: "everytime we plug in tiles it crashes and
+  [affects] the novation. its like on command when i plug in tiles" --
+  a DIFFERENT signature than this entry's multi-minute-uptime freeze,
+  not yet investigated). Worth explicitly reconfirming which
+  physical unit is which before trusting bus-number-based flashing
+  again, rather than assuming bus 2 now means what it meant a flash or
+  two ago.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

@@ -5,6 +5,20 @@
 
 #include "sk6805.pio.h"
 
+/* Temporary, diagnostic-only dependency on services/ -- a real exception
+ * to this codebase's own drivers-don't-depend-on-services layering
+ * (drivers/i2c_bus.c, drivers/board_init.c etc. never do this). Real
+ * hardware just proved this exact function is where the recurring
+ * freeze lands (see this file's own TILES_PIO_TIMEOUT_US comment for
+ * the finding), specifically INSIDE tiles_sk6805_write() despite its
+ * own 5ms timeout -- the caller-side 'w'/'x' pair in services/lighting.c
+ * bisects "before this call" from "after it," but not WHERE inside it.
+ * Changing the caller to push one pixel at a time instead would corrupt
+ * the reset/latch timing below (must run once, after the LAST pixel,
+ * not after each one) -- reaching in here directly is the only way to
+ * get per-pixel resolution without that side effect. */
+#include "../services/debug_mode.h"
+
 /* Real feedback: a second real-hardware freeze persisted even after
  * every i2c_write_blocking()/i2c_read_blocking() call in this codebase
  * got a timeout bound (see drivers/pca9685.c's own identical rationale)
@@ -97,6 +111,12 @@ uint32_t tiles_sk6805_pack_rgb(uint8_t r, uint8_t g, uint8_t b) {
 
 void tiles_sk6805_write(const tiles_sk6805_chain_t *chain, const uint32_t *pixels, size_t count) {
     for (size_t i = 0; i < count; i++) {
+        /* One 'p' per pixel INDEX attempted, emitted before the
+         * potentially-hanging call itself -- see this file's own include
+         * comment above. Counting 'p's in the next crash report pins down
+         * exactly which pixel the freeze lands on, distinct from whether
+         * it happens at all (services/lighting.c's own 'w'/'x' pair). */
+        tiles_debug_trace('p');
         /* Left-align the 24-bit GRB word in the 32-bit FIFO slot to
          * match the pull_threshold=24, shift-left OSR config above. */
         if (!sk6805_put_blocking_with_timeout(chain->pio, chain->sm, pixels[i] << 8u, TILES_PIO_TIMEOUT_US)) {
@@ -111,5 +131,9 @@ void tiles_sk6805_write(const tiles_sk6805_chain_t *chain, const uint32_t *pixel
             break;
         }
     }
+    /* Marks "the per-pixel loop above fully exited" -- if a report ever
+     * cuts off after the last expected 'p' but before this 'q', the
+     * freeze is in the trailing sleep_us() below, not the loop. */
+    tiles_debug_trace('q');
     sleep_us(TILES_SK6805_RESET_LOW_US);
 }
