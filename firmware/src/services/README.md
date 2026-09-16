@@ -5866,5 +5866,38 @@ not its code.
   off -- RAM doesn't survive that either way, and actual cross-power-
   cycle persistence remains the separate, larger, not-yet-built
   profiles/ module note_map.h's own header already anticipated.
+- **The crash-report timing fix paid off immediately: the first real
+  (non-boot-noise) freeze trace captured all session.** Live-testing
+  crash, both boards independently, right after flashing the snapshot-
+  timing fix above. Both reports finally showed a realistic uptime
+  (~455-461 SECONDS, not the bogus "20 ms" every single prior report
+  showed) and the ring's healthy repeating cycle (`TMPBRoudEGSYLwiwHcXK`)
+  cut off at the EXACT SAME point on both boards: right after the 'w'
+  trace for the underglow SK6805 write (debug mode's magenta pulse was
+  active on both, per the standing test convention), with NOTHING
+  recorded afterward for the rest of the ring. This is real signal, not
+  noise -- two independently-running boards landing on the identical cut
+  point, at realistic multi-minute uptimes, is exactly what the snapshot-
+  timing fix was supposed to finally reveal.
+  Genuinely strange part, though: the code at that exact point --
+  `services/drivers/sk6805.c`'s `tiles_sk6805_write()`, a per-pixel loop
+  each bounded to `TILES_PIO_TIMEOUT_US` (5ms), then one `sleep_us()` for
+  the 300us reset/latch pulse -- has no plausible path to explain
+  holding the CPU silent for anywhere near the full 1000ms watchdog
+  window, even in its own absolute worst case (every one of underglow's
+  handful of pixels timing out back to back). Either that 5ms timeout
+  genuinely isn't bounding the wait the way its own code implies it
+  should here, or the true hang is happening somewhere else entirely --
+  an interrupt context, most plausibly -- with this 'w' simply being
+  the last thing the MAIN loop got to record before something else froze
+  it from outside. Added one more trace character to tell these apart
+  on the next occurrence: `tiles_debug_trace('x')` right after all 4 of
+  `tiles_sk6805_write()`'s call sites (`write_pad()`, `write_debug_
+  underglow()`, `write_crash_underglow()`, `write_underglow()`) in
+  `services/lighting.c`. `w` then `x` next time means the hang is AFTER
+  this call returns; `w` with no `x` means it's genuinely stuck inside
+  the call despite its own timeout. Not yet resolved -- this is the
+  clearest lead the whole investigation has produced, and the next
+  capture should finally answer which half of the bisection it is.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

@@ -295,6 +295,23 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
     tiles_tca9554_enable_mux(&s_led_mux, cfg->led.mux_index);
     tiles_debug_trace('w');
     tiles_sk6805_write(&s_pad_chain, &pixel, 1);
+    /* Real hardware finally caught the hang itself, not boot noise --
+     * first genuine crash report since tiles_debug_mode_capture_crash_
+     * snapshot() moved the snapshot copy earlier (see that function's
+     * own comment): trace cut off right after 'w' on TWO boards
+     * independently, at realistic multi-minute uptimes, with nothing
+     * after it for the full watchdog window. But the code right there
+     * -- a 5ms-timeout-bounded PIO push per pixel, then a 300us sleep_
+     * us() -- has no business taking anywhere near 1000ms even in its
+     * worst case (every pixel timing out). This 'x' answers whether
+     * tiles_sk6805_write() actually RETURNED at all: if the next crash
+     * report shows 'w' then 'x', the hang is somewhere AFTER this call
+     * (the mux-disable below, or something entirely outside this
+     * function, e.g. an interrupt context) -- if it still cuts off at
+     * 'w' with no 'x', the hang is genuinely INSIDE tiles_sk6805_write()
+     * despite its own timeout, meaning that timeout isn't actually
+     * bounding the wait the way its own code implies it should. */
+    tiles_debug_trace('x');
     tiles_tca9554_disable_all_muxes(&s_led_mux);
 }
 
@@ -352,6 +369,10 @@ static void write_debug_underglow(void) {
      * function's own callers) narrows it back down if needed. */
     tiles_debug_trace('w');
     tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
+    /* See write_pad()'s own 'x' comment -- same bisection, this call
+     * site included since debug mode's own magenta pulse is exactly
+     * what's active during a real debug-mode test session. */
+    tiles_debug_trace('x');
 }
 
 /* Real feedback: "we need an indicator for crash now that we skip boot
@@ -391,6 +412,8 @@ static void write_crash_underglow(void) {
      * function's own callers) narrows it back down if needed. */
     tiles_debug_trace('w');
     tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
+    /* See write_pad()'s own 'x' comment -- same bisection. */
+    tiles_debug_trace('x');
 }
 
 static void write_underglow(void) {
@@ -408,6 +431,8 @@ static void write_underglow(void) {
      * function's own callers) narrows it back down if needed. */
     tiles_debug_trace('w');
     tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
+    /* See write_pad()'s own 'x' comment -- same bisection. */
+    tiles_debug_trace('x');
 }
 
 static void set_pad_press_internal(uint8_t logical_pad, float press_0_to_1) {
