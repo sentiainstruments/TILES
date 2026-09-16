@@ -6168,5 +6168,22 @@ not its code.
   fresh every single frame, the layout snaps immediately the instant
   length crosses to or from 16 -- no separate "on length change"
   trigger needed at all.
+- **First real validation of the `sleep_us()` -> `busy_wait_us()` fix:
+  hours of active use, across two further flashes on top of it, zero
+  new crash reports.** Real feedback: "there hasnt been a crash in a
+  bit since you implemented that fix its been hours and a new flash
+  even." Checked against the actual log rather than taken on trust
+  alone: the newest crash-report offset is still the exact same one
+  that led to the fix in the first place -- nothing new since, through
+  ~77MB of subsequent healthy trace activity and two more reflashes (the
+  16-step 4x4 layout change included, itself a real, separate edit to
+  the same file). Not proof it's gone for good -- every prior fix this
+  session that LOOKED like progress (I2C timeouts, the SK6805 PIO
+  timeout, the crash-report snapshot timing) also survived some amount
+  of testing before the next real data point complicated the picture --
+  but this is the longest clean stretch since the investigation began,
+  on the fix most directly backed by reading the actual mechanism start
+  to finish rather than a bounded-but-still-hanging guess. Worth
+  treating as genuinely promising, not yet as closed.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
