@@ -18,14 +18,16 @@
  *
  * "shift" is SW6/circle -- see services/expression_control.h's own
  * real-feedback quote: "our shift and power button is circle."
- * "on its own" means alone: this module's own circle-hold tracking
- * (see .c) requires every other function button to be up, so this can
- * never fire mid-way through the debug-mode combo (diamond+square+
- * circle) or the expression-mute combo (circle+square) -- both of
- * those also have circle down, and would otherwise restart this
- * gesture's own hold timer on every one of their scans for no reason,
- * or worse, race to dismiss this indicator as a side effect of an
- * unrelated gesture.
+ * Dismiss is a single click of circle alone (real feedback, after a
+ * first hardware pass tried a 2-second hold instead: "dismiss is a
+ * single shift click not a hold") -- "alone" requires every other
+ * function button to have been up for the entire press, not just at
+ * the moment of release, so this can never fire off the tail end of
+ * the debug-mode combo (diamond+square+circle) or the expression-mute
+ * combo (circle+square) -- both of those also involve circle, and a
+ * hand lifting off one finger at a time, circle last, would otherwise
+ * look identical to this click at the exact instant of release. See
+ * the .c file for the actual press-tracking.
  *
  * Rendering lives in services/lighting.c (tiles_lighting_service()
  * checks tiles_crash_indicator_is_active() and, if true, overrides the

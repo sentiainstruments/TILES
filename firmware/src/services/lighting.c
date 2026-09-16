@@ -157,6 +157,10 @@ static tiles_rgb01_t s_underglow_rgb[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
 static uint8_t s_service_cursor;
 static bool s_initialized;
 static bool s_standby_active;
+/* True while write_crash_underglow()/write_debug_underglow() owned the
+ * underglow as of the last tiles_lighting_service() call -- see that
+ * function's own comment on the restore-on-dismiss fix this drives. */
+static bool s_underglow_override_was_active;
 
 static float clamp01(float v) {
     if (v < 0.0f) {
@@ -404,6 +408,7 @@ bool tiles_lighting_init(void) {
     s_service_cursor = 0;
     s_initialized = false;
     s_standby_active = false;
+    s_underglow_override_was_active = false;
 
     if (!tiles_sk6805_init(&s_underglow_chain, pio0, TILES_GPIO_UNDERGLOW_DATA)) {
         return false;
@@ -448,11 +453,35 @@ void tiles_lighting_service(void) {
      * coexist). The crash is the more urgent, less-expected thing to
      * see; debug mode being on is something the person already knows,
      * since they're the one who turned it on. */
+    bool underglow_override_active = false;
     if (tiles_crash_indicator_is_active()) {
         write_crash_underglow();
+        underglow_override_active = true;
     } else if (tiles_debug_mode_is_active()) {
         write_debug_underglow();
+        underglow_override_active = true;
     }
+
+    /* Real feedback on the crash indicator's dismiss: "the dismiss
+     * didnt work it just made the red color solid." Root cause: unlike
+     * pads (write_pad()'s round-robin below re-drives every pad every
+     * few frames regardless), underglow has NO other continuous
+     * per-frame driver once neither override above is active -- so the
+     * instant either one stops owning it, nothing ever wrote a fresh
+     * value again, and it just stayed latched at whatever the pulse's
+     * last brightness happened to be, forever. Detects that exact
+     * transition (was overriding last frame, isn't this frame) and
+     * fires write_underglow() once, which pushes s_underglow_rgb[]'s
+     * CURRENT value -- always kept correctly up to date underneath the
+     * override by whatever normally owns it (the plain default, or
+     * standby's own animation via tiles_lighting_set_standby_underglow_
+     * rgb()), regardless of this override having been on top of it --
+     * exactly mirroring tiles_lighting_set_standby_active(false)'s own
+     * explicit restore just below, for the identical reason. */
+    if (s_underglow_override_was_active && !underglow_override_active) {
+        write_underglow();
+    }
+    s_underglow_override_was_active = underglow_override_active;
 
     write_pad(s_service_cursor);
     s_service_cursor = (uint8_t)((s_service_cursor + 1u) % TILES_NUM_PADS);

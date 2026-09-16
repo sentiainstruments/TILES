@@ -3,28 +3,24 @@
 #include "board_layout.h"
 #include "buttons.h"
 
-#include "pico/time.h"
-
-/* Matches this codebase's other one-shot hold gestures (services/
- * debug_mode.c's 8-second combo, services/expression_control.h's
- * 3-second combos) in shape, not duration -- 2 seconds specifically
- * because real feedback asked for exactly that: "presing shift for 2
- * secodns." Deliberately no separate _triggered_this_hold edge-latch
- * like those other gestures use: unlike a toggle, dismissing is a
- * one-way transition (s_active can only go true->false here), so
- * there's nothing a repeat trigger could do wrong even if the hold
- * continued past the threshold -- the very next scan's early-return
- * (once s_active is false) makes the whole hold-tracking block dead
- * until another crash sets s_active true again. */
-#define TILES_CRASH_INDICATOR_DISMISS_HOLD_MS 2000u
+/* Real feedback, after the first hardware pass: "dismiss is a single
+ * shift click not a hold" -- corrects this module's original 2-second-
+ * hold spec once it had actually been tried. A click fires on release,
+ * requiring circle to have been the ONLY function button down for the
+ * ENTIRE press, not just at the instant of release -- s_circle_was_
+ * pressed_alone tracks that across the whole press so a hand lifting
+ * off a multi-button combo (the debug-mode combo, the expression-mute
+ * combo -- both also involve circle) one finger at a time, circle
+ * last, can never be mistaken for this click just because circle
+ * happened to be the only one still down at the exact release instant. */
 
 static bool s_active = false;
-static bool s_circle_alone_held = false;
-static uint32_t s_circle_alone_start_ms = 0u;
+static bool s_circle_pressed = false;
+static bool s_circle_was_pressed_alone = false;
 
 void tiles_crash_indicator_init(bool crash_recovered) {
     s_active = crash_recovered;
-    s_circle_alone_held = false;
+    s_circle_pressed = false;
 }
 
 void tiles_crash_indicator_scan(void) {
@@ -42,19 +38,17 @@ void tiles_crash_indicator_scan(void) {
                         tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
                         tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
                         tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
-    bool circle_alone_now = circle && !others_held;
 
-    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-
-    if (circle_alone_now && !s_circle_alone_held) {
-        s_circle_alone_held = true;
-        s_circle_alone_start_ms = now_ms;
-    } else if (!circle_alone_now) {
-        s_circle_alone_held = false;
-    }
-
-    if (s_circle_alone_held && (now_ms - s_circle_alone_start_ms) >= TILES_CRASH_INDICATOR_DISMISS_HOLD_MS) {
-        s_active = false;
+    if (circle && !s_circle_pressed) {
+        s_circle_pressed = true;
+        s_circle_was_pressed_alone = !others_held;
+    } else if (circle && s_circle_pressed && others_held) {
+        s_circle_was_pressed_alone = false;
+    } else if (!circle && s_circle_pressed) {
+        s_circle_pressed = false;
+        if (s_circle_was_pressed_alone) {
+            s_active = false;
+        }
     }
 }
 

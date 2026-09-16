@@ -5403,5 +5403,79 @@ not its code.
   case -- the more urgent, less-expected thing to see, versus debug
   mode being on, which the person already knows since they turned it
   on themselves.
+- **First real-hardware pass on the crash indicator found two things to
+  fix, both from real feedback: "the dismiss didnt work it just made
+  the red color solid make the dismiss return to regular underglow and
+  dimsiss is a single shift click not a hold."**
+  **Bug (not a design change): underglow never restored on dismiss.**
+  `tiles_lighting_service()` only ever WROTE the underglow from inside
+  the crash/debug override branches -- there was no `else` case for
+  "neither is active." That's fine while pads are involved (`write_pad()`'s
+  own round-robin below keeps re-driving them regardless), but
+  underglow has no other continuous per-frame driver, so the instant
+  the override stopped being active, NOTHING wrote to it again -- it
+  just stayed latched at whatever brightness the pulse happened to be
+  at that exact frame, forever, reading as "solid" rather than restored.
+  Fixed by tracking whether either override owned the underglow last
+  frame (`s_underglow_override_was_active`) and, on the exact frame
+  that flips from owned to not-owned, calling `write_underglow()` once
+  -- which pushes `s_underglow_rgb[]`'s current value (always kept
+  correct underneath the override by whatever normally owns it, the
+  default or standby's animation) back to hardware, the same explicit-
+  restore reasoning `tiles_lighting_set_standby_active(false)` already
+  uses for the identical reason. This was a latent bug in debug mode's
+  own pulse too (toggling debug mode off while running would have had
+  the exact same "stays solid" symptom) -- the fix covers both since
+  both go through the same override/restore path now.
+  **Design change: hold -> single click.** `services/crash_indicator.c`
+  originally required holding circle alone for 2000ms (matching the
+  original ask); real feedback after trying it said single-click
+  instead. Now fires on release of a circle-press during which no
+  other function button was EVER also down (tracked for the whole
+  press, not just checked at the release instant) -- so it can't
+  accidentally fire off the tail end of the debug-mode or expression-
+  mute combos if a hand lifts off them one finger at a time, circle
+  last.
+- **Real feedback, same test: "ok testing on both boards now they both
+  crashed... the recovery time is good but still we need to dig deeper
+  for the cause."** Confirms the recovery-time work (watchdog +
+  boot-skip fixes) is working as intended, and confirms the I2C bus-
+  recovery fix above did NOT stop these particular crashes -- an honest
+  result, not the fix being wrong, just not the whole story.
+  Checked macOS's own kernel USB log (`log show`) for the exact test
+  window rather than guessing further from firmware alone, and found
+  something that reframes the investigation: `AppleUSBHostFamily`
+  itself logs `AppleUSBHostPort::terminateDevice: ... hardware
+  connection lost` for the TILES device, repeatedly, roughly every
+  10-45 seconds during the test window -- and several of the
+  reconnects that follow come back as `RP2350 Boot` (the ROM
+  bootloader), not the application. A watchdog reset ALWAYS re-runs the
+  application; landing in the bootloader instead means something more
+  severe than an app-level hang is happening -- most consistent with a
+  genuine, brief power/connection interruption on the USB-C port itself
+  (the same port-level Type-C signaling/current-renegotiation activity
+  -- `AppleUSBHostResourcesTypeC::allocateDownstreamBusCurrentGated`
+  briefly granting 0mA -- already spotted once earlier this session),
+  not a firmware bug reacting to a bus-reset event. This is also
+  consistent with real feedback mid-session: a completely unrelated
+  USB MIDI device (a Novation Launchkey) on the same Mac was ALSO seen
+  glitching, including once with no plug/unplug action at all -- a
+  device-agnostic, host/port-level cause explains that far better than
+  two unrelated devices independently developing the same symptom at
+  the same time. Separately confirmed (and unrelated to the crashes):
+  this session's own `picotool info -a` calls show up in the same log
+  as `picotool@(null): ... failed to open Launchkey MK4 61` --
+  picotool's device scan opens EVERY connected USB device to check it,
+  not just Raspberry Pi ones, so at least one Launchkey disturbance
+  during this session was this investigation's own tooling, not a
+  mystery. No evidence of Ableton specifically in the log (no
+  Ableton-attributed line anywhere in the window checked) -- doesn't
+  rule out something it does indirectly, but the direct culprit visible
+  here is the host's own USB-C port/power stack, not an application.
+  Not yet root-caused further than that (which port, which cable, a
+  hub in between, macOS's own Type-C power management, or the ports
+  themselves) -- next real step is testing whether the disconnect
+  frequency changes on a different port/cable, independent of anything
+  in this firmware.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
