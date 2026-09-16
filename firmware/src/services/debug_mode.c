@@ -60,17 +60,32 @@ typedef struct {
     bool reported;
 } debug_crash_snapshot_t;
 
-/* Both survive a watchdog reset (SRAM keeps its contents -- only an
- * actual power loss clears it), unlike ordinary `static` globals, which
- * the C runtime zeroes on every boot regardless of reset cause. See
- * pico/platform/sections.h's own __uninitialized_ram documentation. */
+/* All three survive a watchdog reset (SRAM keeps its contents -- only
+ * an actual power loss clears it), unlike ordinary `static` globals,
+ * which the C runtime zeroes on every boot regardless of reset cause.
+ * See pico/platform/sections.h's own __uninitialized_ram documentation.
+ * s_debug_mode_active joined the other two after real feedback caught a
+ * SECOND crash mid-investigation of the first: debug mode resetting to
+ * off on every reboot meant live tracing (and the underglow pulse) went
+ * silent right when a repeated failure needed it most, requiring the
+ * combo to be re-held after every single recovery. Whether it's trusted
+ * on a given boot (vs. forced to a known `false`) is decided in tiles_
+ * debug_mode_init() below, the same way s_live_trace's own content is --
+ * see that function's own comment. */
 static debug_trace_ring_t __uninitialized_ram(s_live_trace);
 static debug_crash_snapshot_t __uninitialized_ram(s_crash_snapshot);
+static bool __uninitialized_ram(s_debug_mode_active);
 
-static bool s_debug_mode_active;
 static bool s_combo_held;
 static uint32_t s_combo_start_ms;
 static bool s_combo_triggered_this_hold;
+/* Set in tiles_debug_mode_init() when debug mode auto-resumed active
+ * after a crash-recovery reboot -- session-local (ordinary .bss is
+ * fine here, this only ever needs to matter for the boot that sets it),
+ * consumed once by tiles_debug_mode_scan() a couple seconds in, once
+ * USB has had time to actually re-enumerate. See that function's own
+ * comment for why this can't just dump immediately from init(). */
+static bool s_pending_boot_dump;
 
 static void record_to_live_ring(const char *data, uint32_t len) {
     for (uint32_t i = 0; i < len; i++) {
@@ -106,42 +121,128 @@ static void cdc_write_raw_str(const char *s) {
     cdc_write_raw(s, (uint32_t)strlen(s));
 }
 
+/* Total budget for one entire report dump (every cdc_write_paced() call
+ * within it shares this SAME deadline, computed once by the caller) --
+ * generous for the success case (a real terminal draining the port
+ * finishes in a small fraction of this), but a hard stop otherwise. */
+#define DEBUG_REPORT_DUMP_TIMEOUT_MS 2000u
+
+/* Writes `s` a few bytes at a time, pumping tud_task() and flushing
+ * between chunks so the USB stack actually gets a chance to drain the
+ * 64-byte CDC TX FIFO (CFG_TUD_CDC_TX_BUFSIZE) before the next chunk
+ * tries to queue more into it. Without this, a report's worth of text
+ * (a few hundred bytes) queued back-to-back with nothing pumping in
+ * between overflows that FIFO fast -- cdc_write_raw()'s own "truncate
+ * to whatever's available" contract (correctly non-blocking, see this
+ * file's header) then silently drops most of it, which is exactly what
+ * happened the first time this ran on real hardware: the report came
+ * back with whole phrases missing, different calls' output concatenated
+ * mid-word. tud_task() is safe to call this often -- it's designed to
+ * be pumped frequently and returns quickly when there's nothing to do.
+ * Bounded by `deadline` (shared across an entire dump, see the caller)
+ * rather than looping until every byte is confirmed sent -- if nobody's
+ * actually connected to drain the port, `available` never recovers, and
+ * an unbounded version of this exact loop would hang forever waiting
+ * for room that will never appear. That would be a real, ugly irony:
+ * the freeze-diagnostic tool causing a NEW freeze of its own, exactly
+ * the failure class this entire session has been about removing.
+ * Returns false the moment the shared deadline is reached (whether or
+ * not this specific call finished), so the caller can stop attempting
+ * the rest of the report rather than let each remaining piece burn its
+ * own full timeout in turn. */
+static bool cdc_write_paced(const char *s, absolute_time_t deadline) {
+    if (s == NULL) {
+        return true;
+    }
+    uint32_t len = (uint32_t)strlen(s);
+    uint32_t sent = 0u;
+    while (sent < len) {
+        tud_task();
+        if (time_reached(deadline)) {
+            return false;
+        }
+        uint32_t available = tud_cdc_write_available();
+        if (available == 0u) {
+            continue;
+        }
+        uint32_t chunk = len - sent;
+        if (chunk > available) {
+            chunk = available;
+        }
+        uint32_t written = tud_cdc_write(s + sent, chunk);
+        sent += written;
+        tud_cdc_write_flush();
+    }
+    return true;
+}
+
 /* Called once, the first time debug mode is entered after a crash-
  * recovery reboot -- see this file's own header for the full mechanism.
  * Prints the ring in chronological order (oldest to newest, starting
  * from ring_pos -- the slot about to be overwritten next, i.e. the
  * oldest still-held byte) so the LAST characters printed are
  * unambiguously the last thing that happened, not scattered wherever
- * ring_pos physically landed. */
+ * ring_pos physically landed. Uses cdc_write_paced() above throughout,
+ * NOT the plain cdc_write_raw()/tiles_debug_trace_str() this file uses
+ * everywhere else -- see that function's own comment for why a report
+ * this size specifically needs the pacing. */
 static void dump_crash_report_if_pending(void) {
     if (s_crash_snapshot.magic != DEBUG_CRASH_MAGIC || s_crash_snapshot.reported) {
         return;
     }
 
-    cdc_write_raw_str("\r\n=== CRASH REPORT: watchdog recovered a hang ===\r\n");
-    char header[64];
-    snprintf(header, sizeof(header), "Uptime when it froze: %lu ms\r\n",
-             (unsigned long)s_crash_snapshot.ring_data.uptime_ms);
-    cdc_write_raw_str(header);
-    cdc_write_raw_str("Last activity before the freeze (oldest to newest):\r\n");
-    for (uint16_t i = 0; i < DEBUG_TRACE_RING_SIZE; i++) {
-        uint16_t idx = (uint16_t)((s_crash_snapshot.ring_data.ring_pos + i) % DEBUG_TRACE_RING_SIZE);
-        char c = s_crash_snapshot.ring_data.ring[idx];
-        if (c != '\0') {
-            cdc_write_raw(&c, 1);
-        }
-    }
-    cdc_write_raw_str("\r\n=== END REPORT ===\r\n");
-    tud_cdc_write_flush();
-
+    /* Marked reported UP FRONT, not after a successful dump -- if nobody
+     * turns out to be connected and every write below times out, the
+     * alternative (retry on every future debug-mode entry) would just
+     * mean every subsequent entry re-burns the same 2-second budget on
+     * a dump that's already proven doomed. A report that failed to
+     * deliver once is treated as lost, not retried -- consistent with
+     * this whole feature's own "never guarantee delivery, only ever
+     * guarantee not blocking" contract (see this file's header). */
     s_crash_snapshot.reported = true;
+
+    absolute_time_t deadline = make_timeout_time_ms(DEBUG_REPORT_DUMP_TIMEOUT_MS);
+    bool ok = cdc_write_paced("\r\n=== CRASH REPORT: watchdog recovered a hang ===\r\n", deadline);
+
+    if (ok) {
+        char header[64];
+        snprintf(header, sizeof(header), "Uptime when it froze: %lu ms\r\n",
+                 (unsigned long)s_crash_snapshot.ring_data.uptime_ms);
+        ok = cdc_write_paced(header, deadline);
+    }
+    if (ok) {
+        ok = cdc_write_paced("Last activity before the freeze (oldest to newest):\r\n", deadline);
+    }
+    if (ok) {
+        /* Built into a plain string and sent through cdc_write_paced()
+         * in one go, rather than one tud_task()-pumped call per
+         * character -- a few hundred individual pumps for the ring
+         * alone would work but is needless overhead for a one-time dump
+         * when batching is just as safe. +1 for the null terminator,
+         * DEBUG_TRACE_RING_SIZE '\0' ring slots (an all-empty ring, the
+         * theoretical minimum) still leaves room for it. */
+        char ring_text[DEBUG_TRACE_RING_SIZE + 1u];
+        uint16_t ring_text_len = 0u;
+        for (uint16_t i = 0; i < DEBUG_TRACE_RING_SIZE; i++) {
+            uint16_t idx = (uint16_t)((s_crash_snapshot.ring_data.ring_pos + i) % DEBUG_TRACE_RING_SIZE);
+            char c = s_crash_snapshot.ring_data.ring[idx];
+            if (c != '\0') {
+                ring_text[ring_text_len++] = c;
+            }
+        }
+        ring_text[ring_text_len] = '\0';
+        ok = cdc_write_paced(ring_text, deadline);
+    }
+    if (ok) {
+        cdc_write_paced("\r\n=== END REPORT ===\r\n", deadline);
+    }
 }
 
 void tiles_debug_mode_init(void) {
-    s_debug_mode_active = false;
     s_combo_held = false;
     s_combo_start_ms = 0u;
     s_combo_triggered_this_hold = false;
+    s_pending_boot_dump = false;
 
     /* Checked BEFORE (re-)arming the watchdog below, against THIS boot's
      * own reset cause -- confirmed against the pico-sdk's own header
@@ -149,7 +250,9 @@ void tiles_debug_mode_init(void) {
      * (that goes through watchdog_reboot()/the bootrom's own UF2 path,
      * which clears the specific scratch marker this checks for), so a
      * routine firmware update is never mistaken for a crash. */
-    if (watchdog_enable_caused_reboot() && s_live_trace.uptime_ms != 0u) {
+    bool crash_recovered = watchdog_enable_caused_reboot() && s_live_trace.uptime_ms != 0u;
+
+    if (crash_recovered) {
         /* s_live_trace still holds whatever was being recorded at the
          * exact moment of the hang -- SRAM survives a watchdog reset,
          * only real power loss clears it. Snapshot it into the
@@ -166,6 +269,24 @@ void tiles_debug_mode_init(void) {
         s_crash_snapshot.ring_data = s_live_trace;
         s_crash_snapshot.magic = DEBUG_CRASH_MAGIC;
         s_crash_snapshot.reported = false;
+        /* s_debug_mode_active is trusted as-is here -- it too survived
+         * the reset (see this file's header for why it joined the
+         * other two __uninitialized_ram fields), so if it was true the
+         * instant before the hang, it's still true now: live tracing
+         * and the underglow pulse resume automatically, no re-entry
+         * needed. The pending report gets dumped from tiles_debug_
+         * mode_scan() a couple seconds in, not immediately here -- USB
+         * hasn't been serviced even once yet at this point in boot
+         * (tud_task() first runs at the top of main.c's own loop, which
+         * hasn't started), so cdc_write_paced()'s pumping would just be
+         * racing a re-enumeration that hasn't happened yet. */
+        s_pending_boot_dump = s_debug_mode_active;
+    } else {
+        /* Genuinely fresh boot (power-on, RUN-pin reset, or a normal
+         * picotool reflash) -- s_debug_mode_active's leftover SRAM
+         * content can't be trusted the way it can after a confirmed
+         * crash-recovery reboot, so start from a known state. */
+        s_debug_mode_active = false;
     }
 
     memset(&s_live_trace, 0, sizeof(s_live_trace));
@@ -176,8 +297,23 @@ void tiles_debug_mode_init(void) {
     watchdog_enable(DEBUG_WATCHDOG_TIMEOUT_MS, true);
 }
 
+/* How long after boot to trust that USB has actually finished
+ * re-enumerating before attempting the auto-resumed report dump --
+ * generous (real enumeration is typically much faster), and this only
+ * ever needs to happen once, so there's no cost to being conservative
+ * here. Measured from boot, not from the crash -- irrelevant how long
+ * the PREVIOUS session ran, only how long THIS one has had to get USB
+ * back up. */
+#define DEBUG_BOOT_DUMP_DELAY_MS 2000u
+
 void tiles_debug_mode_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+
+    if (s_pending_boot_dump && now_ms >= DEBUG_BOOT_DUMP_DELAY_MS) {
+        s_pending_boot_dump = false;
+        dump_crash_report_if_pending();
+    }
+
     bool diamond = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
     bool square = tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
     bool circle = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);

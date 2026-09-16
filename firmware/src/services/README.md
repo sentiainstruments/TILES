@@ -5059,5 +5059,62 @@ not its code.
   power-mode flicker right before a hang -- confirming or ruling out the
   brownout theory in the entry just above -- would now show up in a
   crash report even if nobody was watching live when it happened.
+- **The crash recorder above got its first real-hardware exercise
+  almost immediately, and two real bugs in IT (not the thing it's
+  diagnosing) turned up.** First result was the actual point of this
+  whole feature working: a genuine hang, watchdog-recovered, snapshot
+  intact, showing `TMPBoudEGS0123YLHcXK` (every stage marker, every
+  loop, textbook healthy) repeating for hundreds of iterations and then
+  stopping cold on a bare `T` -- meaning the freeze is inside `tud_task()`
+  itself, TinyUSB's own USB-stack pump, not in ANY of the I2C/PIO/
+  sequencer code the last several rounds focused on. Genuinely new
+  information no amount of further I2C/PIO auditing would ever have
+  found, and the reason this session moved to actually investigating
+  `tud_task()`'s own vendored source next instead of patching another
+  peripheral driver.
+  Two bugs surfaced getting to that result, both in `services/debug_
+  mode.c` itself:
+  **The report text came out corrupted** -- "Uptime when i" directly
+  concatenated with "Last activity before the freeze," the actual
+  uptime number and half a sentence just gone. Cause: `dump_crash_
+  report_if_pending()` queued a report's worth of text (several hundred
+  bytes) across many back-to-back `tud_cdc_write()` calls with nothing
+  pumping `tud_task()` in between, overflowing the 64-byte CDC TX FIFO
+  (`CFG_TUD_CDC_TX_BUFSIZE`) fast -- `cdc_write_raw()`'s own correct
+  "truncate to whatever's available, never block" contract then quietly
+  dropped most of it. Fixed with a new `cdc_write_paced()` that pumps
+  `tud_task()` and flushes between chunks so the FIFO actually drains
+  before more gets queued into it -- used only for this one-time report
+  dump, not for `tiles_debug_trace()`/`_str()`'s own hot path, where
+  that pumping overhead would be wasted on characters that already
+  arrive one main-loop iteration apart naturally.
+  **A second crash landed mid-investigation of the first, and the live
+  trace had already gone silent** -- `s_debug_mode_active` lived in
+  ordinary `.bss`, zeroed on every reboot regardless of cause, so the
+  watchdog's own recovery turned debug mode back off right when a
+  repeated failure needed it watched most. Joined `s_live_trace`/
+  `s_crash_snapshot` in `__uninitialized_ram` -- trusted as-is on a
+  confirmed crash-recovery boot (so it auto-resumes exactly as it was
+  the instant before the hang, live tracing and the underglow pulse
+  included, no re-entry needed), forced to a known `false` on a
+  genuinely fresh boot (where leftover SRAM content can't be trusted).
+  The auto-resumed report dump itself is deferred ~2 seconds past boot
+  (`tiles_debug_mode_scan()`, not `tiles_debug_mode_init()`) rather than
+  attempted immediately -- at `init()` time `tud_task()` hasn't run even
+  once yet this boot, so USB hasn't re-enumerated and `cdc_write_paced()`
+  would just be racing a connection that doesn't exist yet.
+  **`cdc_write_paced()`'s own pumping loop is deadline-bounded**, not a
+  plain "keep trying until every byte lands" loop -- sharing ONE
+  deadline (`DEBUG_REPORT_DUMP_TIMEOUT_MS`, 2s) across an entire report
+  dump, checked via `time_reached()` (`hardware/timer.h`, pulled in
+  transitively through the `pico/time.h` this file already includes).
+  Without this, a report dump attempted while nobody's actually
+  connected to drain the port would spin forever waiting for FIFO room
+  that never appears -- the freeze-diagnostic tool causing a new freeze
+  of its own, exactly the failure class this entire session exists to
+  remove. `s_crash_snapshot.reported` is set BEFORE attempting the dump,
+  not after a confirmed success, so a report that fails to deliver once
+  (nobody connected yet) is treated as lost rather than retried on every
+  subsequent debug-mode entry.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
