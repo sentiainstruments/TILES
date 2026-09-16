@@ -6059,5 +6059,83 @@ not its code.
   what the code claimed to do and what it actually depended on, rather
   than another round of "already timeout-bounded, still hangs, unclear
   why."
+- **A batch of real feedback while stability testing continued in
+  parallel, six items:**
+  - **Scale selection already affects both melodic and chord mode, by
+    design -- verified, not changed.** "when selecting a global scale
+    it should affect the melodic and chord mode so double check that."
+    `note_map.c`'s `chord_mode_scale_table()` reads the globally
+    selected scale first and uses it as-is whenever it's a genuine
+    7-note diatonic scale (Ionian/Dorian/Phrygian/Lydian/Mixolydian/
+    Aeolian/Locrian) -- only falls back to Ionian for the other 11
+    (chromatic, pentatonic, blues, whole-tone, diminished, etc.),
+    deliberately, because chord mode's skip-one/skip-two harmonization
+    can't produce a real triad against a scale that isn't 7-note
+    diatonic. Not a bug; melodic mode's own `note_for_scale_degree()`
+    has no such exception at all.
+  - **Opening the scale (or mode) picker while chord mode was active
+    let its pads still fire real notes underneath.** "selecting a
+    scale should not trigger midi sound when slecting so no midi on
+    select scale just menu input." Root cause was chord-mode-specific:
+    `tiles_op_mode_owns_pad()`'s chord branch answered purely from
+    chord-region membership, never checking whether a menu was ALSO
+    open on top -- unlike every other mode, which falls straight
+    through to `tiles_op_mode_owns_pad_grid()` and so already correctly
+    suppressed new strikes the instant either menu's own visible flag
+    went true. `handle_chord_pad_taps()` (chord's separate pipeline,
+    bypassing that accessor and services/expression.c's gate entirely)
+    never checked menu state either. Both now check menu state first.
+  - **Capture mode no longer force-ends whatever was already sounding
+    the instant it's entered.** "capture mode should not mute the midi
+    notes that are playing underneath it should be additive and real
+    time." `seq_capture_mode_enter()` used to call `seq_end_current_
+    note()` on entry -- reasoned at the time as "capture mode takes
+    over this lane," but in practice an abrupt, audible cutoff the
+    moment capture starts, not a smooth "start layering on top of
+    what's already going." Removed; whatever was ringing keeps ringing
+    and ends on its own normal timing while newly captured content
+    layers in from there.
+  - **The ambient "sequencer running" pulse (triangle's background
+    indicator, and diamond's own new play-pulse state) now beats with
+    the actual tempo instead of a fixed 3000ms.** "the pulse for
+    sequencer is running should be a bit faster, how about we make it
+    match the bpm of clock." New `tiles_midi_clock_get_ms_per_beat()`
+    (`services/midi_clock.h`/`.c`) exposes the current tempo from
+    whichever source is actually driving the clock -- real external
+    Clock bytes now get their OWN beat-to-beat interval measurement
+    (they never carried a tempo value of their own before, just "another
+    pulse happened"), or tap tempo's already-averaged interval, or a
+    500ms (120bpm-equivalent) placeholder before either is ever
+    established. `background_pattern_pulse_level()` reads this as its
+    period instead of a fixed constant.
+  - **Quantized starts always waited for the NEXT beat, even landing
+    one pulse past the last one.** "quantize is off, its always
+    waiting for the next beat, it should measure if it can snap to the
+    last beat as well so its accuarte similar to how other devices do
+    it." Same nearest-boundary measurement `seq_capture_handle_taps()`
+    already used for which STEP a captured note targets (its own
+    "Nearest-step quantization," predating this fix) now also applies
+    to which BEAT a pending sequencer/capture start resolves against,
+    in both `seq_advance_clock()` and `seq_capture_advance_clock()`:
+    past the halfway point of the current beat, still waits for the
+    next one; within the first half, snaps to the one that just passed
+    and starts immediately instead of sitting through most of a beat
+    of dead air first.
+  - **A step's remembered pitch was getting silently discarded every
+    time it was turned back on.** Real feedback, a separate message in
+    the same testing round: "when steps are turned off they are not
+    saving the asigned pitch. they should always save the pitch they
+    lasrt had when on in case of retrigger." `step_pitch_override[]`/
+    `step_note[]` were never actually cleared when a step turned off --
+    that data already survived untouched -- but the plain tap-to-arm
+    toggle unconditionally re-resolved and overwrote it on every re-arm
+    regardless, discarding whatever pitch the step remembered from
+    before. Now only resolves+freezes a fresh pitch the first time a
+    step is EVER armed (no override yet at all); an already-programmed
+    step keeps its pitch across as many off/on toggles as it goes
+    through. The pitch-edit view (hold a step) remains the deliberate
+    way to actually change an already-frozen step's pitch; capture
+    mode's own commit is unaffected -- playing a step live is
+    intentionally always "what you just played," not frozen history.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

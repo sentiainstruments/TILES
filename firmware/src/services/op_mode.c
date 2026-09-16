@@ -192,13 +192,19 @@ static float menu_selected_pulse_level(uint32_t now_ms) {
  * to a genuinely visible button-LED range instead of that pulse's own
  * barely-there idle-pad brightness. Used for "something's happening in
  * the background," deliberately calmer/slower than menu_selected_
- * pulse_level()'s own faster, brighter "this is active right now." */
-#define OP_BACKGROUND_PULSE_PERIOD_MS 3000.0f
+ * pulse_level()'s own faster, brighter "this is active right now."
+ * Real feedback: "the pulse for sequencer is running should be a bit
+ * faster, how about we make it match the bpm of clock" -- period is
+ * now one beat at whatever tempo tiles_midi_clock_get_ms_per_beat()
+ * currently reports (real external clock or tap tempo, see that
+ * function's own comment) instead of a fixed 3000ms regardless of it;
+ * also affects handle_diamond_transport()'s own reuse of this exact
+ * function for its "clock running, this lane isn't" state. */
 #define OP_BACKGROUND_PULSE_MIN 0.0f
 #define OP_BACKGROUND_PULSE_MAX 1.0f
 
 static float background_pattern_pulse_level(uint32_t now_ms) {
-    float phase = (float)now_ms / OP_BACKGROUND_PULSE_PERIOD_MS;
+    float phase = (float)now_ms / tiles_midi_clock_get_ms_per_beat();
     float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
     return OP_BACKGROUND_PULSE_MIN + (OP_BACKGROUND_PULSE_MAX - OP_BACKGROUND_PULSE_MIN) * raw;
 }
@@ -1152,7 +1158,22 @@ static void seq_handle_step_taps(uint32_t now_ms) {
              * shouldn't ALSO arm/disarm the step it landed on. */
             if (s_seq_step_touch_started_ms[step] != 0u) {
                 pat->step_armed[step] = !pat->step_armed[step];
-                if (pat->step_armed[step]) {
+                /* Real feedback: "when steps are turned off they are not
+                 * saving the assigned pitch. they should always save the
+                 * pitch they last had when on in case of retrigger."
+                 * step_pitch_override[]/step_note[] were never actually
+                 * cleared when a step turned off -- that data already
+                 * survived untouched -- but re-arming unconditionally
+                 * overwrote it below regardless, discarding whatever
+                 * pitch this step remembered from before the instant you
+                 * turned it back on. Only resolve+freeze a fresh pitch
+                 * the first time a step is EVER armed (no override yet
+                 * at all); a step that already has one keeps it exactly
+                 * as it was, however many times it gets toggled off and
+                 * back on. The pitch-edit view (hold a step) remains the
+                 * deliberate way to actually change an already-frozen
+                 * step's pitch. */
+                if (pat->step_armed[step] && !pat->step_pitch_override[step]) {
                     /* Real feedback: "changing scale on a melodic modes
                      * or other sequences should not affect other
                      * sequences that are already set up or playing
@@ -1239,8 +1260,23 @@ static void seq_advance_clock(uint8_t lane, tiles_midi_clock_state_t clock) {
          * arrives -- real feedback pinned this down precisely: "play when
          * playing brings head to start point again" (restart, step 0) is
          * a genuinely different action from "when stopped makes play"
-         * (resume exactly where a plain stop left it, no reset). */
-        if ((clock.pulse_count % OP_CLOCK_PULSES_PER_BEAT) != 0u) {
+         * (resume exactly where a plain stop left it, no reset).
+         * Real feedback: "quantize is off, its always waiting for the
+         * next beat, it should measure if it can snap to the last beat
+         * as well so its accuarte similar to how other devices do it."
+         * Used to require phase_in_beat == 0 exactly -- landing even one
+         * pulse past a boundary meant waiting nearly a full beat for the
+         * next one. Same nearest-boundary measurement seq_capture_
+         * handle_taps() already uses for which STEP a captured note
+         * targets (see that function's own "Nearest-step quantization"
+         * comment) applied here to which BEAT a pending start resolves
+         * against: past the halfway point of the current beat, keep
+         * waiting for the next one same as before; within the first
+         * half, close enough to the one that just passed to snap to it
+         * and start now instead of sitting through most of a beat of
+         * dead air first. */
+        uint32_t phase_in_beat = clock.pulse_count % OP_CLOCK_PULSES_PER_BEAT;
+        if (phase_in_beat != 0u && (phase_in_beat * 2u) < OP_CLOCK_PULSES_PER_BEAT) {
             return;
         }
         s_seq_pending_start[lane] = false;
@@ -2682,13 +2718,21 @@ static void seq_capture_mode_enter(void) {
     if (s_seq_edit_mode != OP_SEQ_EDIT_NONE) {
         edit_exit();
     }
-    /* Whatever the NORMAL playback engine had sounding on the EDITED
-     * lane must not keep ringing underneath a live capture performance
-     * -- capture mode takes over that ONE lane specifically; the other 3
-     * keep playing normally the whole time (see tiles_op_mode_scan()'s
-     * own per-lane advance loop, which skips only s_seq_edit_lane while
-     * s_seq_capture_mode_active is true). */
-    seq_end_current_note(s_seq_edit_lane);
+    /* Real feedback reversed this: "capture mode should not mute the
+     * midi notes that are playing underneath[,] it should be additive
+     * and real time." Used to force-end whatever the normal playback
+     * engine had sounding on the edited lane right here, on entry --
+     * reasoned at the time as "capture mode takes over this ONE lane,"
+     * but in practice that's an abrupt, audible cutoff the instant
+     * capture starts, not the smooth hand-off a real "start layering
+     * in on top of what's already going" performance needs. Simply not
+     * calling this lets whatever was already ringing keep ringing
+     * (and end on its own normal note-off timing) while newly captured
+     * content layers in additively from here on -- seq_capture_advance_
+     * clock() below already handles ending its OWN previously-fired
+     * notes as capture's own steps advance, same as normal playback
+     * always has; this was only ever about the ONE note active at the
+     * exact moment of entry, not an ongoing lifecycle concern. */
     s_seq_capture_mode_active = true;
     s_seq_capture_prev_scale = tiles_note_map_get_scale();
     tiles_note_map_set_scale(TILES_SCALE_CHROMATIC);
@@ -2787,7 +2831,10 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
         return;
     }
     if (s_seq_pending_start[lane]) {
-        if ((clock.pulse_count % OP_CLOCK_PULSES_PER_BEAT) != 0u) {
+        /* Same nearest-boundary fix as seq_advance_clock()'s own pending-
+         * start check above -- see that one's comment. */
+        uint32_t phase_in_beat = clock.pulse_count % OP_CLOCK_PULSES_PER_BEAT;
+        if (phase_in_beat != 0u && (phase_in_beat * 2u) < OP_CLOCK_PULSES_PER_BEAT) {
             return;
         }
         s_seq_pending_start[lane] = false;
@@ -3929,7 +3976,12 @@ void tiles_op_mode_scan(void) {
         float level = any_lane_running() ? background_pattern_pulse_level(now_ms) : 0.0f;
         tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, level);
     }
-    if (s_active_mode == OP_MODE_CHORD) {
+    /* See tiles_op_mode_owns_pad()'s own comment -- this pipeline
+     * bypasses that accessor and services/expression.c's gate entirely,
+     * so it needs its own explicit menu check rather than inheriting
+     * one; skipped outright while either menu owns the grid instead of
+     * letting a touch on a chord pad commit a real chord underneath it. */
+    if (s_active_mode == OP_MODE_CHORD && !s_menu_visible && !s_scale_menu_visible) {
         handle_chord_pad_taps(now_ms);
     }
     /* Guitar mode needs nothing further here -- handle_transport_and_
@@ -3955,9 +4007,28 @@ bool tiles_op_mode_owns_pad_grid(void) {
 /* See this accessor's own declaration in op_mode.h for the full
  * reasoning -- every mode except chord just defers to the blanket
  * accessor above; chord narrows that answer down to its own 8
- * chord-strip pads instead of claiming (or releasing) the whole grid. */
+ * chord-strip pads instead of claiming (or releasing) the whole grid.
+ * Real feedback: "selecting a scale should not trigger midi sound when
+ * slecting so no midi on select scale just menu input." Root cause,
+ * chord-mode-specific: the narrowing below used to apply UNCONDITIONALLY
+ * whenever chord was active, answering purely from chord-region
+ * membership with no regard for whether a menu (scale or mode picker)
+ * was ALSO currently open on top of it -- unlike every other mode, which
+ * falls straight through to tiles_op_mode_owns_pad_grid() and so
+ * already correctly suppressed new strikes the instant either menu's
+ * own visible flag went true. Opening the scale picker while chord was
+ * the active mode meant its answer for a melody pad never changed at
+ * all, and handle_chord_pad_taps() (op_mode.c's own separate chord-pad
+ * pipeline, which bypasses this accessor and services/expression.c's
+ * gate entirely) never checked menu state either -- both the 16 melody
+ * pads AND the 8 chord pads could still fire real notes underneath
+ * either menu. Now checks menu state FIRST, before the chord-specific
+ * narrowing -- while a menu is open every pad defers to the blanket
+ * grid answer (true, suppressing all of them), exactly matching every
+ * other mode's own behavior; the chord-specific narrowing only applies
+ * once nothing is layered on top, unchanged from before for that case. */
 bool tiles_op_mode_owns_pad(uint8_t logical_pad) {
-    if (s_active_mode == OP_MODE_CHORD) {
+    if (s_active_mode == OP_MODE_CHORD && !s_menu_visible && !s_scale_menu_visible) {
         return tiles_note_map_is_chord_region_pad(logical_pad);
     }
     return tiles_op_mode_owns_pad_grid();

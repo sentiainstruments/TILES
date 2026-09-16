@@ -57,6 +57,18 @@ static bool s_external_was_active;
 static uint32_t s_last_external_pulse_ms;
 static bool s_ever_seen_external_pulse;
 
+/* Beat-to-beat (every 24th Clock byte) timestamp + measured interval,
+ * for tiles_midi_clock_get_ms_per_beat() below -- external Clock bytes
+ * carry no tempo value of their own (just "another pulse happened"), so
+ * unlike tap tempo's own already-averaged s_tap_interval_ms, this has
+ * to be derived from real arrival timing. Defaults to 500ms (120bpm
+ * equivalent) purely as a sane starting point before any real beat
+ * interval has ever been measured -- never actually used as a "real"
+ * tempo, just a placeholder nothing downstream should treat as
+ * meaningful until a genuine beat interval overwrites it. */
+static uint32_t s_last_external_beat_ms;
+static float s_external_ms_per_beat = 500.0f;
+
 static uint32_t s_tap_timestamps[TAP_TEMPO_MAX_HISTORY];
 static uint8_t s_tap_count; /* taps in the CURRENT session, caps at TAP_TEMPO_MAX_HISTORY (oldest drops off) */
 static uint32_t s_last_tap_ms;
@@ -91,6 +103,13 @@ void tiles_midi_clock_init(void) {
 
 bool tiles_midi_clock_is_running(void) {
     return s_running;
+}
+
+float tiles_midi_clock_get_ms_per_beat(void) {
+    if (s_source_is_tap_tempo && s_tap_tempo_established) {
+        return s_tap_interval_ms;
+    }
+    return s_external_ms_per_beat;
 }
 
 bool tiles_midi_clock_external_active(uint32_t now_ms) {
@@ -235,6 +254,22 @@ void tiles_midi_clock_scan(void) {
                 s_pulse_count++;
                 s_last_external_pulse_ms = now_ms;
                 s_ever_seen_external_pulse = true;
+                /* One beat's worth of real pulses just completed --
+                 * measure it, sanity-bounded (~15-1200bpm) against a
+                 * stale s_last_external_beat_ms from a much earlier,
+                 * unrelated tempo (a fresh Start doesn't reset this
+                 * timestamp, so the very first beat after a long gap
+                 * would otherwise compute nonsense) rather than trusting
+                 * every measurement blindly. */
+                if (s_pulse_count % 24u == 0u) {
+                    if (s_last_external_beat_ms != 0u) {
+                        uint32_t interval = now_ms - s_last_external_beat_ms;
+                        if (interval >= 50u && interval <= 4000u) {
+                            s_external_ms_per_beat = (float)interval;
+                        }
+                    }
+                    s_last_external_beat_ms = now_ms;
+                }
                 break;
             case MIDI_REALTIME_START:
                 s_running = true;

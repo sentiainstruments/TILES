@@ -182,3 +182,17 @@ void tiles_midi_clock_set_running(bool running);
  * reset when stop click twice and if playing and play again it starts
  * from the top again." */
 bool tiles_midi_clock_is_running(void);
+
+/* Current tempo, in milliseconds per quarter-note beat, from whichever
+ * source is actually driving the clock right now (real external Clock
+ * bytes measured beat-to-beat, or the internal tap-tempo generator's own
+ * already-averaged interval -- see this file's own header) -- falls
+ * back to a plain 120bpm-equivalent default (500ms) if neither has ever
+ * been established. Real feedback: "the pulse for sequencer is
+ * running should be a bit faster, how about we make it match the bpm
+ * of clock" -- services/op_mode.c's own background_pattern_pulse_level()
+ * reads this instead of a fixed period so that pulse (and anything else
+ * wanting a tempo-synced ambient pulse) speeds up and slows down with
+ * the actual tempo instead of sitting at one fixed rate regardless of
+ * it. */
+float tiles_midi_clock_get_ms_per_beat(void);
