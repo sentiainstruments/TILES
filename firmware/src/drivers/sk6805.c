@@ -131,9 +131,34 @@ void tiles_sk6805_write(const tiles_sk6805_chain_t *chain, const uint32_t *pixel
             break;
         }
     }
-    /* Marks "the per-pixel loop above fully exited" -- if a report ever
-     * cuts off after the last expected 'p' but before this 'q', the
-     * freeze is in the trailing sleep_us() below, not the loop. */
+    /* Marks "the per-pixel loop above fully exited" -- the very next
+     * real crash report after 'q' shipped cut off RIGHT HERE: all 4
+     * underglow 'p's present, 'q' present, then nothing -- no caller-
+     * side 'x' ever fired. That bisects the freeze to this exact call,
+     * previously sleep_us(), which for anything above PICO_TIME_SLEEP_
+     * OVERHEAD_ADJUST_US (6us, pico-sdk default -- 300us here is nowhere
+     * close) does NOT busy-wait despite this file's own header comment
+     * saying otherwise: pico_time/time.c's sleep_until() calls
+     * add_alarm_at() to schedule a hardware alarm IRQ, then blocks on a
+     * spinlock waiting for that alarm's callback to notify it -- a real
+     * dependency on the timer/alarm-pool interrupt subsystem actually
+     * firing, not a plain register poll. If anything about that
+     * notification is ever missed (a lost wake-up, an alarm queued
+     * during some other code's interrupt-disabled window -- see this
+     * codebase's own flash-save entry on disabling interrupts for
+     * "tens of milliseconds" -- or any other alarm-pool-level fault),
+     * this call blocks forever with no timeout of its own, and nothing
+     * upstream (the 5ms-bounded PIO wait above, already returned by
+     * this point) can catch it. busy_wait_us() (hardware/timer.h, also
+     * already pulled in transitively via pico/time.h) is what this
+     * file's own header comment already claimed this did -- a genuine
+     * `while (raw timer register < target) tight_loop_contents();`
+     * spin against the hardware counter directly, no IRQ, no alarm
+     * pool, nothing else that could go missing. For a fixed 300us
+     * latch delay this isn't a workaround, it's the more correct
+     * primitive to begin with -- sleep_us() exists for cases that
+     * actually want to yield/save power over a longer wait, neither of
+     * which applies to a delay this short and this timing-critical. */
     tiles_debug_trace('q');
-    sleep_us(TILES_SK6805_RESET_LOW_US);
+    busy_wait_us(TILES_SK6805_RESET_LOW_US);
 }

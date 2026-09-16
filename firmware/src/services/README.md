@@ -6013,5 +6013,51 @@ not its code.
   as correlated with FREQUENCY, not as a precondition, in any future
   reasoning about this -- and don't over-trust the original quote above
   as still-accurate just because it's written down.
+- **Found it (real confidence, not a guess this time): `sleep_us()` in
+  `tiles_sk6805_write()` was never actually a busy-wait, despite this
+  file's own header comment claiming it was.** The 'p'/'q' trace from
+  the previous entry got its first real hit: the next live-testing crash
+  cut off with all 4 underglow pixels' 'p' present, 'q' present (the
+  per-pixel loop had fully exited), then nothing -- no caller-side 'x'.
+  That bisects the freeze to exactly one call: the trailing `sleep_us(
+  TILES_SK6805_RESET_LOW_US)` (300us) right after the loop, previously
+  assumed to be a simple register-polling delay the same way the PIO
+  wait just above it is. Reading pico-sdk's own `pico_time/time.c`
+  directly instead of trusting the assumption: `sleep_us()`, for
+  anything above `PICO_TIME_SLEEP_OVERHEAD_ADJUST_US` (6us default --
+  300us is nowhere near that threshold), calls `sleep_until()`, which
+  calls `add_alarm_at()` to schedule a HARDWARE ALARM INTERRUPT and then
+  blocks on a spinlock waiting for that alarm's own callback to notify
+  it. That's a real, working dependency on the timer/alarm-pool
+  interrupt subsystem actually firing -- not the plain `while (timer <
+  target) tight_loop_contents();` spin this file's own header comment
+  describes and every other timeout in this codebase (the PIO wait
+  right above this call, drivers/i2c_bus.h's own 5ms bound) actually is.
+  If that notification is ever missed for any reason -- a lost wake-up,
+  an alarm queued during another code path's own interrupt-disabled
+  window (this file's own pattern-store flash-save entry, much earlier,
+  disables interrupts for "tens of milliseconds" doing exactly that,
+  right before this same underglow write could plausibly run again) --
+  this call blocks forever, and nothing else in the whole call chain
+  can catch it: the 5ms-bounded PIO wait already returned by the time
+  this runs, and a hang waiting on an interrupt notification has no
+  deadline of its own to check.
+  Fixed by using what the header comment already claimed was
+  happening: `busy_wait_us()` (`hardware/timer.h`, already reachable
+  through the existing `pico/time.h` include) polls the raw hardware
+  timer counter register directly in a tight loop -- no IRQ, no alarm
+  pool, nothing else in the system that could go missing underneath it.
+  For a fixed, short, timing-critical latch delay like this one, that
+  isn't a workaround bolted on to dodge a bug -- it's the correct
+  primitive to have used from the start; `sleep_us()`'s own
+  interrupt-based design exists specifically to let OTHER code run (or
+  the core sleep/save power) during a longer wait, neither of which
+  this 300us LED-protocol delay ever needed or benefited from.
+  Not yet proven from a clean next capture -- that's the real test --
+  but this is the first fix all session backed by reading the actual
+  mechanism start to finish and finding a genuine, concrete gap between
+  what the code claimed to do and what it actually depended on, rather
+  than another round of "already timeout-bounded, still hangs, unclear
+  why."
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
