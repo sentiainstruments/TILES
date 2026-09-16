@@ -3384,9 +3384,29 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
         s_seq_pending_start[lane] = false;
         return;
     }
-    if (!clock.running) {
-        return;
-    }
+    /* Real feedback: "the live capture mode within the sequencer mode
+     * is still not sending the midi signals, it is capturing but its
+     * not live playing looping." Root cause: this function used to
+     * early-return here on !clock.running, same as seq_advance_clock()
+     * -- but that check makes sense THERE (an already-recorded pattern
+     * genuinely should pause when the transport stops) and does NOT
+     * make sense HERE, where it silently blocked the actual commit-to-
+     * pattern logic below on every single scan whenever real clock
+     * bytes were arriving but tiles_midi_clock_is_running() itself
+     * still read false -- exactly what happens whenever seq_capture_
+     * mode_enter()'s own tiles_midi_clock_set_running(true) call turns
+     * out to be a no-op (services/midi_clock.c's own "real clock always
+     * wins" guard against a live external source, regardless of
+     * whether THAT source's transport is actually playing yet). Live-
+     * preview notes in seq_capture_handle_taps() fire purely from touch
+     * events, completely unaffected by any of this, which is exactly
+     * why capture could sound like it was working while nothing ever
+     * actually landed in the pattern. clock.pulse_count itself keeps
+     * advancing on every real Clock byte regardless of clock.running
+     * (see midi_clock.c's own MIDI_REALTIME_CLOCK case) -- capture only
+     * ever needs pulse_count progression for its own quantization, not
+     * a belief about whether the DAW considers itself "playing," so
+     * removing this check costs nothing here. */
     if (s_seq_pending_start[lane]) {
         /* Same nearest-boundary fix as seq_advance_clock()'s own pending-
          * start check above -- see that one's comment. */

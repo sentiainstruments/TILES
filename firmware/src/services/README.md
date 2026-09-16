@@ -6340,5 +6340,32 @@ not its code.
     when this lane wants to run but has no clock to advance against --
     nothing's actually audible in that state either, matching "-"'s own
     stopped-ish role).
+- **In-sequencer capture mode was recording nothing at all, despite
+  sounding like it worked while you played.** Real feedback: "the live
+  capture mode within the sequencer mode is still not sending the midi
+  signals, it is capturing but its not live playing looping." Root
+  cause: `seq_capture_advance_clock()` (the function that actually
+  commits a captured note into the pattern once its target step's
+  boundary arrives) used to early-return on `!clock.running`, mirroring
+  `seq_advance_clock()`'s own identical check -- correct THERE (an
+  already-recorded pattern genuinely should pause when the transport
+  stops) but wrong here, where it silently blocked the commit on every
+  single scan whenever real clock bytes were arriving but `tiles_midi_
+  clock_is_running()` itself still read false. That's exactly what
+  happens whenever `seq_capture_mode_enter()`'s own `tiles_midi_clock_
+  set_running(true)` call turns out to be a no-op -- `services/midi_
+  clock.c`'s own "real clock always wins" guard against a live external
+  source, regardless of whether THAT source's transport is actually
+  playing yet. Live-preview notes in `seq_capture_handle_taps()` fire
+  purely from touch events, completely independent of any of this,
+  which is exactly why capturing could sound like it was working (you
+  hear yourself playing) while nothing ever actually landed in the
+  pattern. Fixed by removing the check from this function specifically
+  -- `clock.pulse_count` itself keeps advancing on every real Clock
+  byte regardless of `clock.running` (confirmed reading `services/
+  midi_clock.c`'s own `MIDI_REALTIME_CLOCK` case directly, not
+  assumed), and capture only ever needs that raw progression for its
+  own quantization, never a belief about whether the DAW considers
+  itself "playing."
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
