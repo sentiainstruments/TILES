@@ -3148,16 +3148,41 @@ static void handle_diamond_transport(uint32_t now_ms) {
                  * armed in the background. CC first, then the Realtime
                  * byte -- see handle_diamond_transport()'s own comment
                  * for why the CC is the primary, verified path and the
-                 * Realtime send is a harmless bonus for a Sync/Ext setup. */
+                 * Realtime send is a harmless bonus for a Sync/Ext
+                 * setup -- but ONLY that: real feedback found "the midi
+                 * clock lights [in Ableton] not being in perfect sync
+                 * from ableton internal clock and the clock its
+                 * reciveing in return," and confirmed Ableton's own
+                 * Track/Sync/Remote input is enabled on this same port
+                 * (bidirectional) -- meaning Ableton is ALREADY the one
+                 * driving the clock TILES is following (tiles_midi_
+                 * clock_external_active()) exactly when this button
+                 * would otherwise ALSO send it a raw Stop/Start byte on
+                 * that identical port, a redundant, self-referential
+                 * signal Ableton's own Sync input has no good reason to
+                 * receive from a device it's already the master of.
+                 * Skipped specifically then -- the CC (the primary,
+                 * verified path, MIDI-Mapped rather than Sync-
+                 * interpreted) still fully stops/starts Ableton's
+                 * transport either way, so nothing is lost; this only
+                 * removes the part that was confusing Ableton's own
+                 * clock display, not the feature. Still sent normally
+                 * whenever no external clock is active -- e.g. using
+                 * this button to start Ableton from fully stopped,
+                 * where TILES genuinely is the one initiating. */
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_STOP_CC, 127u);
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_STOP_CC, 0u);
-                tiles_midi_send_stop();
+                if (!tiles_midi_clock_external_active(now_ms)) {
+                    tiles_midi_send_stop();
+                }
                 s_transport_playing = false;
                 s_transport_recording = false;
             } else {
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_PLAY_CC, 127u);
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_PLAY_CC, 0u);
-                tiles_midi_send_start();
+                if (!tiles_midi_clock_external_active(now_ms)) {
+                    tiles_midi_send_start();
+                }
                 s_transport_playing = true;
             }
         }

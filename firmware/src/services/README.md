@@ -5601,5 +5601,63 @@ not its code.
     exactly once, at the exact moment a save/delete is triggered. An
     inherent property of writing this chip's flash, not something
     worth engineering around for a deliberate, occasional action.
+- **A live-testing crash, captured with debug mode armed, put the
+  crash investigation on new footing.** Real feedback isolated the
+  trigger cleanly: "i found what causes it, its when ableton is
+  playing, boards dont crash when ableton is not playing and not
+  sending clock somehow it also affects my novation but it is based on
+  the tiles devices." Then, moments later, live: "tiles crashed tiles
+  2 crashed and novation crached rn." With debug mode already armed,
+  that crash's own auto-dumped report was real, hard evidence instead
+  of another round of guessing from code alone: board 1's crash report
+  ring ended at `L` (`tiles_lighting_service()`) -- the SAME function a
+  crash captured earlier this session also ended at, confirming this
+  is a genuinely recurring hang location, not a one-off.
+  Re-read that function's two blocking operations line by line rather
+  than assume: the I2C mux-select calls (now routed through drivers/
+  i2c_bus.h's tiles_i2c_write(), from this session's own earlier fix)
+  and the SK6805 PIO write (drivers/sk6805.c's sk6805_put_blocking_
+  with_timeout()) BOTH already have real, working timeout bounds --
+  confirmed reading the actual code, not assumed from memory. The
+  SK6805 one, it turns out, predates tonight entirely: its own header
+  comment records a past "second real-hardware freeze" found after the
+  first I2C-focused round, with the identical "pio_sm_put_blocking() is
+  a raw spin with no timeout, same failure class" diagnosis this
+  session kept independently re-deriving for I2C. That both timeouts
+  are real and already in place, yet the hang still recurs at exactly
+  this function, is the honest, open puzzle right now -- not yet
+  explained, not papered over as solved.
+  What WAS a real gap: main.c's own per-stage trace only proves the
+  hang is somewhere inside `tiles_lighting_service()`, not which of
+  its two genuinely different operations. Closed with two new trace
+  characters local to this file -- `'i'` right before write_pad()'s
+  4 TCA9554 I2C calls, `'w'` right before every SK6805 write (pad and
+  all 3 underglow paths share it; which override was active that
+  instant narrows pad vs. underglow back down if it matters) -- so the
+  NEXT occurrence's crash report says definitively which class of
+  operation it was, instead of leaving that as this round's own still-
+  open question.
+  Separately, chasing a related but different observation ("even
+  before crash i can see the midi clock lights [in Ableton] not being
+  in perfect sync from ableton internal clock and the clock its
+  reciveing in return" -- clarified as Ableton's own MIDI activity
+  lights, and confirmed Ableton has Track/Sync/Remote enabled on this
+  same port, bidirectional): `handle_diamond_transport()`'s Play/Stop
+  button was sending a raw MIDI Start/Stop byte back to Ableton
+  alongside its own CC (the CC being "the primary, verified path," per
+  this function's own long-standing comment, the Realtime byte only
+  ever "a harmless bonus for a Sync/Ext setup") -- REGARDLESS of
+  whether Ableton was already the one driving the clock TILES is
+  slaved to. With Sync enabled on that same bidirectional port, that's
+  a redundant, self-referential signal with no good reason to exist
+  once Ableton is already the master -- now skipped specifically when
+  `tiles_midi_clock_external_active()` is true, CC still sent either
+  way (so the actual Play/Stop/Record remote-control feature is fully
+  intact), Realtime byte still sent normally whenever no external
+  clock is active (e.g. starting Ableton from fully stopped, where
+  TILES genuinely is the one initiating). Not confirmed as a
+  contributor to the crash itself -- MIDI clock desync and a firmware
+  hang are different failure classes -- but a real, independently
+  worth-fixing bug regardless, found investigating the same report.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

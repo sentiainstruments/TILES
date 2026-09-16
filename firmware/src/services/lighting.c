@@ -276,9 +276,24 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
     uint8_t b = (uint8_t)((float)ceiling * clamp01(desired.b));
     uint32_t pixel = tiles_sk6805_pack_rgb(r, g, b);
 
+    /* Real feedback chasing a recurring real-hardware freeze whose
+     * crash-report trace ends at 'L' (this whole function) TWICE now:
+     * main.c's own per-stage trace only proves the hang is SOMEWHERE
+     * in tiles_lighting_service(), not which of its two genuinely
+     * different blocking operations -- I2C (the 4 TCA9554 mux calls
+     * below, already timeout-bounded via drivers/i2c_bus.h) or the PIO
+     * SK6805 write (also already timeout-bounded, see drivers/
+     * sk6805.c's own header). Both already have real, working
+     * timeouts, confirmed by reading the actual code, yet the hang
+     * still recurs there -- these two characters exist so the NEXT
+     * occurrence's crash report says which of the two it actually was,
+     * instead of leaving that as the still-open question it currently
+     * is. */
+    tiles_debug_trace('i');
     tiles_tca9554_disable_all_muxes(&s_led_mux);
     tiles_tca9554_set_select(&s_led_mux, cfg->led.mux_channel);
     tiles_tca9554_enable_mux(&s_led_mux, cfg->led.mux_index);
+    tiles_debug_trace('w');
     tiles_sk6805_write(&s_pad_chain, &pixel, 1);
     tiles_tca9554_disable_all_muxes(&s_led_mux);
 }
@@ -329,6 +344,13 @@ static void write_debug_underglow(void) {
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
         pixels[i] = pixel;
     }
+    /* Same 'w' used by write_pad()'s own SK6805 write -- see that
+     * function's own comment on why. Sharing one character between
+     * pad and underglow writes trades a little precision (which of
+     * the two) for staying within the trace ring's own small budget;
+     * whether debug/crash mode was active that same instant (see this
+     * function's own callers) narrows it back down if needed. */
+    tiles_debug_trace('w');
     tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
 }
 
@@ -361,6 +383,13 @@ static void write_crash_underglow(void) {
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
         pixels[i] = pixel;
     }
+    /* Same 'w' used by write_pad()'s own SK6805 write -- see that
+     * function's own comment on why. Sharing one character between
+     * pad and underglow writes trades a little precision (which of
+     * the two) for staying within the trace ring's own small budget;
+     * whether debug/crash mode was active that same instant (see this
+     * function's own callers) narrows it back down if needed. */
+    tiles_debug_trace('w');
     tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
 }
 
@@ -371,6 +400,13 @@ static void write_underglow(void) {
         pixels[i] = tiles_sk6805_pack_rgb(underglow_channel_level(c->r), underglow_channel_level(c->g),
                                            underglow_channel_level(c->b));
     }
+    /* Same 'w' used by write_pad()'s own SK6805 write -- see that
+     * function's own comment on why. Sharing one character between
+     * pad and underglow writes trades a little precision (which of
+     * the two) for staying within the trace ring's own small budget;
+     * whether debug/crash mode was active that same instant (see this
+     * function's own callers) narrows it back down if needed. */
+    tiles_debug_trace('w');
     tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
 }
 
