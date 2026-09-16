@@ -4,9 +4,33 @@
 
 #include "pad_config.h"
 
-static tiles_scale_mode_t s_scale = TILES_SCALE_CHROMATIC;
-static int8_t s_octave_shift = 0;
-static int8_t s_key_offset = 0;
+#include "pico/platform/sections.h"
+
+/* Real feedback: "after crash it dosnt reset to last active screen and
+ * settings. its just rebooting to clean slate. we need to make sure it
+ * reboots to last state completely includeing sequence, layout, scale,
+ * play state." Placed in __uninitialized_ram (pico/platform/sections.h)
+ * -- the same crash-surviving RAM section services/debug_mode.c's own
+ * trace ring already uses -- rather than left as ordinary statics: the
+ * C runtime zeroes/re-initializes ordinary .bss/.data on EVERY reset
+ * including a watchdog-caused one, which is exactly why scale/octave/key
+ * used to silently fall back to their compiled-in defaults on every
+ * crash-recovery reboot. __uninitialized_ram variables can't carry a
+ * compile-time initializer (that's the whole point -- nothing may ever
+ * touch them at startup), so the fresh-boot defaults these three used to
+ * carry inline now live in tiles_note_map_init() below instead, applied
+ * only when this boot ISN'T a crash recovery. */
+static tiles_scale_mode_t __uninitialized_ram(s_scale);
+static int8_t __uninitialized_ram(s_octave_shift);
+static int8_t __uninitialized_ram(s_key_offset);
+
+void tiles_note_map_init(bool crash_recovered) {
+    if (!crash_recovered) {
+        s_scale = TILES_SCALE_CHROMATIC;
+        s_octave_shift = 0;
+        s_key_offset = 0;
+    }
+}
 
 /* ---- Guitar/bass fret mode ----------------------------------------------
  * Real feedback: "lets imoplenment for note mode a guitar fret mode for 4

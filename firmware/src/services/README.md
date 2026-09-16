@@ -5776,5 +5776,95 @@ not its code.
     requires diamond AND triangle to both be up, not just checked
     together -- closes the debug-mode gap directly and is strictly
     stronger defense-in-depth for the already-handled game-mode case.
+- **Every crash report captured this session was showing the wrong
+  moment.** Continued digging on the recurring freeze -- both boards
+  crashed again during a live Ableton-playing test ("it crashed"), and
+  the newest report from each showed the exact same signature every
+  single prior report this session had also shown: `Uptime when it
+  froze: 20 ms`, and a 256-byte ring completely full of just one
+  call's own trace characters (`i`/`w`, `write_pad()`'s I2C-mux-select
+  and SK6805-write stages) repeating dozens of times with nothing else
+  interleaved at all. That specific signature -- isolated, only two
+  characters, very early uptime -- doesn't match the main loop's
+  per-iteration `write_pad()` call (which would show the OTHER stage
+  characters mixed in between pads); it matches `tiles_lighting_
+  init()`'s own one-time 24-pad boot sweep instead, called from
+  main() before the main loop exists at all. Root cause, once that
+  clicked: `tiles_debug_mode_init()` -- the ONLY place that ever
+  copied the crash-surviving trace ring into the reportable snapshot
+  -- doesn't run until near the bottom of main(), AFTER `tiles_
+  lighting_init()`/`tiles_buttons_init()`/`tiles_touch_init()`/`tiles_
+  hall_init()`/the boot sequence have all already run. `tiles_debug_
+  trace()`'s ring write is unconditional (recorded regardless of
+  whether debug mode itself is toggled on, confirmed by reading `record_
+  to_live_ring()` directly), and every one of those calls invokes it --
+  meaning on EVERY crash-recovery reboot, that early activity was
+  overwriting the ring's real evidence of the ORIGINAL hang before the
+  snapshot ever got taken. Every report this session showed the
+  recovery boot's own boot-time noise, never the actual freeze -- the
+  crash reporter had a blind spot for its own most important case from
+  the moment it shipped. Fixed by splitting the copy out into a new
+  `tiles_debug_mode_capture_crash_snapshot(bool crash_recovered)`
+  (`services/debug_mode.c`/`.h`), called from the very first lines of
+  `main()` -- immediately after `crash_recovered` itself is computed,
+  before `tiles_usb_device_init()`, `board_init()`, or anything else
+  that could touch the ring. `tiles_debug_mode_init()` keeps its other
+  job (clearing the ring fresh, arming the watchdog) at its usual spot
+  near the bottom, just no longer the snapshot copy. This doesn't fix
+  the underlying freeze -- it fixes the TOOL built to find it, which
+  until now had never actually shown its real cause even once. The
+  next captured report should finally show what's really happening in
+  the moment things lock up, not this false lead.
+- **A crash-recovery reboot used to come back to a clean slate --
+  now it restores mode, scale, and per-lane play state too.** Real
+  feedback, spotted mid-test: unit 1 crashed on a completely different
+  path than unit 2's Ableton-correlated one (idle -> touched it ->
+  entered screensaver -> crashed), suggesting more than one root cause
+  is still in play; separately, and regardless of what eventually
+  fixes the underlying freeze(s): "after crash it dosnt reset to last
+  active screen and settings. its just rebooting to clean slate. we
+  need to make sure it reboots to last state completely includeing
+  sequence, layout, scale, play state." Sequence PATTERN CONTENT was
+  already safe -- `pattern_store_load_all()` reloads every saved slot
+  from flash on every boot, crash-recovery included, unconditionally.
+  Everything else the player can see/hear as "what the board was doing"
+  was not: `tiles_op_mode_init()` and note_map.c's scale/octave/key
+  state were ordinary statics, which the C runtime re-initializes to
+  their compiled-in defaults on every reset, watchdog-caused ones
+  included -- only `__uninitialized_ram` (`pico/platform/sections.h`)
+  survives that, the same mechanism `services/debug_mode.c`'s own
+  trace ring already relies on. Moved into that section: `services/
+  op_mode.c`'s `s_active_mode` ("layout"), `s_seq_lane_running[]` and
+  `s_seq_active_alt[]` (per-lane "play state" -- which alt pattern
+  each lane has selected, and whether it's running), and `services/
+  note_map.c`'s `s_scale`/`s_octave_shift`/`s_key_offset`. Both files'
+  init functions now take a `crash_recovered` parameter (main() passes
+  the same value it already computed at the top, same precedent as
+  every other boot-time skip there) and simply don't re-default those
+  specific fields when it's true -- everything else about a fresh vs.
+  recovery boot stays exactly as it already was. Two things restoring
+  the raw flags alone wouldn't have gotten right, both handled at the
+  end of `tiles_op_mode_init()`: note_map.c's own guitar-mode/chord-
+  mode flags need to be re-synced to whatever mode was restored (fixed
+  by replaying `set_active_mode()` with the mode already in place --
+  its own inequality guards correctly no-op every "leaving" branch and
+  only run the "entering" ones when old and new match, so this is safe
+  even though nothing is actually being left); and a restored "lane is
+  running" flag alone wouldn't make it AUDIBLE again, since `tiles_
+  midi_clock_is_running()` isn't persisted the same way and would stay
+  false forever, silently starving `seq_advance_clock()` of a running
+  clock to advance against (fixed with an explicit `tiles_midi_clock_
+  set_running(true)` if any lane comes back running). Deliberately
+  scoped OUT: `s_transport_playing`/`s_transport_recording` (this
+  device's own belief about ABLETON's transport state, not this
+  device's own playback) stay reset-on-every-boot -- MIDI has no way
+  to query the DAW's actual state back, Ableton may well have kept
+  running or been stopped by hand during whatever downtime the crash
+  caused, and restoring a guess risks the diamond button's next click
+  sending the opposite of what the host actually needs. This is also
+  scoped to surviving a watchdog RESET specifically, not a real power-
+  off -- RAM doesn't survive that either way, and actual cross-power-
+  cycle persistence remains the separate, larger, not-yet-built
+  profiles/ module note_map.h's own header already anticipated.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

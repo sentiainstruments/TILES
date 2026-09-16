@@ -64,6 +64,7 @@
 #include "services/haptics.h"
 #include "services/lighting.h"
 #include "services/midi_clock.h"
+#include "services/note_map.h"
 #include "services/octave_control.h"
 #include "services/op_mode.h"
 #include "services/pedal.h"
@@ -113,6 +114,20 @@ int main(void) {
      * not that plus several more seconds of prints nobody's there to
      * read anyway during a live set. */
     bool crash_recovered = watchdog_enable_caused_reboot();
+
+    /* Must run right here, before literally anything else below --
+     * see services/debug_mode.h's own comment on tiles_debug_mode_
+     * capture_crash_snapshot() for the finding that made this move
+     * necessary: every crash report captured this session showed the
+     * SAME early write_pad() signature instead of the real freeze,
+     * because the snapshot copy used to happen from inside tiles_
+     * debug_mode_init() at its usual spot near the bottom of this
+     * function -- by then, tiles_lighting_init() and several other
+     * init calls below had already overwritten the very ring buffer
+     * that copy was meant to preserve. Only touches __uninitialized_ram
+     * state, no hardware dependency, so nothing stops it running this
+     * early. */
+    tiles_debug_mode_capture_crash_snapshot(crash_recovered);
 
     /* Must run before stdio_init_all(): with tinyusb_device linked
      * explicitly (see CMakeLists.txt), pico_stdio_usb expects us to have
@@ -177,6 +192,14 @@ int main(void) {
      * so every channel is already in its intended state (motors off,
      * button LEDs dark) before the physical outputs go live. */
     board_pca9685_enable_outputs();
+
+    /* Scale/octave-shift/key-offset -- real feedback: "we need to make
+     * sure it reboots to last state completely includeing sequence,
+     * layout, scale, play state." No hardware dependency of its own,
+     * but must run before tiles_octave_control_init() just below, its
+     * first real consumer. See services/note_map.h's own comment on
+     * tiles_note_map_init(). */
+    tiles_note_map_init(crash_recovered);
 
     /* SW1 ("-")/SW2 ("+")'s default function: octave shift, applied via
      * services/note_map.c. Claims both buttons' LEDs via buttons.h's
@@ -301,9 +324,11 @@ int main(void) {
 
     /* Operation modes (melodic/chord/sequencer/arp), SW4/diamond single
      * click -- needs lighting/buttons/touch already initialized, same as
-     * standby/game_mode above, whose rendering path it shares. See
-     * services/op_mode.h. */
-    tiles_op_mode_init();
+     * standby/game_mode above, whose rendering path it shares. Reuses
+     * this function's own early crash_recovered -- real feedback: "we
+     * need to make sure it reboots to last state completely includeing
+     * sequence, layout, scale, play state." See services/op_mode.h. */
+    tiles_op_mode_init(crash_recovered);
 
     /* Real-hardware trace logging (diamond+square+circle held 8s to
      * toggle) -- see services/debug_mode.h's own header for the full

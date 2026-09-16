@@ -256,7 +256,21 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-void tiles_op_mode_init(void);
+/* Real feedback: "we need to make sure it reboots to last state
+ * completely includeing sequence, layout, scale, play state." Pass
+ * exactly what watchdog_enable_caused_reboot() read at the top of
+ * main() -- same value every other boot-time skip there already
+ * reuses. When true, the active mode ("layout") and every lane's
+ * running/active-alt state ("play state") are left exactly as they
+ * were the instant before the crash instead of snapping back to
+ * melodic/all-stopped -- see op_mode.c's own s_active_mode/s_seq_lane_
+ * running[]/s_seq_active_alt[] declarations for the __uninitialized_ram
+ * mechanism this relies on. Pattern CONTENT ("sequence") was already
+ * unconditionally safe across a crash-recovery reboot before this --
+ * see pattern_store_load_all()'s own comment -- only the four items
+ * above needed this parameter added. Scale/octave/key restoration is
+ * services/note_map.h's own tiles_note_map_init(), a separate call. */
+void tiles_op_mode_init(bool crash_recovered);
 
 /* Handles the triangle click (mode-select, or the scale picker -- now
  * universal, not per-mode -- when circle/"shift" is also held), the

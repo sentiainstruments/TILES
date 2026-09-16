@@ -270,34 +270,24 @@ static void dump_crash_report_if_pending(void) {
     }
 }
 
-void tiles_debug_mode_init(void) {
-    s_combo_held = false;
-    s_combo_start_ms = 0u;
-    s_combo_triggered_this_hold = false;
-    s_pending_boot_dump = false;
+void tiles_debug_mode_capture_crash_snapshot(bool crash_recovered) {
+    /* Guarded on uptime_ms != 0 as a cheap sanity check (a real crash
+     * always ran for SOME time first) rather than trusting
+     * watchdog_enable_caused_reboot() alone against whatever garbage
+     * s_live_trace might hold if this specific boot path is ever
+     * reached in a way this reasoning didn't anticipate. */
+    bool trace_looks_real = crash_recovered && s_live_trace.uptime_ms != 0u;
 
-    /* Checked BEFORE (re-)arming the watchdog below, against THIS boot's
-     * own reset cause -- confirmed against the pico-sdk's own header
-     * comment to read false after a normal `picotool load -x` reflash
-     * (that goes through watchdog_reboot()/the bootrom's own UF2 path,
-     * which clears the specific scratch marker this checks for), so a
-     * routine firmware update is never mistaken for a crash. */
-    bool crash_recovered = watchdog_enable_caused_reboot() && s_live_trace.uptime_ms != 0u;
-
-    if (crash_recovered) {
+    if (trace_looks_real) {
         /* s_live_trace still holds whatever was being recorded at the
          * exact moment of the hang -- SRAM survives a watchdog reset,
          * only real power loss clears it. Snapshot it into the
-         * separately-persisted struct before normal recording resumes
-         * and starts overwriting s_live_trace fresh -- without this
-         * copy, the old content would be gone within the first handful
-         * of loop iterations after reboot, long before debug mode could
-         * ever be re-entered to read it. Guarded on uptime_ms != 0 as a
-         * cheap sanity check (a real crash always ran for SOME time
-         * first) rather than trusting watchdog_enable_caused_reboot()
-         * alone against whatever garbage s_live_trace might hold if
-         * this specific boot path is ever reached in a way this
-         * reasoning didn't anticipate. */
+         * separately-persisted struct HERE, before board_init() or any
+         * other init below main()'s call to this function has a chance
+         * to run and start recording ITS OWN activity into s_live_trace
+         * -- see this function's own header-comment finding for why
+         * that overwrite is exactly what's been happening every time
+         * this session. */
         s_crash_snapshot.ring_data = s_live_trace;
         s_crash_snapshot.magic = DEBUG_CRASH_MAGIC;
         s_crash_snapshot.reported = false;
@@ -313,13 +303,24 @@ void tiles_debug_mode_init(void) {
          * hasn't started), so cdc_write_paced()'s pumping would just be
          * racing a re-enumeration that hasn't happened yet. */
         s_pending_boot_dump = s_debug_mode_active;
-    } else {
+    } else if (!crash_recovered) {
         /* Genuinely fresh boot (power-on, RUN-pin reset, or a normal
          * picotool reflash) -- s_debug_mode_active's leftover SRAM
          * content can't be trusted the way it can after a confirmed
          * crash-recovery reboot, so start from a known state. */
         s_debug_mode_active = false;
     }
+}
+
+void tiles_debug_mode_init(void) {
+    s_combo_held = false;
+    s_combo_start_ms = 0u;
+    s_combo_triggered_this_hold = false;
+    /* s_pending_boot_dump and the crash snapshot itself are already
+     * settled by tiles_debug_mode_capture_crash_snapshot(), called from
+     * the very top of main() before this -- see that function's own
+     * comment for why it can't wait until here. Not touched again in
+     * this function. */
 
     memset(&s_live_trace, 0, sizeof(s_live_trace));
 

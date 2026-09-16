@@ -21,6 +21,7 @@
 #include "hardware/sync.h"
 #include "hardware/watchdog.h"
 
+#include "pico/platform/sections.h"
 #include "pico/time.h"
 
 #include <math.h>
@@ -252,7 +253,27 @@ static float background_pattern_pulse_level(uint32_t now_ms) {
  * flash per quarter note, not per individual clock pulse. */
 #define OP_CLOCK_PULSES_PER_BEAT 24u
 
-static tiles_op_mode_t s_active_mode;
+/* Real feedback: "we need to make sure it reboots to last state
+ * completely includeing sequence, layout, scale, play state." Placed in
+ * __uninitialized_ram (survives a watchdog reset, unlike ordinary
+ * statics -- see note_map.c's own comment on the same mechanism) along
+ * with s_seq_lane_running[]/s_seq_active_alt[] below -- together,
+ * "which mode is showing" + "which lanes are playing" + "which pattern
+ * slot each lane has selected" is what this feedback means by "layout"
+ * and "play state." Deliberately NOT extended to s_transport_playing/
+ * s_transport_recording just below (this device's own BELIEF about
+ * Ableton's transport state, not this device's own playback) -- MIDI
+ * has no way to query Ableton's actual state, and Ableton may well have
+ * kept running or been stopped by hand during whatever downtime this
+ * crash caused, so restoring a guess here risks the diamond button's
+ * next click sending the OPPOSITE of what the host actually needs
+ * (Stop when it's already stopped, or vice versa); resetting to "assume
+ * stopped" and letting the player's next diamond click resync is the
+ * safer default. tiles_op_mode_init() below only skips re-defaulting
+ * these three on a confirmed crash-recovery boot -- untouched here,
+ * this declaration carries no initializer on purpose, same reason
+ * note_map.c's own crash-survived statics don't either. */
+static tiles_op_mode_t __uninitialized_ram(s_active_mode);
 static bool s_menu_visible;
 
 /* Real feedback: "its powering on with the mode light on" -- triangle's
@@ -473,7 +494,10 @@ static bool s_pattern_slot_saved[OP_SEQ_NUM_LANES][OP_SEQ_ALTS_PER_LANE];
  * lane's own independent seq_advance_clock() call, completely separate
  * from which lane the player happens to be LOOKING at right now
  * (s_seq_edit_lane below). */
-static uint8_t s_seq_active_alt[OP_SEQ_NUM_LANES];
+/* __uninitialized_ram -- see s_active_mode's own comment above; part of
+ * "which pattern slot each lane has selected" surviving a crash-recovery
+ * reboot instead of every lane silently snapping back to alt 0. */
+static uint8_t __uninitialized_ram(s_seq_active_alt)[OP_SEQ_NUM_LANES];
 /* Which lane's pattern the main step view/editor currently shows -- the
  * OTHER 3 lanes keep playing in the background regardless, same
  * established "runs in the background" precedent this file already uses
@@ -515,7 +539,14 @@ static uint32_t s_seq_length_flash_ms;
  * called the moment any lane here goes from stopped to running (so the
  * shared pulse_count starts advancing if it wasn't already), and
  * set_running(false) only once EVERY lane here has stopped. */
-static bool s_seq_lane_running[OP_SEQ_NUM_LANES];
+/* __uninitialized_ram -- see s_active_mode's own comment above; part of
+ * "play state" surviving a crash-recovery reboot. Restoring this alone
+ * isn't enough to make a previously-running lane audible again though --
+ * see tiles_op_mode_init()'s own restore-path comment for why it also
+ * has to call tiles_midi_clock_set_running(true) directly instead of
+ * waiting for the normal stopped->running edge that only fires from a
+ * live "-"/"+" press. */
+static bool __uninitialized_ram(s_seq_lane_running)[OP_SEQ_NUM_LANES];
 static uint8_t s_seq_current_step[OP_SEQ_NUM_LANES]; /* 0..23 */
 static bool s_seq_note_sounding[OP_SEQ_NUM_LANES];
 static uint8_t s_seq_sounding_pad[OP_SEQ_NUM_LANES]; /* 1..24, valid iff s_seq_note_sounding[lane] */
@@ -3541,8 +3572,10 @@ static float compute_beat_flash_level(uint32_t now_ms, tiles_midi_clock_state_t 
     return 0.0f;
 }
 
-void tiles_op_mode_init(void) {
-    s_active_mode = OP_MODE_MELODIC;
+void tiles_op_mode_init(bool crash_recovered) {
+    if (!crash_recovered) {
+        s_active_mode = OP_MODE_MELODIC;
+    }
     s_menu_visible = false;
     s_triangle_was_held = false;
     s_triangle_press_had_conflict = false;
@@ -3570,14 +3603,16 @@ void tiles_op_mode_init(void) {
             pat->length = OP_SEQ_NUM_STEPS;
             s_pattern_slot_saved[lane][alt] = false;
         }
-        s_seq_active_alt[lane] = 0u;
+        if (!crash_recovered) {
+            s_seq_active_alt[lane] = 0u;
+            s_seq_lane_running[lane] = false;
+        }
         /* Claims from the TOP of the 15 MPE Member Channels downward --
          * see this file's own "Multi-lane pattern bank" section. Lane 0
          * = nibble 15, exactly today's original single-pattern behavior,
          * unchanged for anyone never touching the bank. */
         s_seq_lane_channel[lane] =
             (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + TILES_MIDI_MPE_NUM_MEMBER_CHANNELS - 1u - lane);
-        s_seq_lane_running[lane] = false;
         s_seq_current_step[lane] = 0u;
         s_seq_note_sounding[lane] = false;
         s_seq_step_started_at_pulse[lane] = 0u;
@@ -3611,6 +3646,36 @@ void tiles_op_mode_init(void) {
      * safe and cheap to do unconditionally on every boot, crash-
      * recovery included. */
     pattern_store_load_all();
+
+    if (crash_recovered) {
+        /* s_active_mode/s_seq_active_alt[]/s_seq_lane_running[] were all
+         * deliberately left untouched above -- see their own
+         * __uninitialized_ram declarations for why they already hold
+         * whatever they were the instant before the crash. Replaying
+         * set_active_mode() with the mode already in place re-syncs
+         * note_map.c's guitar/chord flags and the standby/lighting
+         * ownership that go with it -- that function's own "!=" guards
+         * correctly no-op every "leaving" branch and only run the
+         * "entering" ones when old and new are the same value, so this
+         * is safe to call here even though nothing is actually being
+         * left. */
+        set_active_mode(s_active_mode);
+        for (uint8_t lane = 0; lane < OP_SEQ_NUM_LANES; lane++) {
+            if (s_seq_lane_running[lane]) {
+                /* Mirrors the transition handle_transport_and_length()
+                 * makes on a live stopped->running edge (see s_seq_lane_
+                 * running[]'s own declaration comment) -- restoring the
+                 * per-lane flag alone doesn't do this, and without it
+                 * tiles_midi_clock_is_running() stays false forever
+                 * (that flag is an ordinary static, not persisted the
+                 * same way), leaving this lane silently stuck waiting
+                 * for a clock source that already thinks nothing wants
+                 * it, instead of actually resuming playback. */
+                tiles_midi_clock_set_running(true);
+                break;
+            }
+        }
+    }
 }
 
 void tiles_op_mode_scan(void) {

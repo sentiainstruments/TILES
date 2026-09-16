@@ -33,6 +33,22 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Real feedback: "we need to make sure it reboots to last state
+ * completely includeing sequence, layout, scale, play state." Call
+ * once, early in main() -- no hardware dependency, so no particular
+ * ordering requirement beyond running before anything else here could
+ * be called. `crash_recovered`: pass exactly what watchdog_enable_
+ * caused_reboot() read at the top of main(), same value every other
+ * boot-time skip in main.c already reuses. When true, the current
+ * scale/octave-shift/key-offset are left untouched -- see note_map.c's
+ * own __uninitialized_ram comment for why they already survived the
+ * reset itself and only need this function to NOT overwrite them with
+ * fresh-boot defaults. This is scoped to surviving a watchdog reset
+ * specifically, not a real power-off (RAM doesn't survive that) -- see
+ * this file's own header comment on the future profiles/ module for
+ * actual cross-power-cycle persistence, a separate, larger concern. */
+void tiles_note_map_init(bool crash_recovered);
+
 /* Real feedback: "for melodic it toggles different scale modes... lets
  * do in an ableton push style for the lighting... ionian, dorian,
  * phrigian, lydian, mixo, aeolian, locrian, bluse major and minor,

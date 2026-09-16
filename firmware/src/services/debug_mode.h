@@ -79,6 +79,28 @@
 
 #include <stdbool.h>
 
+/* Root-cause finding from this session's own crash-report analysis:
+ * EVERY report captured so far -- both boards, independently, several
+ * times -- showed the identical signature, "uptime when it froze: 20
+ * ms" and a ring completely full of just one write_pad() call's own
+ * trace characters repeating, nothing else interleaved. That's not the
+ * real freeze -- tiles_debug_mode_init() (below) used to be where the
+ * ring got copied into the reportable snapshot, and main() doesn't
+ * call it until AFTER tiles_lighting_init()/tiles_buttons_init()/
+ * tiles_touch_init()/tiles_hall_init()/the boot sequence have all
+ * already run and called tiles_debug_trace() themselves -- since
+ * record_to_live_ring() (debug_mode.c) writes unconditionally,
+ * regardless of whether debug mode itself is toggled on, every one of
+ * those calls overwrites more of whatever the ring held from the
+ * ACTUAL moment of the original hang, long before the snapshot copy
+ * ever ran. Every report this session has shown the recovery boot's
+ * OWN early activity, never the real thing. Must be called at the
+ * very top of main(), immediately after computing crash_recovered via
+ * watchdog_enable_caused_reboot() and before ANYTHING else (including
+ * board_init()) runs -- only __uninitialized_ram state, no hardware
+ * dependency, so there's nothing stopping it running that early. */
+void tiles_debug_mode_capture_crash_snapshot(bool crash_recovered);
+
 void tiles_debug_mode_init(void);
 
 /* Must run every main-loop iteration regardless of debug mode's current
