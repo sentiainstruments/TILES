@@ -6410,24 +6410,41 @@ not its code.
   Applied to both copies of this logic (`render_sequencer()`'s own
   inline "-"/"+" LEDs and the shared `render_transport_toggle_leds()`
   used by the pitch/probability/ratchet edit views) for consistency.
-- **Pattern save/delete underglow: still not showing after the
-  redundant-writer fix above, root cause not yet pinned down.** Real
-  feedback, after that fix was already on the board: "still no
-  underglow or confirmations while in pattern selector menu." Every
-  static read of the code (the getter's own elapsed/blink math, the
-  priority order in `tiles_lighting_service()`, the crash indicator's
-  own `crash_recovered`-gated init confirming it isn't latched active
-  from a stale boot) checks out, and the serial log confirms `pattern_
-  store_save_slot()`/`_clear_slot()` themselves fire correctly on every
-  attempt -- so this needs real data, not another guess. Added two
-  paired, transition-only (not per-frame) diagnostic prints: one in
-  `render_pattern_bank()` when it first sees the flash armed (confirms
-  or rules out the state ever reaching that function at all), one in
-  `tiles_lighting_service()` whenever the underglow override's owner
-  changes (confirms or rules out something else still winning ahead of
-  pattern-flash despite the priority order looking right on paper).
-  Left in permanently, same "printf on state transitions" precedent
-  this file already uses elsewhere (`[op_mode] active mode -> X` etc.)
-  -- cheap, and useful again if this class of bug recurs.
+- **Pattern save/delete underglow (and pad flash): the real root cause,
+  found via the diagnostic prints above.** Real feedback after two
+  rounds of fixes that didn't help: "i did two saves and two delete but
+  no light confirmations on either ... but when i did it without debug
+  mode there was no underglow at all either" -- the "without debug
+  mode" half was the key data point, since it ruled out any debug-mode
+  race once and for all (nothing else was active to compete with it,
+  and it still didn't show). The diagnostic prints confirmed it: `[op_
+  mode] saved lane N pattern N to flash` fired every time (the trigger
+  was never the problem), but `render_pattern_bank()`'s own "pattern
+  flash showing" print never fired ONCE, and `tiles_lighting_service()`'s
+  override never transitioned to `2` (pattern_flash) either -- so
+  `s_pattern_flash_active` was reading false to EVERY consumer, despite
+  being set true moments earlier. Root cause: `render_pattern_bank(uint32_t
+  now_ms)` takes `now_ms` as a PARAMETER, captured once at the top of
+  `tiles_op_mode_scan()` -- before `handle_pattern_bank_taps()` (called
+  earlier in that same scan) runs `pattern_store_write_all()`, the flash
+  erase/program with interrupts disabled that always takes some real,
+  nonzero wall-clock time. `s_pattern_flash_start_ms` is captured via a
+  FRESH `get_absolute_time()` call AFTER that write returns, so it's
+  always >= the stale `now_ms` this function was handed. `now_ms -
+  s_pattern_flash_start_ms` (both `uint32_t`) underflowed to a huge
+  number on the very FIRST check every single time, tripping the expiry
+  branch immediately and clearing `s_pattern_flash_active` before a
+  single frame could ever reach the pad, the underglow, or `tiles_
+  lighting_service()`'s getter -- which is exactly why the previous
+  two fixes (debug-mode priority, removing the redundant underglow
+  writer) were both real but insufficient: they fixed how the state
+  would have been CONSUMED, while the state itself was already dead on
+  arrival. Fixed by capturing a fresh timestamp for this one check
+  instead of trusting the passed-in parameter, exactly like `tiles_op_
+  mode_pattern_flash_underglow_color()` already correctly did -- which
+  is also why that getter's OWN math was never the suspect here; it was
+  never the one racing against the flash write. The two diagnostic
+  prints stay in permanently (cheap, transition-only, and this is
+  exactly the kind of bug they're for).
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

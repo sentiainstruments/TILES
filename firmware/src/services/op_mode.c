@@ -2628,10 +2628,30 @@ bool tiles_op_mode_pattern_flash_underglow_color(float *out_r, float *out_g, flo
 static void render_pattern_bank(uint32_t now_ms) {
     bool flash_on = ((now_ms / OP_PATTERN_BANK_FLASH_MS) % 2u) == 0u;
 
+    /* Real root cause of "still no underglow or confirmations" (the
+     * diagnostic prints added to chase this confirmed it never even
+     * got this far): `now_ms` here is a PARAMETER, captured once at the
+     * top of tiles_op_mode_scan() -- BEFORE handle_pattern_bank_taps()
+     * (called earlier in that same scan) runs pattern_store_write_all(),
+     * the flash erase/program with interrupts disabled that always
+     * takes some real, nonzero wall-clock time. s_pattern_flash_start_ms
+     * is captured via a FRESH get_absolute_time() call AFTER that write
+     * returns, so it's always >= the stale now_ms this function was
+     * handed. `now_ms - s_pattern_flash_start_ms` (both uint32_t)
+     * underflows to a huge number on the very FIRST check, tripping the
+     * expiry branch immediately and clearing s_pattern_flash_active
+     * before a single frame of the flash could ever show on the pad,
+     * the underglow, or the getter tiles_lighting_service() reads --
+     * that's why removing the redundant underglow writer didn't help;
+     * the state was already dead by the time either consumer looked.
+     * Fixed by capturing a fresh timestamp for this specific check
+     * instead of trusting the passed-in one, exactly like tiles_op_
+     * mode_pattern_flash_underglow_color() already correctly does. */
     bool save_flash_showing = false;
     bool save_flash_on = false;
     if (s_pattern_flash_active) {
-        uint32_t elapsed = now_ms - s_pattern_flash_start_ms;
+        uint32_t flash_now_ms = to_ms_since_boot(get_absolute_time());
+        uint32_t elapsed = flash_now_ms - s_pattern_flash_start_ms;
         if (elapsed >= OP_PATTERN_FLASH_TOTAL_MS) {
             s_pattern_flash_active = false;
         } else {
