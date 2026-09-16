@@ -6237,5 +6237,69 @@ not its code.
   of this entry, which will also use shift+diamond -- one gesture, one
   meaning, everywhere, rather than capture meaning shift+diamond
   outside sequencer mode but plain diamond inside it.
+- **New feature: capture into lane 3 from melodic, chord, or guitar
+  mode, without leaving that mode.** Real feedback: "i also want to add
+  a feature that captures from melodic mode or chord mode or any mode
+  into lane 3 sequencer on command and each new capture from each mode
+  goes into a different bank of lane 3 effectively making it possible
+  to run multiple sequences for each lane at once... for trigger
+  capture mode lets use a push of shift and diamond if not in use
+  already by another function. this will make the steps start counting
+  like in sequencer flashing under the current layout and the playing
+  gets saved." Shift+diamond (free to claim outside sequencer mode --
+  it used to just fall through to the same play/stop/record toggle a
+  plain click already does, never its own distinct gesture) toggles
+  this on; the current mode's pad grid stays exactly as it already
+  renders, untouched, with a new amber underglow pulse (services/
+  lighting.c's write_cross_capture_underglow(), same "bypass standby
+  ownership, write straight to hardware" pattern the crash/debug
+  indicators already use, since melodic/chord/guitar mode never claim
+  standby_active in the first place) the only visible sign anything
+  changed.
+  Deliberately built almost entirely out of REUSE rather than a
+  parallel system: cross_capture_enter()/_exit() just save/repoint
+  s_seq_edit_lane at lane 3 (index 2 -- "3 is now capture" per this
+  same message's own lane-numbering reminder) and set that lane's
+  active alt to a fixed per-mode bank (melodic->0, chord->1, guitar->2
+  -- "each new capture from each mode goes into a different bank", a
+  fixed mapping so re-capturing from the same mode later deliberately
+  overwrites that same bank rather than accumulating endlessly), then
+  call the EXACT same seq_capture_mode_enter()/seq_capture_handle_taps()/
+  seq_capture_advance_clock() this file already has for sequencer mode's
+  own plain-diamond capture -- every one of those already reads s_seq_
+  edit_lane/active_pattern() internally, so none of them needed to
+  change to work here too, and lane 3's own playback afterward is just
+  the existing "every lane runs in the background regardless of mode"
+  behavior already established, not new code at all.
+  What genuinely IS new: tiles_op_mode_scan()'s own dispatch runs
+  capture's scan functions but, when this is the cross-mode variant,
+  deliberately does NOT call render_seq_capture() or return early the
+  way sequencer mode's own capture does -- control falls through to
+  the current mode's own normal rendering instead, unmodified.
+  Two real correctness gaps caught auditing this before it ever
+  shipped, not found by testing: first, a defensive check elsewhere in
+  this file already existed for "exit capture mode if shift+triangle
+  opens the scale picker on top of it" -- calling the bare seq_capture_
+  mode_exit() there (and in set_active_mode()'s own mode-change safety
+  net) would have left s_seq_edit_lane and a new is-cross-capture-active
+  flag stuck pointing at lane 3 forever, since only cross_capture_exit()
+  itself clears those; both sites now check which variant is active and
+  call the right one. Second, and more serious: chord mode's own pads
+  never resolve notes through tiles_note_map_get_note() at all (they
+  bypass it entirely for build_chord_voicing()'s own 4-voice output --
+  see that function's own section) -- without an explicit check,
+  capturing from chord mode would have silently recorded whatever
+  melodic note that pad's position implies instead of an actual chord,
+  defeating the entire reason chord mode is one of this feature's own
+  named capture sources. seq_capture_handle_taps() now detects a chord-
+  region pad while chord mode is active and captures build_chord_
+  voicing()'s first 2 voices (bass + root -- the two most foundational,
+  and OP_SEQ_MAX_NOTES_PER_STEP's own flash-capacity cap leaves no room
+  for the full 4 anyway) as two notes from that one touch, instead of
+  the single plain-melodic note it would otherwise have captured.
+  Genuinely new to real playing time as of this change, built on top of
+  the multi-note-per-step work above in the same pass -- worth watching
+  closely on the next real-hardware round, same as everything else
+  reintroduced or newly built this session.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

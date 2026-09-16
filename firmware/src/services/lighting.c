@@ -4,6 +4,7 @@
 #include "crash_indicator.h"
 #include "debug_mode.h"
 #include "note_map.h"
+#include "op_mode.h"
 #include "pad_config.h"
 #include "power.h"
 
@@ -416,6 +417,49 @@ static void write_crash_underglow(void) {
     tiles_debug_trace('x');
 }
 
+/* Real feedback: "captures from melodic mode or chord mode or any mode
+ * into lane 3 sequencer on command... this will make the steps start
+ * counting like in sequencer flashing under the current layout and the
+ * playing gets saved." Same "bypass standby-active entirely, write
+ * straight to hardware" reasoning as write_debug_underglow()/write_
+ * crash_underglow() above -- this feature's whole point is that the
+ * current mode's own pad grid stays exactly as-is underneath, so
+ * underglow is the only real estate left for an indicator, and it has
+ * to work regardless of whether standby_active happens to be claimed
+ * (melodic/chord/guitar mode never claim it at all -- see set_active_
+ * mode()'s own comment in services/op_mode.c). Amber (full R+G, no B):
+ * distinct from crash's pure red, debug's magenta, and chord mode's own
+ * solid blue strip -- nothing else in this firmware currently uses it.
+ * Same 900ms pulse period as the other two for visual consistency, not
+ * shared code, matching this file's own established "same convention,
+ * separate copy" precedent. */
+#define CROSS_CAPTURE_UNDERGLOW_PULSE_PERIOD_MS 900.0f
+#define CROSS_CAPTURE_UNDERGLOW_PULSE_MIN 0.35f
+#define CROSS_CAPTURE_UNDERGLOW_PULSE_MAX 1.0f
+
+static float cross_capture_underglow_pulse_level(uint32_t now_ms) {
+    float phase = (float)now_ms / CROSS_CAPTURE_UNDERGLOW_PULSE_PERIOD_MS;
+    float raw = 0.5f + 0.5f * sinf(2.0f * DEBUG_UNDERGLOW_PI * phase);
+    return CROSS_CAPTURE_UNDERGLOW_PULSE_MIN + (CROSS_CAPTURE_UNDERGLOW_PULSE_MAX - CROSS_CAPTURE_UNDERGLOW_PULSE_MIN) * raw;
+}
+
+static void write_cross_capture_underglow(void) {
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    float pulse = cross_capture_underglow_pulse_level(now_ms);
+    uint8_t level = underglow_channel_level(pulse);
+    uint32_t pixel = tiles_sk6805_pack_rgb(level, level, 0u);
+    uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
+    for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
+        pixels[i] = pixel;
+    }
+    /* Same 'w' used by write_pad()'s own SK6805 write -- see that
+     * function's own comment on why. */
+    tiles_debug_trace('w');
+    tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
+    /* See write_pad()'s own 'x' comment -- same bisection. */
+    tiles_debug_trace('x');
+}
+
 static void write_underglow(void) {
     uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
@@ -520,6 +564,13 @@ void tiles_lighting_service(void) {
         underglow_override_active = true;
     } else if (tiles_debug_mode_is_active()) {
         write_debug_underglow();
+        underglow_override_active = true;
+    } else if (tiles_op_mode_cross_capture_is_active()) {
+        /* Lowest priority of the three -- crash/debug are rarer and
+         * more urgent; this one's own trigger (shift+diamond) is
+         * something the person just did on purpose, same reasoning as
+         * debug mode's own priority below crash. */
+        write_cross_capture_underglow();
         underglow_override_active = true;
     }
 

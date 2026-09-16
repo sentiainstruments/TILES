@@ -362,3 +362,15 @@ bool tiles_op_mode_has_menu_open(void);
  * comment, and this accessor's own comment in op_mode.c, for the real
  * stuck-note failure mode this prevents. */
 bool tiles_op_mode_sequencer_channel_is_reserved(uint8_t channel);
+
+/* True while the cross-mode "capture into lane 3" feature is actively
+ * recording (shift+diamond from melodic/chord/guitar mode -- see this
+ * file's own "Cross-mode capture into lane 3" section). services/
+ * lighting.c checks this for its own underglow-only recording
+ * indicator, the same "bypass standby ownership entirely, write
+ * straight to hardware" pattern services/crash_indicator.h/services/
+ * debug_mode.h's own underglow overrides already use -- this feature's
+ * whole point is that the pad grid stays exactly as the current mode
+ * already renders it, so it can't claim standby_active the way
+ * sequencer mode's own (visually replacing) capture render does. */
+bool tiles_op_mode_cross_capture_is_active(void);
