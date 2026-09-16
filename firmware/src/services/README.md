@@ -5995,5 +5995,23 @@ not its code.
   physical unit is which before trusting bus-number-based flashing
   again, rather than assuming bus 2 now means what it meant a flash or
   two ago.
+- **Correction to this session's own earlier finding: "Ableton playing"
+  is not actually a strict trigger.** The original isolation, much
+  earlier in this file, reads as unconditional: "boards dont crash when
+  ableton is not playing and not sending clock." Real feedback now,
+  after more testing: nothing is MIDI-mapped to Ableton's Tap Tempo
+  (ruling out the specific mechanism the CoreMIDI/CoreAudio deadlock
+  research lead pointed at), and "the fail does happen without ableton
+  playing but it did appear to be more recurrent [with it] either way
+  we can be doubtfull about that specific trigger." Consistent with
+  where the bisection trace has actually been pointing (a hardware-level
+  PIO/bus stall inside `tiles_sk6805_write()`, not anything MIDI-clock-
+  specific) -- a timing-sensitive hardware stall wouldn't need Ableton's
+  clock at all, just enough sustained activity to land in whatever
+  window triggers it, which naturally correlates with heavier play
+  without being caused by it specifically. Treat "Ableton playing"
+  as correlated with FREQUENCY, not as a precondition, in any future
+  reasoning about this -- and don't over-trust the original quote above
+  as still-accurate just because it's written down.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
