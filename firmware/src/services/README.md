@@ -6410,5 +6410,24 @@ not its code.
   Applied to both copies of this logic (`render_sequencer()`'s own
   inline "-"/"+" LEDs and the shared `render_transport_toggle_leds()`
   used by the pitch/probability/ratchet edit views) for consistency.
+- **Pattern save/delete underglow: still not showing after the
+  redundant-writer fix above, root cause not yet pinned down.** Real
+  feedback, after that fix was already on the board: "still no
+  underglow or confirmations while in pattern selector menu." Every
+  static read of the code (the getter's own elapsed/blink math, the
+  priority order in `tiles_lighting_service()`, the crash indicator's
+  own `crash_recovered`-gated init confirming it isn't latched active
+  from a stale boot) checks out, and the serial log confirms `pattern_
+  store_save_slot()`/`_clear_slot()` themselves fire correctly on every
+  attempt -- so this needs real data, not another guess. Added two
+  paired, transition-only (not per-frame) diagnostic prints: one in
+  `render_pattern_bank()` when it first sees the flash armed (confirms
+  or rules out the state ever reaching that function at all), one in
+  `tiles_lighting_service()` whenever the underglow override's owner
+  changes (confirms or rules out something else still winning ahead of
+  pattern-flash despite the priority order looking right on paper).
+  Left in permanently, same "printf on state transitions" precedent
+  this file already uses elsewhere (`[op_mode] active mode -> X` etc.)
+  -- cheap, and useful again if this class of bug recurs.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

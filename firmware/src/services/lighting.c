@@ -14,6 +14,7 @@
 #include "tca9554.h"
 
 #include <math.h>
+#include <stdio.h>
 
 /* Real feedback, across several rounds: "make all led brighter its hard
  * to see" (10 -> 25), then "lets standardise led brightnbess, resting led
@@ -586,9 +587,19 @@ void tiles_lighting_service(void) {
      * since they're the one who turned it on. */
     bool underglow_override_active = false;
     float pattern_flash_r, pattern_flash_g, pattern_flash_b;
+    /* Diagnostic only (real feedback: "still no underglow ... while in
+     * pattern selector menu" -- reported AGAIN after the redundant-
+     * writer fix, so the remaining gap is somewhere in here, not in
+     * render_pattern_bank() anymore). Prints only on a TRANSITION (which
+     * override, if any, currently owns underglow), never once per frame
+     * -- narrows down whether pattern-flash is even being selected at
+     * all, or whether something else is still winning ahead of it. */
+    static uint8_t s_debug_last_override_kind = 0xFFu;
+    uint8_t debug_override_kind = 0u;
     if (tiles_crash_indicator_is_active()) {
         write_crash_underglow();
         underglow_override_active = true;
+        debug_override_kind = 1u;
     } else if (tiles_op_mode_pattern_flash_underglow_color(&pattern_flash_r, &pattern_flash_g, &pattern_flash_b)) {
         /* Above debug mode specifically -- real feedback found debug
          * mode's own override (checked just below) was unconditionally
@@ -598,9 +609,11 @@ void tiles_lighting_service(void) {
          * ambient "recording is on" pulse for that short window. */
         write_pattern_flash_underglow(pattern_flash_r, pattern_flash_g, pattern_flash_b);
         underglow_override_active = true;
+        debug_override_kind = 2u;
     } else if (tiles_debug_mode_is_active()) {
         write_debug_underglow();
         underglow_override_active = true;
+        debug_override_kind = 3u;
     } else if (tiles_op_mode_cross_capture_is_active()) {
         /* Lowest priority of the three -- crash/debug are rarer and
          * more urgent; this one's own trigger (shift+diamond) is
@@ -608,6 +621,12 @@ void tiles_lighting_service(void) {
          * debug mode's own priority below crash. */
         write_cross_capture_underglow();
         underglow_override_active = true;
+        debug_override_kind = 4u;
+    }
+    if (debug_override_kind != s_debug_last_override_kind) {
+        printf("[lighting] underglow override -> %u (0=none 1=crash 2=pattern_flash 3=debug 4=cross_capture)\n",
+               (unsigned)debug_override_kind);
+        s_debug_last_override_kind = debug_override_kind;
     }
 
     /* Real feedback on the crash indicator's dismiss: "the dismiss

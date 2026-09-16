@@ -2639,6 +2639,17 @@ static void render_pattern_bank(uint32_t now_ms) {
             save_flash_on = ((elapsed / OP_PATTERN_FLASH_BLINK_MS) % 2u) == 0u;
         }
     }
+    /* Diagnostic only -- see tiles_lighting_service()'s own matching
+     * trace (services/lighting.c). Prints on the rising edge only, once
+     * per save/delete rather than once per scan, so this confirms
+     * whether render_pattern_bank() itself ever sees the flash armed at
+     * all, independent of whether underglow ends up showing it. */
+    static bool s_debug_last_save_flash_showing = false;
+    if (save_flash_showing && !s_debug_last_save_flash_showing) {
+        printf("[op_mode] pattern flash showing: pad=%u is_delete=%u\n", (unsigned)s_pattern_flash_pad,
+               (unsigned)s_pattern_flash_is_delete);
+    }
+    s_debug_last_save_flash_showing = save_flash_showing;
 
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         uint8_t lane = (uint8_t)(row - (TILES_GRID_MIN_ROW + 1u));
