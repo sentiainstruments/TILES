@@ -50,6 +50,9 @@ static uint32_t s_pulse_count;
 static bool s_running;
 static bool s_start_edge;
 static bool s_source_is_tap_tempo;
+/* tiles_midi_clock_external_active() as of the LAST scan -- see its
+ * new use in tiles_midi_clock_scan() below. */
+static bool s_external_was_active;
 
 static uint32_t s_last_external_pulse_ms;
 static bool s_ever_seen_external_pulse;
@@ -77,6 +80,7 @@ void tiles_midi_clock_init(void) {
     s_source_is_tap_tempo = false;
     s_last_external_pulse_ms = 0u;
     s_ever_seen_external_pulse = false;
+    s_external_was_active = false;
     s_tap_count = 0u;
     s_last_tap_ms = 0u;
     s_tap_tempo_established = false;
@@ -260,13 +264,52 @@ void tiles_midi_clock_scan(void) {
         }
     }
 
+    /* Real feedback: "there is a sync issue between the clock on tiles
+     * and ableton. its not auto latching to ableton clock. it should
+     * auto switch to that clock when it detedcts it. midi clock has
+     * priority over iinternal clock." The receive loop above already
+     * gives a real Start (0xFA) byte start_edge -- correct when
+     * Ableton's own transport begins while TILES is already listening
+     * -- but a bare Clock (0xF8) byte never sets it, on purpose (a
+     * pulse alone isn't "this is beat 1," see that case's own
+     * comment). That leaves a real gap exactly matching this report:
+     * if TILES starts (or resumes) receiving external clock WITHOUT
+     * ever seeing the Start that began it -- Ableton was already
+     * playing before TILES was listening, or before this port
+     * reconnected -- external_active flips true off nothing but plain
+     * Clock bytes, s_running never does (Clock alone doesn't set it,
+     * same as always), and nothing ever re-anchors any lane's own
+     * step-boundary phase to this new source -- indistinguishable from
+     * "not auto-latching" from the outside, even though clock bytes
+     * are genuinely arriving and being counted. Fixed the same way a
+     * real Start already is handled, not a new mechanism: the instant
+     * external_active transitions from false to true, treat it exactly
+     * like one -- s_running = true (a real clock's mere presence
+     * outranks whatever TILES's own internal state already assumed,
+     * "midi clock has priority") and start_edge = true (reuses seq_
+     * reset()'s own already-safe, already-tested phase realignment --
+     * every running lane's step-boundary reference recaptures the
+     * CURRENT pulse_count, no separate reset of pulse_count's own
+     * absolute value needed or safe to do here, since lanes already
+     * mid-flight are tracking against it). A later real Start/Stop
+     * still behaves exactly as it always did; this only covers the
+     * specific gap where external clock's own PRESENCE, not a
+     * particular byte within it, is what should have triggered the
+     * switch. */
+    bool external_active_now = tiles_midi_clock_external_active(now_ms);
+    if (external_active_now && !s_external_was_active) {
+        s_running = true;
+        s_start_edge = true;
+    }
+    s_external_was_active = external_active_now;
+
     /* Internal tap-tempo generator -- only ever advances pulse_count
      * while no real external clock is currently active; real bytes
      * above always take priority (the loop above already updated
      * s_last_external_pulse_ms if any arrived THIS scan, so this check
      * is already current). See this file's own header for the full
      * reasoning. */
-    if (!tiles_midi_clock_external_active(now_ms) && s_tap_tempo_established) {
+    if (!external_active_now && s_tap_tempo_established) {
         s_source_is_tap_tempo = true;
         float virtual_pulse_interval_ms = s_tap_interval_ms / 24.0f;
         if (virtual_pulse_interval_ms < 1.0f) {

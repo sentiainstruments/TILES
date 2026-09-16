@@ -2242,6 +2242,37 @@ not its code.
   (restart from the top) apart from "play while stopped" (resume) -- real
   feedback: "play position of head should reset when stop click twice and
   if playing and play again it starts from the top again."
+  **Auto-latch to external clock the instant it's detected, not just
+  on a real Start byte.** Real feedback, live mid-testing: "there is a
+  sync issue between the clock on tiles and ableton. its not auto
+  latching to ableton clock. it should auto switch to that clock when
+  it detedcts it. midi clock has priority over iinternal clock." A real
+  Start (0xFA) byte already gave `start_edge` correctly; a bare Clock
+  (0xF8) byte deliberately never did (a pulse alone isn't "this is beat
+  1"), which left a real gap matching this report exactly: if TILES
+  starts (or resumes) receiving Ableton's clock WITHOUT ever seeing the
+  Start that began it -- Ableton was already playing before TILES was
+  listening, or before a dropped connection came back -- `external_
+  active` flips true off nothing but plain Clock bytes, `s_running`
+  never does (Clock alone doesn't set it, unchanged), and no lane's own
+  step-boundary phase ever re-anchors to the new source -- genuinely
+  indistinguishable from "not auto-latching" from outside this file,
+  even though clock bytes are arriving and being counted correctly.
+  Fixed by reusing the existing, already-safe Start machinery rather
+  than inventing a new one: the instant `tiles_midi_clock_external_
+  active()` transitions from false to true (tracked via a new
+  `s_external_was_active`), `tiles_midi_clock_scan()` now sets both
+  `s_running = true` (a real clock's mere presence outranks whatever
+  TILES's own state already assumed -- "midi clock has priority") and
+  `s_start_edge = true` (the exact mechanism `seq_reset()` already
+  safely handles -- every running lane recaptures ITS OWN step-
+  boundary reference against the CURRENT pulse_count; deliberately does
+  NOT reset `s_pulse_count`'s own absolute value, which would be unsafe
+  -- lanes already mid-flight are tracking elapsed pulses against it,
+  and yanking it backward would underflow that unsigned math). A later
+  real Start/Stop still behaves exactly as always; this only covers the
+  gap where external clock's PRESENCE itself, not a specific byte
+  within it, is what should have triggered the switch.
 - `op_mode.h`/`.c` — done for V1: operation modes (melodic/chord/
   sequencer/arpeggiator), SW4 ("diamond")'s function -- real feedback:
   "its time to implement the operation modes. we have standard melodic,
