@@ -1,6 +1,7 @@
 #include "lighting.h"
 
 #include "board_pins.h"
+#include "crash_indicator.h"
 #include "debug_mode.h"
 #include "note_map.h"
 #include "pad_config.h"
@@ -278,8 +279,13 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
     tiles_tca9554_disable_all_muxes(&s_led_mux);
 }
 
-/* Real feedback: debug mode "confirmed by the underglow pulsing red
- * steady." Same sine-pulse shape services/op_mode.c's own menu_
+/* Real feedback, originally: debug mode "confirmed by the underglow
+ * pulsing red steady." Recolored to Sentia Magenta once the crash
+ * indicator below ALSO needed a pulsing underglow: "turn debug mode
+ * light to sentia magenta instead of red to avoid confusion" -- red is
+ * now reserved exclusively for "a crash just happened, unacknowledged"
+ * (write_crash_underglow() below), so the two can never be mistaken for
+ * each other. Same sine-pulse shape services/op_mode.c's own menu_
  * selected_pulse_level() uses for its own "this is the active/selected
  * thing" language -- not shared code (op_mode.c's own copy is static to
  * that file), just the same established visual convention, so debug
@@ -306,10 +312,45 @@ static float debug_underglow_pulse_level(uint32_t now_ms) {
  * to whatever s_underglow_rgb[] currently holds, sidesteps that
  * entirely -- the instant debug mode exits, the very next call falls
  * through to this function's normal round-robin/on-change behavior and
- * underglow simply reflects whatever it was already supposed to. */
+ * underglow simply reflects whatever it was already supposed to.
+ * R and B both scaled by the same pulse level (G stays 0) so the color
+ * stays true Sentia Magenta at every point in the pulse, not just at
+ * full brightness. */
 static void write_debug_underglow(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
     float pulse = debug_underglow_pulse_level(now_ms);
+    uint8_t level = underglow_channel_level(pulse);
+    uint32_t pixel = tiles_sk6805_pack_rgb(level, 0u, level);
+    uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
+    for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
+        pixels[i] = pixel;
+    }
+    tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
+}
+
+/* Real feedback: "we need an indicator for crash now that we skip boot
+ * sequence so turn underglow a pulsing red to indicate crash." Same
+ * pulse shape as write_debug_underglow() just above, same "bypass
+ * standby-active entirely, write straight to hardware" reasoning --
+ * see that function's own comment -- kept as a separate copy rather
+ * than parameterizing one shared function, matching this file's own
+ * established precedent for this exact pulse shape (see the comment
+ * above debug_underglow_pulse_level()). Pure red: this is now the one
+ * and only thing in this firmware that uses it, on purpose, so it can
+ * never be confused with debug mode's magenta. */
+#define CRASH_UNDERGLOW_PULSE_PERIOD_MS 900.0f
+#define CRASH_UNDERGLOW_PULSE_MIN 0.35f
+#define CRASH_UNDERGLOW_PULSE_MAX 1.0f
+
+static float crash_underglow_pulse_level(uint32_t now_ms) {
+    float phase = (float)now_ms / CRASH_UNDERGLOW_PULSE_PERIOD_MS;
+    float raw = 0.5f + 0.5f * sinf(2.0f * DEBUG_UNDERGLOW_PI * phase);
+    return CRASH_UNDERGLOW_PULSE_MIN + (CRASH_UNDERGLOW_PULSE_MAX - CRASH_UNDERGLOW_PULSE_MIN) * raw;
+}
+
+static void write_crash_underglow(void) {
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    float pulse = crash_underglow_pulse_level(now_ms);
     uint8_t level = underglow_channel_level(pulse);
     uint32_t pixel = tiles_sk6805_pack_rgb(level, 0u, 0u);
     uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
@@ -400,7 +441,16 @@ void tiles_lighting_service(void) {
         return;
     }
 
-    if (tiles_debug_mode_is_active()) {
+    /* Crash takes priority when both happen to be active at once (debug
+     * mode can survive a crash-recovery reboot via its own
+     * __uninitialized_ram state -- see services/debug_mode.c -- so a
+     * fresh crash indicator and an already-on debug mode CAN genuinely
+     * coexist). The crash is the more urgent, less-expected thing to
+     * see; debug mode being on is something the person already knows,
+     * since they're the one who turned it on. */
+    if (tiles_crash_indicator_is_active()) {
+        write_crash_underglow();
+    } else if (tiles_debug_mode_is_active()) {
         write_debug_underglow();
     }
 

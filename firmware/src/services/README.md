@@ -5347,5 +5347,61 @@ not its code.
   rather than (or in addition to) the still-open USB E15 erratum class --
   that needs the same real-hardware soak test this whole investigation
   has run on every other change.
+- **Real feedback, immediately following the crash-recovery-boot-skip
+  fixes above: "we need an indicator for crash now that we skip boot
+  sequence so turn underglow a pulsing red to indicate crash that can
+  be cancelled or aknowledged by presing shift for 2 secodns on its
+  own, turn debug mode light to sentia magenta instead of red to avoid
+  confusion."** Direct consequence of skipping the boot animation on
+  crash-recovery (see above): that animation used to be the only
+  visible "something just happened" signal on any boot, so skipping it
+  specifically for crash-recovery left exactly that kind of boot
+  looking completely silent -- worth fixing given how much of this
+  session was spent making crash-recovery fast specifically so it'd be
+  usable mid-set; a fast but silent recovery still leaves the player
+  wondering whether anything happened at all.
+  New `services/crash_indicator.c`/`.h`: activated once at boot
+  (`tiles_crash_indicator_init(crash_recovered)`, reusing main.c's own
+  early `watchdog_enable_caused_reboot()` read rather than a fresh
+  call), scanned every main-loop iteration thereafter
+  (`tiles_crash_indicator_scan()`, trace char `'R'`) watching for SW6
+  (circle -- "shift," per services/expression_control.h's own real-
+  feedback quote: "our shift and power button is circle") held ALONE
+  (every other function button up) for 2000ms, the exact hold this
+  codebase's other one-shot gestures already use as their shape
+  (services/debug_mode.c's 8s combo, the expression mute combo's 3s),
+  just a different duration because that's what was asked for. "Alone"
+  specifically avoids colliding with the two other gestures that also
+  hold circle down (the debug-mode combo, the expression-mute combo) --
+  without it, either of those would restart this gesture's own hold
+  timer on every scan for no reason.
+  Rendering: `services/lighting.c`'s `tiles_lighting_service()` checks
+  `tiles_crash_indicator_is_active()` first thing and, if true, pulses
+  the underglow red -- the exact same "bypass s_underglow_rgb[]/
+  s_standby_active entirely, write straight to hardware" mechanism
+  `write_debug_underglow()` already established (see this file's own
+  debug-mode entry, above, or lighting.c's comment on that function) --
+  reused rather than reinvented, since "must stay visible no matter
+  what else owns rendering" is exactly the same requirement both
+  indicators have. Same sine-pulse shape/timing as the debug pulse too
+  (0.35-1.0, 900ms period), kept as a separate copy per this file's own
+  established convention for that shape (its own comment: "not shared
+  code... just the same established visual convention").
+  **Recoloring debug mode**, the other half of the same feedback:
+  debug mode's own pulse (active since earlier this session, confirmed
+  by "the underglow pulsing red steady") moved from red to Sentia
+  Magenta (R and B both scaled by the same pulse level, G stays 0, so
+  the hue stays true magenta throughout the pulse, not just at full
+  brightness) -- red is now this firmware's one and only "a crash just
+  happened, unacknowledged" color, on purpose, so the two can never be
+  mistaken for each other the way they could have if both indicators
+  had ended up red. Since services/debug_mode.c's own active-state
+  flag lives in `__uninitialized_ram` and survives a crash-recovery
+  reboot, debug mode and a fresh crash indicator CAN genuinely both be
+  active at once (debug mode was already on from before the crash);
+  `tiles_lighting_service()` gives the crash pulse priority in that
+  case -- the more urgent, less-expected thing to see, versus debug
+  mode being on, which the person already knows since they turned it
+  on themselves.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

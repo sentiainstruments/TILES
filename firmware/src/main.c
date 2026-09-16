@@ -55,6 +55,7 @@
 #include "midi/usb_device.h"
 #include "services/boot_sequence.h"
 #include "services/buttons.h"
+#include "services/crash_indicator.h"
 #include "services/debug_mode.h"
 #include "services/expression.h"
 #include "services/expression_control.h"
@@ -311,6 +312,15 @@ int main(void) {
      * near the loop it instruments. */
     tiles_debug_mode_init();
 
+    /* Real feedback: "we need an indicator for crash now that we skip
+     * boot sequence" -- the animation used to be the only visible sign
+     * a fresh boot had just happened; skipping it on crash-recovery
+     * (see this function's own opening comment) left that kind of boot
+     * silent. Reuses this function's own early crash_recovered rather
+     * than re-deriving it -- see services/crash_indicator.h for the
+     * full feature (underglow pulse + circle-held-alone-2s dismiss). */
+    tiles_crash_indicator_init(crash_recovered);
+
     while (true) {
         /* MUST run every iteration: this is what actually services the
          * USB stack (processes control transfers, moves CDC/MIDI data
@@ -401,6 +411,12 @@ int main(void) {
         /* Needs fresh button state, same as tiles_octave_control_scan()
          * just below -- see services/debug_mode.h's own header. */
         tiles_debug_mode_scan();
+        /* Needs fresh button state (circle-held-alone dismiss). Must
+         * run before tiles_lighting_service() (below) so a dismiss that
+         * just happened this tick is already reflected in this same
+         * tick's render. See services/crash_indicator.h. */
+        tiles_debug_trace('R');
+        tiles_crash_indicator_scan();
         /* Must run after tiles_buttons_scan() so this iteration's
          * debounced SW1/SW2 state is fresh. See
          * services/octave_control.h. */
