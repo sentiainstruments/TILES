@@ -369,11 +369,30 @@ bool tiles_op_mode_sequencer_channel_is_reserved(uint8_t channel);
  * lighting.c checks this for its own underglow-only recording
  * indicator, the same "bypass standby ownership entirely, write
  * straight to hardware" pattern services/crash_indicator.h/services/
- * debug_mode.h's own underglow overrides already use -- this feature's
- * whole point is that the pad grid stays exactly as the current mode
- * already renders it, so it can't claim standby_active the way
- * sequencer mode's own (visually replacing) capture render does. */
+ * debug_mode.h's own underglow overrides already use -- the pad grid
+ * otherwise stays exactly as the current mode already renders it (see
+ * tiles_op_mode_cross_capture_is_note_sounding() below for the one
+ * pad-level exception real feedback asked for on top of that). */
 bool tiles_op_mode_cross_capture_is_active(void);
+
+/* True if `note` is one of the notes currently sounding on the cross-
+ * capture lane (OP_CROSS_CAPTURE_LANE) while cross-capture is active --
+ * always false otherwise, including once capture ends (the lane's own
+ * s_seq_sounding_notes[] is really just "whatever's audibly playing
+ * right now," same array normal background playback uses). Real
+ * feedback: "im asking for the sequencer to be visible on the pads on
+ * the leds" -- the underglow-only indicator above wasn't enough on its
+ * own; services/lighting.c's pad_desired_rgb() checks this, per pad,
+ * against that pad's own currently-mapped note (tiles_note_map_get_
+ * note()) so whichever pad the loop is currently playing visibly
+ * flashes right on the melodic/guitar grid, without touching any OTHER
+ * pad's own note-role coloring or blocking real touches -- the same
+ * "layer on top, don't replace" precedent this whole feature already
+ * follows for MIDI output. Chord mode's own chord-strip pads (which
+ * don't resolve through tiles_note_map_get_note() at all) are outside
+ * what this can highlight; only the melody-region/guitar-neck pads
+ * that a captured note could ever actually reverse-map to. */
+bool tiles_op_mode_cross_capture_is_note_sounding(uint8_t note);
 
 /* True while the pattern bank's own save/delete confirmation flash is
  * currently showing, with *out_r/*out_g/*out_b set to the color it

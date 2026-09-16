@@ -3306,6 +3306,24 @@ bool tiles_op_mode_cross_capture_is_active(void) {
     return s_cross_capture_active;
 }
 
+/* See this accessor's own declaration in op_mode.h for the full
+ * reasoning. s_seq_note_sounding[]/s_seq_sounding_notes[][]/_note_count[]
+ * are the exact same state seq_end_current_note() itself reads to know
+ * what to send Note-Off for -- this is a read-only peek at the SAME
+ * live truth, not a separate tracked copy that could ever drift from
+ * what's actually sounding. */
+bool tiles_op_mode_cross_capture_is_note_sounding(uint8_t note) {
+    if (!s_cross_capture_active || !s_seq_note_sounding[OP_CROSS_CAPTURE_LANE]) {
+        return false;
+    }
+    for (uint8_t i = 0; i < s_seq_sounding_note_count[OP_CROSS_CAPTURE_LANE]; i++) {
+        if (s_seq_sounding_notes[OP_CROSS_CAPTURE_LANE][i] == note) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void cross_capture_enter(void) {
     s_cross_capture_saved_edit_lane = s_seq_edit_lane;
     s_seq_edit_lane = OP_CROSS_CAPTURE_LANE;
@@ -3513,7 +3531,28 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
     if (length < 1u) {
         length = 1u;
     }
-    s_seq_current_step[lane] = (uint8_t)((s_seq_current_step[lane] + steps_to_advance) % length);
+    uint8_t new_step = (uint8_t)((s_seq_current_step[lane] + steps_to_advance) % length);
+    /* Real feedback: "it loops live playing what was recorded on the
+     * previous pass without erasing what was already written ... its
+     * not audible until capture is off." True on both counts, and the
+     * second one is the actual bug: this function used to just move
+     * s_seq_current_step[lane] here directly, never calling anything
+     * that would fire a note -- it only ever committed a NEWLY touched
+     * note into the step just left (above) and otherwise stayed
+     * silent. Whatever was already recorded in a PREVIOUS pass sat
+     * there, correctly un-erased, but simply never played back while
+     * capture (which fully owns this lane instead of seq_advance_
+     * clock() -- see the per-lane loop above that skips it) was
+     * active -- you'd only ever hear it once you exited and normal
+     * playback took over again. seq_enter_step() (the exact function
+     * seq_advance_clock() itself calls for every other lane) already
+     * does exactly what's needed here: ends whatever was sounding,
+     * advances the step, and fires whatever's armed at the new one
+     * (probability/ratchet included, for free) -- reused here instead
+     * of a second copy, so a capture pass now sounds like layering a
+     * new take over the existing loop actually playing, not silence
+     * with your own new notes floating on top of it. */
+    seq_enter_step(lane, new_step);
 }
 
 /* Real feedback: "the curent step of the sequencer should light up pink
@@ -4125,6 +4164,19 @@ static void handle_circle_tap(uint32_t now_ms) {
                                tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
         s_circle_press_pending_tap = mode_ok && !combo_conflict && !tiles_midi_clock_external_active(now_ms);
+        /* Diagnostic only (real feedback: "the shift diamond combo
+         * triggers an additional functionality for tap tempo on the
+         * shift button ... only if capture is on" -- mode_ok above
+         * already requires s_active_mode == OP_MODE_SEQUENCER, which
+         * the serial log confirms stays false throughout a melodic-mode
+         * capture session, so this candidacy SHOULD be false every time
+         * that's reported. Printing every press so the next test either
+         * catches mode_ok reading true when it shouldn't, or rules this
+         * exact mechanism out entirely so the search moves elsewhere. */
+        if (s_circle_press_pending_tap) {
+            printf("[op_mode] circle press -> tap-tempo candidate (mode=%d capture=%d cross_capture=%d)\n",
+                   (int)s_active_mode, (int)s_seq_capture_mode_active, (int)s_cross_capture_active);
+        }
     }
 
     if (held && s_circle_press_pending_tap &&

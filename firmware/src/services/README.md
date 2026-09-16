@@ -6480,5 +6480,58 @@ not its code.
   narrowing it the same way would risk the transpose combo firing by
   accident during ordinary sequencer transport use, a real regression
   this fix doesn't need to risk to fix the one thing that broke.
+- **Cross-mode capture (melodic/chord/guitar) fixes, three issues from
+  one real-feedback message: "when capture is triggered shift becomes
+  tap tempo and we can see the sequencer running automatically under
+  the melodic layout and it loops live playing what was recorded on
+  the previous pass without erasing what was already written."**
+  Follow-up answers narrowed each one down:
+  - **Previously-recorded content was silent while capturing, only
+    audible again once capture ended.** "its not audible until capture
+    is off" -- confirmed by reading `seq_capture_advance_clock()`: it
+    only ever committed a NEWLY touched note into the step just left
+    and advanced `s_seq_current_step[lane]` directly, never calling
+    anything that would fire a note for whatever was ALREADY armed at
+    the step being entered. Correct on the "doesn't erase" half (an
+    earlier round's own fix), silent on the "loops live playing" half.
+    `seq_advance_clock()` (every OTHER lane's own normal playback) uses
+    `seq_enter_step()` for exactly this -- ends the current note,
+    advances the step, and fires whatever's armed there (probability/
+    ratchet included) -- so `seq_capture_advance_clock()` now calls
+    that same function instead of assigning the step directly. A
+    capture pass now sounds like layering a new take over the loop
+    that's actually playing, not silence with only your own new notes
+    floating on top of it.
+  - **The sequencer becoming visible on the pad LEDs, not just
+    underglow.** "im asking for the sequencer to be visible on the pads
+    on the leds" -- the amber underglow pulse (built earlier this
+    session) wasn't enough on its own. New `tiles_op_mode_cross_
+    capture_is_note_sounding(uint8_t note)` (op_mode.c/.h) reads the
+    exact same `s_seq_sounding_notes[]`/`s_seq_note_sounding[]` state
+    `seq_end_current_note()` itself uses -- a read-only peek at what's
+    genuinely sounding, not a separate tracked copy. `services/
+    lighting.c`'s `pad_desired_rgb()` checks this, per pad, against
+    that pad's own currently-mapped note (`tiles_note_map_get_note()`),
+    ahead of guitar/chord-region/melodic idle coloring but AFTER the
+    active-touch check -- so whichever pad the loop is currently
+    playing flashes amber right on the melodic/guitar grid, without
+    ever overriding a pad you're actually touching. Chord-region pads
+    are excluded (they don't resolve through `tiles_note_map_get_note()`
+    at all, so checking it there risks a coincidental, meaningless
+    match) -- this can only ever highlight melody-region/guitar-neck
+    pads, matching where the doc comment says so.
+  - **"Shift becomes tap tempo" while capture is on -- NOT reproduced
+    by reading the code, so instrumented instead of guessed at.**
+    `handle_circle_tap()`'s own tap-tempo candidacy already requires
+    `s_active_mode == OP_MODE_SEQUENCER` (`mode_ok`), and the serial
+    log confirms `active_mode` genuinely stays on melodic/chord the
+    whole time cross-capture runs (no `[op_mode] active mode ->`
+    transition between "capture mode -> on" and "-> off") -- on paper
+    this candidacy should be false every time. Rather than changing
+    code with no confirmed mechanism, added a print at the exact point
+    candidacy is granted (`mode`/`capture`/`cross_capture` state
+    included) so the next test either catches `mode_ok` reading true
+    when it shouldn't, or rules this specific function out entirely so
+    the search moves elsewhere. Unresolved.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

@@ -204,6 +204,25 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
     }
     uint8_t logical_pad = (uint8_t)(pad_index + 1u);
 
+    /* Real feedback: "im asking for the sequencer to be visible on the
+     * pads on the leds" -- the cross-capture underglow pulse below
+     * wasn't enough on its own; this shows the actual loop playing back
+     * by flashing whichever pad the currently-sounding note would live
+     * on, layered on top of every OTHER mode's own idle coloring (see
+     * tiles_op_mode_cross_capture_is_note_sounding()'s own comment).
+     * Checked ahead of guitar/chord-region/melodic idle coloring below
+     * -- a note actually sounding right now is a more time-sensitive
+     * thing to see than any of those static idle looks -- but AFTER the
+     * active-touch check above, so a real live touch always wins over
+     * this ambient hint. Chord-region pads are excluded: they don't
+     * resolve through tiles_note_map_get_note() at all (see that
+     * function's own comment), so checking it there would risk a
+     * coincidental, meaningless match. */
+    if (tiles_op_mode_cross_capture_is_active() && !tiles_note_map_is_chord_region_pad(logical_pad) &&
+        tiles_op_mode_cross_capture_is_note_sounding(tiles_note_map_get_note(logical_pad))) {
+        return (tiles_rgb01_t){1.0f, 0.6f, 0.0f};
+    }
+
     /* Guitar/bass fret mode: a completely different idle-coloring scheme,
      * checked before the melodic root/natural logic below (mutually
      * exclusive -- see services/note_map.h's own header). Real feedback:
