@@ -91,6 +91,28 @@ static void tiles_power_recover_haptics_and_buttons(tiles_power_state_t new_stat
 }
 
 int main(void) {
+    /* Real feedback, computing an honest answer to "how long will boot
+     * take if [a watchdog recovery] happens now": every printf() below
+     * that fires unconditionally at boot -- this banner, the 9 calls
+     * inside tiles_diag_i2c_scan_expected_devices(), calibration.c's own
+     * help text -- can each individually block up to
+     * PICO_STDIO_USB_STDOUT_TIMEOUT_US (500ms) whenever nobody has a
+     * terminal open to drain the USB-CDC buffer, exactly the ordinary
+     * case once TILES is plugged into a DAW rather than a dev machine.
+     * That's ~11 calls, up to ~5.5s worst case, on EVERY boot -- was
+     * already true before tonight, just never mattered until recovery
+     * SPEED became the actual point rather than "eventually recovers."
+     * Computed once, this early -- watchdog_enable_caused_reboot() is a
+     * raw hardware scratch-register read, safe to call before ANY
+     * peripheral init, board_init() included -- and reused everywhere
+     * below a boot-time print/scan is skippable, instead of leaving
+     * each site to call it again fresh. A genuine fresh power-on still
+     * gets the full, useful diagnostic output; a crash-recovery boot
+     * gets back to running as fast as USB re-enumeration itself takes,
+     * not that plus several more seconds of prints nobody's there to
+     * read anyway during a live set. */
+    bool crash_recovered = watchdog_enable_caused_reboot();
+
     /* Must run before stdio_init_all(): with tinyusb_device linked
      * explicitly (see CMakeLists.txt), pico_stdio_usb expects us to have
      * already called tusb_init() with our own composite CDC+MIDI
@@ -99,13 +121,21 @@ int main(void) {
 
     stdio_init_all();
 
-    printf("[main] SENTIA TILES unit %u/%u\n", (unsigned)TILES_UNIT_NUMBER, (unsigned)TILES_UNIT_COUNT);
+    if (!crash_recovered) {
+        printf("[main] SENTIA TILES unit %u/%u\n", (unsigned)TILES_UNIT_NUMBER, (unsigned)TILES_UNIT_COUNT);
+    }
 
     board_init();
 
     /* Phase 2 bring-up: confirm every expected I2C device ACKs before
-     * bringing up anything that talks to one. */
-    tiles_diag_i2c_scan_expected_devices();
+     * bringing up anything that talks to one. Skipped on a crash-
+     * recovery boot -- see this function's own opening comment; nothing
+     * about the I2C devices themselves changed since a moment ago, a
+     * software reset didn't unplug anything, so re-verifying presence
+     * here buys nothing but several more seconds of unread prints. */
+    if (!crash_recovered) {
+        tiles_diag_i2c_scan_expected_devices();
+    }
 
     /* Boot order step 13: raise both I2C buses to the 400kHz operating
      * speed now that enumeration has run, before any driver init below
@@ -189,28 +219,36 @@ int main(void) {
      * takes, not that PLUS this animation's own ~4.7s on top -- even
      * now that it correctly pumps tud_task() throughout (see boot_
      * sequence.c/.h's own history just below), that's still real wall-
-     * clock time nobody asked to sit through a second time.
-     * watchdog_enable_caused_reboot() is a raw hardware scratch-register
-     * read -- safe to call this early, before services/debug_mode.c's
-     * own tiles_debug_mode_init() (which checks the exact same thing,
-     * later, for its own crash-snapshot purposes) has even run yet.
-     * Skipping the Hall-baseline recapture this animation would
-     * otherwise also do is correct here, not just incidental to
-     * skipping the animation: that recapture's own justification (a
-     * few settled seconds since a just-power-cycled MCU) doesn't apply
-     * after a WARM reset at all -- the sensors never lost power, so the
-     * baseline tiles_hall_init() already captured a moment ago this
-     * exact boot is exactly as valid as one taken 4 more seconds from
-     * now would be. */
-    if (watchdog_enable_caused_reboot()) {
+     * clock time nobody asked to sit through a second time. Reuses
+     * this function's own early crash_recovered (see main()'s opening
+     * comment) instead of calling watchdog_enable_caused_reboot() a
+     * second time here -- it's a raw hardware scratch-register read,
+     * so calling it again would still be harmless, just redundant now
+     * that one early read covers every boot-time skip in this
+     * function, this one included. Skipping the Hall-baseline
+     * recapture this animation would otherwise also do is correct
+     * here, not just incidental to skipping the animation: that
+     * recapture's own justification (a few settled seconds since a
+     * just-power-cycled MCU) doesn't apply after a WARM reset at all --
+     * the sensors never lost power, so the baseline tiles_hall_init()
+     * already captured a moment ago this exact boot is exactly as
+     * valid as one taken 4 more seconds from now would be. */
+    if (crash_recovered) {
         printf("[boot_sequence] skipped -- crash-recovery reboot, not a fresh power-on\n");
     } else if (!tiles_boot_sequence_run()) {
         printf("[boot_sequence] post-animation Hall baseline re-capture failed for at least one pad\n");
     }
 
     /* Serial-driven Hall calibration capture -- needs tiles_hall_init()
-     * above already run. See diagnostics/calibration.h. */
-    tiles_calibration_init();
+     * above already run. See diagnostics/calibration.h. Skipped on a
+     * crash-recovery boot along with the other boot-time-only prints
+     * above (see main()'s opening comment): tiles_calibration_init()'s
+     * only effect is printing its own help text over CDC, which can
+     * itself block up to 500ms with nobody connected to drain it, and
+     * a warm reset doesn't change what that text would say anyway. */
+    if (!crash_recovered) {
+        tiles_calibration_init();
+    }
 
     /* Haptics: needs tiles_buttons_init() (above) already run, since it
      * shares both PCA9685 chip instances with buttons rather than

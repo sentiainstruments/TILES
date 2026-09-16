@@ -5223,5 +5223,47 @@ not its code.
   recovery boot via `watchdog_enable_caused_reboot()`, so recovery is
   bounded by USB re-enumeration time alone, not that plus a second
   ~4.7s animation nobody asked to sit through twice.
+- **Same thread, next question -- real feedback: "bootloader mode ready
+  on both but we need a practrical solution how long will boot take if
+  fail hapens now? mittigationg it is not solving it."** Computing an
+  honest number surfaced a further gap the animation-skip fix above
+  didn't cover: `main.c` still ran its startup banner `printf`,
+  `tiles_diag_i2c_scan_expected_devices()` (9 more `printf`s), and
+  `tiles_calibration_init()`'s help-text `printf` unconditionally on
+  EVERY boot, crash-recovery included. Each individual `printf()` over
+  CDC can itself block up to `PICO_STDIO_USB_STDOUT_TIMEOUT_US` (500ms)
+  whenever nothing is connected to drain the USB-CDC buffer -- the
+  ordinary case once TILES is running inside a DAW rather than sitting
+  on a dev machine with a terminal attached -- so those ~11 calls could
+  add up to ~5.5 more seconds on top of the watchdog's own detection
+  time, on every single boot, not just a fresh power-on.
+  Fixed by computing one `bool crash_recovered =
+  watchdog_enable_caused_reboot();` at the very top of `main()`, before
+  any peripheral init, and reusing it at every boot-time-only call site
+  (the banner, the I2C scan, `tiles_calibration_init()`, and the
+  existing boot-animation skip, which used to call the same function a
+  second time). Confirmed safe to read this early and reuse rather than
+  re-checking fresh at each site: `watchdog_enable_caused_reboot()` is a
+  pure read of `watchdog_hw->reason` and a scratch register
+  (`pico-sdk/src/rp2_common/hardware_watchdog/watchdog.c`), and a repo-
+  wide grep confirms the ONLY other caller is `services/debug_mode.c`'s
+  own independent check inside `tiles_debug_mode_init()` -- which runs
+  later in `main()` and doesn't call `watchdog_enable()` (the one thing
+  that writes that scratch register) until after its own read, so both
+  reads always agree.
+  This doesn't touch WHY the original freeze happens -- only how much
+  worse a recovery makes things once the watchdog has already caught
+  one. With it, a crash-recovery boot's own honest worst case is: up to
+  1000ms for the watchdog to actually trip (`DEBUG_WATCHDOG_TIMEOUT_MS`,
+  the longest gap possible since the last `watchdog_update()` pet
+  before a hang), plus whatever USB re-enumeration itself takes on the
+  host side once the reset completes -- not fully under this firmware's
+  control, but no longer artificially padded by ~4.7s of animation and
+  ~5.5s of unread `printf`s on top, both of which are now skipped
+  entirely rather than merely shortened. The remaining ~1s watchdog
+  detection window itself is the next thing worth shrinking, but that's
+  a deliberate, separate tradeoff (a shorter timeout risks false-
+  positive resets on a legitimately busy loop iteration) rather than a
+  bug -- not changed here.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
