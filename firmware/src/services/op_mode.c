@@ -2003,6 +2003,15 @@ static void render_edit_mode(uint32_t now_ms, bool transport_running) {
     }
 }
 
+/* Forward-declared this early because mode_owns_standby_grid() just
+ * below needs to read s_song_capture_active directly, not just call
+ * into a function that could stay forward-declared -- same reasoning
+ * as the other places in this file this exact pair gets forward-
+ * declared early (set_active_mode(), handle_diamond_transport()). Real
+ * definitions live in this file's own "Song mode: capture" section,
+ * much further down. */
+static bool s_song_capture_active;
+
 /* Real feedback (Song mode's own bug, found before ever reaching real
  * hardware): sequencer mode is the only mode that claims standby_
  * active for its ENTIRE duration (its step-view is rendered entirely
@@ -2015,12 +2024,32 @@ static void render_edit_mode(uint32_t now_ms, bool transport_running) {
  * the whole grid handed to it this way," used by menu_exit()/scale_
  * menu_exit() just below (both reachable from ANY mode, so both need
  * to know whether to release standby_active on close or leave it
- * claimed) and by set_active_mode() further down, so a future mode
- * with the same need only has to change this one function, not hunt
- * down every place that used to spell out "== OP_MODE_SEQUENCER" by
- * hand. */
+ * claimed), by set_active_mode() further down, and by tiles_op_mode_
+ * owns_pad_grid() (which services/expression.c defers to before
+ * treating a touch as a live note), so a future mode with the same
+ * need only has to change this one function, not hunt down every
+ * place that used to spell out "== OP_MODE_SEQUENCER" by hand.
+ * Song mode's own capture is the one real exception carved out here:
+ * while song_capture_active, the grid is deliberately NOT standby-
+ * driven (see song_capture_enter()'s own comment) -- it shows melodic-
+ * style note coloring instead, on purpose, so both a live-preview
+ * sound (via services/expression.c's own MPE pipeline, left running)
+ * and a separately recorded copy (via song_capture_handle_taps()'s own
+ * direct tiles_midi_note_on() calls, on the dedicated slot channel)
+ * come out of the SAME touch -- the exact same "live feel stays
+ * intact while a separate channel also gets recorded" precedent this
+ * feature always had when it was still called cross-capture. Without
+ * this exception, entering Song mode's OWN capture from within Song
+ * mode itself (as opposed to from melodic/chord/guitar, where s_
+ * active_mode never becomes OP_MODE_SONG in the first place) would
+ * incorrectly keep claiming standby_active/suppressing expression.c
+ * for the WHOLE capture, contradicting song_capture_enter()'s own
+ * explicit release of both. */
 static bool mode_owns_standby_grid(tiles_op_mode_t mode) {
-    return mode == OP_MODE_SEQUENCER || mode == OP_MODE_SONG;
+    if (mode == OP_MODE_SONG) {
+        return !s_song_capture_active;
+    }
+    return mode == OP_MODE_SEQUENCER;
 }
 
 /* ---- Menu -------------------------------------------------------------- */
@@ -3040,25 +3069,28 @@ static void pattern_bank_exit(void) {
  * defensive safety-net check below can see them. */
 static bool s_seq_capture_mode_active;
 static void seq_capture_mode_exit(void);
-/* Same reason, for the cross-mode "capture into lane 3" feature just
- * below it -- see that section's own header comment. */
-static bool s_cross_capture_active;
-static void cross_capture_exit(void);
+/* Same reason, for Song mode's own capture (see this file's own "Song
+ * mode: capture" section) -- song_capture_enter()/_exit() themselves
+ * are declared once, in full, down there; these are forward
+ * declarations only, needed this early because set_active_mode()
+ * below and handle_diamond_transport() (much further down) both call
+ * them directly. s_song_capture_active itself is forward-declared
+ * even earlier still, right before mode_owns_standby_grid() -- see
+ * that declaration's own comment. */
+static void song_capture_enter(void);
+static void song_capture_exit(void);
 
 static void set_active_mode(tiles_op_mode_t mode) {
-    if (s_cross_capture_active && mode != s_active_mode) {
-        /* Checked BEFORE the bare seq_capture_mode_exit() below, and as
-         * an else against it -- cross_capture_exit() ALSO restores
-         * s_seq_edit_lane and clears s_cross_capture_active, neither of
-         * which the bare call touches; calling both (or the wrong one
-         * first) would leave this feature's own state stuck pointing at
-         * lane 3. Real feedback: "captures from melodic mode or chord
-         * mode or any mode into lane 3... on command" -- this only ever
-         * exists WHILE some non-sequencer mode is active, so any genuine
-         * mode change at all -- including into sequencer mode itself --
-         * ends it, since the bank a capture targets is tied to whichever
-         * mode was active when it started. */
-        cross_capture_exit();
+    if (s_song_capture_active && mode != s_active_mode) {
+        /* Real feedback: capture (whether triggered from within Song
+         * mode or, since the rewire below, from melodic/chord/guitar)
+         * ends on any genuine mode change -- same defensive reasoning
+         * this file's OTHER capture mechanisms already establish
+         * (seq_capture_mode_exit()'s own guard just below): a plain
+         * triangle click opening the top-level menu and committing a
+         * different mode shouldn't leave a capture session latched
+         * true underneath it. */
+        song_capture_exit();
     } else if (s_seq_capture_mode_active && mode != OP_MODE_SEQUENCER) {
         /* Defensive: capture mode is normally only ever left via its own
          * shift/diamond exit gestures (see seq_capture_mode_exit()'s own
@@ -3404,124 +3436,6 @@ static void seq_capture_mode_exit(void) {
     s_seq_capture_mode_active = false;
     tiles_note_map_set_scale(s_seq_capture_prev_scale);
     printf("[op_mode] sequencer capture mode -> off\n");
-}
-
-/* ---- Cross-mode capture into lane 3 ------------------------------------
- * Real feedback: "i also want to add a feature that captures from
- * melodic mode or chord mode or any mode into lane 3 sequencer on
- * command and each new capture from each mode goes into a different
- * bank of lane 3 effectively making it possible to run multiple
- * sequences for each lane at once... for trigger capture mode lets use
- * a push of shift and diamond if not in use already by another
- * function. this will make the steps start counting like in sequencer
- * flashing under the current layout and the playing gets saved."
- * Lane 3 (index 2, 0-based -- "3 is now capture" per that same message's
- * own lane-numbering reminder) specifically, not a new configurable
- * target -- this reuses the EXACT same seq_capture_mode_enter()/_exit(),
- * seq_capture_handle_taps(), seq_capture_advance_clock() this file
- * already has for sequencer mode's own plain-diamond capture, just by
- * temporarily repointing s_seq_edit_lane at lane 3 for the duration --
- * every one of those functions already reads s_seq_edit_lane/
- * active_pattern() internally, so none of them needed a single change
- * to work here too. What IS genuinely new: this runs while s_active_
- * mode is melodic/chord/guitar, not sequencer, and the current mode's
- * own grid must stay fully visible/playable underneath -- see this
- * feature's own dispatch in tiles_op_mode_scan() (falls through to the
- * normal per-mode render instead of seq_capture_mode's own render_seq_
- * capture(), which would replace the grid entirely) and write_cross_
- * capture_underglow() in services/lighting.c (an underglow-only
- * indicator, since the pad grid itself is spoken for). */
-#define OP_CROSS_CAPTURE_LANE 2u
-static uint8_t s_cross_capture_saved_edit_lane;
-
-/* Real feedback: "each new capture from each mode goes into a
- * different bank of lane 3" -- a fixed mode->bank mapping, not a
- * separately-tracked "next free bank" counter: capturing from melodic
- * always lands in the same bank, so re-capturing from melodic later
- * deliberately overwrites that same bank rather than accumulating a
- * new one every time (matches every other pattern slot's own "re-
- * arming replaces what was there" behavior elsewhere in this file).
- * OP_MODE_SEQUENCER has no case -- this feature isn't reachable from
- * sequencer mode at all (sequencer_active is checked before either
- * gesture that could enter it), so it can never actually hit that
- * default. */
-static uint8_t cross_capture_bank_for_mode(tiles_op_mode_t mode) {
-    switch (mode) {
-    case OP_MODE_MELODIC:
-        return 0u;
-    case OP_MODE_CHORD:
-        return 1u;
-    case OP_MODE_GUITAR:
-        return 2u;
-    default:
-        return 0u;
-    }
-}
-
-bool tiles_op_mode_cross_capture_is_active(void) {
-    return s_cross_capture_active;
-}
-
-/* See this accessor's own declaration in op_mode.h for the full
- * reasoning. s_seq_note_sounding[]/s_seq_sounding_notes[][]/_note_count[]
- * are the exact same state seq_end_current_note() itself reads to know
- * what to send Note-Off for -- this is a read-only peek at the SAME
- * live truth, not a separate tracked copy that could ever drift from
- * what's actually sounding. */
-bool tiles_op_mode_cross_capture_is_note_sounding(uint8_t note) {
-    if (!s_cross_capture_active || !s_seq_note_sounding[OP_CROSS_CAPTURE_LANE]) {
-        return false;
-    }
-    for (uint8_t i = 0; i < s_seq_sounding_note_count[OP_CROSS_CAPTURE_LANE]; i++) {
-        if (s_seq_sounding_notes[OP_CROSS_CAPTURE_LANE][i] == note) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/* See this accessor's own declaration in op_mode.h. Real feedback: "i
- * still need the guide curent step on light visible, we're missing
- * that still" -- tiles_op_mode_cross_capture_is_note_sounding() above
- * only ever lights up while a note is actually armed AND sounding, so
- * a silent step (nothing recorded there yet) showed nothing at all --
- * no sense of the playhead actually moving through the pattern, unlike
- * sequencer mode's own step-view, which real feedback already
- * established needs "cuentet stept to be lit up always" (see render_
- * sequencer()'s own is_current handling). Mirrors that same idea onto
- * melodic/chord/guitar's grid instead: seq_pad_for_step(), the exact
- * function that same step-view uses for its own step<->pad mapping
- * (including the 16-step 4x4 remap), applied to this lane's own
- * current step and pattern -- so the true step position is visible
- * even through a rest, not just the moments something happens to
- * sound. */
-bool tiles_op_mode_cross_capture_current_step_pad(uint8_t *out_pad) {
-    if (!s_cross_capture_active) {
-        return false;
-    }
-    *out_pad = seq_pad_for_step(pattern_for_lane(OP_CROSS_CAPTURE_LANE), s_seq_current_step[OP_CROSS_CAPTURE_LANE]);
-    return true;
-}
-
-static void cross_capture_enter(void) {
-    s_cross_capture_saved_edit_lane = s_seq_edit_lane;
-    s_seq_edit_lane = OP_CROSS_CAPTURE_LANE;
-    /* Deliberately NOT restored on exit -- this is the actual point of
-     * the feature, not a temporary borrow: lane 3 keeps playing
-     * whatever alt this capture just recorded into, same as any other
-     * lane's own s_seq_active_alt persists once changed. */
-    s_seq_active_alt[OP_CROSS_CAPTURE_LANE] = cross_capture_bank_for_mode(s_active_mode);
-    s_cross_capture_active = true;
-    seq_capture_mode_enter();
-}
-
-static void cross_capture_exit(void) {
-    if (!s_cross_capture_active) {
-        return;
-    }
-    seq_capture_mode_exit();
-    s_seq_edit_lane = s_cross_capture_saved_edit_lane;
-    s_cross_capture_active = false;
 }
 
 static void seq_capture_handle_taps(tiles_midi_clock_state_t clock) {
@@ -3941,6 +3855,28 @@ static void handle_triangle_click(void) {
                          * grid exclusively; opening the scale picker on
                          * top of it would be ambiguous. */
                         edit_exit();
+                    } else if (s_song_capture_active) {
+                        /* Same reachability gap as the regular
+                         * sequencer's own seq_capture_mode_enter()
+                         * comment about the pattern bank, applied to
+                         * Song mode's own capture (reachable from
+                         * melodic/chord/guitar/Song mode itself, so
+                         * this exact gap exists for all of them):
+                         * nothing stops a fresh shift+triangle tap
+                         * while a song capture session is already
+                         * running, and opening the scale picker on top
+                         * would fight capture's own chromatic override
+                         * for grid ownership, then silently freeze the
+                         * capture (tiles_op_mode_scan()'s dispatch
+                         * checks s_scale_menu_visible before ever
+                         * reaching song_capture_handle_taps()/_advance_
+                         * clock() again) without ever cleanly exiting
+                         * it. Exit capture instead of opening anything,
+                         * same "shift+triangle cancels whatever sub-
+                         * state owns the grid" role this branch already
+                         * plays for the regular sequencer's own capture
+                         * and per-step edit just above. */
+                        song_capture_exit();
                     } else if (s_seq_capture_mode_active) {
                         /* Defensive, same reachability gap as seq_
                          * capture_mode_enter()'s own comment about the
@@ -3952,18 +3888,8 @@ static void handle_triangle_click(void) {
                          * opening anything, the same "shift+triangle
                          * cancels whatever sequencer sub-state owns the
                          * grid" role this branch already plays for
-                         * per-step edit just above. cross_capture_exit(),
-                         * not the bare seq_capture_mode_exit(), when this
-                         * is the cross-mode capture variant -- that one
-                         * ALSO restores s_seq_edit_lane and clears
-                         * s_cross_capture_active, neither of which the
-                         * bare call touches; calling the wrong one here
-                         * would leave both stuck pointing at lane 3. */
-                        if (s_cross_capture_active) {
-                            cross_capture_exit();
-                        } else {
-                            seq_capture_mode_exit();
-                        }
+                         * per-step edit just above. */
+                        seq_capture_mode_exit();
                     } else if (s_scale_menu_visible) {
                         scale_menu_exit();
                     } else {
@@ -4100,20 +4026,17 @@ static void handle_triangle_click(void) {
 #define OP_TRANSPORT_STOP_CC 103u
 #define OP_TRANSPORT_RECORD_CC 104u
 
-/* Song mode's own pattern-library size and capture-state flags --
- * pulled up here (out of this file's own "Song mode" section, much
- * further down) because handle_diamond_transport() just below and
- * tiles_op_mode_scan() (also below, but still before that section)
- * both need to reference them directly, not just call into functions
- * that could stay forward-declared. Real definitions/full comments
- * live in the "Song mode" section itself, where the rest of this
- * state is declared -- these are the only three that outgrew a
- * forward declaration. */
+/* Song mode's own pattern-library size and capture slot -- pulled up
+ * here (out of this file's own "Song mode" section, much further
+ * down) because handle_diamond_transport() just below and tiles_op_
+ * mode_scan() (also below, but still before that section) both need
+ * to reference it directly, not just call into a function that could
+ * stay forward-declared. s_song_capture_active/song_capture_enter()/
+ * _exit() are ALSO forward-declared this early now (see the comment
+ * next to their real declarations, before set_active_mode() further
+ * up) since that function needs them too. */
 #define OP_SONG_NUM_SLOTS TILES_NUM_PADS
-static bool s_song_capture_active;
 static uint8_t s_song_capture_slot; /* 1..24 -- which pad/slot is being recorded into */
-static void song_capture_enter(void);
-static void song_capture_exit(void);
 
 static void handle_diamond_transport(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
@@ -4157,9 +4080,9 @@ static void handle_diamond_transport(uint32_t now_ms) {
                  * the original "capture mode is triggered by diamond in
                  * sequencer mode... shift diamond does pattern picker"
                  * -- shift+diamond now means capture EVERYWHERE, matching
-                 * the same gesture this file's own cross-mode "capture
-                 * into lane 3" feature uses outside sequencer mode (see
-                 * that feature's own section), instead of meaning
+                 * the same gesture this file's own Song mode capture
+                 * uses outside sequencer mode (see that feature's own
+                 * "Song mode: capture" section), instead of meaning
                  * capture only here and pattern-bank there. Plain click
                  * (no shift) is a simple toggle now -- no hold needed at
                  * all, since shift alone already cleanly separates this
@@ -4194,53 +4117,49 @@ static void handle_diamond_transport(uint32_t now_ms) {
                  * captures from melodic mode or chord mode or any mode
                  * into lane 3 sequencer on command... for trigger
                  * capture mode lets use a push of shift and diamond if
-                 * not in use already by another function." Shift+
-                 * diamond outside sequencer mode was never its own
-                 * distinct gesture before this -- it fell through to
-                 * the exact same play/stop/record toggle a plain click
-                 * already does (the record-ARM check above already
-                 * excludes shift, but nothing stopped a quick shift+
-                 * diamond CLICK, too short to arm, from still landing
-                 * here) -- genuinely free to claim. See this file's own
-                 * "Cross-mode capture into lane 3" section for
-                 * cross_capture_enter()/_exit(). Used to also require a
-                 * tempo to already exist before entry (matching
-                 * sequencer mode's own capture entry below), but real
-                 * feedback rejected that -- and the tap-tempo-tap
-                 * workaround this comment used to describe -- outright:
-                 * "i dont need shit diamond to register tap tempo,
-                 * delete that, i need shift diamond to enter capture
-                 * and once in capture we can start playing it by tap
-                 * tempo with the shift button only like in the
+                 * not in use already by another function," later
+                 * rewired onto Song mode entirely: "lets implement
+                 * another sequencer mode know as song mode as the
+                 * default capture modes instead of regular sequencer."
+                 * Shift+diamond outside sequencer mode was never its
+                 * own distinct gesture before the original version of
+                 * this -- it fell through to the exact same play/stop/
+                 * record toggle a plain click already does (the
+                 * record-ARM check above already excludes shift, but
+                 * nothing stopped a quick shift+diamond CLICK, too
+                 * short to arm, from still landing here) -- genuinely
+                 * free to claim. Used to require a tempo to already
+                 * exist before entry, but real feedback rejected that
+                 * outright: "i dont need shit diamond to register tap
+                 * tempo, delete that, i need shift diamond to enter
+                 * capture and once in capture we can start playing it
+                 * by tap tempo with the shift button only like in the
                  * sequencer." Enters unconditionally now; with no tempo
-                 * yet, seq_capture_advance_clock() simply sits pending
-                 * (s_seq_pending_start stays true, nothing commits or
+                 * yet, song_capture_advance_clock() simply sits pending
+                 * (s_song_pending_start stays true, nothing commits or
                  * loops) while live touches still sound normally via
-                 * seq_capture_handle_taps() -- exactly the same inert-
-                 * but-harmless state entering sequencer mode itself with
-                 * no tempo already tolerates. handle_circle_tap()'s own
-                 * mode_ok already treats s_cross_capture_active as
+                 * song_capture_handle_taps() -- exactly the same inert-
+                 * but-harmless state entering sequencer mode itself
+                 * with no tempo already tolerates. handle_circle_tap()'s
+                 * own mode_ok already treats s_song_capture_active as
                  * sequencer-equivalent for tap-tempo purposes (see that
                  * function's own comment), so shift alone taps out a
                  * fresh tempo once inside, same gesture sequencer mode
-                 * itself uses. */
-                if (s_active_mode == OP_MODE_SONG) {
-                    /* Real feedback: "Also support capturing while
-                     * viewing Song mode." Song mode's own capture,
-                     * completely separate from cross-capture (which
-                     * targets melodic/chord/guitar mode's own
-                     * "capture into lane 3" feature -- see that
-                     * section's own header comment; Song mode isn't
-                     * one of its source modes, it has this instead). */
-                    if (s_song_capture_active) {
-                        song_capture_exit();
-                    } else {
-                        song_capture_enter();
-                    }
-                } else if (s_cross_capture_active) {
-                    cross_capture_exit();
+                 * itself uses.
+                 * One gesture now regardless of which mode it's
+                 * triggered from (melodic/chord/guitar, the former
+                 * "cross-capture," or Song mode itself) -- both used to
+                 * be two separate mechanisms (cross_capture_enter()/
+                 * _exit(), targeting the regular sequencer's lane 3)
+                 * before the rewire above; song_capture_enter() always
+                 * targets the next empty slot in Song mode's own
+                 * library instead, so there's no longer a real
+                 * difference between "capturing from Song mode" and
+                 * "capturing from anywhere else" worth branching on. */
+                if (s_song_capture_active) {
+                    song_capture_exit();
                 } else {
-                    cross_capture_enter();
+                    song_capture_enter();
                 }
             } else if (s_diamond_record_armed) {
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 127u);
@@ -4407,20 +4326,21 @@ static void handle_circle_tap(uint32_t now_ms) {
          * deliberate exception. Real feedback, after an earlier round
          * mistook this for a bug report: "thats a feature i want in
          * melodic modes inspired by the sequencer but i only want it
-         * active when captuire mode is active." Cross-capture (melodic/
-         * chord/guitar mode's own "capture into lane 3" feature -- see
-         * this file's own "Cross-mode capture into lane 3" section)
-         * already NEEDS a tempo to even start (cross_capture_enter()'s
-         * own tap-tempo-established/external-clock gate), but once
-         * you're actually in a non-sequencer mode with it running,
-         * there was no way to tap a NEW tempo at all -- shift's tap-
-         * tempo role was sequencer-only, full stop. s_cross_capture_
-         * active is only ever true outside sequencer mode in the first
-         * place (see set_active_mode()'s own defensive exit), so this
-         * doesn't widen sequencer mode's own rule at all -- it just adds
-         * the one specific state real feedback asked for. */
+         * active when captuire mode is active." Song mode's own capture
+         * (reachable from melodic/chord/guitar or from Song mode itself
+         * -- see this file's own "Song mode: capture" section) can be
+         * entered with no tempo at all (real feedback explicitly
+         * rejected requiring one -- song_capture_enter() has no tempo
+         * gate) -- so once you're actually recording with no tempo
+         * yet, there was no way to tap a NEW one at all, since shift's
+         * tap-tempo role was sequencer-only, full stop.
+         * s_song_capture_active being true never widens sequencer
+         * mode's own rule at all (it's only ever true OUTSIDE sequencer
+         * mode, or from within Song mode, neither of which this OR
+         * already covered) -- it just adds the one specific state real
+         * feedback asked for. */
         bool mode_ok =
-            (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode == OP_SEQ_EDIT_NONE) || s_cross_capture_active;
+            (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode == OP_SEQ_EDIT_NONE) || s_song_capture_active;
         bool combo_conflict = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
@@ -4851,13 +4771,13 @@ void tiles_op_mode_scan(void) {
      * fresh-start sequence above exactly (same 4 fields, same order)
      * rather than inventing a slightly different one. Gated on
      * sequencer mode even though handle_circle_tap() only registers a
-     * tap in sequencer mode or while cross-capture is active (see that
-     * function's own mode_ok) -- the tap and this edge landing can
-     * straddle a mode switch in principle, and this should never fire
-     * for whichever mode the player has since moved to; cross-capture's
-     * own lane doesn't need this anyway, since seq_capture_mode_enter()
-     * already marks it running directly on entry, independent of any
-     * tap-tempo establishment edge. */
+     * tap in sequencer mode or while Song mode's own capture is active
+     * (see that function's own mode_ok) -- the tap and this edge
+     * landing can straddle a mode switch in principle, and this should
+     * never fire for whichever mode the player has since moved to;
+     * Song mode's own captured slot doesn't need this anyway, since
+     * song_capture_enter() already marks it running directly on entry,
+     * independent of any tap-tempo establishment edge. */
     if (s_active_mode == OP_MODE_SEQUENCER && clock.start_edge && clock.source_is_tap_tempo &&
         !s_seq_lane_running[s_seq_edit_lane]) {
         s_seq_lane_running[s_seq_edit_lane] = true;
@@ -4940,24 +4860,22 @@ void tiles_op_mode_scan(void) {
     if (s_seq_capture_mode_active) {
         seq_capture_handle_taps(clock);
         seq_capture_advance_clock(clock);
-        /* Cross-mode capture (see that feature's own section) deliberately
-         * does NOT return here, unlike sequencer mode's own plain-diamond
-         * capture just below -- the whole point is that the current
-         * mode's own grid stays fully visible/playable underneath, so
-         * control falls through to the normal per-mode dispatch a few
-         * lines down exactly as if this whole block hadn't run at all;
-         * only the underglow (services/lighting.c's write_cross_
-         * capture_underglow(), gated on tiles_op_mode_cross_capture_
-         * is_active()) shows anything different. */
-        if (!s_cross_capture_active) {
-            /* Own dispatch branch, not routed through the normal
-             * sequencer playback path -- see this file's own
-             * "Sequencer capture mode" section for why it needs its own
-             * advance/render entirely rather than reusing seq_advance_
-             * clock()/render_sequencer(). */
-            render_seq_capture(now_ms);
-            return;
-        }
+        /* s_seq_capture_mode_active is exclusively the regular
+         * sequencer's own plain-diamond capture now -- cross-mode
+         * capture used to also set this flag (reusing this same
+         * engine, repointed at lane 3) before the rewire onto Song
+         * mode's own, completely separate song_capture_* functions
+         * (see this file's own "Song mode: capture" section), so the
+         * "don't return, let the current mode's grid stay visible"
+         * exception this used to need for that case no longer applies
+         * -- always render_seq_capture() and return here now.
+         * Own dispatch branch, not routed through the normal sequencer
+         * playback path -- see this file's own "Sequencer capture
+         * mode" section for why it needs its own advance/render
+         * entirely rather than reusing seq_advance_clock()/render_
+         * sequencer(). */
+        render_seq_capture(now_ms);
+        return;
     }
 
     if (s_active_mode == OP_MODE_SEQUENCER) {
@@ -4971,11 +4889,18 @@ void tiles_op_mode_scan(void) {
              * see song_capture_enter()'s own comment for why the grid
              * instead falls through to services/lighting.c's own
              * default melodic-style note coloring, the same surface
-             * every note actually gets captured from. Only the
-             * underglow is Song mode's own. */
+             * every note actually gets captured from. Underglow is
+             * NOT rendered here either -- services/lighting.c's own
+             * tiles_lighting_service() already shows a pulsing amber
+             * "recording" indicator whenever tiles_op_mode_song_
+             * capture_is_active(), through its own priority chain
+             * (above debug mode, same real bug this file's own pattern-
+             * flash confirmation hit earlier this session -- see that
+             * fix's own README entry). Calling render_song_underglow()
+             * here too would just be a second, always-losing writer to
+             * the exact same pixels every single scan, not a real gap. */
             song_capture_handle_taps(clock);
             song_capture_advance_clock(clock);
-            render_song_underglow();
         } else {
             handle_song_overview_taps(now_ms);
             render_song_overview(now_ms);
@@ -5031,16 +4956,30 @@ void tiles_op_mode_scan(void) {
 }
 
 bool tiles_op_mode_owns_pad_grid(void) {
-    /* mode_owns_standby_grid() -- also Song mode now. Matters for more
-     * than rendering: services/expression.c checks tiles_op_mode_owns_
-     * pad(pad), which defers to this blanket accessor for every mode
-     * except chord, before processing a touch as a live melodic note.
-     * Without Song mode included here, expression.c would ALSO fire a
-     * note for every touch during song_capture_handle_taps()'s own
-     * capture session -- that function already calls tiles_midi_note_
-     * on() directly, same as the regular sequencer's own capture, so
-     * letting expression.c ALSO process the same touch would double-
-     * fire every single note. */
+    /* mode_owns_standby_grid() -- also Song mode's own track-overview
+     * screen now (its own bug, found before ever reaching real
+     * hardware -- see that function's own comment for the full
+     * reasoning, including why it deliberately excludes Song mode's
+     * own capture). Matters for more than rendering: services/
+     * expression.c checks tiles_op_mode_owns_pad(pad), which defers to
+     * this blanket accessor for every mode except chord, before
+     * processing a touch as a live melodic note -- suppressing it here
+     * is exactly what makes the track-overview's own 24 pads mean
+     * "track slots," not notes, the same way it already does for the
+     * regular sequencer's step-view. Deliberately does NOT suppress
+     * expression.c while Song mode's own capture is active (mode_owns_
+     * standby_grid()'s own exclusion for that case) -- the grid is
+     * showing melodic-style note coloring on purpose then (see song_
+     * capture_enter()'s own comment), and expression.c staying active
+     * is what gives a live-feel MPE sound on its own dynamically-
+     * claimed channel WHILE song_capture_handle_taps() separately
+     * records the SAME touch onto the dedicated slot channel -- the
+     * exact same "live feel stays intact, a separate channel also
+     * gets recorded" precedent this feature always had when it was
+     * still called cross-capture and reachable only from melodic/
+     * chord/guitar mode (where s_active_mode never became OP_MODE_
+     * SONG in the first place, so this exclusion wasn't even needed
+     * there). */
     return s_menu_visible || s_scale_menu_visible || mode_owns_standby_grid(s_active_mode);
 }
 
@@ -5143,18 +5082,22 @@ bool tiles_op_mode_has_menu_open(void) {
  * range for cohesion." A genuine 5th top-level mode (OP_MODE_SONG),
  * separate from OP_MODE_SEQUENCER -- see that enum's own comment.
  * Extensive follow-up Q&A settled the shape actually being built here
- * (this section grows over several rounds -- this first pass is data
- * model, flash storage, and channel reservation only; the two screens
- * -- 24-pad track-overview and per-pattern step-edit -- and the
- * capture/reorder/delete gestures themselves come in later passes):
- * - 24 pattern-library slots (one per pad, on a dedicated track-
- *   overview screen -- not yet built), freely reorderable (shift+tap
- *   to pick up, plain tap elsewhere to move/swap, hold 5s+shift to
- *   delete -- gestures not yet built either), each either empty or
- *   holding one real, independently-existing pattern. Up to 24 of
- *   these can genuinely exist at once -- real feedback, after an
- *   earlier round proposed collapsing this to match the channel
- *   budget: "i want up to 24 real independent patterns."
+ * (this section grew over several rounds/stages -- data model, flash
+ * storage, and channel reservation first; then the 24-pad track-
+ * overview screen and its reorder/delete gestures; then the playback
+ * engine and capture, first from within Song mode, then rewired so
+ * cross-capture from melodic/chord/guitar lands here too instead of
+ * the regular sequencer's lane 3. The per-pattern step-edit screen and
+ * manual pitch editing are the one piece still genuinely not built):
+ * - 24 pattern-library slots (one per pad, on the track-overview
+ *   screen -- render_song_overview()/handle_song_overview_taps()),
+ *   freely reorderable (shift+tap to pick up, plain tap elsewhere to
+ *   move/swap, hold 5s+shift to delete -- song_pick_up()/song_place()/
+ *   song_delete_slot()), each either empty or holding one real,
+ *   independently-existing pattern. Up to 24 of these can genuinely
+ *   exist at once -- real feedback, after an earlier round proposed
+ *   collapsing this to match the channel budget: "i want up to 24 real
+ *   independent patterns."
  * - Each pattern is 128 steps (OP_SONG_STEPS_PER_PAGE x OP_SONG_NUM_
  *   PAGES -- 16 steps/page across 8 pages), up to OP_SONG_MAX_NOTES_
  *   PER_STEP (4) notes each, no probability/ratchet (real feedback:
@@ -5163,10 +5106,10 @@ bool tiles_op_mode_has_menu_open(void) {
  * - Up to OP_SONG_MAX_CONCURRENT (9) patterns can be PLAYING at once --
  *   a real concurrency limit, not a slot-count one (a stopped, saved
  *   pattern doesn't hold a channel at all). Starting a 10th while 9
- *   already play is blocked, confirmed red-flash feedback (not yet
- *   built). This number is exactly the channel budget below, not a
- *   round number picked for its own sake -- see song_claim_channel()'s
- *   own comment for why.
+ *   already play is blocked, confirmed red-flash feedback (song_
+ *   toggle_start_stop()'s own song_flash_error() call). This number is
+ *   exactly the channel budget below, not a round number picked for
+ *   its own sake -- see song_claim_channel()'s own comment for why.
  * - MIDI channel: real feedback originally asked for a channel that
  *   "follows the pattern" (survives reordering, doesn't depend on
  *   which of the 24 slots it's currently sitting in) and, separately,
@@ -5185,14 +5128,15 @@ bool tiles_op_mode_has_menu_open(void) {
  *   pattern rather than being permanently fixed -- confirmed
  *   acceptable, since the whole point of the original ask was about
  *   slot position specifically, not permanence.
- * - Color: plain yellow is Song mode's own theme (matching cross-
- *   capture's existing amber/yellow-ish underglow language), but each
- *   individual pattern additionally gets ITS OWN random hue within a
- *   wider yellow-green-to-orange band, assigned once at creation and
- *   persisted (see op_song_pattern_t's own hue_byte), so the 24-slot
- *   overview reads as a cohesive family of colors without every track
- *   looking identical. Not yet consumed by any rendering -- that's the
- *   track-overview screen, still to come. */
+ * - Color: plain yellow is Song mode's own theme (matching the same
+ *   amber/yellow-ish underglow language the old cross-capture feature
+ *   already established), but each individual pattern additionally
+ *   gets ITS OWN random hue within a wider yellow-green-to-orange
+ *   band, assigned once at creation (song_capture_enter()'s own
+ *   get_rand_32() call) and persisted (see op_song_pattern_t's own
+ *   hue_byte), so the 24-slot overview reads as a cohesive family of
+ *   colors without every track looking identical -- see song_hue_to_
+ *   rgb()/render_song_overview()'s own consumption of it. */
 
 /* Real feedback: "the right two columns are the 8 pages per sequence
  * track" -- columns 5-6 (matching TILES_GRID_MAX_COL's own top 2)
@@ -5799,14 +5743,15 @@ static void render_song_overview(uint32_t now_ms) {
 
 /* Real feedback: "this mode is characterized by the color yellow like
  * the underglow of capture." Plain, steady yellow -- not pulsing/
- * animated (cross-capture's own underglow pulse is a DIFFERENT,
- * ambient "something's recording" signal that doesn't fit Song mode's
- * own always-on theme the same way), revisit once there's real
- * playback to sync a pulse against. Factored out of render_song_
- * overview() so tiles_op_mode_scan()'s own capture-active branch can
- * show the same theme while the pad grid itself is busy showing
- * melodic-style note coloring instead (see song_capture_enter()'s own
- * comment). */
+ * animated (Song mode's own capture pulse, services/lighting.c's
+ * write_song_capture_underglow(), is a DIFFERENT, ambient "something's
+ * recording" signal that doesn't fit this always-on overview theme the
+ * same way; it takes over through that file's own priority chain
+ * while capturing, so this function is only ever called from the
+ * track-overview render below, not while capturing), revisit once
+ * there's real playback to sync a pulse against. Factored out of
+ * render_song_overview() purely so its own tail doesn't repeat the
+ * same loop inline. */
 static void render_song_underglow(void) {
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
         tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 1.0f, 0.0f);
@@ -5884,24 +5829,31 @@ static void song_advance_clock(uint8_t slot, tiles_midi_clock_state_t clock) {
     song_enter_step(slot, new_step);
 }
 
-/* ---- Song mode: capture (stage 3) -----------------------------------
- * Real feedback: "Also support capturing while viewing Song mode."
+/* ---- Song mode: capture (stage 3, rewired from cross-capture) --------
+ * Real feedback: "Also support capturing while viewing Song mode,"
+ * then, once that shipped as its own separate mechanism from cross-
+ * capture (which used to target the regular sequencer's lane 3): "song
+ * mode as the default capture mode instead of regular sequencer."
+ * These functions now handle BOTH cases -- capturing from within Song
+ * mode itself, and from melodic/chord/guitar mode (the former "cross-
+ * capture," now just another way to reach the exact same song_
+ * capture_enter()) -- since song_capture_enter() always targets the
+ * next empty slot in Song mode's own library regardless of which mode
+ * it was triggered from, there's no real difference left between the
+ * two worth branching on (see handle_diamond_transport()'s own shift+
+ * diamond branch, now a single unconditional call either way).
  * Shaped closely after the regular sequencer's own seq_capture_
  * handle_taps()/seq_capture_advance_clock() (nearest-step
  * quantization, a pending-cluster accumulator committed on the next
- * step boundary, live-preview notes independent of any of that), with
- * one real difference: there's no chord-region special case here at
- * all -- capturing from within Song mode always reads a pad's note
- * through the plain tiles_note_map_get_note() melodic mapping, since
- * Song mode has no chord-region concept of its own and this capture
- * source is never entered FROM chord mode (that's cross-capture's own
- * job, still targeting the regular sequencer's lane 3 -- rewiring
- * that to target Song mode instead is a real, separate ask ["song mode
- * as the default capture mode instead of regular sequencer"] not yet
- * done in this pass). s_song_capture_active/s_song_capture_slot
- * themselves are declared much earlier in this file, right before
- * handle_diamond_transport() -- see that declaration's own comment
- * for why. */
+ * step boundary, live-preview notes independent of any of that),
+ * including that function's own chord-region special case (build_
+ * chord_voicing(), triggered on handle_chord_pad_taps()'s own real
+ * strike rather than raw touch-down, for real velocity and the full
+ * voicing) -- needed here now too, since capturing FROM chord mode is
+ * one of the ways to reach this. s_song_capture_active/s_song_
+ * capture_slot themselves are declared much earlier in this file,
+ * right before set_active_mode()/handle_diamond_transport() -- see
+ * those declarations' own comments for why. */
 static tiles_scale_mode_t s_song_capture_prev_scale;
 static bool s_song_capture_prev_pad_touched[TILES_NUM_PADS];
 static uint8_t s_song_capture_armed_notes[OP_SONG_MAX_NOTES_PER_STEP];
@@ -5934,19 +5886,77 @@ static void song_capture_end_all_sounding_notes(void) {
     s_song_capture_live_count = 0u;
 }
 
+bool tiles_op_mode_song_capture_is_active(void) {
+    return s_song_capture_active;
+}
+
+/* See this accessor's own declaration in op_mode.h for the full
+ * reasoning. s_song_note_sounding[]/s_song_sounding_notes[][]/_note_
+ * count[] are the exact same state song_end_current_note() itself
+ * reads to know what to send Note-Off for -- this is a read-only peek
+ * at the SAME live truth, not a separate tracked copy that could ever
+ * drift from what's actually sounding. */
+bool tiles_op_mode_song_capture_is_note_sounding(uint8_t note) {
+    if (!s_song_capture_active) {
+        return false;
+    }
+    uint8_t slot = s_song_capture_slot - 1u;
+    if (!s_song_note_sounding[slot]) {
+        return false;
+    }
+    for (uint8_t i = 0; i < s_song_sounding_note_count[slot]; i++) {
+        if (s_song_sounding_notes[slot][i] == note) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Same edge as the regular sequencer's own seq_capture_handle_taps()
+ * now uses for its chord-region case (see that function's own comment
+ * for the full "wrong velocity"/"incomplete voicings" story this
+ * fixed) -- rises the moment handle_chord_pad_taps() itself actually
+ * fires a chord pad, exposing its own resolved s_chord_pad_notes[]/
+ * s_chord_pad_last_velocity[], rather than the raw touch-down edge
+ * (too early to have a real strike or velocity yet). Only matters
+ * while capture is reached from chord mode (the former "cross-
+ * capture" path, now rewired onto this same function) -- capturing
+ * from within Song mode itself never has chord-region pads to worry
+ * about, since Song mode has no chord region of its own. */
+static bool s_song_capture_prev_chord_sounding[TILES_NUM_PADS];
+
 static void song_capture_handle_taps(tiles_midi_clock_state_t clock) {
     uint8_t slot = s_song_capture_slot - 1u;
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         bool touched = tiles_touch_is_touched(pad);
         bool was_touched = s_song_capture_prev_pad_touched[pad - 1u];
-        if (touched && !was_touched) {
-            uint8_t note = tiles_note_map_get_note(pad);
-            tiles_haptics_trigger_kick(pad, OP_SONG_VELOCITY);
-            tiles_midi_note_on(s_song_slot_channel[slot], note, OP_SONG_VELOCITY);
-            if (s_song_capture_live_count < OP_SONG_MAX_NOTES_PER_STEP) {
-                s_song_capture_live_pads[s_song_capture_live_count] = pad;
-                s_song_capture_live_notes[s_song_capture_live_count] = note;
-                s_song_capture_live_count++;
+        bool is_chord_pad = tiles_note_map_is_chord_mode_active() && tiles_note_map_is_chord_region_pad(pad);
+        bool chord_strike_edge =
+            is_chord_pad && s_chord_pad_sounding[pad - 1u] && !s_song_capture_prev_chord_sounding[pad - 1u];
+        if ((touched && !was_touched && !is_chord_pad) || chord_strike_edge) {
+            uint8_t notes[OP_SONG_MAX_NOTES_PER_STEP];
+            uint8_t note_count;
+            uint8_t velocity;
+            if (is_chord_pad) {
+                note_count = (OP_SONG_MAX_NOTES_PER_STEP < OP_CHORD_NUM_VOICES) ? OP_SONG_MAX_NOTES_PER_STEP
+                                                                                 : OP_CHORD_NUM_VOICES;
+                for (uint8_t i = 0; i < note_count; i++) {
+                    notes[i] = s_chord_pad_notes[pad - 1u][i];
+                }
+                velocity = s_chord_pad_last_velocity[pad - 1u];
+            } else {
+                notes[0] = tiles_note_map_get_note(pad);
+                note_count = 1u;
+                velocity = OP_SONG_VELOCITY;
+            }
+            tiles_haptics_trigger_kick(pad, velocity);
+            for (uint8_t i = 0; i < note_count; i++) {
+                tiles_midi_note_on(s_song_slot_channel[slot], notes[i], velocity);
+                if (s_song_capture_live_count < OP_SONG_MAX_NOTES_PER_STEP) {
+                    s_song_capture_live_pads[s_song_capture_live_count] = pad;
+                    s_song_capture_live_notes[s_song_capture_live_count] = notes[i];
+                    s_song_capture_live_count++;
+                }
             }
             uint32_t elapsed_in_step = clock.pulse_count - s_song_step_started_at_pulse[slot];
             bool nearest_is_next_step = (elapsed_in_step * 2u) >= OP_SEQ_CLOCKS_PER_STEP;
@@ -5956,14 +5966,17 @@ static void song_capture_handle_taps(tiles_midi_clock_state_t clock) {
                 s_song_capture_target_step = target;
                 s_song_capture_armed_count = 0u;
             }
-            if (s_song_capture_armed_count < OP_SONG_MAX_NOTES_PER_STEP) {
-                s_song_capture_armed_notes[s_song_capture_armed_count] = note;
-                s_song_capture_armed_count++;
+            for (uint8_t i = 0; i < note_count; i++) {
+                if (s_song_capture_armed_count < OP_SONG_MAX_NOTES_PER_STEP) {
+                    s_song_capture_armed_notes[s_song_capture_armed_count] = notes[i];
+                    s_song_capture_armed_count++;
+                }
             }
         } else if (!touched && was_touched) {
             song_capture_end_one_sounding_note(pad);
         }
         s_song_capture_prev_pad_touched[pad - 1u] = touched;
+        s_song_capture_prev_chord_sounding[pad - 1u] = is_chord_pad && s_chord_pad_sounding[pad - 1u];
     }
 }
 
@@ -6061,6 +6074,11 @@ static void song_capture_enter(void) {
     s_song_capture_live_count = 0u;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_song_capture_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+        /* Same "don't misread an already-active state as a fresh
+         * edge" reasoning as the regular sequencer's own equivalent
+         * reset -- a chord pad already sounding when capture starts
+         * shouldn't retroactively count as a fresh strike. */
+        s_song_capture_prev_chord_sounding[i] = s_chord_pad_sounding[i];
     }
     /* mode_owns_standby_grid()'s own comment explains why Song mode
      * claims standby_active while showing its track-overview -- this

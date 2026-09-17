@@ -363,22 +363,26 @@ bool tiles_op_mode_has_menu_open(void);
  * stuck-note failure mode this prevents. */
 bool tiles_op_mode_sequencer_channel_is_reserved(uint8_t channel);
 
-/* True while the cross-mode "capture into lane 3" feature is actively
- * recording (shift+diamond from melodic/chord/guitar mode -- see this
- * file's own "Cross-mode capture into lane 3" section). services/
- * lighting.c checks this for its own underglow-only recording
- * indicator, the same "bypass standby ownership entirely, write
- * straight to hardware" pattern services/crash_indicator.h/services/
- * debug_mode.h's own underglow overrides already use -- the pad grid
- * otherwise stays exactly as the current mode already renders it (see
- * tiles_op_mode_cross_capture_is_note_sounding() below for the one
- * pad-level exception real feedback asked for on top of that). */
-bool tiles_op_mode_cross_capture_is_active(void);
+/* True while Song mode's own capture is actively recording (shift+
+ * diamond from melodic/chord/guitar mode, or from within Song mode
+ * itself -- see op_mode.c's own "Song mode: capture" section).
+ * services/lighting.c checks this for its own underglow-only
+ * recording indicator, the same "bypass standby ownership entirely,
+ * write straight to hardware" pattern services/crash_indicator.h/
+ * services/debug_mode.h's own underglow overrides already use -- the
+ * pad grid otherwise stays exactly as the current mode already
+ * renders it (see tiles_op_mode_song_capture_is_note_sounding() below
+ * for the one pad-level exception real feedback asked for on top of
+ * that).
+ * Formerly "cross-mode capture into lane 3," rewired onto Song mode's
+ * own pattern library entirely -- real feedback: "song mode as the
+ * default capture mode instead of regular sequencer." */
+bool tiles_op_mode_song_capture_is_active(void);
 
-/* True if `note` is one of the notes currently sounding on the cross-
- * capture lane (OP_CROSS_CAPTURE_LANE) while cross-capture is active --
- * always false otherwise, including once capture ends (the lane's own
- * s_seq_sounding_notes[] is really just "whatever's audibly playing
+/* True if `note` is one of the notes currently sounding on whichever
+ * slot Song mode's capture is currently recording into -- always
+ * false otherwise, including once capture ends (that slot's own
+ * s_song_sounding_notes[] is really just "whatever's audibly playing
  * right now," same array normal background playback uses). Real
  * feedback: "im asking for the sequencer to be visible on the pads on
  * the leds" -- the underglow-only indicator above wasn't enough on its
@@ -391,23 +395,14 @@ bool tiles_op_mode_cross_capture_is_active(void);
  * follows for MIDI output. Chord mode's own chord-strip pads (which
  * don't resolve through tiles_note_map_get_note() at all) are outside
  * what this can highlight; only the melody-region/guitar-neck pads
- * that a captured note could ever actually reverse-map to. */
-bool tiles_op_mode_cross_capture_is_note_sounding(uint8_t note);
-
-/* True while cross-capture is active, with *out_pad set to whichever
- * pad the cross-capture lane's own step<->pad mapping (the SAME one
- * sequencer mode's own step-view uses, 16-step 4x4 remap included)
- * currently sits on -- always false (out param untouched) otherwise.
- * Real feedback: "i still need the guide curent step on light
- * visible" -- unlike tiles_op_mode_cross_capture_is_note_sounding()
- * above, this is true on EVERY step, armed or not, so services/
- * lighting.c can show a dim, always-on playhead marker through rests
- * too, not just the moments something happens to sound -- the same
- * "current step lit up always" real feedback already established for
- * sequencer mode's own step-view (see render_sequencer()'s own
- * is_current handling), applied here on top of melodic/chord/guitar's
- * grid instead. */
-bool tiles_op_mode_cross_capture_current_step_pad(uint8_t *out_pad);
+ * that a captured note could ever actually reverse-map to.
+ * No equivalent of the old cross-capture's own "current step pad"
+ * marker yet -- that one relied on the regular sequencer's 24-step
+ * pattern mapping naturally onto the 24-pad grid 1:1; Song mode's own
+ * 128 steps (16/page x 8 pages) has no equally natural single-pad
+ * mapping while melodic/chord/guitar's grid (not Song's own step-edit
+ * screen) is what's actually showing. Deferred, not forgotten. */
+bool tiles_op_mode_song_capture_is_note_sounding(uint8_t note);
 
 /* True while the pattern bank's own save/delete confirmation flash is
  * currently showing, with *out_r/*out_g/*out_b set to the color it

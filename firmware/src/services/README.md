@@ -6857,5 +6857,62 @@ not its code.
     regular sequencer's lane 3, not Song mode -- the original ask was
     "song mode as the default capture mode instead of regular
     sequencer," which means rewiring that too, just not yet.
+- **Song mode stage 4: cross-capture rewired from the regular
+  sequencer's lane 3 onto Song mode's own library -- closing the
+  original ask ("song mode as the default capture mode instead of
+  regular sequencer") that stages 1-3 deliberately deferred.** The
+  entire "Cross-mode capture into lane 3" section (`cross_capture_
+  enter()`/`_exit()`, `OP_CROSS_CAPTURE_LANE`, `cross_capture_bank_
+  for_mode()`, `s_cross_capture_active`, the three `tiles_op_mode_
+  cross_capture_*()` public accessors) is deleted outright, not kept
+  around unused -- `handle_diamond_transport()`'s shift+diamond branch
+  outside sequencer mode collapses to one unconditional `song_capture_
+  enter()`/`_exit()` call, since `song_capture_enter()` always targets
+  the next empty library slot regardless of which mode triggered it,
+  so there's no longer a real difference between "capturing from Song
+  mode" and "capturing from melodic/chord/guitar" worth branching on.
+  `handle_circle_tap()`'s `mode_ok` and the various defensive mode-
+  switch-ends-capture guards (`set_active_mode()`, `handle_triangle_
+  click()`'s shift+triangle escape hatch) all now check `s_song_
+  capture_active` instead of the retired flag.
+  - **Chord-region voicing came along for the ride**: `song_capture_
+    handle_taps()` gained the exact same chord-region special case
+    `seq_capture_handle_taps()` already has (trigger on `handle_chord_
+    pad_taps()`'s own real strike, `build_chord_voicing()`'s full 4
+    voices, real velocity) -- needed now that capturing from chord
+    mode is one of the ways to reach this function. Capturing from
+    within Song mode itself never hits this case, since Song mode has
+    no chord region of its own.
+  - **services/lighting.c**: `write_cross_capture_underglow()` ->
+    `write_song_capture_underglow()`, `tiles_op_mode_cross_capture_
+    is_active()`/`_is_note_sounding()` -> `tiles_op_mode_song_capture_
+    is_active()`/`_is_note_sounding()`. The old "current step pad"
+    marker (`tiles_op_mode_cross_capture_current_step_pad()`) has no
+    replacement -- it relied on the regular sequencer's 24-step
+    pattern mapping naturally onto the 24-pad grid 1:1; Song mode's
+    128 steps have no equally natural single-pad mapping while
+    melodic/chord/guitar's grid, not Song's own step-edit screen, is
+    what's actually showing. Deferred, not forgotten.
+  - **A real bug caught during the rewire, not just a rename**: the
+    previous round's own justification for excluding Song mode from
+    `tiles_op_mode_owns_pad_grid()`'s capture case was wrong -- it
+    reasoned that letting `services/expression.c` also process a
+    touch during capture would "double-fire" every note. It doesn't:
+    expression.c's own live note goes out on its own dynamically-
+    claimed MPE channel, while the capture engine's copy goes out on
+    the dedicated slot channel -- two genuinely separate, non-
+    colliding outputs, the exact same "live feel stays intact, a
+    separate channel also gets recorded" shape cross-capture always
+    had. The REAL fix needed was narrower: `mode_owns_standby_grid()`
+    now excludes Song mode's OWN capture specifically (`mode ==
+    OP_MODE_SONG` returns `!s_song_capture_active`, not a blanket
+    true) -- without it, capturing from WITHIN Song mode itself (the
+    one case where `s_active_mode` genuinely IS `OP_MODE_SONG` during
+    capture, unlike triggering from melodic/chord/guitar) would have
+    kept `standby_active` claimed and expression.c suppressed for the
+    entire session, contradicting `song_capture_enter()`'s own
+    explicit release of both. `tiles_op_mode_owns_pad_grid()` reusing
+    this same function needed no further change once it was fixed at
+    the source.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

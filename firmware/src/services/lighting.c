@@ -205,11 +205,11 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
     uint8_t logical_pad = (uint8_t)(pad_index + 1u);
 
     /* Real feedback: "im asking for the sequencer to be visible on the
-     * pads on the leds" -- the cross-capture underglow pulse below
-     * wasn't enough on its own; this shows the actual loop playing back
-     * by flashing whichever pad the currently-sounding note would live
+     * pads on the leds" -- the capture underglow pulse below wasn't
+     * enough on its own; this shows the actual loop playing back by
+     * flashing whichever pad the currently-sounding note would live
      * on, layered on top of every OTHER mode's own idle coloring (see
-     * tiles_op_mode_cross_capture_is_note_sounding()'s own comment).
+     * tiles_op_mode_song_capture_is_note_sounding()'s own comment).
      * Checked ahead of guitar/chord-region/melodic idle coloring below
      * -- a note actually sounding right now is a more time-sensitive
      * thing to see than any of those static idle looks -- but AFTER the
@@ -217,27 +217,20 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
      * this ambient hint. Chord-region pads are excluded: they don't
      * resolve through tiles_note_map_get_note() at all (see that
      * function's own comment), so checking it there would risk a
-     * coincidental, meaningless match. */
-    if (tiles_op_mode_cross_capture_is_active() && !tiles_note_map_is_chord_region_pad(logical_pad) &&
-        tiles_op_mode_cross_capture_is_note_sounding(tiles_note_map_get_note(logical_pad))) {
+     * coincidental, meaningless match.
+     * Formerly cross-capture's own indicator (a fixed lane on the
+     * regular sequencer); now Song mode's, rewired the same way that
+     * whole feature was -- see op_mode.c's own "Song mode: capture"
+     * section. The OLD "current step pad" marker this file's own
+     * pad_desired_rgb() used to also show here doesn't have an
+     * equivalent yet -- Song mode's 128 steps have no equally natural
+     * single-pad mapping onto melodic/chord/guitar's 24-pad grid the
+     * way the regular sequencer's 24 steps did. Deferred, not
+     * forgotten -- see tiles_op_mode_song_capture_is_note_sounding()'s
+     * own declaration comment in op_mode.h. */
+    if (tiles_op_mode_song_capture_is_active() && !tiles_note_map_is_chord_region_pad(logical_pad) &&
+        tiles_op_mode_song_capture_is_note_sounding(tiles_note_map_get_note(logical_pad))) {
         return (tiles_rgb01_t){1.0f, 0.6f, 0.0f};
-    }
-
-    /* Real feedback: "i still need the guide curent step on light
-     * visible, we're missing that still" -- the note-sounding flash
-     * above only ever lights up while something's actually armed AND
-     * audibly playing, so a silent step showed nothing at all: no sense
-     * of the playhead actually moving through the pattern. Dim enough
-     * to read as an ambient marker, not a second bright indicator
-     * competing with the one above -- checked AFTER it so an actually-
-     * sounding pad always wins if the two land on the same one. Bumped
-     * up from the initial 0.15 (this codebase's own established
-     * "unarmed cursor" brightness elsewhere -- see op_mode.c's OP_SEQ_
-     * CURSOR_LEVEL) per real feedback: "need the sequencer marquer to
-     * be slightly brighter in capture mode." */
-    uint8_t cross_capture_step_pad;
-    if (tiles_op_mode_cross_capture_current_step_pad(&cross_capture_step_pad) && cross_capture_step_pad == logical_pad) {
-        return (tiles_rgb01_t){0.35f, 0.21f, 0.0f};
     }
 
     /* Guitar/bass fret mode: a completely different idle-coloring scheme,
@@ -457,32 +450,39 @@ static void write_crash_underglow(void) {
 /* Real feedback: "captures from melodic mode or chord mode or any mode
  * into lane 3 sequencer on command... this will make the steps start
  * counting like in sequencer flashing under the current layout and the
- * playing gets saved." Same "bypass standby-active entirely, write
- * straight to hardware" reasoning as write_debug_underglow()/write_
- * crash_underglow() above -- this feature's whole point is that the
- * current mode's own pad grid stays exactly as-is underneath, so
- * underglow is the only real estate left for an indicator, and it has
- * to work regardless of whether standby_active happens to be claimed
- * (melodic/chord/guitar mode never claim it at all -- see set_active_
- * mode()'s own comment in services/op_mode.c). Amber (full R+G, no B):
- * distinct from crash's pure red, debug's magenta, and chord mode's own
- * solid blue strip -- nothing else in this firmware currently uses it.
- * Same 900ms pulse period as the other two for visual consistency, not
- * shared code, matching this file's own established "same convention,
- * separate copy" precedent. */
-#define CROSS_CAPTURE_UNDERGLOW_PULSE_PERIOD_MS 900.0f
-#define CROSS_CAPTURE_UNDERGLOW_PULSE_MIN 0.35f
-#define CROSS_CAPTURE_UNDERGLOW_PULSE_MAX 1.0f
+ * playing gets saved," later rewired onto Song mode's own pattern
+ * library entirely ("song mode as the default capture mode instead of
+ * regular sequencer" -- see op_mode.c's own "Song mode: capture"
+ * section). Same "bypass standby-active entirely, write straight to
+ * hardware" reasoning as write_debug_underglow()/write_crash_
+ * underglow() above -- this feature's whole point is that the current
+ * mode's own pad grid stays exactly as-is underneath (except while
+ * capturing from within Song mode itself, where Song's OWN standby-
+ * claimed grid is what's showing instead -- see op_mode.c's own
+ * render_song_underglow(), a separate, always-on yellow rather than
+ * this ambient pulse), so underglow is the only real estate left for
+ * an indicator here, and it has to work regardless of whether standby_
+ * active happens to be claimed (melodic/chord/guitar mode never claim
+ * it at all -- see set_active_mode()'s own comment in services/
+ * op_mode.c). Amber (full R+G, no B): distinct from crash's pure red,
+ * debug's magenta, and chord mode's own solid blue strip -- nothing
+ * else in this firmware currently uses it. Same 900ms pulse period as
+ * the other two for visual consistency, not shared code, matching
+ * this file's own established "same convention, separate copy"
+ * precedent. */
+#define SONG_CAPTURE_UNDERGLOW_PULSE_PERIOD_MS 900.0f
+#define SONG_CAPTURE_UNDERGLOW_PULSE_MIN 0.35f
+#define SONG_CAPTURE_UNDERGLOW_PULSE_MAX 1.0f
 
-static float cross_capture_underglow_pulse_level(uint32_t now_ms) {
-    float phase = (float)now_ms / CROSS_CAPTURE_UNDERGLOW_PULSE_PERIOD_MS;
+static float song_capture_underglow_pulse_level(uint32_t now_ms) {
+    float phase = (float)now_ms / SONG_CAPTURE_UNDERGLOW_PULSE_PERIOD_MS;
     float raw = 0.5f + 0.5f * sinf(2.0f * DEBUG_UNDERGLOW_PI * phase);
-    return CROSS_CAPTURE_UNDERGLOW_PULSE_MIN + (CROSS_CAPTURE_UNDERGLOW_PULSE_MAX - CROSS_CAPTURE_UNDERGLOW_PULSE_MIN) * raw;
+    return SONG_CAPTURE_UNDERGLOW_PULSE_MIN + (SONG_CAPTURE_UNDERGLOW_PULSE_MAX - SONG_CAPTURE_UNDERGLOW_PULSE_MIN) * raw;
 }
 
-static void write_cross_capture_underglow(void) {
+static void write_song_capture_underglow(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-    float pulse = cross_capture_underglow_pulse_level(now_ms);
+    float pulse = song_capture_underglow_pulse_level(now_ms);
     uint8_t level = underglow_channel_level(pulse);
     uint32_t pixel = tiles_sk6805_pack_rgb(level, level, 0u);
     uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
@@ -650,17 +650,20 @@ void tiles_lighting_service(void) {
         write_debug_underglow();
         underglow_override_active = true;
         debug_override_kind = 3u;
-    } else if (tiles_op_mode_cross_capture_is_active()) {
+    } else if (tiles_op_mode_song_capture_is_active()) {
         /* Lowest priority of the three -- crash/debug are rarer and
          * more urgent; this one's own trigger (shift+diamond) is
          * something the person just did on purpose, same reasoning as
-         * debug mode's own priority below crash. */
-        write_cross_capture_underglow();
+         * debug mode's own priority below crash. Formerly cross-
+         * capture's own indicator; rewired onto Song mode's own
+         * capture the same way that whole feature was -- see
+         * op_mode.c's own "Song mode: capture" section. */
+        write_song_capture_underglow();
         underglow_override_active = true;
         debug_override_kind = 4u;
     }
     if (debug_override_kind != s_debug_last_override_kind) {
-        printf("[lighting] underglow override -> %u (0=none 1=crash 2=pattern_flash 3=debug 4=cross_capture)\n",
+        printf("[lighting] underglow override -> %u (0=none 1=crash 2=pattern_flash 3=debug 4=song_capture)\n",
                (unsigned)debug_override_kind);
         s_debug_last_override_kind = debug_override_kind;
     }
