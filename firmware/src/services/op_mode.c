@@ -457,29 +457,34 @@ static uint32_t s_beat_flash_start_ms;
 
 /* Real feedback: "sequencer real time and note select should allow for
  * multiple notes per step so if i play a cluster of notes we should be
- * able to save those in that single step." 2, not something more
- * generous like a full hand-cluster or chord mode's own 4 voices, is a
- * hard flash-capacity ceiling, not a musical judgment call: the whole
- * pattern store (tiles_pattern_store_t -- all 24 patterns across 4
- * lanes x 6 alternatives) has to fit in exactly one 4096-byte flash
- * sector (see TILES_PATTERN_FLASH_OFFSET's own comment for why it's
- * one sector specifically -- the erase+program sequence runs with
- * interrupts disabled and nothing able to pet the watchdog partway
- * through, and a bigger region risks that whole window exceeding the
- * watchdog timeout on a slow flash chip). Even after packing this
- * store's own slot_saved bool[4][6] down to a bitmask specifically to
- * claw back header room (see tiles_pattern_store_t's own comment), 2
- * is the actual largest value that fits -- 3 overflows by 572 bytes,
- * confirmed empirically, not estimated. The _Static_assert right after
- * that struct's definition below exists specifically so this can never
- * silently regress if either constant ever changes again.
+ * able to save those in that single step" -- later raised to 4
+ * specifically so a captured chord (chord mode's own bass/root/fifth/
+ * open-third voicing, OP_CHORD_NUM_VOICES) keeps every voice instead of
+ * being reduced to bass+root: "i told you steps should be able to
+ * capture chords... rework it to 4 voices max per step." This was
+ * genuinely capped at 2 for a while -- a hard flash-capacity ceiling,
+ * not a musical judgment call, with 3 confirmed (empirically, not
+ * estimated) to overflow the pattern store's one-sector budget by 572
+ * bytes even after packing slot_saved down to a bitmask. Reaching 4
+ * needed the SAME packing trick applied further: tiles_pattern_flash_t
+ * (the on-flash layout pattern_store_write_all()/_load_all() actually
+ * read and write, see that struct's own comment) additionally packs
+ * step_armed[]/step_pitch_override[] into bitmasks and step_notes[][]
+ * into a sentinel-terminated array instead of a separate step_note_
+ * count[] byte per step -- none of which touches this RUNTIME struct
+ * below at all, so every other place in this file that reads/writes
+ * op_seq_pattern_t directly needed zero changes. Net result: smaller
+ * on-flash, at 4 notes/step, than the old design was at 2 -- see that
+ * struct's own comment for the actual numbers. The _Static_assert
+ * right after tiles_pattern_store_t's own definition exists
+ * specifically so this can never silently regress again.
  * step_note_count[i] == 0 means "nothing recorded" even if step_armed[i]
  * is true (an armed-but-empty step, reachable via the plain tap-to-arm
  * path below, which arms first and only fills in a note on first pitch
  * assignment) -- seq_fire_note() below treats that case as silent,
  * matching how an unarmed step already behaves, rather than a special
  * case of its own. */
-#define OP_SEQ_MAX_NOTES_PER_STEP 2u
+#define OP_SEQ_MAX_NOTES_PER_STEP 4u
 
 typedef struct {
     bool step_armed[OP_SEQ_NUM_STEPS];
@@ -2311,16 +2316,87 @@ static void scale_menu_exit(void) {
  * something worth working around for a deliberate, occasional action
  * like this one. */
 #define TILES_PATTERN_STORE_MAGIC 0x454c4954u /* "TILE" -- matches services/debug_mode.c's own crash-magic convention */
-/* Bumped for the multi-note-per-step change (op_seq_pattern_t's
- * step_note[]->step_notes[][]/step_note_count[] -- see that struct's
- * own comment) -- a real layout change, not just new fields appended,
- * so version 1 flash data must never be reinterpreted against it.
+/* Bumped once for the multi-note-per-step change (op_seq_pattern_t's
+ * step_note[]->step_notes[][]/step_note_count[]), and again for the
+ * OP_SEQ_MAX_NOTES_PER_STEP 2->4 change (tiles_pattern_flash_t's own
+ * packed layout, replacing a direct op_seq_pattern_t copy) -- both real
+ * layout changes, not just new fields appended, so an older version's
+ * flash data must never be reinterpreted against a newer one.
  * pattern_store_load_all()'s own version check already treats any
  * mismatch as "never saved before on this board," the same safe
  * fallback a first-ever boot gets -- existing saved patterns are lost
- * across this specific update, not corrupted. */
-#define TILES_PATTERN_STORE_VERSION 2u
+ * across a version bump, not corrupted. */
+#define TILES_PATTERN_STORE_VERSION 3u
 #define TILES_PATTERN_FLASH_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
+
+/* On-flash layout for ONE pattern -- deliberately NOT op_seq_pattern_t
+ * itself (that struct stays exactly as every other line of this file
+ * already reads/writes it directly, hundreds of call sites, none of
+ * which need to know or care that this exists). Two packing tricks get
+ * OP_SEQ_MAX_NOTES_PER_STEP from 2 up to 4 within the same one-sector
+ * budget (see that constant's own comment for why 4 specifically, and
+ * pattern_store_pack_slot_saved()'s own comment just below for the
+ * precedent this copies):
+ * - step_armed[]/step_pitch_override[] (24 bytes each as bool[24]) each
+ *   become a 4-byte bitmask, same trick slot_saved_mask already used.
+ * - step_notes[][] keeps its shape, but the separate step_note_count[]
+ *   byte-per-step array (24 bytes) is dropped entirely: an unused slot
+ *   in a step's own cluster is marked with 0xFF (never a real MIDI
+ *   note, 0-127 only) instead, so the count is just however many non-
+ *   0xFF entries a step has -- see pack_pattern_to_flash()/unpack_
+ *   pattern_from_flash() below for the conversion, called once per
+ *   pattern from pattern_store_write_all()/_load_all() instead of
+ *   those functions' old direct op_seq_pattern_t copy. */
+typedef struct {
+    uint32_t step_armed_mask;
+    uint32_t step_pitch_override_mask;
+    uint8_t step_notes[OP_SEQ_NUM_STEPS][OP_SEQ_MAX_NOTES_PER_STEP]; /* 0xFF = unused slot */
+    uint8_t step_probability_percent[OP_SEQ_NUM_STEPS];
+    uint8_t step_ratchet_count[OP_SEQ_NUM_STEPS];
+    bool probability_enabled;
+    uint8_t length;
+} tiles_pattern_flash_t;
+
+static void pack_pattern_to_flash(const op_seq_pattern_t *pat, tiles_pattern_flash_t *out) {
+    out->step_armed_mask = 0u;
+    out->step_pitch_override_mask = 0u;
+    for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
+        if (pat->step_armed[i]) {
+            out->step_armed_mask |= (uint32_t)1u << i;
+        }
+        if (pat->step_pitch_override[i]) {
+            out->step_pitch_override_mask |= (uint32_t)1u << i;
+        }
+        uint8_t count = pat->step_note_count[i];
+        for (uint8_t j = 0; j < OP_SEQ_MAX_NOTES_PER_STEP; j++) {
+            out->step_notes[i][j] = (j < count) ? pat->step_notes[i][j] : 0xFFu;
+        }
+        out->step_probability_percent[i] = pat->step_probability_percent[i];
+        out->step_ratchet_count[i] = pat->step_ratchet_count[i];
+    }
+    out->probability_enabled = pat->probability_enabled;
+    out->length = pat->length;
+}
+
+static void unpack_pattern_from_flash(const tiles_pattern_flash_t *in, op_seq_pattern_t *pat) {
+    for (uint8_t i = 0; i < OP_SEQ_NUM_STEPS; i++) {
+        pat->step_armed[i] = (in->step_armed_mask & ((uint32_t)1u << i)) != 0u;
+        pat->step_pitch_override[i] = (in->step_pitch_override_mask & ((uint32_t)1u << i)) != 0u;
+        uint8_t count = 0u;
+        for (uint8_t j = 0; j < OP_SEQ_MAX_NOTES_PER_STEP; j++) {
+            uint8_t note = in->step_notes[i][j];
+            if (note != 0xFFu) {
+                pat->step_notes[i][count] = note;
+                count++;
+            }
+        }
+        pat->step_note_count[i] = count;
+        pat->step_probability_percent[i] = in->step_probability_percent[i];
+        pat->step_ratchet_count[i] = in->step_ratchet_count[i];
+    }
+    pat->probability_enabled = in->probability_enabled;
+    pat->length = in->length;
+}
 
 typedef struct {
     uint32_t magic;
@@ -2336,14 +2412,14 @@ typedef struct {
      * actual runtime array, used constantly, indexed directly) never
      * has to change shape just to satisfy the on-flash layout. */
     uint32_t slot_saved_mask;
-    op_seq_pattern_t pattern[OP_SEQ_NUM_LANES][OP_SEQ_ALTS_PER_LANE];
+    tiles_pattern_flash_t pattern[OP_SEQ_NUM_LANES][OP_SEQ_ALTS_PER_LANE];
 } tiles_pattern_store_t;
 
 /* Must fit in exactly one flash sector -- see TILES_PATTERN_FLASH_
  * OFFSET's own comment for why growing this to span a second sector
  * isn't a safe fallback for a future overflow, and OP_SEQ_MAX_NOTES_
- * PER_STEP's own comment for how tight this already is at 2. A hard
- * compile error here beats a silent memcpy() past the end of
+ * PER_STEP's own comment for how this got to 4 without spanning one.
+ * A hard compile error here beats a silent memcpy() past the end of
  * pattern_store_write_all()'s own write buffer -- exactly what
  * happened, caught only by a compiler warning, while building this
  * feature in the first place. */
@@ -2384,7 +2460,11 @@ static void pattern_store_write_all(void) {
     store->magic = TILES_PATTERN_STORE_MAGIC;
     store->version = TILES_PATTERN_STORE_VERSION;
     store->slot_saved_mask = pattern_store_pack_slot_saved();
-    memcpy(store->pattern, s_seq_pattern, sizeof(store->pattern));
+    for (uint8_t lane = 0; lane < OP_SEQ_NUM_LANES; lane++) {
+        for (uint8_t alt = 0; alt < OP_SEQ_ALTS_PER_LANE; alt++) {
+            pack_pattern_to_flash(&s_seq_pattern[lane][alt], &store->pattern[lane][alt]);
+        }
+    }
 
     watchdog_update();
     uint32_t prev_interrupts = save_and_disable_interrupts();
@@ -2452,7 +2532,7 @@ static void pattern_store_load_all(void) {
     for (uint8_t lane = 0; lane < OP_SEQ_NUM_LANES; lane++) {
         for (uint8_t alt = 0; alt < OP_SEQ_ALTS_PER_LANE; alt++) {
             if (s_pattern_slot_saved[lane][alt]) {
-                s_seq_pattern[lane][alt] = store->pattern[lane][alt];
+                unpack_pattern_from_flash(&store->pattern[lane][alt], &s_seq_pattern[lane][alt]);
             }
         }
     }
@@ -3411,11 +3491,14 @@ static void seq_capture_handle_taps(tiles_midi_clock_state_t clock) {
          * s_chord_pad_notes[]/s_chord_pad_last_velocity[] -- see that
          * function's own real strike-measurement) rather than the raw
          * touch, and reading those instead of re-deriving anything.
-         * "incomplete voicings," on the other hand, is a hard ceiling,
-         * not a bug: OP_SEQ_MAX_NOTES_PER_STEP is capped at 2 by real
-         * flash capacity (see that constant's own comment), so a real
-         * 4-voice chord can only ever keep 2 of them -- bass+root, the
-         * two most foundational, same choice as before. */
+         * "incomplete voicings" is fixed too, now that OP_SEQ_MAX_
+         * NOTES_PER_STEP has been raised to 4 (see that constant's own
+         * comment) -- every real voice a chord pad plays fits in a
+         * single step now, not just bass+root. note_count below still
+         * takes the smaller of the two constants rather than assuming
+         * they're equal, so this can't silently read past s_chord_pad_
+         * notes[]'s own OP_CHORD_NUM_VOICES-wide rows if either one
+         * ever changes again. */
         bool chord_strike_edge = is_chord_pad && s_chord_pad_sounding[pad - 1u] && !s_seq_capture_prev_chord_sounding[pad - 1u];
         if ((touched && !was_touched && !is_chord_pad) || chord_strike_edge) {
             /* Real feedback: "sequencer real time and note select
@@ -3431,7 +3514,8 @@ static void seq_capture_handle_taps(tiles_midi_clock_state_t clock) {
             uint8_t note_count;
             uint8_t velocity;
             if (is_chord_pad) {
-                note_count = OP_SEQ_MAX_NOTES_PER_STEP;
+                note_count = (OP_SEQ_MAX_NOTES_PER_STEP < OP_CHORD_NUM_VOICES) ? OP_SEQ_MAX_NOTES_PER_STEP
+                                                                                 : OP_CHORD_NUM_VOICES;
                 for (uint8_t i = 0; i < note_count; i++) {
                     notes[i] = s_chord_pad_notes[pad - 1u][i];
                 }

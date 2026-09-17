@@ -6629,5 +6629,39 @@ not its code.
     bass+root, the same "two most foundational" choice as before.
     Raising the cap isn't safe to revisit without redoing that same
     capacity work; left unchanged.
+- **Steps now capture the full 4-voice chord, not just bass+root --
+  the flash-capacity ceiling from earlier this session got reworked,
+  not lifted.** Real feedback rejected the "hard limit" explanation
+  outright: "i told you steps should be able to capture chords, can
+  you rework it to 4 voices max per step?" `OP_SEQ_MAX_NOTES_PER_STEP`
+  really was capped at 2 by the pattern store's one-sector budget (3
+  confirmed, empirically, to overflow by 572 bytes) -- but that budget
+  had more give left in it than the earlier round found, once the SAME
+  packing trick already used for `slot_saved_mask` (a bitmask instead
+  of a `bool[4][6]`) got applied further. New `tiles_pattern_flash_t`
+  is the on-flash layout `pattern_store_write_all()`/`_load_all()`
+  actually read and write now (via new `pack_pattern_to_flash()`/
+  `unpack_pattern_from_flash()`), separate from `op_seq_pattern_t`
+  itself -- every one of the hundreds of call sites that already read/
+  write that struct directly needed zero changes, exactly the same
+  "pack only at the storage boundary" precedent `slot_saved_mask`
+  already established. Two things changed in the on-flash copy only:
+  `step_armed[]`/`step_pitch_override[]` (24 bytes each as `bool[24]`)
+  each become a 4-byte bitmask, and the separate `step_note_count[]`
+  byte-per-step array is dropped entirely in favor of a `0xFF` sentinel
+  marking an unused slot in `step_notes[][]` (0-127 covers every real
+  MIDI note, so `0xFF` is never ambiguous). Measured, not estimated:
+  `tiles_pattern_flash_t` is 156 bytes/pattern now; the whole store
+  (`24 patterns * 156 + 12-byte header`) is 3756 bytes, 340 bytes under
+  the 4096 budget -- smaller than the OLD 2-notes-per-step design was
+  (4092 bytes, a 4-byte margin), despite doubling the note capacity.
+  `TILES_PATTERN_STORE_VERSION` bumped 2->3 (a real layout change, same
+  "existing saved patterns are lost, not corrupted" precedent as the
+  1->2 bump). `seq_capture_handle_taps()`'s own chord-region branch
+  needed one small follow-up: it now takes `min(OP_SEQ_MAX_NOTES_PER_
+  STEP, OP_CHORD_NUM_VOICES)` instead of assuming they're equal, so it
+  can't silently read past `s_chord_pad_notes[]`'s own `OP_CHORD_NUM_
+  VOICES`-wide rows if either constant ever changes again -- with both
+  at 4 right now, every real chord voice fits in a single step.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
