@@ -6663,5 +6663,94 @@ not its code.
   can't silently read past `s_chord_pad_notes[]`'s own `OP_CHORD_NUM_
   VOICES`-wide rows if either constant ever changes again -- with both
   at 4 right now, every real chord voice fits in a single step.
+- **Song mode (new 5th top-level mode) -- foundation pass: data model,
+  flash storage, channel reservation, menu integration. No rendering
+  or gestures yet.** Real feedback: "lets implement another sequencer
+  mode know as song mode as the default capture modes instead of
+  regular sequencer... this operates like ableton live scene trigger
+  or session view meaning we can assign a costume midi channel for
+  each bank kinda like a looper." A long round of follow-up questions
+  (asked because real feedback explicitly requested it: "ask as many
+  questions as necesarely so no ambiguity") settled the actual shape,
+  including two real technical conflicts worth recording since they
+  shaped the design directly:
+  - **MIDI channel budget.** Of the 16 standard channels, channel 1 is
+    the MPE master/zone channel; channels 2-16 are the member pool live
+    melodic/chord/guitar touches dynamically claim from
+    (`services/expression.c`'s own `claim_mpe_channel()`). Of those 15,
+    4 are already permanently reserved for the regular sequencer's own
+    4 lanes, and 1 more (nibble 10) is separately, permanently used by
+    chord mode's own fixed `OP_CHORD_CHANNEL` -- leaving 10 genuinely
+    free before Song mode existed at all. Confirmed real feedback: "9
+    song tracks, 1 channel stays free for live MPE" -- Song mode's own
+    pool (`s_song_channel_pool[]`) claims 9 of those 10, working from
+    the top down, same convention the 4 lanes already use.
+  - **Channel permanence vs. pattern count.** Real feedback wanted a
+    channel that "follows the pattern" (survives reordering) AND up to
+    24 real independent patterns -- but those can't both hold with a
+    PERMANENT per-pattern channel, since there are only 9 exclusive
+    channels and up to 24 patterns. Resolved by making channel
+    assignment dynamic instead: `song_claim_channel()`/`song_release_
+    channel()` claim from the 9-slot pool the moment a pattern starts
+    PLAYING and release it the moment it stops -- the same mechanism
+    `claim_mpe_channel()` already uses for live MPE, just a separate,
+    smaller pool. `tiles_op_mode_sequencer_channel_is_reserved()`
+    (the one function `claim_mpe_channel()` already calls per
+    candidate channel) got extended to also check Song's pool, so live
+    touches still can't steal a channel a song track is using -- no
+    new call site needed anywhere.
+  - **Data model**: `op_song_pattern_t` -- 128 steps (`OP_SONG_STEPS_
+    PER_PAGE` 16 x `OP_SONG_NUM_PAGES` 8), up to `OP_SONG_MAX_NOTES_
+    PER_STEP` (4) notes each via the same 0xFF-sentinel-for-"unused
+    slot" convention the regular sequencer's own multi-note rework
+    just established, doing double duty as "is this step armed" (no
+    separate `step_armed[]`/`step_pitch_override[]`/probability/
+    ratchet at all -- real feedback: "plain armed/notes only" for this
+    first version) -- plus a `hue_byte` for this pattern's own random
+    color (see below), not yet assigned anywhere since nothing creates
+    a pattern yet. `OP_SONG_NUM_SLOTS` (24, one per pad) of these,
+    each independently real -- real feedback, after an earlier round
+    proposed collapsing the count to match the channel budget: "i want
+    up to 24 real independent patterns."
+  - **Flash storage**: unlike the regular sequencer's `op_seq_
+    pattern_t`/`tiles_pattern_flash_t` split, Song mode's runtime copy
+    IS its own on-flash layout -- no packing needed, since the 513-
+    byte-per-pattern footprint fits its own reserved region with real
+    margin. New `tiles_song_store_t`/`TILES_SONG_FLASH_OFFSET`, a
+    dedicated `TILES_SONG_NUM_FLASH_SECTORS` (4) region reserved
+    immediately below the regular sequencer's own single sector. Flash
+    SPACE was never the constraint (this board's 4MB vs a firmware
+    image under 128KB) -- only the SIZE OF ONE ERASE+PROGRAM OPERATION
+    is, since that runs with interrupts disabled and nothing able to
+    pet the watchdog mid-operation. `song_store_write_all()` (not yet
+    called from anywhere -- nothing can create/edit a pattern yet)
+    writes its 4 sectors as 4 separate, independent erase+program
+    calls, each individually as safe as the regular sequencer's own
+    single-sector save, just repeated -- confirmed acceptable to real
+    feedback ("save to flash, like the existing pattern bank") even
+    knowing the whole save now takes noticeably longer overall.
+    Measured, not estimated: 12324 bytes against a 16384-byte budget,
+    4060 to spare -- see `tiles_song_store_t`'s own `_Static_assert`.
+  - **Menu integration**: `OP_MODE_SONG` added to the mode enum,
+    `OP_MENU_COL_SONG` (column 5, the next free slot) wired into
+    `col_is_available()`/`render_menu_col_color()`/`col_is_current_
+    mode()`/`handle_menu_taps()`. Selectable now, but has no rendering
+    of its own yet -- falls through to the generic "background pattern
+    playing" triangle-pulse branch every other non-sequencer mode
+    already uses, which is harmless (checks the regular sequencer's
+    `any_lane_running()`, unrelated to Song mode) but not yet
+    Song mode's own real screen.
+  - **Still to come, in later passes**: the two screens (24-pad track-
+    overview: tap=start/stop with the 9-concurrent cap and red-flash-
+    blocked feedback, hold 2s=edit; per-pattern step-edit: 16 steps in
+    columns 1-4, 8 pages row-major in columns 5-6, diamond=back to
+    overview), the reorder gesture (shift+tap to pick up pulsing green,
+    plain tap elsewhere to move/swap, 2x green flash confirm) and
+    delete gesture (shift+hold 5s, 2x red flash confirm), manual per-
+    step pitch editing, capture integration (both cross-capture from
+    melodic/chord/guitar and a capture gesture from within Song mode
+    itself, both always creating a new pattern in the next empty slot,
+    blocked+red-flash if all 24 are full), and the actual per-track
+    HSV hue-to-RGB rendering for `hue_byte`.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

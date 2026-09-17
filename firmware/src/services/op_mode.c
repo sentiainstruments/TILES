@@ -45,11 +45,18 @@
  * "lets create a mode that does chords on one side colum 1 and 2... and
  * melody in columns 3456... so this would go as our 4th play mode" -- see
  * this file's own "Chord mode" section below. */
+/* OP_MODE_SONG added as a genuine 5th mode -- real feedback: "lets
+ * implement another sequencer mode know as song mode... Ableton live
+ * scene trigger or session view." A separate mode from OP_MODE_
+ * SEQUENCER, not a replacement -- see this file's own "Song mode"
+ * section for the full design (24-slot pattern library, 9 concurrently
+ * playable tracks, 128 steps/pattern across 8 pages of 16). */
 typedef enum {
     OP_MODE_MELODIC = 0,
     OP_MODE_CHORD,
     OP_MODE_SEQUENCER,
     OP_MODE_GUITAR,
+    OP_MODE_SONG,
 } tiles_op_mode_t;
 
 #define OP_NUM_MODES 4u
@@ -77,6 +84,9 @@ typedef enum {
 #define OP_MENU_COL_SEQUENCER 2u
 #define OP_MENU_COL_GUITAR 3u
 #define OP_MENU_COL_CHORD 4u
+/* Song mode takes the next free column -- see this file's own "Song
+ * mode" section for the feature itself. */
+#define OP_MENU_COL_SONG 5u
 
 /* Mode-selector row colors -- real feedback's own phrase, "mode selector
  * color": melodic = Sentia magenta (this codebase's brand color,
@@ -103,6 +113,16 @@ typedef enum {
 #define OP_MENU_GUITAR_R 1.0f
 #define OP_MENU_GUITAR_G 0.5f
 #define OP_MENU_GUITAR_B 0.0f
+/* Song = yellow -- real feedback: "this mode is characterized by the
+ * color yellow like the underglow of capture." Pure yellow (full R+G,
+ * no B) at the menu-slot level; the mode's own screens use it as the
+ * base theme, with each individual track's own pad getting a random
+ * hue within a wider yellow-green-to-orange band for cohesion without
+ * every track looking identical (see this file's own "Song mode"
+ * section). */
+#define OP_MENU_SONG_R 1.0f
+#define OP_MENU_SONG_G 1.0f
+#define OP_MENU_SONG_B 0.0f
 
 /* Triangle LED glow while the top-level mode picker is actually open --
  * the button itself is monochrome PWM (not addressable RGB like the
@@ -2035,6 +2055,7 @@ static bool col_is_available(uint8_t col) {
     case OP_MENU_COL_SEQUENCER:
     case OP_MENU_COL_GUITAR:
     case OP_MENU_COL_CHORD:
+    case OP_MENU_COL_SONG:
         return true;
     default: /* outside the menu entirely */
         return false;
@@ -2058,10 +2079,15 @@ static void render_menu_col_color(uint8_t col, float *r, float *g, float *b) {
         *g = OP_MENU_CHORD_G;
         *b = OP_MENU_CHORD_B;
         break;
+    case OP_MENU_COL_SONG:
+        *r = OP_MENU_SONG_R;
+        *g = OP_MENU_SONG_G;
+        *b = OP_MENU_SONG_B;
+        break;
     default: /* OP_MENU_COL_GUITAR -- only ever called for an available
               * column (see render_menu() below), so this catch-all is
-              * safe: melodic/sequencer/chord are handled above, leaving
-              * only guitar. */
+              * safe: melodic/sequencer/chord/song are handled above,
+              * leaving only guitar. */
         *r = OP_MENU_GUITAR_R;
         *g = OP_MENU_GUITAR_G;
         *b = OP_MENU_GUITAR_B;
@@ -2087,6 +2113,8 @@ static bool col_is_current_mode(uint8_t col) {
         return s_active_mode == OP_MODE_GUITAR;
     case OP_MENU_COL_CHORD:
         return s_active_mode == OP_MODE_CHORD;
+    case OP_MENU_COL_SONG:
+        return s_active_mode == OP_MODE_SONG;
     default:
         return false;
     }
@@ -3797,6 +3825,8 @@ static void handle_menu_taps(void) {
                     mode = OP_MODE_SEQUENCER;
                 } else if (col == OP_MENU_COL_GUITAR) {
                     mode = OP_MODE_GUITAR;
+                } else if (col == OP_MENU_COL_SONG) {
+                    mode = OP_MODE_SONG;
                 }
                 menu_exit();
                 set_active_mode(mode);
@@ -4538,6 +4568,12 @@ static float compute_beat_flash_level(uint32_t now_ms, tiles_midi_clock_state_t 
     return 0.0f;
 }
 
+/* Defined down in this file's own "Song mode" section, well after this
+ * call site -- forward-declared here rather than moving that whole
+ * section, same "declare here, define later" precedent this file
+ * already uses for pattern_bank_exit()/seq_capture_mode_exit()/etc. */
+static void song_store_load_all(void);
+
 void tiles_op_mode_init(bool crash_recovered) {
     if (!crash_recovered) {
         s_active_mode = OP_MODE_MELODIC;
@@ -4612,6 +4648,19 @@ void tiles_op_mode_init(bool crash_recovered) {
      * safe and cheap to do unconditionally on every boot, crash-
      * recovery included. */
     pattern_store_load_all();
+    /* Song mode's own pattern library -- same "plain read, safe and
+     * cheap unconditionally" reasoning as pattern_store_load_all()
+     * just above. s_song_slot_running[]/s_song_channel_in_use[] etc.
+     * are plain statics, not __uninitialized_ram, so every song track
+     * comes up stopped after ANY reboot including crash-recovery --
+     * unlike the regular sequencer's own s_seq_lane_running[], which
+     * deliberately survives a crash so a playing pattern picks back up
+     * automatically. Deferred, not forgotten: there's no real
+     * playback/advance logic for Song mode yet (later pass), so
+     * there's nothing meaningful to preserve across a crash yet
+     * either -- revisit __uninitialized_ram for these once that
+     * exists, matching the sequencer's own precedent. */
+    song_store_load_all();
 
     if (crash_recovered) {
         /* s_active_mode/s_seq_active_alt[]/s_seq_lane_running[] were all
@@ -4972,6 +5021,291 @@ bool tiles_op_mode_has_menu_open(void) {
            s_seq_capture_mode_active;
 }
 
+/* ---- Song mode -----------------------------------------------------------
+ * Real feedback: "lets implement another sequencer mode know as song
+ * mode as the default capture modes instead of regular sequencer. with
+ * multiple pages per sequence meaning 16 steps per page and the right
+ * two columns are the 8 pages per sequence track. we need up to 4
+ * voices per step[.] the other difference with sequencer mode is that
+ * this operates like ableton live scene trigger or session view
+ * meaning we can assign a costume midi channel for each bank kinda
+ * like a looper. tap capacitive on each sequence is start and stop.
+ * hold foe 2 seconds is open edit for pattern. this mode is
+ * characterized by the color yellow like the underglow of capture but
+ * each sequence gets assigned a random color within a define hue
+ * range for cohesion." A genuine 5th top-level mode (OP_MODE_SONG),
+ * separate from OP_MODE_SEQUENCER -- see that enum's own comment.
+ * Extensive follow-up Q&A settled the shape actually being built here
+ * (this section grows over several rounds -- this first pass is data
+ * model, flash storage, and channel reservation only; the two screens
+ * -- 24-pad track-overview and per-pattern step-edit -- and the
+ * capture/reorder/delete gestures themselves come in later passes):
+ * - 24 pattern-library slots (one per pad, on a dedicated track-
+ *   overview screen -- not yet built), freely reorderable (shift+tap
+ *   to pick up, plain tap elsewhere to move/swap, hold 5s+shift to
+ *   delete -- gestures not yet built either), each either empty or
+ *   holding one real, independently-existing pattern. Up to 24 of
+ *   these can genuinely exist at once -- real feedback, after an
+ *   earlier round proposed collapsing this to match the channel
+ *   budget: "i want up to 24 real independent patterns."
+ * - Each pattern is 128 steps (OP_SONG_STEPS_PER_PAGE x OP_SONG_NUM_
+ *   PAGES -- 16 steps/page across 8 pages), up to OP_SONG_MAX_NOTES_
+ *   PER_STEP (4) notes each, no probability/ratchet (real feedback:
+ *   "plain armed/notes only" -- confirmed over the equivalent option
+ *   that would have matched the old sequencer's fuller feature set).
+ * - Up to OP_SONG_MAX_CONCURRENT (9) patterns can be PLAYING at once --
+ *   a real concurrency limit, not a slot-count one (a stopped, saved
+ *   pattern doesn't hold a channel at all). Starting a 10th while 9
+ *   already play is blocked, confirmed red-flash feedback (not yet
+ *   built). This number is exactly the channel budget below, not a
+ *   round number picked for its own sake -- see song_claim_channel()'s
+ *   own comment for why.
+ * - MIDI channel: real feedback originally asked for a channel that
+ *   "follows the pattern" (survives reordering, doesn't depend on
+ *   which of the 24 slots it's currently sitting in) and, separately,
+ *   for up to 24 real independent patterns to be possible. Those two
+ *   requirements can't both hold with a PERMANENT per-pattern channel
+ *   -- there are only 9 exclusive channels available (see below) and
+ *   24 possible patterns, so a fixed assignment would run out well
+ *   before the 24th. Resolved by making channel assignment dynamic
+ *   instead: claimed from the 9-channel pool the moment a pattern
+ *   starts PLAYING, released the moment it stops -- same mechanism
+ *   services/expression.c's own claim_mpe_channel() already uses for
+ *   live MPE polyphony, just a separate, smaller pool. This still
+ *   satisfies the original ask in spirit (a pattern's channel never
+ *   depends on its library slot position), it just means the channel
+ *   itself can differ between two separate play sessions of the same
+ *   pattern rather than being permanently fixed -- confirmed
+ *   acceptable, since the whole point of the original ask was about
+ *   slot position specifically, not permanence.
+ * - Color: plain yellow is Song mode's own theme (matching cross-
+ *   capture's existing amber/yellow-ish underglow language), but each
+ *   individual pattern additionally gets ITS OWN random hue within a
+ *   wider yellow-green-to-orange band, assigned once at creation and
+ *   persisted (see op_song_pattern_t's own hue_byte), so the 24-slot
+ *   overview reads as a cohesive family of colors without every track
+ *   looking identical. Not yet consumed by any rendering -- that's the
+ *   track-overview screen, still to come. */
+
+/* Real feedback: "the right two columns are the 8 pages per sequence
+ * track" -- columns 5-6 (matching TILES_GRID_MAX_COL's own top 2)
+ * across all 4 rows are the 8 page-select pads; columns 1-4 across all
+ * 4 rows are the current page's own 16 steps. Confirmed row-major for
+ * the page mapping specifically: row 1 = pages 1-2, row 2 = pages 3-4,
+ * row 3 = pages 5-6, row 4 = pages 7-8 (column 5 = the lower-numbered
+ * page in each pair, column 6 the higher). Not yet consumed by any
+ * rendering/touch-handling -- that's the step-edit screen, still to
+ * come. */
+#define OP_SONG_STEPS_PER_PAGE 16u
+#define OP_SONG_NUM_PAGES 8u
+#define OP_SONG_NUM_STEPS (OP_SONG_STEPS_PER_PAGE * OP_SONG_NUM_PAGES) /* 128 */
+/* One per pad on the (not yet built) track-overview screen -- see this
+ * section's own header comment for why up to 24 real patterns can
+ * exist despite only 9 being simultaneously playable. */
+#define OP_SONG_NUM_SLOTS TILES_NUM_PADS
+/* Real feedback: "we need up to 4 voices per step" -- same cap, same
+ * flash-capacity reasoning class as the regular sequencer's own OP_
+ * SEQ_MAX_NOTES_PER_STEP (see that constant's own comment), but Song
+ * mode's actual per-pattern footprint (see op_song_pattern_t below)
+ * has enough headroom in its own reserved flash region that no bit-
+ * packing trickery was needed to reach 4 here -- see tiles_song_
+ * store_t's own _Static_assert for the real margin. */
+#define OP_SONG_MAX_NOTES_PER_STEP 4u
+
+/* One saved pattern -- the runtime copy IS the on-flash layout here
+ * (unlike the regular sequencer's op_seq_pattern_t/tiles_pattern_
+ * flash_t split), no packing needed: 513 bytes/pattern x 24 patterns
+ * fits its own reserved 4-sector flash region (16384 bytes) with over
+ * 4KB to spare even before considering that headroom -- see tiles_
+ * song_store_t's own _Static_assert. step_notes[][] uses the same
+ * 0xFF-sentinel-for-"unused slot" convention the regular sequencer's
+ * own tiles_pattern_flash_t introduced, doing double duty as this
+ * pattern's own "is this step armed at all" answer (any non-0xFF
+ * entry means yes) -- Song mode has no separate step_armed[]/step_
+ * pitch_override[] concept at all, since real feedback confirmed
+ * "plain armed/notes only," nothing more, for this first version.
+ * hue_byte: this pattern's own random color seed (see this section's
+ * own header comment on Song mode's color scheme) -- 0 maps to the
+ * warm end of the yellow-green-to-orange band, 255 the cool end;
+ * assigned once, whenever a pattern is first created, by whichever
+ * later pass actually implements capture into Song mode. */
+typedef struct {
+    uint8_t step_notes[OP_SONG_NUM_STEPS][OP_SONG_MAX_NOTES_PER_STEP];
+    uint8_t hue_byte;
+} op_song_pattern_t;
+
+static op_song_pattern_t s_song_pattern[OP_SONG_NUM_SLOTS];
+static bool s_song_slot_occupied[OP_SONG_NUM_SLOTS];
+/* Runtime-only playback state, one per slot, meaningful only while
+ * s_song_slot_occupied[slot] is true. Not persisted -- a reboot always
+ * comes up with every saved pattern stopped, same as the regular
+ * sequencer's own lanes do (s_seq_lane_running[] isn't loaded from
+ * flash either). Shaped closely after the regular sequencer's own
+ * per-lane playback fields (s_seq_current_step[]/s_seq_step_started_
+ * at_pulse[]/s_seq_note_sounding[]/s_seq_sounding_notes[][]/_note_
+ * count[]) since the actual advance/fire logic (still to come) will
+ * need the identical shape of bookkeeping, just indexed by slot
+ * instead of lane. */
+static bool s_song_slot_running[OP_SONG_NUM_SLOTS];
+static uint8_t s_song_slot_channel[OP_SONG_NUM_SLOTS]; /* valid only while running */
+static uint8_t s_song_current_step[OP_SONG_NUM_SLOTS];
+static uint32_t s_song_step_started_at_pulse[OP_SONG_NUM_SLOTS];
+static bool s_song_note_sounding[OP_SONG_NUM_SLOTS];
+static uint8_t s_song_sounding_notes[OP_SONG_NUM_SLOTS][OP_SONG_MAX_NOTES_PER_STEP];
+static uint8_t s_song_sounding_note_count[OP_SONG_NUM_SLOTS];
+
+/* Real feedback: "9 song tracks, 1 channel stays free for live MPE" --
+ * see the channel-pool comment just below for the full reasoning. */
+#define OP_SONG_MAX_CONCURRENT 9u
+
+/* Real feedback: "we can assign a costume midi channel for each bank
+ * kinda like a looper," followed up once the actual 16-channel MIDI
+ * budget got worked through against what's already committed
+ * elsewhere: channel 0 (nibble) is the MPE master/zone channel;
+ * nibbles 1-15 are the MPE member pool live melodic/chord/guitar
+ * touches dynamically claim from (services/expression.c's own claim_
+ * mpe_channel()); of those 15, nibbles 12-15 are already permanently
+ * reserved for the regular sequencer's own 4 lanes (see set_active_
+ * mode()'s -- actually tiles_op_mode_init()'s -- own s_seq_lane_
+ * channel[] assignment), and nibble 10 is separately, permanently
+ * used by chord mode's own fixed OP_CHORD_CHANNEL, outside the
+ * dynamic pool entirely. That leaves exactly 10 nibbles genuinely
+ * free (1-9, 11) before Song mode existed at all -- confirmed real
+ * feedback: "9 song tracks, 1 channel stays free for live MPE," so
+ * Song mode's own pool claims 9 of those 10 (working from the top of
+ * ITS OWN free range downward, same "claim from the top down"
+ * convention the 4 existing lanes already established), leaving
+ * nibble 1 as the one channel live MPE polyphony keeps for itself
+ * whenever any song track is playing. */
+static const uint8_t s_song_channel_pool[OP_SONG_MAX_CONCURRENT] = {11u, 9u, 8u, 7u, 6u, 5u, 4u, 3u, 2u};
+static bool s_song_channel_in_use[OP_SONG_MAX_CONCURRENT];
+
+/* Claims the next free channel from Song mode's own 9-slot pool --
+ * false (out param untouched) if all 9 are already in use, which the
+ * caller (still to come: whatever handles the track-overview's own
+ * tap-to-start gesture) treats as "blocked, can't start a 10th,"
+ * confirmed real feedback ("blocked, no-op but it flashes red to
+ * idicate error"). Dynamic claim/release rather than a permanent per-
+ * pattern assignment -- see this section's own header comment for why
+ * that's the one design that satisfies both "channel survives
+ * reordering" and "up to 24 real independent patterns" at once. */
+static bool song_claim_channel(uint8_t *out_channel) {
+    for (uint8_t i = 0u; i < OP_SONG_MAX_CONCURRENT; i++) {
+        if (!s_song_channel_in_use[i]) {
+            s_song_channel_in_use[i] = true;
+            *out_channel = s_song_channel_pool[i];
+            return true;
+        }
+    }
+    return false;
+}
+
+static void song_release_channel(uint8_t channel) {
+    for (uint8_t i = 0u; i < OP_SONG_MAX_CONCURRENT; i++) {
+        if (s_song_channel_pool[i] == channel) {
+            s_song_channel_in_use[i] = false;
+            return;
+        }
+    }
+}
+
+#define TILES_SONG_STORE_MAGIC 0x474e4f53u /* "SONG" */
+#define TILES_SONG_STORE_VERSION 1u
+/* 4 sectors, reserved immediately below the regular sequencer's own
+ * single reserved sector (see TILES_PATTERN_FLASH_OFFSET) -- flash
+ * SPACE itself is nowhere near a constraint (this board's own 4MB vs
+ * a firmware image under 128KB), only the SIZE OF ONE ERASE+PROGRAM
+ * OPERATION is (see TILES_PATTERN_FLASH_OFFSET's own comment on why
+ * that has to stay within one sector's worth of interrupts-disabled
+ * time). song_store_write_all() below writes these 4 sectors as 4
+ * separate, independent erase+program calls -- each individually as
+ * safe as the regular sequencer's own single-sector save, just done 4
+ * times in a row, so the whole save takes longer overall (four
+ * sequential tens-of-milliseconds pauses instead of one) but never
+ * risks the watchdog the regular save doesn't already risk. */
+#define TILES_SONG_NUM_FLASH_SECTORS 4u
+#define TILES_SONG_FLASH_OFFSET (TILES_PATTERN_FLASH_OFFSET - FLASH_SECTOR_SIZE * TILES_SONG_NUM_FLASH_SECTORS)
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t occupied_mask; /* one bit per slot, same packing precedent as the regular sequencer's own slot_saved_mask */
+    op_song_pattern_t pattern[OP_SONG_NUM_SLOTS];
+} tiles_song_store_t;
+
+/* Must fit in exactly TILES_SONG_NUM_FLASH_SECTORS sectors -- measured,
+ * not estimated: 12 (header) + 24 * 513 (pattern) = 12324 bytes against
+ * a 16384-byte budget, 4060 bytes to spare. A hard compile error here
+ * beats a silent memcpy() past the end of song_store_write_all()'s own
+ * per-sector write buffer, same reasoning as the regular sequencer's
+ * own _Static_assert right next to tiles_pattern_store_t. */
+_Static_assert(sizeof(tiles_song_store_t) <= FLASH_SECTOR_SIZE * TILES_SONG_NUM_FLASH_SECTORS,
+               "tiles_song_store_t no longer fits in its reserved flash region");
+
+/* Rewrites the WHOLE store every time, same "always start from current
+ * RAM state" reasoning as pattern_store_write_all() -- static, not
+ * stack: sizeof(tiles_song_store_t) (~12KB) is far too large for this
+ * main loop's own stack frame regardless. Builds the full logical
+ * image once here, then writes it out FLASH_SECTOR_SIZE bytes at a
+ * time across TILES_SONG_NUM_FLASH_SECTORS separate erase+program
+ * calls -- see TILES_SONG_FLASH_OFFSET's own comment for why this has
+ * to be several independent single-sector operations rather than one
+ * bigger one. */
+static void song_store_write_all(void) {
+    static tiles_song_store_t s_store;
+    static uint8_t s_write_buf[FLASH_SECTOR_SIZE];
+    memset(&s_store, 0, sizeof(s_store));
+    s_store.magic = TILES_SONG_STORE_MAGIC;
+    s_store.version = TILES_SONG_STORE_VERSION;
+    uint32_t mask = 0u;
+    for (uint8_t i = 0; i < OP_SONG_NUM_SLOTS; i++) {
+        if (s_song_slot_occupied[i]) {
+            mask |= (uint32_t)1u << i;
+        }
+        s_store.pattern[i] = s_song_pattern[i];
+    }
+    s_store.occupied_mask = mask;
+
+    const uint8_t *src = (const uint8_t *)&s_store;
+    size_t total = sizeof(s_store);
+    for (uint32_t sector = 0u; sector < TILES_SONG_NUM_FLASH_SECTORS; sector++) {
+        memset(s_write_buf, 0, sizeof(s_write_buf));
+        size_t offset_in_store = (size_t)sector * FLASH_SECTOR_SIZE;
+        size_t remaining = (offset_in_store < total) ? (total - offset_in_store) : 0u;
+        size_t copy_len = (remaining < FLASH_SECTOR_SIZE) ? remaining : FLASH_SECTOR_SIZE;
+        if (copy_len > 0u) {
+            memcpy(s_write_buf, src + offset_in_store, copy_len);
+        }
+        watchdog_update();
+        uint32_t prev_interrupts = save_and_disable_interrupts();
+        flash_range_erase(TILES_SONG_FLASH_OFFSET + sector * FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE);
+        flash_range_program(TILES_SONG_FLASH_OFFSET + sector * FLASH_SECTOR_SIZE, s_write_buf, FLASH_SECTOR_SIZE);
+        restore_interrupts(prev_interrupts);
+        watchdog_update();
+    }
+}
+
+/* Companion to song_store_write_all() -- a plain read, same "flash is
+ * directly addressable, no erase/program machinery needed" reasoning
+ * as pattern_store_load_all(), safe and cheap to call unconditionally
+ * on every boot including crash-recovery. Not yet called from
+ * anywhere -- tiles_op_mode_init() wiring it in is part of this same
+ * first pass, right alongside where pattern_store_load_all() already
+ * gets called. */
+static void song_store_load_all(void) {
+    const tiles_song_store_t *store = (const tiles_song_store_t *)(XIP_BASE + TILES_SONG_FLASH_OFFSET);
+    if (store->magic != TILES_SONG_STORE_MAGIC || store->version != TILES_SONG_STORE_VERSION) {
+        return; /* never saved before on this board, or an incompatible future layout */
+    }
+    for (uint8_t i = 0; i < OP_SONG_NUM_SLOTS; i++) {
+        s_song_slot_occupied[i] = (store->occupied_mask & ((uint32_t)1u << i)) != 0u;
+        if (s_song_slot_occupied[i]) {
+            s_song_pattern[i] = store->pattern[i];
+        }
+    }
+    printf("[op_mode] loaded saved song patterns from flash\n");
+}
+
 /* Real feedback: "is there anything needed to stop stuck niotes?" --
  * investigated the one real gap: services/expression.c's live-touch MPE
  * channel allocator (claim_mpe_channel()) and this file's own per-lane
@@ -4995,10 +5329,24 @@ bool tiles_op_mode_has_menu_open(void) {
  * the instant that lane stops, see that function's own comment) and
  * won't fire a new one, so its channel is genuinely free for live touch
  * to use -- reserving it anyway would just shrink live polyphony for no
- * real reason. */
+ * real reason.
+ * Extended for Song mode's own dynamically-claimed channel pool (see
+ * this file's own "Song mode" section, song_claim_channel()'s comment
+ * specifically, for why that has to be dynamic -- claimed at play-
+ * start, released at stop -- rather than a permanent per-lane
+ * assignment the way the 4 lanes above are). claim_mpe_channel() in
+ * services/expression.c calls this same one function for every
+ * candidate channel already, so extending it here is the only change
+ * needed to keep live MPE touches from stealing a channel a song track
+ * is actively sounding on -- no new call site anywhere. */
 bool tiles_op_mode_sequencer_channel_is_reserved(uint8_t channel) {
     for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
         if (s_seq_lane_running[lane] && s_seq_lane_channel[lane] == channel) {
+            return true;
+        }
+    }
+    for (uint8_t i = 0u; i < OP_SONG_MAX_CONCURRENT; i++) {
+        if (s_song_channel_in_use[i] && s_song_channel_pool[i] == channel) {
             return true;
         }
     }
