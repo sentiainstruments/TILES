@@ -22,7 +22,6 @@
 #include "hardware/watchdog.h"
 
 #include "pico/platform/sections.h"
-#include "pico/rand.h"
 #include "pico/time.h"
 
 #include <math.h>
@@ -2011,6 +2010,15 @@ static void render_edit_mode(uint32_t now_ms, bool transport_running) {
  * definitions live in this file's own "Song mode: capture" section,
  * much further down. */
 static bool s_song_capture_active;
+/* Same reasoning, for the step-edit screen's own pitch-pick sub-state
+ * (see this file's own "Song mode: step-edit screen" section) --
+ * mode_owns_standby_grid() just below needs it for the identical
+ * reason it needs s_song_capture_active: while picking a step's
+ * pitch, the grid shows melodic-style note coloring (and sounds live)
+ * instead of the step-edit screen's own custom coloring, same as
+ * capture. Real definition lives with the rest of that section, much
+ * further down. */
+static bool s_song_edit_pick_active;
 
 /* Real feedback (Song mode's own bug, found before ever reaching real
  * hardware): sequencer mode is the only mode that claims standby_
@@ -2029,7 +2037,7 @@ static bool s_song_capture_active;
  * treating a touch as a live note), so a future mode with the same
  * need only has to change this one function, not hunt down every
  * place that used to spell out "== OP_MODE_SEQUENCER" by hand.
- * Song mode's own capture is the one real exception carved out here:
+ * Song mode's own capture is one real exception carved out here:
  * while song_capture_active, the grid is deliberately NOT standby-
  * driven (see song_capture_enter()'s own comment) -- it shows melodic-
  * style note coloring instead, on purpose, so both a live-preview
@@ -2044,10 +2052,14 @@ static bool s_song_capture_active;
  * active_mode never becomes OP_MODE_SONG in the first place) would
  * incorrectly keep claiming standby_active/suppressing expression.c
  * for the WHOLE capture, contradicting song_capture_enter()'s own
- * explicit release of both. */
+ * explicit release of both. The step-edit screen's own pitch-pick
+ * sub-state is the second exception, for the identical reason: real
+ * feedback confirmed picking a step's pitch means tapping pads on the
+ * live melodic surface to hear and choose notes, not a custom step-
+ * edit-only picker widget. */
 static bool mode_owns_standby_grid(tiles_op_mode_t mode) {
     if (mode == OP_MODE_SONG) {
-        return !s_song_capture_active;
+        return !s_song_capture_active && !s_song_edit_pick_active;
     }
     return mode == OP_MODE_SEQUENCER;
 }
@@ -3079,6 +3091,14 @@ static void seq_capture_mode_exit(void);
  * that declaration's own comment. */
 static void song_capture_enter(void);
 static void song_capture_exit(void);
+/* Same reason, for the step-edit screen (see this file's own "Song
+ * mode: step-edit screen" section) -- s_song_edit_active itself needs
+ * no early forward declaration the way s_song_capture_active/s_song_
+ * edit_pick_active do, since nothing this early reads it directly,
+ * only calls into song_edit_exit() below. */
+static bool s_song_edit_active;
+static void song_edit_exit(void);
+static void song_edit_pick_cancel(void); /* needed this early too -- handle_diamond_transport()'s own back-gesture branch calls it directly */
 
 static void set_active_mode(tiles_op_mode_t mode) {
     if (s_song_capture_active && mode != s_active_mode) {
@@ -3103,6 +3123,21 @@ static void set_active_mode(tiles_op_mode_t mode) {
          * capture_mode_active isn't set true until after it returns, so
          * this branch can never fire from that call. */
         seq_capture_mode_exit();
+    }
+    if (s_song_edit_active && mode != s_active_mode) {
+        /* A separate `if`, not chained onto the else-if above -- unlike
+         * seq_capture_mode_active/song_capture_active (mutually
+         * exclusive by construction, see that branch's own comment),
+         * the step-edit screen CAN still be latched true underneath an
+         * active Song capture (shift+diamond targets the next EMPTY
+         * slot regardless of what's currently being edited, so both
+         * can be true at once -- see handle_diamond_transport()'s own
+         * comment on that gesture). Chaining this as an else-if would
+         * silently skip it whenever capture also happened to be active,
+         * leaving a stale edit session that would reappear exactly as
+         * left the next time Song mode's track-overview is reached,
+         * instead of a fresh one. */
+        song_edit_exit();
     }
     /* Deliberately does NOT seq_end_current_note() on leaving sequencer
      * mode anymore -- real feedback: "sequencer should not stop if mode
@@ -4161,6 +4196,26 @@ static void handle_diamond_transport(uint32_t now_ms) {
                 } else {
                     song_capture_enter();
                 }
+            } else if (s_active_mode == OP_MODE_SONG && s_song_edit_active) {
+                /* Real feedback (step-edit screen Q&A): "Diamond click"
+                 * for the back gesture. One click always backs up
+                 * exactly one level -- out of pitch-pick into the
+                 * step-grid if a step is currently being picked
+                 * (discarding whatever was accumulated, unchanged from
+                 * whatever the step already held -- see song_edit_
+                 * pick_cancel()'s own comment), or out of the step-
+                 * grid into the track-overview otherwise. Checked here,
+                 * ahead of the plain play/stop/record toggle below,
+                 * specifically because that toggle is otherwise this
+                 * button's ONLY plain-click behavior outside sequencer
+                 * mode -- without this branch, a plain diamond click
+                 * while editing would silently send a transport Stop/
+                 * Start instead of backing out. */
+                if (s_song_edit_pick_active) {
+                    song_edit_pick_cancel();
+                } else {
+                    song_edit_exit();
+                }
             } else if (s_diamond_record_armed) {
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 127u);
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 0u);
@@ -4559,7 +4614,18 @@ static void song_capture_handle_taps(tiles_midi_clock_state_t clock);
 static void song_capture_advance_clock(tiles_midi_clock_state_t clock);
 /* song_capture_enter()/_exit() themselves are forward-declared earlier
  * still, right before handle_diamond_transport() -- see that spot's
- * own comment for why. */
+ * own comment for why. Same "declare here, define later" precedent
+ * for the step-edit screen (also its own "Song mode" subsection,
+ * right after track-overview) -- song_edit_enter() specifically is
+ * needed by handle_song_overview_taps() below, which comes first in
+ * the file; song_edit_exit()/song_edit_pick_cancel() are ALREADY
+ * forward-declared earlier still (right by s_song_edit_active/s_song_
+ * edit_pick_active), since set_active_mode()/handle_diamond_
+ * transport() need them even earlier than this. */
+static void song_edit_enter(uint8_t pad);
+static void handle_song_edit_taps(uint32_t now_ms);
+static void render_song_edit(uint32_t now_ms);
+static void handle_song_edit_pick_taps(uint32_t now_ms);
 
 void tiles_op_mode_init(bool crash_recovered) {
     if (!crash_recovered) {
@@ -4901,6 +4967,19 @@ void tiles_op_mode_scan(void) {
              * the exact same pixels every single scan, not a real gap. */
             song_capture_handle_taps(clock);
             song_capture_advance_clock(clock);
+        } else if (s_song_edit_active) {
+            if (s_song_edit_pick_active) {
+                /* Same "no pad render of its own, underglow still
+                 * needed" shape as capture just above -- see render_
+                 * song_underglow()'s own comment for why calling it
+                 * directly here is safe (no priority-chain race the
+                 * way capture's pulsing underglow would have). */
+                handle_song_edit_pick_taps(now_ms);
+                render_song_underglow();
+            } else {
+                handle_song_edit_taps(now_ms);
+                render_song_edit(now_ms);
+            }
         } else {
             handle_song_overview_taps(now_ms);
             render_song_overview(now_ms);
@@ -4957,29 +5036,31 @@ void tiles_op_mode_scan(void) {
 
 bool tiles_op_mode_owns_pad_grid(void) {
     /* mode_owns_standby_grid() -- also Song mode's own track-overview
-     * screen now (its own bug, found before ever reaching real
-     * hardware -- see that function's own comment for the full
-     * reasoning, including why it deliberately excludes Song mode's
-     * own capture). Matters for more than rendering: services/
-     * expression.c checks tiles_op_mode_owns_pad(pad), which defers to
-     * this blanket accessor for every mode except chord, before
-     * processing a touch as a live melodic note -- suppressing it here
-     * is exactly what makes the track-overview's own 24 pads mean
-     * "track slots," not notes, the same way it already does for the
-     * regular sequencer's step-view. Deliberately does NOT suppress
-     * expression.c while Song mode's own capture is active (mode_owns_
-     * standby_grid()'s own exclusion for that case) -- the grid is
+     * and step-edit screens now (its own bug, found before ever
+     * reaching real hardware -- see that function's own comment for
+     * the full reasoning, including why it deliberately excludes Song
+     * mode's own capture AND its step-edit screen's pitch-pick sub-
+     * state). Matters for more than rendering: services/expression.c
+     * checks tiles_op_mode_owns_pad(pad), which defers to this blanket
+     * accessor for every mode except chord, before processing a touch
+     * as a live melodic note -- suppressing it here is exactly what
+     * makes the track-overview's own 24 pads mean "track slots" and
+     * the step-edit screen's own 24 pads mean "steps/pages," not
+     * notes, the same way it already does for the regular sequencer's
+     * step-view. Deliberately does NOT suppress expression.c while
+     * Song mode's own capture OR pitch-pick is active (mode_owns_
+     * standby_grid()'s own exclusion for both cases) -- the grid is
      * showing melodic-style note coloring on purpose then (see song_
-     * capture_enter()'s own comment), and expression.c staying active
-     * is what gives a live-feel MPE sound on its own dynamically-
-     * claimed channel WHILE song_capture_handle_taps() separately
-     * records the SAME touch onto the dedicated slot channel -- the
-     * exact same "live feel stays intact, a separate channel also
-     * gets recorded" precedent this feature always had when it was
-     * still called cross-capture and reachable only from melodic/
-     * chord/guitar mode (where s_active_mode never became OP_MODE_
-     * SONG in the first place, so this exclusion wasn't even needed
-     * there). */
+     * capture_enter()'s/song_edit_pick_enter()'s own comments), and
+     * expression.c staying active is what gives a live-feel MPE sound
+     * on its own dynamically-claimed channel while the recording/
+     * picking logic separately captures the SAME touch onto its own
+     * destination -- the exact same "live feel stays intact, a
+     * separate channel also gets recorded" precedent this feature
+     * always had when it was still called cross-capture and reachable
+     * only from melodic/chord/guitar mode (where s_active_mode never
+     * became OP_MODE_SONG in the first place, so this exclusion wasn't
+     * even needed there). */
     return s_menu_visible || s_scale_menu_visible || mode_owns_standby_grid(s_active_mode);
 }
 
@@ -5131,12 +5212,14 @@ bool tiles_op_mode_has_menu_open(void) {
  * - Color: plain yellow is Song mode's own theme (matching the same
  *   amber/yellow-ish underglow language the old cross-capture feature
  *   already established), but each individual pattern additionally
- *   gets ITS OWN random hue within a wider yellow-green-to-orange
- *   band, assigned once at creation (song_capture_enter()'s own
- *   get_rand_32() call) and persisted (see op_song_pattern_t's own
- *   hue_byte), so the 24-slot overview reads as a cohesive family of
- *   colors without every track looking identical -- see song_hue_to_
- *   rgb()/render_song_overview()'s own consumption of it. */
+ *   gets ITS OWN hue within a wider yellow-green-to-orange band,
+ *   assigned once at creation (song_capture_enter()'s own OP_SONG_
+ *   HUE_STEP sequence, deterministic rather than random -- see that
+ *   constant's own comment for why) and persisted (see op_song_
+ *   pattern_t's own hue_byte), so the 24-slot overview reads as a
+ *   cohesive family of clearly distinct colors, not just "not
+ *   identical" -- see song_hue_to_rgb()/render_song_overview()'s own
+ *   consumption of it. */
 
 /* Real feedback: "the right two columns are the 8 pages per sequence
  * track" -- columns 5-6 (matching TILES_GRID_MAX_COL's own top 2)
@@ -5177,11 +5260,12 @@ bool tiles_op_mode_has_menu_open(void) {
  * entry means yes) -- Song mode has no separate step_armed[]/step_
  * pitch_override[] concept at all, since real feedback confirmed
  * "plain armed/notes only," nothing more, for this first version.
- * hue_byte: this pattern's own random color seed (see this section's
- * own header comment on Song mode's color scheme) -- 0 maps to the
- * warm end of the yellow-green-to-orange band, 255 the cool end;
- * assigned once, whenever a pattern is first created, by whichever
- * later pass actually implements capture into Song mode. */
+ * hue_byte: this pattern's own color seed (see this section's own
+ * header comment on Song mode's color scheme) -- 0 maps to the warm
+ * end of the yellow-green-to-orange band, 255 the cool end; assigned
+ * once, whenever a pattern is first created (song_capture_enter()),
+ * from a deterministic hue-shift sequence, not sampled randomly -- see
+ * OP_SONG_HUE_STEP's own comment for why. */
 typedef struct {
     uint8_t step_notes[OP_SONG_NUM_STEPS][OP_SONG_MAX_NOTES_PER_STEP];
     uint8_t hue_byte;
@@ -5263,7 +5347,16 @@ static void song_release_channel(uint8_t channel) {
 }
 
 #define TILES_SONG_STORE_MAGIC 0x474e4f53u /* "SONG" */
-#define TILES_SONG_STORE_VERSION 1u
+/* Bumped 1 -> 2 for next_hue_byte below: an old v1 image is a different
+ * byte layout, not just missing a field, so re-reading it as v2 would
+ * silently misparse every pattern that follows the new field rather
+ * than just losing the hue-shift counter. Same "treat a version
+ * mismatch as never-saved" rule this load already had for a genuinely
+ * incompatible future layout -- this IS that case, not a hypothetical
+ * one anymore. Any patterns saved under v1 during Song mode's own
+ * bring-up are lost when this first boots, which is fine -- they were
+ * this feature's own test data, not real content. */
+#define TILES_SONG_STORE_VERSION 2u
 /* 4 sectors, reserved immediately below the regular sequencer's own
  * single reserved sector (see TILES_PATTERN_FLASH_OFFSET) -- flash
  * SPACE itself is nowhere near a constraint (this board's own 4MB vs
@@ -5283,17 +5376,24 @@ typedef struct {
     uint32_t magic;
     uint32_t version;
     uint32_t occupied_mask; /* one bit per slot, same packing precedent as the regular sequencer's own slot_saved_mask */
+    uint8_t next_hue_byte; /* OP_SONG_HUE_STEP's own running counter, persisted so a reboot doesn't restart the hue-shift sequence from 0 and risk an early repeat against colors already assigned */
     op_song_pattern_t pattern[OP_SONG_NUM_SLOTS];
 } tiles_song_store_t;
 
 /* Must fit in exactly TILES_SONG_NUM_FLASH_SECTORS sectors -- measured,
- * not estimated: 12 (header) + 24 * 513 (pattern) = 12324 bytes against
- * a 16384-byte budget, 4060 bytes to spare. A hard compile error here
+ * not estimated: 13 (header) + 24 * 513 (pattern) = 12325 bytes against
+ * a 16384-byte budget, 4059 bytes to spare. A hard compile error here
  * beats a silent memcpy() past the end of song_store_write_all()'s own
  * per-sector write buffer, same reasoning as the regular sequencer's
  * own _Static_assert right next to tiles_pattern_store_t. */
 _Static_assert(sizeof(tiles_song_store_t) <= FLASH_SECTOR_SIZE * TILES_SONG_NUM_FLASH_SECTORS,
                "tiles_song_store_t no longer fits in its reserved flash region");
+
+/* OP_SONG_HUE_STEP's own counter -- see that constant's comment.
+ * Declared here (rather than down by song_capture_enter(), its only
+ * writer) because song_store_write_all()/_load_all() just below need
+ * to persist it, and both come earlier in this file than capture. */
+static uint8_t s_song_next_hue_byte;
 
 /* Rewrites the WHOLE store every time, same "always start from current
  * RAM state" reasoning as pattern_store_write_all() -- static, not
@@ -5310,6 +5410,7 @@ static void song_store_write_all(void) {
     memset(&s_store, 0, sizeof(s_store));
     s_store.magic = TILES_SONG_STORE_MAGIC;
     s_store.version = TILES_SONG_STORE_VERSION;
+    s_store.next_hue_byte = s_song_next_hue_byte;
     uint32_t mask = 0u;
     for (uint8_t i = 0; i < OP_SONG_NUM_SLOTS; i++) {
         if (s_song_slot_occupied[i]) {
@@ -5350,6 +5451,7 @@ static void song_store_load_all(void) {
     if (store->magic != TILES_SONG_STORE_MAGIC || store->version != TILES_SONG_STORE_VERSION) {
         return; /* never saved before on this board, or an incompatible future layout */
     }
+    s_song_next_hue_byte = store->next_hue_byte;
     for (uint8_t i = 0; i < OP_SONG_NUM_SLOTS; i++) {
         s_song_slot_occupied[i] = (store->occupied_mask & ((uint32_t)1u << i)) != 0u;
         if (s_song_slot_occupied[i]) {
@@ -5446,8 +5548,9 @@ static void song_end_current_note(uint8_t slot) {
  * (not a narrower hand-rolled interpolation) even though this band
  * only ever exercises two of its six sectors, so a future wider/
  * different band needs no rewrite here, just a different mapping into
- * `hue`. Not yet called from anywhere that assigns a real hue_byte --
- * see op_song_pattern_t's own comment. */
+ * `hue`. Called from render_song_overview() for every occupied slot;
+ * see OP_SONG_HUE_STEP's own comment for how hue_byte itself is
+ * actually chosen. */
 static void song_hue_to_rgb(uint8_t hue_byte, float sat, float val, float *out_r, float *out_g, float *out_b) {
     float hue = 30.0f + ((float)hue_byte / 255.0f) * 60.0f;
     float c = val * sat;
@@ -5634,6 +5737,15 @@ static bool s_song_prev_pad_touched[OP_SONG_NUM_SLOTS];
 static bool s_song_touch_started_with_shift[OP_SONG_NUM_SLOTS];
 static uint32_t s_song_touch_started_ms[OP_SONG_NUM_SLOTS];
 static bool s_song_delete_fired[OP_SONG_NUM_SLOTS];
+/* Real feedback: "hold foe 2 seconds is open edit for pattern" -- from
+ * the ORIGINAL spec, never actually wired up until the step-edit
+ * screen itself existed. Same "fired" shape as s_song_delete_fired[]
+ * just above (checked while touched, so it can only ever fire once
+ * per touch, and suppresses the plain-tap toggle below on release so
+ * a 2-second hold doesn't ALSO start/stop the pattern the instant the
+ * finger lifts). */
+#define OP_SONG_EDIT_HOLD_MS 2000u
+static bool s_song_edit_fired[OP_SONG_NUM_SLOTS];
 
 static void handle_song_overview_taps(uint32_t now_ms) {
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
@@ -5645,6 +5757,7 @@ static void handle_song_overview_taps(uint32_t now_ms) {
             s_song_touch_started_with_shift[pad - 1u] = circle_held;
             s_song_touch_started_ms[pad - 1u] = now_ms;
             s_song_delete_fired[pad - 1u] = false;
+            s_song_edit_fired[pad - 1u] = false;
         }
 
         if (s_song_touch_started_with_shift[pad - 1u]) {
@@ -5682,7 +5795,23 @@ static void handle_song_overview_taps(uint32_t now_ms) {
                 } else {
                     song_place(s_song_picked_up_slot, pad);
                 }
-            } else if (s_song_slot_occupied[pad - 1u]) {
+            }
+            /* Plain start/stop toggle deferred to release below (was
+             * fired right here, unconditionally, before the edit-hold
+             * gesture existed) -- a tap and a 2-second hold both begin
+             * with this identical touch-down, and only the eventual
+             * release (quick vs. still-held-past-OP_SONG_EDIT_HOLD_MS)
+             * tells them apart. */
+        } else if (touched && was_touched) {
+            if (s_song_picked_up_slot == 0u && !s_song_edit_fired[pad - 1u] && s_song_slot_occupied[pad - 1u]) {
+                uint32_t held_ms = now_ms - s_song_touch_started_ms[pad - 1u];
+                if (held_ms >= OP_SONG_EDIT_HOLD_MS) {
+                    song_edit_enter(pad);
+                    s_song_edit_fired[pad - 1u] = true;
+                }
+            }
+        } else if (!touched && was_touched) {
+            if (s_song_picked_up_slot == 0u && !s_song_edit_fired[pad - 1u] && s_song_slot_occupied[pad - 1u]) {
                 song_toggle_start_stop(pad);
             }
         }
@@ -5731,7 +5860,18 @@ static void render_song_overview(uint32_t now_ms) {
         } else {
             float r, g, b;
             song_hue_to_rgb(s_song_pattern[slot].hue_byte, 1.0f, 1.0f, &r, &g, &b);
-            float level = s_song_slot_running[slot] ? 1.0f : OP_SCALE_AVAILABLE_LEVEL;
+            /* Real feedback: "the playing pads should pulse" -- a
+             * playing pattern was previously just a flat, steady full-
+             * brightness pad, identical in behavior (if not color) to
+             * every other lit-but-static state on this screen, giving
+             * no "this one's actually running" signal beyond color and
+             * the dimmer stopped-but-saved level. Reuses the same
+             * pulse this screen already uses for the picked-up-for-
+             * reorder pad (pick_up_pulse), same file-wide "standardize
+             * the pulsing" convention this file's own OP_MENU_SELECTED_
+             * PULSE_* comment establishes -- just applied to this
+             * pad's own hue instead of a fixed green. */
+            float level = s_song_slot_running[slot] ? pick_up_pulse : OP_SCALE_AVAILABLE_LEVEL;
             tiles_lighting_set_standby_pad_rgb(pad, r * level, g * level, b * level);
         }
     }
@@ -5747,15 +5887,267 @@ static void render_song_overview(uint32_t now_ms) {
  * write_song_capture_underglow(), is a DIFFERENT, ambient "something's
  * recording" signal that doesn't fit this always-on overview theme the
  * same way; it takes over through that file's own priority chain
- * while capturing, so this function is only ever called from the
- * track-overview render below, not while capturing), revisit once
- * there's real playback to sync a pulse against. Factored out of
- * render_song_overview() purely so its own tail doesn't repeat the
- * same loop inline. */
+ * while capturing, so this function is never called while song_
+ * capture_active), revisit once there's real playback to sync a pulse
+ * against. Factored out of render_song_overview() purely so its own
+ * tail doesn't repeat the same loop inline -- also called directly
+ * from tiles_op_mode_scan()'s own step-edit pitch-pick branch (see
+ * this file's own "Song mode: step-edit screen" section), since pick
+ * mode intentionally renders no pads of its own (the grid shows
+ * melodic-style coloring instead, see mode_owns_standby_grid()'s own
+ * comment) but still needs the underglow theme to keep reading as
+ * Song mode underneath that -- no capture-style race there the way
+ * there would be for pads, since nothing else ever writes Song's
+ * underglow during pick mode specifically. */
 static void render_song_underglow(void) {
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
         tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 1.0f, 0.0f);
     }
+}
+
+/* ---- Song mode: step-edit screen ------------------------------------------
+ * Real feedback (original spec): "hold foe 2 seconds is open edit for
+ * pattern" -- entered from the track-overview above (handle_song_
+ * overview_taps()'s own OP_SONG_EDIT_HOLD_MS branch), one pattern at a
+ * time. None of the rest of this screen was actually specified until
+ * building it forced the real questions -- real feedback, this
+ * screen's own Q&A:
+ * - Layout: columns 1-4 across all 4 rows show the current page's own
+ *   16 steps, row-major, same board_pad_for_row_col() numbering every
+ *   other row-major grid in this file already uses (song_edit_step_
+ *   pad()). Columns 5-6 are the 8 page-select pads, row-major over
+ *   pairs -- see OP_SONG_STEPS_PER_PAGE's own header comment for that
+ *   exact mapping (song_edit_page_pad() mirrors it). Real feedback:
+ *   "dim vs. lit distinguishes empty vs. occupied pages" -- render_
+ *   song_edit()'s own page loop below.
+ * - Manual pitch entry: "Select step, then tap grid to pick note" --
+ *   tapping a step enters pitch-pick, where the WHOLE grid becomes a
+ *   chromatic note surface (same "release standby, let melodic-style
+ *   coloring and live MPE sound through" mechanism song_capture_
+ *   enter() already established -- see mode_owns_standby_grid()'s own
+ *   extension for s_song_edit_pick_active). Tapping the SAME step pad
+ *   again commits whatever was picked, REPLACING the step's old notes
+ *   wholesale (including clearing it if nothing was picked -- there's
+ *   no separate "clear" gesture, this doubles as one); diamond click
+ *   instead cancels, leaving the step exactly as it was (see handle_
+ *   diamond_transport()'s own new branch).
+ * - Chords: real feedback explicitly rejected building one up a pad at
+ *   a time ("we cant have it glitch with one at a time aditions"),
+ *   asking instead for "tap multiple notes together but they have to
+ *   be played together or arpegiated quickly." OP_SONG_EDIT_PICK_
+ *   WINDOW_MS below is that "together" window: any pad touched within
+ *   it of the FIRST pad in a fresh strike joins the same chord (up to
+ *   OP_SONG_MAX_NOTES_PER_STEP); a touch arriving AFTER the window
+ *   closes starts an entirely new one instead of silently appending to
+ *   the old, so a stray later tap can never quietly graft itself onto
+ *   an already-intended chord. 200ms is a first-attempt guess -- long
+ *   enough for a deliberate quick strum/roll across up to 4 pads,
+ *   short enough that a genuinely separate later tap doesn't get
+ *   mistaken for part of the same gesture -- not yet verified against
+ *   real hardware feel. */
+#define OP_SONG_EDIT_PICK_WINDOW_MS 200u
+
+static uint8_t s_song_edit_slot; /* 0-based, valid iff s_song_edit_active */
+static uint8_t s_song_edit_page; /* 0-7, which of the 8 pages is currently shown */
+static bool s_song_edit_step_prev_touched[OP_SONG_STEPS_PER_PAGE];
+static bool s_song_edit_page_prev_touched[OP_SONG_NUM_PAGES];
+
+/* Valid only while s_song_edit_pick_active. */
+static uint8_t s_song_edit_pick_step;        /* 0..127 -- the step within the FULL pattern being picked */
+static uint8_t s_song_edit_pick_confirm_pad; /* the physical pad that re-confirms/commits this pick */
+static uint8_t s_song_edit_pick_notes[OP_SONG_MAX_NOTES_PER_STEP];
+static uint8_t s_song_edit_pick_count;
+static bool s_song_edit_pick_window_active;
+static uint32_t s_song_edit_pick_window_start_ms;
+static bool s_song_edit_pick_prev_touched[TILES_NUM_PADS];
+static tiles_scale_mode_t s_song_edit_pick_prev_scale;
+
+static uint8_t song_edit_step_pad(uint8_t step_in_page) {
+    uint8_t row = (uint8_t)(step_in_page / 4u + 1u);
+    uint8_t col = (uint8_t)(step_in_page % 4u + 1u);
+    return board_pad_for_row_col(row, col);
+}
+
+static uint8_t song_edit_page_pad(uint8_t page) {
+    uint8_t row = (uint8_t)(page / 2u + 1u);
+    uint8_t col = (page % 2u == 0u) ? 5u : 6u;
+    return board_pad_for_row_col(row, col);
+}
+
+static bool song_edit_page_has_content(uint8_t slot, uint8_t page) {
+    uint8_t base = (uint8_t)(page * OP_SONG_STEPS_PER_PAGE);
+    for (uint8_t s = 0u; s < OP_SONG_STEPS_PER_PAGE; s++) {
+        if (s_song_pattern[slot].step_notes[base + s][0] != 0xFFu) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void song_edit_enter(uint8_t pad) {
+    s_song_edit_active = true;
+    s_song_edit_slot = (uint8_t)(pad - 1u);
+    s_song_edit_page = 0u;
+    s_song_edit_pick_active = false;
+    for (uint8_t s = 0u; s < OP_SONG_STEPS_PER_PAGE; s++) {
+        s_song_edit_step_prev_touched[s] = false;
+    }
+    for (uint8_t p = 0u; p < OP_SONG_NUM_PAGES; p++) {
+        s_song_edit_page_prev_touched[p] = false;
+    }
+    /* mode_owns_standby_grid() already owns the grid throughout this
+     * screen's own step-grid view, same as track-overview -- no
+     * standby_active toggle needed on entry, only around pitch-pick
+     * below (see that state's own comment). */
+    printf("[op_mode] song edit -> on (slot %u)\n", (unsigned)(s_song_edit_slot + 1u));
+}
+
+static void song_edit_pick_enter(uint8_t step_index, uint8_t confirm_pad) {
+    s_song_edit_pick_active = true;
+    s_song_edit_pick_step = step_index;
+    s_song_edit_pick_confirm_pad = confirm_pad;
+    s_song_edit_pick_count = 0u;
+    s_song_edit_pick_window_active = false;
+    for (uint8_t i = 0u; i < TILES_NUM_PADS; i++) {
+        s_song_edit_pick_prev_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+    }
+    /* Same "full chromatic access while recording" reasoning as song_
+     * capture_enter()'s own scale swap -- restored on cancel/commit
+     * below. */
+    s_song_edit_pick_prev_scale = tiles_note_map_get_scale();
+    tiles_note_map_set_scale(TILES_SCALE_CHROMATIC);
+    /* Same "release standby ownership so the grid shows the surface
+     * notes are actually chosen from" reasoning as song_capture_
+     * enter()'s own comment -- see mode_owns_standby_grid()'s own
+     * extension for s_song_edit_pick_active. */
+    tiles_lighting_set_standby_active(false);
+    tiles_buttons_set_standby_active(false);
+}
+
+static void song_edit_pick_cancel(void) {
+    if (!s_song_edit_pick_active) {
+        return;
+    }
+    s_song_edit_pick_active = false;
+    tiles_note_map_set_scale(s_song_edit_pick_prev_scale);
+    tiles_lighting_set_standby_active(true);
+    tiles_buttons_set_standby_active(true);
+}
+
+static void song_edit_pick_commit(void) {
+    op_song_pattern_t *pat = &s_song_pattern[s_song_edit_slot];
+    for (uint8_t i = 0u; i < OP_SONG_MAX_NOTES_PER_STEP; i++) {
+        pat->step_notes[s_song_edit_pick_step][i] = (i < s_song_edit_pick_count) ? s_song_edit_pick_notes[i] : 0xFFu;
+    }
+    song_store_write_all();
+    s_song_edit_pick_active = false;
+    tiles_note_map_set_scale(s_song_edit_pick_prev_scale);
+    tiles_lighting_set_standby_active(true);
+    tiles_buttons_set_standby_active(true);
+}
+
+static void song_edit_exit(void) {
+    if (s_song_edit_pick_active) {
+        song_edit_pick_cancel();
+    }
+    s_song_edit_active = false;
+    printf("[op_mode] song edit -> off\n");
+}
+
+static void handle_song_edit_taps(uint32_t now_ms) {
+    (void)now_ms;
+    uint8_t page_base = (uint8_t)(s_song_edit_page * OP_SONG_STEPS_PER_PAGE);
+
+    for (uint8_t s = 0u; s < OP_SONG_STEPS_PER_PAGE; s++) {
+        uint8_t pad = song_edit_step_pad(s);
+        bool touched = tiles_touch_is_touched(pad);
+        bool was = s_song_edit_step_prev_touched[s];
+        if (touched && !was) {
+            tiles_haptics_trigger_touch_pulse(pad);
+            song_edit_pick_enter((uint8_t)(page_base + s), pad);
+        }
+        s_song_edit_step_prev_touched[s] = touched;
+    }
+    for (uint8_t p = 0u; p < OP_SONG_NUM_PAGES; p++) {
+        uint8_t pad = song_edit_page_pad(p);
+        bool touched = tiles_touch_is_touched(pad);
+        bool was = s_song_edit_page_prev_touched[p];
+        if (touched && !was) {
+            tiles_haptics_trigger_touch_pulse(pad);
+            s_song_edit_page = p;
+        }
+        s_song_edit_page_prev_touched[p] = touched;
+    }
+}
+
+static void handle_song_edit_pick_taps(uint32_t now_ms) {
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        bool touched = tiles_touch_is_touched(pad);
+        bool was = s_song_edit_pick_prev_touched[pad - 1u];
+        if (touched && !was) {
+            tiles_haptics_trigger_touch_pulse(pad);
+            if (pad == s_song_edit_pick_confirm_pad) {
+                song_edit_pick_commit();
+                return; /* pick mode just ended -- prev_touched[] for any pads after this one in the loop is stale but harmless, re-seeded by the next song_edit_pick_enter() */
+            }
+            uint8_t note = tiles_note_map_get_note(pad);
+            if (!s_song_edit_pick_window_active ||
+                (now_ms - s_song_edit_pick_window_start_ms) > OP_SONG_EDIT_PICK_WINDOW_MS) {
+                /* Window expired (or this is the first touch of the
+                 * pick) -- starts a FRESH chord, discarding whatever
+                 * was accumulated before rather than appending to it.
+                 * See this section's own header comment for why. */
+                s_song_edit_pick_count = 0u;
+                s_song_edit_pick_window_active = true;
+                s_song_edit_pick_window_start_ms = now_ms;
+            }
+            bool already_picked = false;
+            for (uint8_t i = 0u; i < s_song_edit_pick_count; i++) {
+                if (s_song_edit_pick_notes[i] == note) {
+                    already_picked = true;
+                    break;
+                }
+            }
+            if (!already_picked && s_song_edit_pick_count < OP_SONG_MAX_NOTES_PER_STEP) {
+                s_song_edit_pick_notes[s_song_edit_pick_count] = note;
+                s_song_edit_pick_count++;
+            }
+        }
+        s_song_edit_pick_prev_touched[pad - 1u] = touched;
+    }
+}
+
+static void render_song_edit(uint32_t now_ms) {
+    uint8_t slot = s_song_edit_slot;
+    float r, g, b;
+    song_hue_to_rgb(s_song_pattern[slot].hue_byte, 1.0f, 1.0f, &r, &g, &b);
+    float pulse = menu_selected_pulse_level(now_ms);
+    uint8_t page_base = (uint8_t)(s_song_edit_page * OP_SONG_STEPS_PER_PAGE);
+
+    for (uint8_t s = 0u; s < OP_SONG_STEPS_PER_PAGE; s++) {
+        uint8_t pad = song_edit_step_pad(s);
+        bool armed = s_song_pattern[slot].step_notes[page_base + s][0] != 0xFFu;
+        if (armed) {
+            tiles_lighting_set_standby_pad_rgb(pad, r, g, b);
+        } else {
+            tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
+        }
+    }
+    for (uint8_t p = 0u; p < OP_SONG_NUM_PAGES; p++) {
+        uint8_t pad = song_edit_page_pad(p);
+        if (p == s_song_edit_page) {
+            tiles_lighting_set_standby_pad_rgb(pad, pulse, pulse, pulse);
+        } else if (song_edit_page_has_content(slot, p)) {
+            tiles_lighting_set_standby_pad_rgb(pad, r * OP_SCALE_AVAILABLE_LEVEL, g * OP_SCALE_AVAILABLE_LEVEL,
+                                                b * OP_SCALE_AVAILABLE_LEVEL);
+        } else {
+            tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
+        }
+    }
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+    }
+    render_song_underglow();
 }
 
 /* ---- Song mode: playback engine (stage 3) --------------------------------
@@ -6040,6 +6432,31 @@ static bool song_find_next_empty_slot(uint8_t *out_slot_index) {
  * gesture" pad to point at) -- silently no-op for both, matching how
  * a diamond click with no tempo yet already silently no-ops elsewhere
  * in this file. */
+/* Real feedback: "each sequence gets assigned a random color within a
+ * define hue range for cohesion" -- tried as a genuinely random
+ * get_rand_32() pick first, but real feedback on-hardware: "not
+ * subtile hue shift from pad to pad, they should be defined different
+ * colors following a hue shift." A uniform random pick over the full
+ * 0-255 range has no floor on how close two picks can land, so two
+ * patterns created back to back could (and did) get nearly the same
+ * color -- exactly the "subtle" problem reported. Fixed by dropping
+ * randomness entirely: each new pattern's hue_byte is the previous
+ * one's plus this fixed step, wrapping via uint8_t overflow. 97 is
+ * odd, and gcd(97,256)==1, so repeatedly adding it visits all 256
+ * possible values before ever repeating (unlike an even step, which
+ * would cycle through only half the range) -- no two of Song mode's
+ * 24 patterns can ever land on the same hue_byte by this sequence
+ * alone. It's also close to 256 * (1 - 1/phi) (~97.8), the "golden
+ * angle" fraction generative art already uses for exactly this
+ * problem (assigning a growing series of colors so that every new one
+ * looks clearly distinct from every one already assigned, not just
+ * from its immediate predecessor) -- picked for that property, not
+ * for the coincidence of the number. s_song_next_hue_byte is
+ * persisted (see tiles_song_store_t's own comment) so this sequence
+ * survives a reboot instead of restarting from 0 and risking an early
+ * repeat against colors already on other saved patterns. */
+#define OP_SONG_HUE_STEP 97u
+
 static void song_capture_enter(void) {
     uint8_t slot_index;
     if (!song_find_next_empty_slot(&slot_index)) {
@@ -6050,12 +6467,8 @@ static void song_capture_enter(void) {
         return;
     }
     memset(s_song_pattern[slot_index].step_notes, 0xFF, sizeof(s_song_pattern[slot_index].step_notes));
-    /* Real feedback: "each sequence gets assigned a random color
-     * within a define hue range for cohesion" -- assigned once, right
-     * here, the moment a pattern is actually created; see song_hue_
-     * to_rgb()'s own comment for how this byte maps to an actual
-     * color. */
-    s_song_pattern[slot_index].hue_byte = (uint8_t)(get_rand_32() & 0xFFu);
+    s_song_pattern[slot_index].hue_byte = s_song_next_hue_byte;
+    s_song_next_hue_byte = (uint8_t)(s_song_next_hue_byte + OP_SONG_HUE_STEP);
     s_song_slot_occupied[slot_index] = true;
     s_song_slot_running[slot_index] = true;
     s_song_slot_channel[slot_index] = channel;

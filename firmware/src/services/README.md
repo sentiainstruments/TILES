@@ -6914,5 +6914,113 @@ not its code.
     explicit release of both. `tiles_op_mode_owns_pad_grid()` reusing
     this same function needed no further change once it was fixed at
     the source.
+- **Two real-hardware fixes to Song mode's track-overview, requested
+  together**: "the playing pads should pulse and they should be not
+  subtile hue shift from pad to pad they should be defined different
+  colors following a hue shift."
+  - **Playing pads now pulse.** A running pattern was previously just
+    a flat, steady full-brightness pad -- identical in *behavior* (if
+    not color) to a stopped-but-saved pattern's own flat dim level,
+    giving no "this one's actually running" signal beyond color and
+    brightness alone. `render_song_overview()` now reuses the exact
+    same pulse this screen already draws for the picked-up-for-reorder
+    pad (`menu_selected_pulse_level()`), just applied to the running
+    pattern's own hue instead of a fixed green -- the same file-wide
+    "standardize the pulsing" convention this file's own `OP_MENU_
+    SELECTED_PULSE_*` comment already establishes, not a new pulse
+    shape invented for this one case.
+  - **Hue assignment is no longer random.** `song_capture_enter()`
+    used to pick `hue_byte` via a plain `get_rand_32() & 0xFF` -- a
+    uniform random pick over the full range has no floor on how close
+    two picks can land, so two patterns created back to back could
+    (and on real hardware, did) get nearly the same color, exactly the
+    "subtle hue shift" complaint. Replaced with a deterministic
+    sequence instead: each new pattern's `hue_byte` is the previous
+    one's plus a fixed step (`OP_SONG_HUE_STEP = 97`), wrapping via
+    `uint8_t` overflow. 97 is odd, and `gcd(97, 256) == 1`, so
+    repeatedly adding it visits all 256 possible values before ever
+    repeating (an even step would only ever reach half the range) --
+    no two of Song mode's 24 patterns can land on the same hue by this
+    sequence alone. It's also close to 256 * (1 - 1/phi) (~97.8), the
+    "golden angle" fraction generative art already uses for the
+    identical problem of assigning a growing series of colors so every
+    new one reads as clearly distinct from every one already assigned,
+    not just from its immediate predecessor. The running counter (`s_
+    song_next_hue_byte`) is persisted in `tiles_song_store_t` (new
+    field, version bumped 1 -> 2 -- an old v1 image is a different byte
+    layout, not just missing a field, so it's treated as never-saved
+    rather than misparsed; any patterns saved during Song mode's own
+    bring-up are lost on this first boot, which is fine, they were this
+    feature's own test data) so the sequence survives a reboot instead
+    of restarting from 0 and risking an early repeat against colors
+    already on other saved patterns. `get_rand_32()`/`pico/rand.h` are
+    no longer used anywhere in this file and were removed.
+- **Song mode stage 5: the step-edit screen and manual per-step pitch
+  editing** -- the two pieces explicitly deferred when stage 1 first
+  scoped this feature ("Include manual step editing now" was already
+  confirmed back then; building it just hadn't happened yet). None of
+  this screen's actual interaction had been specified beyond "hold for
+  2 seconds is open edit for pattern," so it got its own real-hardware
+  Q&A round before implementation:
+  - **Entry**: real feedback confirmed the original 2-second-hold spec
+    verbatim. `handle_song_overview_taps()`'s plain (non-shift) branch
+    used to fire `song_toggle_start_stop()` immediately on touch-down;
+    it now defers that to release, and fires `song_edit_enter()`
+    instead if the same touch is still down past `OP_SONG_EDIT_HOLD_MS`
+    (2000ms) -- the same "measure held_ms, fire once, suppress the
+    plain action on release" shape the shift-branch's own 5-second
+    delete hold already used (`s_song_edit_fired[]` mirrors `s_song_
+    delete_fired[]`).
+  - **Layout**: "columns 1-4... the current page's own 16 steps... the
+    right two columns are the 8 pages" -- confirmed row-major for both
+    (already documented, unbuilt, when `OP_SONG_STEPS_PER_PAGE` was
+    first defined in stage 1). `song_edit_step_pad()`/`song_edit_page_
+    pad()` compute each pad from its logical step/page index via
+    `board_pad_for_row_col()`, the same row-major numbering every other
+    grid in this file already uses, rather than a lookup table.
+  - **Manual pitch entry** ("How do you set a step's pitch manually?"):
+    "Select step, then tap grid to pick note" -- tapping a step enters
+    pitch-pick, where the WHOLE grid becomes a chromatic note surface
+    (same "release standby, let melodic-style coloring and live MPE
+    sound through" mechanism `song_capture_enter()` already
+    established for its own capture -- `mode_owns_standby_grid()`
+    gained the identical exclusion for `s_song_edit_pick_active`).
+    Tapping the SAME step pad again commits whatever was picked,
+    REPLACING the step's old notes wholesale -- including clearing it
+    if nothing was picked, since there's no separate clear gesture,
+    this doubles as one. Diamond click instead cancels, leaving the
+    step exactly as it was (`handle_diamond_transport()` gained a new
+    branch, checked ahead of its existing plain-click play/stop/record
+    toggle, since that toggle was otherwise this button's only
+    behavior in Song mode and would otherwise fire a transport Stop/
+    Start instead of backing out of the edit screen).
+  - **Chords, corrected mid-Q&A**: first proposed as "tap multiple pads
+    in sequence, each addition/removal toggling the chord" -- real
+    feedback rejected this outright: "tap multiple notes together but
+    they have to be played together or arpegiated quickly within the
+    step, we cant have it glitch with one at a time aditions." Built
+    instead as a strike window (`OP_SONG_EDIT_PICK_WINDOW_MS`, 200ms,
+    a first-attempt guess not yet verified against real hardware
+    feel): any pad touched within the window of the FIRST pad in a
+    fresh strike joins the same chord (up to `OP_SONG_MAX_NOTES_PER_
+    STEP`); a touch arriving after the window closes starts an
+    entirely new chord instead of silently appending to the old one,
+    so a stray later tap can never quietly graft itself onto an
+    already-intended chord -- directly addressing the "glitch" this
+    feedback was about.
+  - **Page-occupancy indicator**: "dim vs. lit distinguishes empty vs.
+    occupied pages" -- confirmed. `render_song_edit()`'s page loop
+    shows the currently-viewed page as a white `menu_selected_pulse_
+    level()` pulse (the same "selected" signal this file's menus
+    already standardize on) regardless of content, a non-current
+    occupied page at the pattern's own hue dimmed to `OP_SCALE_
+    AVAILABLE_LEVEL`, and a non-current empty page fully off.
+  - **Not built in this pass**: no visual marker for the currently-
+    playing step on this screen even when the pattern being edited is
+    also running in the background -- not asked for, and this screen
+    already has a natural, unclaimed use for it (unlike the old cross-
+    capture's marker, deliberately dropped in stage 4, which had no
+    natural home left anywhere); flagged as a plausible future
+    addition, not built speculatively.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
