@@ -6551,29 +6551,28 @@ not its code.
   after tjhat it does work and nown we do have the loop playing
   inmendiately but i still need the guide curent step on light
   visible, we're missing that still." Three things in there:
-  - The boot-time gap was by design, not a bug -- but real feedback
-    followed up asking for it anyway: "shift plus diamond still is
-    disabeled on boot since sequencer hasent been sarted and tempon
-    hanst been set yet." `cross_capture_enter()` still requires a
-    tempo to exist before it can start (unchanged -- `seq_capture_
-    advance_clock()` would otherwise sit inert forever with nothing to
-    advance against), but `handle_diamond_transport()`'s own shift+
-    diamond release branch now registers a plain tap-tempo tap
-    (`tiles_midi_clock_register_tap(now_ms)`) instead of doing nothing
-    whenever that gate fails -- the branch was a guaranteed no-op in
-    that case anyway, so there's nothing lost by also using it as a
-    tap. Repeating shift+diamond a few times (same 4-tap minimum every
-    tap-tempo session needs) bootstraps a tempo entirely from melodic/
-    chord/guitar mode now, no detour through sequencer mode required.
-    Deliberately NOT solved by widening handle_circle_tap()'s own
-    mode_ok/combo_conflict instead -- that function only evaluates
-    combo_conflict once, at circle's own press-down edge, so it would
-    have needed to become order-sensitive (arm correctly whichever of
-    circle/diamond gets pressed first) to handle this reliably.
-    s_diamond_press_was_shift already tracks "circle was held during
-    this hold" correctly regardless of press order (checked live, every
-    scan, while diamond is held), so reaching this from diamond's own
-    release side sidesteps that whole class of bug for free.
+  - The boot-time gap was by design, not a bug -- real feedback asked
+    for it removed anyway, then explicitly rejected the FIRST attempt
+    at that: a round that made shift+diamond register a plain tap-
+    tempo tap whenever no tempo existed yet (so repeating the gesture a
+    few times would bootstrap one). "no dumb shit. i dont need shit
+    diamond to register tap tempo, delete that, i need shift diamond
+    to enter capture and once in capture we can start playing it by
+    tap tempo with the shift button only like in the sequencer." Both
+    that workaround AND the original tempo-exists gate are gone now --
+    `cross_capture_enter()`'s call site in `handle_diamond_transport()`
+    calls it unconditionally on a fresh shift+diamond release, no
+    check at all. With no tempo yet, `seq_capture_advance_clock()`
+    simply sits pending (`s_seq_pending_start` stays true, nothing
+    commits or loops) while live touches still sound normally through
+    `seq_capture_handle_taps()` -- the exact same inert-but-harmless
+    state entering sequencer mode itself with no tempo already
+    tolerates, not a new failure mode. Once inside, plain shift alone
+    taps out a tempo the same way it always has in sequencer mode --
+    `handle_circle_tap()`'s own `mode_ok` already treats `s_cross_
+    capture_active` as sequencer-equivalent for tap-tempo purposes (an
+    earlier round in this same session), so nothing there needed to
+    change again.
   - "the loop playing inmendiately" confirms the previous round's real
     fix (`seq_capture_advance_clock()` now routing through `seq_enter_
     step()`) actually works on real hardware, not just on paper.

@@ -4011,38 +4011,31 @@ static void handle_diamond_transport(uint32_t now_ms) {
                  * diamond CLICK, too short to arm, from still landing
                  * here) -- genuinely free to claim. See this file's own
                  * "Cross-mode capture into lane 3" section for
-                 * cross_capture_enter()/_exit(). Same tempo-exists gate
-                 * sequencer mode's own capture entry above already
-                 * requires, for the identical reason: entering with no
-                 * tempo at all would just sit inert forever. */
+                 * cross_capture_enter()/_exit(). Used to also require a
+                 * tempo to already exist before entry (matching
+                 * sequencer mode's own capture entry below), but real
+                 * feedback rejected that -- and the tap-tempo-tap
+                 * workaround this comment used to describe -- outright:
+                 * "i dont need shit diamond to register tap tempo,
+                 * delete that, i need shift diamond to enter capture
+                 * and once in capture we can start playing it by tap
+                 * tempo with the shift button only like in the
+                 * sequencer." Enters unconditionally now; with no tempo
+                 * yet, seq_capture_advance_clock() simply sits pending
+                 * (s_seq_pending_start stays true, nothing commits or
+                 * loops) while live touches still sound normally via
+                 * seq_capture_handle_taps() -- exactly the same inert-
+                 * but-harmless state entering sequencer mode itself with
+                 * no tempo already tolerates. handle_circle_tap()'s own
+                 * mode_ok already treats s_cross_capture_active as
+                 * sequencer-equivalent for tap-tempo purposes (see that
+                 * function's own comment), so shift alone taps out a
+                 * fresh tempo once inside, same gesture sequencer mode
+                 * itself uses. */
                 if (s_cross_capture_active) {
                     cross_capture_exit();
-                } else if (tiles_midi_clock_tap_tempo_established() || tiles_midi_clock_external_active(now_ms)) {
-                    cross_capture_enter();
                 } else {
-                    /* Real feedback: "shift plus diamond still is
-                     * disabeled on boot since sequencer hasent been
-                     * sarted and tempon hanst been set yet" -- with no
-                     * tempo at all, the branch above is a silent no-op,
-                     * and until now the only way to establish one was
-                     * visiting sequencer mode's own tap-tempo gesture
-                     * first. Registers this release as a tap instead --
-                     * same tiles_midi_clock_register_tap() handle_
-                     * circle_tap() itself calls, just reached from here
-                     * since s_diamond_press_was_shift already correctly
-                     * tracks "circle was held during this hold"
-                     * regardless of which of the two was pressed first
-                     * (checked live, every scan, at line ~3893 above --
-                     * unlike handle_circle_tap()'s own edge-triggered
-                     * mode_ok, which is why that route can't cleanly
-                     * solve this same case without becoming order-
-                     * sensitive). Repeating shift+diamond a few times
-                     * from melodic/chord/guitar mode alone is now enough
-                     * to bootstrap a tempo on its own -- the same 4-tap
-                     * minimum every other tap-tempo session already
-                     * needs -- and the next press after that lands in
-                     * capture normally. */
-                    tiles_midi_clock_register_tap(now_ms);
+                    cross_capture_enter();
                 }
             } else if (s_diamond_record_armed) {
                 tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 127u);
