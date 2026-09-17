@@ -7022,5 +7022,32 @@ not its code.
     capture's marker, deliberately dropped in stage 4, which had no
     natural home left anywhere); flagged as a plausible future
     addition, not built speculatively.
+- **The regular sequencer's own per-step chord editing had the exact
+  same "many notes ruined the mechanism" problem Song mode's step-edit
+  screen was just fixed for, and got the identical fix**: "fix the
+  same chord thing on the sequencer, the many notes posibility ruined
+  the mechanism." `handle_edit_mode()`'s `OP_SEQ_EDIT_PITCH` branch
+  used to let tapping any pad other than the edited step's own toggle
+  that pad's note into or out of a cluster with NO time bound
+  whatsoever -- a step's chord could be built (or silently mutated) by
+  taps seconds or minutes apart, with no way to tell "still building
+  the same chord" apart from "starting a completely different one."
+  Replaced with the identical strike-window shape Song mode's step-
+  edit screen just introduced (its own separate copy, `OP_SEQ_EDIT_
+  PITCH_STRIKE_WINDOW_MS`, same 200ms first-attempt value, same "same
+  convention, separate copy" reasoning so tuning one screen's timing
+  can't retune the other's): any pad struck within the window of the
+  first pad in a fresh strike joins the same chord (up to `OP_SEQ_
+  MAX_NOTES_PER_STEP`); a touch arriving after the window closes
+  starts an entirely new chord instead of appending to the old one.
+  Tapping the step's own pad still closes and commits -- now REPLACING
+  the step's old content wholesale with whatever was freshly struck
+  (if anything was), rather than incrementally toggling it -- and the
+  two pre-existing no-touch cases are both preserved exactly as they
+  were: a fresh, never-armed step still falls back to its own live-
+  resolved note, and an already-armed step closed without striking
+  anything new is left completely untouched (the ORIGINAL single-note
+  design's own "harmless no-op" close, from before multi-note existed
+  at all).
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
