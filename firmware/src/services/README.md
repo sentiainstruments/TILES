@@ -6593,5 +6593,41 @@ not its code.
     brightness) amber marker, checked right after the brighter note-
     sounding flash so an actually-sounding pad always wins if the two
     ever land on the same one.
+- **Cross-capture step marker brightness, and the real chord-capture
+  bug: wrong velocity (fixed), incomplete voicings (a hard ceiling,
+  not a bug).** Real feedback: "need the sequencer marquer to be
+  slightly brighter in capture mode, aditionally we need to debug the
+  chord capture, its not capturing exactly whats being performed wioth
+  chords, its having lots of issues like incomoplete voicings and
+  wrong velocity."
+  - The dim step-position marker added last round bumped from (0.15,
+    0.09, 0) to (0.35, 0.21, 0) -- same hue, brighter.
+  - "wrong velocity" was a real bug: `seq_capture_handle_taps()`'s
+    chord-region branch used to resolve its own bass+root straight
+    from `tiles_note_map_get_chord_notes()`/`build_chord_voicing()` on
+    the RAW touch-down edge -- before `handle_chord_pad_taps()` (the
+    function that actually PLAYS that pad, on `services/expression.c`'s
+    own measured-strike timing, not raw touch-down) had measured a
+    strike or decided a velocity at all. Firing that early meant every
+    captured chord used a flat `OP_SEQ_VELOCITY` guess, never the real
+    one -- a soft chord and a hard chord captured identically. Fixed by
+    triggering on `s_chord_pad_sounding[]` going true instead (the
+    moment `handle_chord_pad_taps()` itself actually fires that pad),
+    reading its already-resolved `s_chord_pad_notes[]` and a new
+    `s_chord_pad_last_velocity[]` (set inside `chord_pad_strike()`, the
+    one and only place a chord pad's velocity is ever decided) instead
+    of re-deriving anything. New `s_seq_capture_prev_chord_sounding[]`
+    tracks that edge the same way `s_seq_capture_prev_pad_touched[]`
+    already tracks the raw one, reset on capture entry the same way too
+    (so a chord pad already sounding when capture starts doesn't
+    retroactively read as a fresh strike).
+  - "incomplete voicings" is a hard ceiling, not a bug: `OP_SEQ_MAX_
+    NOTES_PER_STEP` is capped at 2 by real flash capacity (see that
+    constant's own comment, from earlier this session's own empirical
+    N=1/2/3/4/6 testing), so a real 4-voice chord (bass/root/fifth/
+    open-third) can only ever keep 2 of them in a single step -- still
+    bass+root, the same "two most foundational" choice as before.
+    Raising the cap isn't safe to revisit without redoing that same
+    capacity work; left unchanged.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

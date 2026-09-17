@@ -832,6 +832,12 @@ static bool s_chord_pad_sounding[TILES_NUM_PADS];
 #define OP_CHORD_NUM_VOICES 4u /* bass + root + fifth + open_third, always */
 
 static uint8_t s_chord_pad_notes[TILES_NUM_PADS][OP_CHORD_NUM_VOICES];
+/* The velocity actually used for this pad's last real strike -- read by
+ * seq_capture_handle_taps() (see that function's own comment) so a
+ * captured chord uses the SAME dynamics that were actually played
+ * instead of a flat guess. Not touched anywhere else; chord_pad_strike()
+ * is the one and only place a chord pad's velocity is ever decided. */
+static uint8_t s_chord_pad_last_velocity[TILES_NUM_PADS];
 /* Strike-velocity tracking, one independent copy per chord pad --
  * mirrors services/expression.c's own PAD_STATE_AWAITING_STRIKE
  * bookkeeping (touch-start timestamp, peak depth reached since then)
@@ -887,6 +893,7 @@ static void chord_pad_strike(uint8_t pad, uint8_t velocity) {
     uint8_t raw[TILES_NOTE_MAP_CHORD_NUM_NOTES];
     tiles_note_map_get_chord_notes(pad, raw);
     build_chord_voicing(raw, s_chord_pad_notes[pad - 1u]);
+    s_chord_pad_last_velocity[pad - 1u] = velocity;
     for (uint8_t i = 0; i < OP_CHORD_NUM_VOICES; i++) {
         tiles_midi_note_on(OP_CHORD_CHANNEL, s_chord_pad_notes[pad - 1u][i], velocity);
     }
@@ -3085,6 +3092,11 @@ static void set_active_mode(tiles_op_mode_t mode) {
 #define OP_SEQ_CAPTURE_MODE_ENABLED 1
 static tiles_scale_mode_t s_seq_capture_prev_scale;
 static bool s_seq_capture_prev_pad_touched[TILES_NUM_PADS];
+/* See seq_capture_handle_taps()'s own comment on why a chord-region pad
+ * is captured on the STRIKE edge (s_chord_pad_sounding[] going true)
+ * rather than the raw touch edge above -- this is that edge's own
+ * "was it already sounding last scan" tracker. */
+static bool s_seq_capture_prev_chord_sounding[TILES_NUM_PADS];
 /* Accumulator for the step currently being recorded -- reset at the
  * start of each step's window, committed into active_pattern()'s real
  * step data the moment the NEXT step boundary arrives (see
@@ -3236,6 +3248,12 @@ static void seq_capture_mode_enter(void) {
     s_seq_pending_start[s_seq_edit_lane] = true;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_seq_capture_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+        /* Same "don't misread an already-active state as a fresh edge"
+         * reasoning as the touch reset just above -- a chord pad
+         * already sounding (struck before capture even started)
+         * shouldn't retroactively count as a brand new strike on
+         * capture's very first scan. */
+        s_seq_capture_prev_chord_sounding[i] = s_chord_pad_sounding[i];
     }
     printf("[op_mode] sequencer capture mode -> on (lane %u)\n", (unsigned)s_seq_edit_lane);
 }
@@ -3373,7 +3391,33 @@ static void seq_capture_handle_taps(tiles_midi_clock_state_t clock) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         bool touched = tiles_touch_is_touched(pad);
         bool was_touched = s_seq_capture_prev_pad_touched[pad - 1u];
-        if (touched && !was_touched) {
+        bool is_chord_pad = tiles_note_map_is_chord_mode_active() && tiles_note_map_is_chord_region_pad(pad);
+        /* Real feedback: "the chord capture... its not capturing
+         * exactly whats being performed with chords, its having lots
+         * of issues like incomoplete voicings and wrong velocity." The
+         * voicing half was a real bug, not the documented flash-
+         * capacity tradeoff just below: this used to resolve bass+root
+         * itself, straight from tiles_note_map_get_chord_notes()/
+         * build_chord_voicing(), on the RAW touch-down edge -- before
+         * handle_chord_pad_taps() (the function that ACTUALLY plays
+         * this pad, on services/expression.c's own measured-strike
+         * timing, not raw touch-down) had even measured a strike or
+         * decided a velocity. Firing immediately meant "wrong velocity"
+         * always (a flat OP_SEQ_VELOCITY guess, never the real one) --
+         * capturing a chord you struck softly sounded identical to one
+         * you struck hard. Fixed by triggering on s_chord_pad_sounding[]
+         * going true instead (the moment handle_chord_pad_taps() itself
+         * actually fires that pad, already exposing its own resolved
+         * s_chord_pad_notes[]/s_chord_pad_last_velocity[] -- see that
+         * function's own real strike-measurement) rather than the raw
+         * touch, and reading those instead of re-deriving anything.
+         * "incomplete voicings," on the other hand, is a hard ceiling,
+         * not a bug: OP_SEQ_MAX_NOTES_PER_STEP is capped at 2 by real
+         * flash capacity (see that constant's own comment), so a real
+         * 4-voice chord can only ever keep 2 of them -- bass+root, the
+         * two most foundational, same choice as before. */
+        bool chord_strike_edge = is_chord_pad && s_chord_pad_sounding[pad - 1u] && !s_seq_capture_prev_chord_sounding[pad - 1u];
+        if ((touched && !was_touched && !is_chord_pad) || chord_strike_edge) {
             /* Real feedback: "sequencer real time and note select
              * should allow for multiple notes per step so if i play a
              * cluster of notes we should be able to save those in that
@@ -3382,36 +3426,24 @@ static void seq_capture_handle_taps(tiles_midi_clock_state_t clock) {
              * cutting the previous one off first -- see this file's own
              * seq_capture_end_one_sounding_note() for how a single
              * finger lifting only ends its OWN note now, not the whole
-             * cluster.
-             * A chord-region pad, while chord mode is the mode this
-             * capture is running from, contributes its OWN bass+root
-             * (build_chord_voicing()'s first 2 of 4 voices -- the two
-             * most foundational, and OP_SEQ_MAX_NOTES_PER_STEP's own
-             * flash-capacity cap leaves no room for all 4 anyway) as
-             * TWO notes from this one touch, not the plain melodic-
-             * mapped single note tiles_note_map_get_note() would
-             * otherwise resolve for that same pad -- without this,
-             * capturing from chord mode would silently record the
-             * wrong notes entirely, defeating the entire reason chord
-             * mode is one of this feature's own named capture sources. */
+             * cluster. */
             uint8_t notes[OP_SEQ_MAX_NOTES_PER_STEP];
             uint8_t note_count;
-            if (tiles_note_map_is_chord_mode_active() && tiles_note_map_is_chord_region_pad(pad)) {
-                uint8_t raw[TILES_NOTE_MAP_CHORD_NUM_NOTES];
-                uint8_t voices[OP_CHORD_NUM_VOICES];
-                tiles_note_map_get_chord_notes(pad, raw);
-                build_chord_voicing(raw, voices);
+            uint8_t velocity;
+            if (is_chord_pad) {
                 note_count = OP_SEQ_MAX_NOTES_PER_STEP;
                 for (uint8_t i = 0; i < note_count; i++) {
-                    notes[i] = voices[i];
+                    notes[i] = s_chord_pad_notes[pad - 1u][i];
                 }
+                velocity = s_chord_pad_last_velocity[pad - 1u];
             } else {
                 notes[0] = tiles_note_map_get_note(pad);
                 note_count = 1u;
+                velocity = OP_SEQ_VELOCITY;
             }
-            tiles_haptics_trigger_kick(pad, OP_SEQ_VELOCITY);
+            tiles_haptics_trigger_kick(pad, velocity);
             for (uint8_t i = 0; i < note_count; i++) {
-                tiles_midi_note_on(s_seq_lane_channel[lane], notes[i], OP_SEQ_VELOCITY);
+                tiles_midi_note_on(s_seq_lane_channel[lane], notes[i], velocity);
                 if (s_seq_capture_live_count < OP_SEQ_MAX_NOTES_PER_STEP) {
                     s_seq_capture_live_pads[s_seq_capture_live_count] = pad;
                     s_seq_capture_live_notes[s_seq_capture_live_count] = notes[i];
@@ -3453,6 +3485,7 @@ static void seq_capture_handle_taps(tiles_midi_clock_state_t clock) {
             seq_capture_end_one_sounding_note(pad);
         }
         s_seq_capture_prev_pad_touched[pad - 1u] = touched;
+        s_seq_capture_prev_chord_sounding[pad - 1u] = is_chord_pad && s_chord_pad_sounding[pad - 1u];
     }
 }
 

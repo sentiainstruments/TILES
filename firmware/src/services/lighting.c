@@ -227,16 +227,17 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
      * visible, we're missing that still" -- the note-sounding flash
      * above only ever lights up while something's actually armed AND
      * audibly playing, so a silent step showed nothing at all: no sense
-     * of the playhead actually moving through the pattern. Dim (same
-     * 0.15 level this codebase's own sequencer-view cursor already
-     * uses for "current step, unarmed" -- see op_mode.c's OP_SEQ_
-     * CURSOR_LEVEL) so it reads as an ambient marker, not a second
-     * bright indicator competing with the one above -- checked AFTER
-     * it so an actually-sounding pad always wins if the two land on
-     * the same one. */
+     * of the playhead actually moving through the pattern. Dim enough
+     * to read as an ambient marker, not a second bright indicator
+     * competing with the one above -- checked AFTER it so an actually-
+     * sounding pad always wins if the two land on the same one. Bumped
+     * up from the initial 0.15 (this codebase's own established
+     * "unarmed cursor" brightness elsewhere -- see op_mode.c's OP_SEQ_
+     * CURSOR_LEVEL) per real feedback: "need the sequencer marquer to
+     * be slightly brighter in capture mode." */
     uint8_t cross_capture_step_pad;
     if (tiles_op_mode_cross_capture_current_step_pad(&cross_capture_step_pad) && cross_capture_step_pad == logical_pad) {
-        return (tiles_rgb01_t){0.15f, 0.09f, 0.0f};
+        return (tiles_rgb01_t){0.35f, 0.21f, 0.0f};
     }
 
     /* Guitar/bass fret mode: a completely different idle-coloring scheme,
