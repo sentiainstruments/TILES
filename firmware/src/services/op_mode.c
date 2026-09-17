@@ -3324,6 +3324,29 @@ bool tiles_op_mode_cross_capture_is_note_sounding(uint8_t note) {
     return false;
 }
 
+/* See this accessor's own declaration in op_mode.h. Real feedback: "i
+ * still need the guide curent step on light visible, we're missing
+ * that still" -- tiles_op_mode_cross_capture_is_note_sounding() above
+ * only ever lights up while a note is actually armed AND sounding, so
+ * a silent step (nothing recorded there yet) showed nothing at all --
+ * no sense of the playhead actually moving through the pattern, unlike
+ * sequencer mode's own step-view, which real feedback already
+ * established needs "cuentet stept to be lit up always" (see render_
+ * sequencer()'s own is_current handling). Mirrors that same idea onto
+ * melodic/chord/guitar's grid instead: seq_pad_for_step(), the exact
+ * function that same step-view uses for its own step<->pad mapping
+ * (including the 16-step 4x4 remap), applied to this lane's own
+ * current step and pattern -- so the true step position is visible
+ * even through a rest, not just the moments something happens to
+ * sound. */
+bool tiles_op_mode_cross_capture_current_step_pad(uint8_t *out_pad) {
+    if (!s_cross_capture_active) {
+        return false;
+    }
+    *out_pad = seq_pad_for_step(pattern_for_lane(OP_CROSS_CAPTURE_LANE), s_seq_current_step[OP_CROSS_CAPTURE_LANE]);
+    return true;
+}
+
 static void cross_capture_enter(void) {
     s_cross_capture_saved_edit_lane = s_seq_edit_lane;
     s_seq_edit_lane = OP_CROSS_CAPTURE_LANE;

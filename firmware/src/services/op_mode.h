@@ -394,6 +394,21 @@ bool tiles_op_mode_cross_capture_is_active(void);
  * that a captured note could ever actually reverse-map to. */
 bool tiles_op_mode_cross_capture_is_note_sounding(uint8_t note);
 
+/* True while cross-capture is active, with *out_pad set to whichever
+ * pad the cross-capture lane's own step<->pad mapping (the SAME one
+ * sequencer mode's own step-view uses, 16-step 4x4 remap included)
+ * currently sits on -- always false (out param untouched) otherwise.
+ * Real feedback: "i still need the guide curent step on light
+ * visible" -- unlike tiles_op_mode_cross_capture_is_note_sounding()
+ * above, this is true on EVERY step, armed or not, so services/
+ * lighting.c can show a dim, always-on playhead marker through rests
+ * too, not just the moments something happens to sound -- the same
+ * "current step lit up always" real feedback already established for
+ * sequencer mode's own step-view (see render_sequencer()'s own
+ * is_current handling), applied here on top of melodic/chord/guitar's
+ * grid instead. */
+bool tiles_op_mode_cross_capture_current_step_pad(uint8_t *out_pad);
+
 /* True while the pattern bank's own save/delete confirmation flash is
  * currently showing, with *out_r/*out_g/*out_b set to the color it
  * wants underglow to show RIGHT NOW (already resolved through its own

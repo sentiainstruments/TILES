@@ -6544,5 +6544,43 @@ not its code.
     with a combo (diamond/triangle/square joining mid-hold) applies
     here unchanged, so the shift+diamond gesture that ENTERS cross-
     capture still can't also register as its own tap.
+- **Cross-capture step guide on the pad grid, plus confirmation of the
+  previous two fixes.** Real feedback: "on boot capture mode is not
+  working, the shift diamond combo dosnt do shit, it requeres
+  sequencer to be starter at least once meaning tempo initialized.
+  after tjhat it does work and nown we do have the loop playing
+  inmendiately but i still need the guide curent step on light
+  visible, we're missing that still." Three things in there:
+  - The boot-time gap is by design, not a new bug: `cross_capture_
+    enter()` has always required a tempo to already exist (tap-tempo
+    established or an external clock) before it can even start --
+    otherwise `seq_capture_advance_clock()` would just sit inert
+    forever with nothing to advance against, the exact gap that gate
+    was written to close. A cold boot has no tempo yet, and until now
+    the only way to establish one was sequencer mode's own tap-tempo
+    gesture -- visiting it once (or having a DAW's clock already
+    connected) unblocks shift+diamond everywhere else for the rest of
+    that session. Left as-is; flagged in case it's still worth
+    smoothing over later, but not changed since it wasn't asked for.
+  - "the loop playing inmendiately" confirms the previous round's real
+    fix (`seq_capture_advance_clock()` now routing through `seq_enter_
+    step()`) actually works on real hardware, not just on paper.
+  - The actual ask: `tiles_op_mode_cross_capture_is_note_sounding()`
+    from that same previous round only ever lit up while something was
+    both armed AND audibly sounding -- a silent step (nothing recorded
+    there) showed nothing, so there was no visible sense of the
+    playhead actually moving through the pattern between hits, unlike
+    sequencer mode's own step-view, which real feedback already
+    established needs "cuentet stept to be lit up always." New `tiles_
+    op_mode_cross_capture_current_step_pad(uint8_t *out_pad)` (op_mode.c/
+    .h) returns true on EVERY step, armed or not, via `seq_pad_for_
+    step()` -- the exact function the sequencer's own step-view uses for
+    step<->pad mapping, 16-step 4x4 remap included -- applied to the
+    cross-capture lane's own current step and pattern. `services/
+    lighting.c`'s `pad_desired_rgb()` shows this as a dim (0.15 level,
+    matching `OP_SEQ_CURSOR_LEVEL`'s own established "unarmed cursor"
+    brightness) amber marker, checked right after the brighter note-
+    sounding flash so an actually-sounding pad always wins if the two
+    ever land on the same one.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
