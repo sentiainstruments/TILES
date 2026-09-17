@@ -6752,5 +6752,50 @@ not its code.
     itself, both always creating a new pattern in the next empty slot,
     blocked+red-flash if all 24 are full), and the actual per-track
     HSV hue-to-RGB rendering for `hue_byte`.
+- **Song mode stage 2: the 24-pad track-overview screen -- rendering,
+  tap-to-start/stop, reorder, delete.** Still no step-edit screen, no
+  manual editing, and no capture -- so nothing can actually become
+  occupied yet, meaning start/stop/reorder/delete are all fully wired
+  but only testable in their "nothing here yet" shape until a later
+  pass adds a way to create a pattern.
+  - `handle_song_overview_taps()`/`render_song_overview()`, dispatched
+    from `tiles_op_mode_scan()` alongside the regular sequencer's own
+    branch (forward-declared, since they're defined down in this
+    file's "Song mode" section, well after that call site -- same
+    "declare here, define later" precedent already used elsewhere).
+  - Tap a stopped, occupied pad to start it (`song_toggle_start_
+    stop()`, always from step 1); tap a playing one to stop it. Start
+    claims a channel from the 9-slot pool (`song_claim_channel()`);
+    if all 9 are already claimed, blocked with a single brief red
+    flash (`song_flash_error()`, `OP_SONG_ERROR_FLASH_MS`) -- confirmed
+    real feedback for exactly this case.
+  - Reorder: shift+tap an occupied pad (`song_pick_up()`) pulses it
+    green (`menu_selected_pulse_level()`, reused as-is); a later plain
+    tap elsewhere (`song_place()`) moves it there, or swaps if that pad
+    is also occupied, confirmed with a double green flash on whichever
+    pad(s) actually changed. Tapping the picked-up pad again cancels.
+    `song_place()` moves the WHOLE slot's worth of state (pattern,
+    running, channel, current step, sounding notes), not just the
+    pattern struct, so a playing pattern keeps playing correctly
+    through a move/swap -- though this needed no special handling at
+    all, since channel reservation is keyed by channel number against
+    `s_song_channel_pool[]`, never by slot index in the first place.
+  - Delete: shift+hold 5 seconds on an occupied pad (`OP_SONG_DELETE_
+    HOLD_MS`) clears it, ending its note and releasing its channel
+    first if it was playing, confirmed with a double red flash.
+  - Move/delete confirmation reuses the exact two-blink shape and
+    timing the regular sequencer's own pattern-bank save/delete flash
+    already established (`OP_SONG_FLASH_BLINK_MS`/`_COUNT`/`_TOTAL_MS`
+    -- separate constants with the same values, this file's own
+    "same convention, separate copy" precedent, not shared code).
+  - Color: occupied+stopped shows a dim version of the pattern's own
+    random hue (`song_hue_to_rgb()`, a real HSV->RGB conversion mapping
+    `hue_byte` linearly across the 30-90 degree orange-to-yellow-green
+    band real feedback asked for); occupied+playing shows it at full
+    brightness. Underglow is plain steady yellow throughout, matching
+    "this mode is characterized by the color yellow like the underglow
+    of capture." No hue_byte is ever actually assigned yet (nothing
+    creates a pattern), so every slot would currently show the same
+    warm end of the band if one somehow existed.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

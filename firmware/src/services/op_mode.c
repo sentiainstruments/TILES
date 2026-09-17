@@ -4573,6 +4573,8 @@ static float compute_beat_flash_level(uint32_t now_ms, tiles_midi_clock_state_t 
  * section, same "declare here, define later" precedent this file
  * already uses for pattern_bank_exit()/seq_capture_mode_exit()/etc. */
 static void song_store_load_all(void);
+static void handle_song_overview_taps(uint32_t now_ms);
+static void render_song_overview(uint32_t now_ms);
 
 void tiles_op_mode_init(bool crash_recovered) {
     if (!crash_recovered) {
@@ -4883,6 +4885,9 @@ void tiles_op_mode_scan(void) {
     if (s_active_mode == OP_MODE_SEQUENCER) {
         seq_handle_step_taps(now_ms);
         render_sequencer(beat_flash_level, clock.running);
+    } else if (s_active_mode == OP_MODE_SONG) {
+        handle_song_overview_taps(now_ms);
+        render_song_overview(now_ms);
     } else {
         /* Real feedback: "make trisngle fhash if pattern is playing and
          * we exit to a different screen than the playing pattern."
@@ -5351,4 +5356,348 @@ bool tiles_op_mode_sequencer_channel_is_reserved(uint8_t channel) {
         }
     }
     return false;
+}
+
+/* ---- Song mode: track-overview screen (stage 2) -------------------------
+ * All 24 pads, one per library slot -- tap a stopped, occupied slot to
+ * start it (always from step 1, real feedback: "always restarts from
+ * step 1"), tap a playing one to stop it. Shift+tap picks a slot up
+ * for reordering (pulses green); a later plain tap anywhere else moves
+ * it there (or swaps, if that pad is also occupied) with a double
+ * green flash confirming; tapping the picked-up pad again cancels.
+ * Shift+hold 5 seconds deletes, confirmed with a double red flash.
+ * No playback/advance-clock logic yet (still to come) -- starting a
+ * slot correctly claims a channel and marks it running, same real
+ * effect tapping "+"" has always had elsewhere in this file, but
+ * nothing yet advances s_song_current_step[]/fires notes, so nothing
+ * is actually audible yet; nothing can even be occupied yet either,
+ * since capture into Song mode doesn't exist yet -- this screen is
+ * fully wired and testable on its own shape (grid, gestures, flashes),
+ * just not yet with real pattern content. */
+
+/* Real feedback: "tap capacitive on each sequence is start and stop" --
+ * plain touch release, no Hall-depth press-through needed (unlike the
+ * pattern bank's own alt-select, which IS a "commit" among several
+ * options; this is a toggle, matching this file's own "tap capacitive"
+ * language literally). */
+static void song_end_current_note(uint8_t slot) {
+    if (!s_song_note_sounding[slot]) {
+        return;
+    }
+    for (uint8_t i = 0; i < s_song_sounding_note_count[slot]; i++) {
+        tiles_midi_note_off(s_song_slot_channel[slot], s_song_sounding_notes[slot][i]);
+    }
+    s_song_note_sounding[slot] = false;
+    s_song_sounding_note_count[slot] = 0u;
+}
+
+/* Real feedback: "each sequence gets assigned a random color within a
+ * define hue range for cohesion... broader yellow-green-to-orange."
+ * Orange (30 deg) to yellow-green (90 deg), hue_byte 0-255 mapped
+ * linearly across that 60-degree band. A real HSV->RGB conversion
+ * (not a narrower hand-rolled interpolation) even though this band
+ * only ever exercises two of its six sectors, so a future wider/
+ * different band needs no rewrite here, just a different mapping into
+ * `hue`. Not yet called from anywhere that assigns a real hue_byte --
+ * see op_song_pattern_t's own comment. */
+static void song_hue_to_rgb(uint8_t hue_byte, float sat, float val, float *out_r, float *out_g, float *out_b) {
+    float hue = 30.0f + ((float)hue_byte / 255.0f) * 60.0f;
+    float c = val * sat;
+    float x = c * (1.0f - fabsf(fmodf(hue / 60.0f, 2.0f) - 1.0f));
+    float m = val - c;
+    float rp = 0.0f, gp = 0.0f, bp = 0.0f;
+    if (hue < 60.0f) {
+        rp = c;
+        gp = x;
+    } else {
+        rp = x;
+        gp = c;
+    }
+    *out_r = rp + m;
+    *out_g = gp + m;
+    *out_b = bp + m;
+}
+
+/* Real feedback: "blocked, no-op but it flashes red to idicate error"
+ * -- for both the 10th-concurrent-play attempt and (once capture
+ * exists) a capture attempt with no empty slot left. A single brief
+ * flash, not the double-blink move/delete confirmation below -- this
+ * means "that didn't work," not "that succeeded." */
+#define OP_SONG_ERROR_FLASH_MS 300u
+static bool s_song_error_flash_active;
+static uint32_t s_song_error_flash_start_ms;
+static uint8_t s_song_error_flash_pad;
+
+static void song_flash_error(uint8_t pad) {
+    s_song_error_flash_active = true;
+    s_song_error_flash_start_ms = to_ms_since_boot(get_absolute_time());
+    s_song_error_flash_pad = pad;
+}
+
+/* Real feedback: "there needs to be a pulsing green led for the
+ * slected pad and a confirmation 2 click underglow and pad after
+ * move. for delete is hold for 5 secodns with shift and confirmation
+ * is red flash." Same two-blink shape and timing as the regular
+ * sequencer's own pattern-bank save/delete flash (OP_PATTERN_FLASH_*),
+ * deliberately a separate copy rather than shared constants -- same
+ * "same convention, separate copy" precedent this file already uses
+ * for its other flash/pulse shapes, so changing one screen's timing
+ * later can't accidentally retune the other's. */
+#define OP_SONG_FLASH_BLINK_MS 150u
+#define OP_SONG_FLASH_COUNT 2u
+#define OP_SONG_FLASH_TOTAL_MS (OP_SONG_FLASH_BLINK_MS * 2u * OP_SONG_FLASH_COUNT)
+static bool s_song_flash_active;
+static bool s_song_flash_is_delete; /* false = green (moved/swapped), true = red (deleted) */
+static uint32_t s_song_flash_start_ms;
+static uint8_t s_song_flash_pad; /* the one cell just moved/deleted -- for a swap, the destination */
+static uint8_t s_song_flash_pad2; /* second cell for a swap, 0 if not a swap */
+
+static void song_flash_confirm(uint8_t pad, uint8_t pad2, bool is_delete) {
+    s_song_flash_active = true;
+    s_song_flash_is_delete = is_delete;
+    s_song_flash_start_ms = to_ms_since_boot(get_absolute_time());
+    s_song_flash_pad = pad;
+    s_song_flash_pad2 = pad2;
+}
+
+/* 0 = nothing picked up. Real feedback: "hold shift and press one pad
+ * and paste by pressing the other pad, if the bank is full then those
+ * two pads swap location do not overwirte" -- confirmed follow-up:
+ * placing needs no shift held, a plain tap anywhere else completes
+ * it. Tapping the SAME pad again cancels (this file's own addition,
+ * not explicitly requested, flagged as such when this was proposed --
+ * standard "put it back down where you picked it up" affordance, low
+ * risk either way). */
+static uint8_t s_song_picked_up_slot;
+
+static void song_pick_up(uint8_t pad) {
+    s_song_picked_up_slot = pad;
+}
+
+static void song_cancel_pick_up(void) {
+    s_song_picked_up_slot = 0u;
+}
+
+/* Moves (if `to` is empty) or swaps (if `to` is also occupied) the
+ * pattern picked up from `from` into `to` -- real feedback: "those two
+ * pads swap location do not overwirte." Channel assignment needs no
+ * attention here either way: it's claimed dynamically at play-start
+ * from a pool keyed by nothing but availability (see song_claim_
+ * channel()'s own comment), never by slot index, so a still-PLAYING
+ * pattern keeps its already-claimed channel through a move/swap
+ * exactly as-is -- only s_song_slot_running[]/s_song_current_step[]/
+ * etc. (indexed by slot, same as the pattern data itself) need to move
+ * with it, which this does by moving the whole slot's worth of state,
+ * not just the pattern struct. */
+static void song_place(uint8_t from_pad, uint8_t to_pad) {
+    uint8_t from = from_pad - 1u;
+    uint8_t to = to_pad - 1u;
+
+    op_song_pattern_t tmp_pattern = s_song_pattern[to];
+    bool tmp_occupied = s_song_slot_occupied[to];
+    bool tmp_running = s_song_slot_running[to];
+    uint8_t tmp_channel = s_song_slot_channel[to];
+    uint8_t tmp_step = s_song_current_step[to];
+    uint32_t tmp_pulse = s_song_step_started_at_pulse[to];
+    bool tmp_sounding = s_song_note_sounding[to];
+    uint8_t tmp_notes[OP_SONG_MAX_NOTES_PER_STEP];
+    memcpy(tmp_notes, s_song_sounding_notes[to], sizeof(tmp_notes));
+    uint8_t tmp_note_count = s_song_sounding_note_count[to];
+
+    s_song_pattern[to] = s_song_pattern[from];
+    s_song_slot_occupied[to] = s_song_slot_occupied[from];
+    s_song_slot_running[to] = s_song_slot_running[from];
+    s_song_slot_channel[to] = s_song_slot_channel[from];
+    s_song_current_step[to] = s_song_current_step[from];
+    s_song_step_started_at_pulse[to] = s_song_step_started_at_pulse[from];
+    s_song_note_sounding[to] = s_song_note_sounding[from];
+    memcpy(s_song_sounding_notes[to], s_song_sounding_notes[from], sizeof(tmp_notes));
+    s_song_sounding_note_count[to] = s_song_sounding_note_count[from];
+
+    /* Swap (to was occupied) -- give `from` what `to` used to hold.
+     * Plain move (to was empty) -- `from`'s old tmp_* is all empty/
+     * zeroed already, so this just clears it correctly either way. */
+    s_song_pattern[from] = tmp_pattern;
+    s_song_slot_occupied[from] = tmp_occupied;
+    s_song_slot_running[from] = tmp_running;
+    s_song_slot_channel[from] = tmp_channel;
+    s_song_current_step[from] = tmp_step;
+    s_song_step_started_at_pulse[from] = tmp_pulse;
+    s_song_note_sounding[from] = tmp_sounding;
+    memcpy(s_song_sounding_notes[from], tmp_notes, sizeof(tmp_notes));
+    s_song_sounding_note_count[from] = tmp_note_count;
+
+    song_store_write_all();
+    song_flash_confirm(to_pad, tmp_occupied ? from_pad : 0u, false);
+    s_song_picked_up_slot = 0u;
+}
+
+/* Real feedback: "for delete is hold for 5 secodns with shift and
+ * confirmation is red flash." Ends whatever's sounding and releases
+ * its channel first if it happened to be playing -- same "clean up
+ * whatever's active before it disappears" rule chord_end_all_notes()/
+ * seq_end_current_note() already establish elsewhere in this file. */
+#define OP_SONG_DELETE_HOLD_MS 5000u
+
+static void song_delete_slot(uint8_t pad) {
+    uint8_t slot = pad - 1u;
+    if (s_song_slot_running[slot]) {
+        song_end_current_note(slot);
+        song_release_channel(s_song_slot_channel[slot]);
+        s_song_slot_running[slot] = false;
+    }
+    memset(&s_song_pattern[slot], 0, sizeof(s_song_pattern[slot]));
+    s_song_slot_occupied[slot] = false;
+    song_store_write_all();
+    song_flash_confirm(pad, 0u, true);
+}
+
+static void song_toggle_start_stop(uint8_t pad) {
+    uint8_t slot = pad - 1u;
+    if (s_song_slot_running[slot]) {
+        song_end_current_note(slot);
+        song_release_channel(s_song_slot_channel[slot]);
+        s_song_slot_running[slot] = false;
+        return;
+    }
+    uint8_t channel;
+    if (!song_claim_channel(&channel)) {
+        /* Real feedback: "blocked, no-op but it flashes red to idicate
+         * error" -- confirmed for exactly this case (a 10th concurrent
+         * play attempt while the other 9 channels are all claimed). */
+        song_flash_error(pad);
+        return;
+    }
+    s_song_slot_running[slot] = true;
+    s_song_slot_channel[slot] = channel;
+    /* Real feedback: "always restarts from step 1." No quantized-start
+     * handling yet (nothing advances the clock yet either -- see this
+     * section's own header comment), so this is the whole start
+     * action for now. */
+    s_song_current_step[slot] = 0u;
+}
+
+static bool s_song_prev_pad_touched[OP_SONG_NUM_SLOTS];
+/* Same shift-tracking shape as the regular sequencer's own pattern-
+ * bank save/delete gesture (s_pattern_bank_touch_started_with_shift[]/
+ * _touch_started_ms[]/_delete_fired[]) -- captured once, at touch-
+ * down, not re-checked live, so releasing shift partway through an
+ * already-committed hold can't retroactively change what it means. */
+static bool s_song_touch_started_with_shift[OP_SONG_NUM_SLOTS];
+static uint32_t s_song_touch_started_ms[OP_SONG_NUM_SLOTS];
+static bool s_song_delete_fired[OP_SONG_NUM_SLOTS];
+
+static void handle_song_overview_taps(uint32_t now_ms) {
+    bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
+    for (uint8_t pad = 1u; pad <= OP_SONG_NUM_SLOTS; pad++) {
+        bool touched = tiles_touch_is_touched(pad);
+        bool was_touched = s_song_prev_pad_touched[pad - 1u];
+        if (touched && !was_touched) {
+            tiles_haptics_trigger_touch_pulse(pad);
+            s_song_touch_started_with_shift[pad - 1u] = circle_held;
+            s_song_touch_started_ms[pad - 1u] = now_ms;
+            s_song_delete_fired[pad - 1u] = false;
+        }
+
+        if (s_song_touch_started_with_shift[pad - 1u]) {
+            /* Real feedback confirmed placing needs no shift held, so
+             * this branch only ever handles the ORIGINAL shift+touch
+             * (pick-up candidate or delete) -- a pending pick-up's
+             * later PLACE tap always lands in the plain-tap branch
+             * below instead, even if that later tap also happens to
+             * start with shift held (checked below: while something
+             * is already picked up, shift+anything on a DIFFERENT pad
+             * is ignored rather than starting a second, overlapping
+             * gesture). */
+            if (s_song_picked_up_slot != 0u) {
+                s_song_prev_pad_touched[pad - 1u] = touched;
+                continue;
+            }
+            if (touched) {
+                uint32_t held_ms = now_ms - s_song_touch_started_ms[pad - 1u];
+                if (held_ms >= OP_SONG_DELETE_HOLD_MS && !s_song_delete_fired[pad - 1u] &&
+                    s_song_slot_occupied[pad - 1u]) {
+                    song_delete_slot(pad);
+                    s_song_delete_fired[pad - 1u] = true;
+                }
+            } else if (was_touched && !s_song_delete_fired[pad - 1u] && s_song_slot_occupied[pad - 1u]) {
+                song_pick_up(pad);
+            }
+            s_song_prev_pad_touched[pad - 1u] = touched;
+            continue;
+        }
+
+        if (touched && !was_touched) {
+            if (s_song_picked_up_slot != 0u) {
+                if (pad == s_song_picked_up_slot) {
+                    song_cancel_pick_up();
+                } else {
+                    song_place(s_song_picked_up_slot, pad);
+                }
+            } else if (s_song_slot_occupied[pad - 1u]) {
+                song_toggle_start_stop(pad);
+            }
+        }
+        s_song_prev_pad_touched[pad - 1u] = touched;
+    }
+}
+
+static void render_song_overview(uint32_t now_ms) {
+    bool flash_showing = false;
+    bool flash_on = false;
+    if (s_song_flash_active) {
+        uint32_t elapsed = now_ms - s_song_flash_start_ms;
+        if (elapsed >= OP_SONG_FLASH_TOTAL_MS) {
+            s_song_flash_active = false;
+        } else {
+            flash_showing = true;
+            flash_on = ((elapsed / OP_SONG_FLASH_BLINK_MS) % 2u) == 0u;
+        }
+    }
+    bool error_showing = false;
+    if (s_song_error_flash_active) {
+        uint32_t elapsed = now_ms - s_song_error_flash_start_ms;
+        if (elapsed >= OP_SONG_ERROR_FLASH_MS) {
+            s_song_error_flash_active = false;
+        } else {
+            error_showing = true;
+        }
+    }
+    float pick_up_pulse = menu_selected_pulse_level(now_ms);
+
+    for (uint8_t pad = 1u; pad <= OP_SONG_NUM_SLOTS; pad++) {
+        uint8_t slot = pad - 1u;
+        if (flash_showing && (pad == s_song_flash_pad || pad == s_song_flash_pad2)) {
+            float level = flash_on ? 1.0f : 0.0f;
+            if (s_song_flash_is_delete) {
+                tiles_lighting_set_standby_pad_rgb(pad, level, 0.0f, 0.0f);
+            } else {
+                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, level, 0.0f);
+            }
+        } else if (error_showing && pad == s_song_error_flash_pad) {
+            tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 0.0f, 0.0f);
+        } else if (pad == s_song_picked_up_slot) {
+            tiles_lighting_set_standby_pad_rgb(pad, 0.0f, pick_up_pulse, 0.0f);
+        } else if (!s_song_slot_occupied[slot]) {
+            tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
+        } else {
+            float r, g, b;
+            song_hue_to_rgb(s_song_pattern[slot].hue_byte, 1.0f, 1.0f, &r, &g, &b);
+            float level = s_song_slot_running[slot] ? 1.0f : OP_SCALE_AVAILABLE_LEVEL;
+            tiles_lighting_set_standby_pad_rgb(pad, r * level, g * level, b * level);
+        }
+    }
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+    }
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        /* Real feedback: "this mode is characterized by the color
+         * yellow like the underglow of capture." Plain, steady yellow
+         * -- not yet pulsing/animated (cross-capture's own underglow
+         * pulse is a DIFFERENT, ambient "something's recording" signal
+         * that doesn't fit Song mode's own always-on theme the same
+         * way), revisit once there's real playback to sync a pulse
+         * against. */
+        tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 1.0f, 0.0f);
+    }
 }
