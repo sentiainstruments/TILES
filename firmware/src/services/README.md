@@ -6551,17 +6551,29 @@ not its code.
   after tjhat it does work and nown we do have the loop playing
   inmendiately but i still need the guide curent step on light
   visible, we're missing that still." Three things in there:
-  - The boot-time gap is by design, not a new bug: `cross_capture_
-    enter()` has always required a tempo to already exist (tap-tempo
-    established or an external clock) before it can even start --
-    otherwise `seq_capture_advance_clock()` would just sit inert
-    forever with nothing to advance against, the exact gap that gate
-    was written to close. A cold boot has no tempo yet, and until now
-    the only way to establish one was sequencer mode's own tap-tempo
-    gesture -- visiting it once (or having a DAW's clock already
-    connected) unblocks shift+diamond everywhere else for the rest of
-    that session. Left as-is; flagged in case it's still worth
-    smoothing over later, but not changed since it wasn't asked for.
+  - The boot-time gap was by design, not a bug -- but real feedback
+    followed up asking for it anyway: "shift plus diamond still is
+    disabeled on boot since sequencer hasent been sarted and tempon
+    hanst been set yet." `cross_capture_enter()` still requires a
+    tempo to exist before it can start (unchanged -- `seq_capture_
+    advance_clock()` would otherwise sit inert forever with nothing to
+    advance against), but `handle_diamond_transport()`'s own shift+
+    diamond release branch now registers a plain tap-tempo tap
+    (`tiles_midi_clock_register_tap(now_ms)`) instead of doing nothing
+    whenever that gate fails -- the branch was a guaranteed no-op in
+    that case anyway, so there's nothing lost by also using it as a
+    tap. Repeating shift+diamond a few times (same 4-tap minimum every
+    tap-tempo session needs) bootstraps a tempo entirely from melodic/
+    chord/guitar mode now, no detour through sequencer mode required.
+    Deliberately NOT solved by widening handle_circle_tap()'s own
+    mode_ok/combo_conflict instead -- that function only evaluates
+    combo_conflict once, at circle's own press-down edge, so it would
+    have needed to become order-sensitive (arm correctly whichever of
+    circle/diamond gets pressed first) to handle this reliably.
+    s_diamond_press_was_shift already tracks "circle was held during
+    this hold" correctly regardless of press order (checked live, every
+    scan, while diamond is held), so reaching this from diamond's own
+    release side sidesteps that whole class of bug for free.
   - "the loop playing inmendiately" confirms the previous round's real
     fix (`seq_capture_advance_clock()` now routing through `seq_enter_
     step()`) actually works on real hardware, not just on paper.
