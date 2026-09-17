@@ -22,6 +22,7 @@
 #include "hardware/watchdog.h"
 
 #include "pico/platform/sections.h"
+#include "pico/rand.h"
 #include "pico/time.h"
 
 #include <math.h>
@@ -2002,6 +2003,26 @@ static void render_edit_mode(uint32_t now_ms, bool transport_running) {
     }
 }
 
+/* Real feedback (Song mode's own bug, found before ever reaching real
+ * hardware): sequencer mode is the only mode that claims standby_
+ * active for its ENTIRE duration (its step-view is rendered entirely
+ * through tiles_lighting_set_standby_pad_rgb()/_underglow_rgb(), which
+ * are silent no-ops whenever standby_active is false -- see those
+ * functions' own guard in services/lighting.c). Song mode's own track-
+ * overview screen needs the exact same thing, for the exact same
+ * reason -- render_song_overview() uses those same setters. This one
+ * function is the single place that decides "which active mode needs
+ * the whole grid handed to it this way," used by menu_exit()/scale_
+ * menu_exit() just below (both reachable from ANY mode, so both need
+ * to know whether to release standby_active on close or leave it
+ * claimed) and by set_active_mode() further down, so a future mode
+ * with the same need only has to change this one function, not hunt
+ * down every place that used to spell out "== OP_MODE_SEQUENCER" by
+ * hand. */
+static bool mode_owns_standby_grid(tiles_op_mode_t mode) {
+    return mode == OP_MODE_SEQUENCER || mode == OP_MODE_SONG;
+}
+
 /* ---- Menu -------------------------------------------------------------- */
 
 static void menu_enter(void) {
@@ -2018,7 +2039,7 @@ static void menu_enter(void) {
 
 static void menu_exit(void) {
     s_menu_visible = false;
-    if (s_active_mode != OP_MODE_SEQUENCER) {
+    if (!mode_owns_standby_grid(s_active_mode)) {
         tiles_lighting_set_standby_active(false);
         tiles_buttons_set_standby_active(false);
     }
@@ -2284,8 +2305,10 @@ static void scale_menu_exit(void) {
      * killed the step view's own rendering the instant this picker closed,
      * even though s_active_mode was still genuinely OP_MODE_SEQUENCER.
      * menu_exit() (the top-level mode picker) already needed this exact
-     * guard for the identical reason; this picker just never got it. */
-    if (s_active_mode != OP_MODE_SEQUENCER) {
+     * guard for the identical reason; this picker just never got it.
+     * Now routed through mode_owns_standby_grid() (also Song mode) --
+     * see that function's own comment. */
+    if (!mode_owns_standby_grid(s_active_mode)) {
         tiles_lighting_set_standby_active(false);
         tiles_buttons_set_standby_active(false);
     }
@@ -3082,6 +3105,13 @@ static void set_active_mode(tiles_op_mode_t mode) {
     s_active_mode = mode;
     if (mode == OP_MODE_SEQUENCER) {
         seq_start();
+    }
+    /* mode_owns_standby_grid() -- also Song mode now, whose own track-
+     * overview screen needs the exact same "whole grid, driven state"
+     * treatment sequencer's step-view already gets. seq_start() above
+     * stays sequencer-only; it's specific to that mode's own pattern
+     * playback, nothing Song mode needs on entry. */
+    if (mode_owns_standby_grid(mode)) {
         tiles_lighting_set_standby_active(true);
         tiles_buttons_set_standby_active(true);
     } else {
@@ -4070,6 +4100,21 @@ static void handle_triangle_click(void) {
 #define OP_TRANSPORT_STOP_CC 103u
 #define OP_TRANSPORT_RECORD_CC 104u
 
+/* Song mode's own pattern-library size and capture-state flags --
+ * pulled up here (out of this file's own "Song mode" section, much
+ * further down) because handle_diamond_transport() just below and
+ * tiles_op_mode_scan() (also below, but still before that section)
+ * both need to reference them directly, not just call into functions
+ * that could stay forward-declared. Real definitions/full comments
+ * live in the "Song mode" section itself, where the rest of this
+ * state is declared -- these are the only three that outgrew a
+ * forward declaration. */
+#define OP_SONG_NUM_SLOTS TILES_NUM_PADS
+static bool s_song_capture_active;
+static uint8_t s_song_capture_slot; /* 1..24 -- which pad/slot is being recorded into */
+static void song_capture_enter(void);
+static void song_capture_exit(void);
+
 static void handle_diamond_transport(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
@@ -4179,7 +4224,20 @@ static void handle_diamond_transport(uint32_t now_ms) {
                  * function's own comment), so shift alone taps out a
                  * fresh tempo once inside, same gesture sequencer mode
                  * itself uses. */
-                if (s_cross_capture_active) {
+                if (s_active_mode == OP_MODE_SONG) {
+                    /* Real feedback: "Also support capturing while
+                     * viewing Song mode." Song mode's own capture,
+                     * completely separate from cross-capture (which
+                     * targets melodic/chord/guitar mode's own
+                     * "capture into lane 3" feature -- see that
+                     * section's own header comment; Song mode isn't
+                     * one of its source modes, it has this instead). */
+                    if (s_song_capture_active) {
+                        song_capture_exit();
+                    } else {
+                        song_capture_enter();
+                    }
+                } else if (s_cross_capture_active) {
                     cross_capture_exit();
                 } else {
                     cross_capture_enter();
@@ -4575,6 +4633,13 @@ static float compute_beat_flash_level(uint32_t now_ms, tiles_midi_clock_state_t 
 static void song_store_load_all(void);
 static void handle_song_overview_taps(uint32_t now_ms);
 static void render_song_overview(uint32_t now_ms);
+static void render_song_underglow(void);
+static void song_advance_clock(uint8_t slot, tiles_midi_clock_state_t clock);
+static void song_capture_handle_taps(tiles_midi_clock_state_t clock);
+static void song_capture_advance_clock(tiles_midi_clock_state_t clock);
+/* song_capture_enter()/_exit() themselves are forward-declared earlier
+ * still, right before handle_diamond_transport() -- see that spot's
+ * own comment for why. */
 
 void tiles_op_mode_init(bool crash_recovered) {
     if (!crash_recovered) {
@@ -4834,6 +4899,19 @@ void tiles_op_mode_scan(void) {
         tiles_debug_trace((char)('0' + lane));
         seq_advance_clock(lane, clock);
     }
+    /* Same "keeps running regardless of what's displayed" rule, Song
+     * mode's own tracks -- see this file's own "Song mode" section.
+     * song_capture_advance_clock() (called from this function's own
+     * OP_MODE_SONG dispatch branch below) owns the ONE slot actually
+     * being recorded into instead, same "must never both run for the
+     * same slot" exception the regular sequencer's own lanes/capture
+     * already established. */
+    for (uint8_t slot = 0u; slot < OP_SONG_NUM_SLOTS; slot++) {
+        if (s_song_capture_active && slot == (uint8_t)(s_song_capture_slot - 1u)) {
+            continue;
+        }
+        song_advance_clock(slot, clock);
+    }
 
     if (s_menu_visible) {
         handle_menu_taps();
@@ -4886,8 +4964,22 @@ void tiles_op_mode_scan(void) {
         seq_handle_step_taps(now_ms);
         render_sequencer(beat_flash_level, clock.running);
     } else if (s_active_mode == OP_MODE_SONG) {
-        handle_song_overview_taps(now_ms);
-        render_song_overview(now_ms);
+        if (s_song_capture_active) {
+            /* Real feedback: "Also support capturing while viewing
+             * Song mode." Deliberately does NOT render the track-
+             * overview or claim the pad grid at all while recording --
+             * see song_capture_enter()'s own comment for why the grid
+             * instead falls through to services/lighting.c's own
+             * default melodic-style note coloring, the same surface
+             * every note actually gets captured from. Only the
+             * underglow is Song mode's own. */
+            song_capture_handle_taps(clock);
+            song_capture_advance_clock(clock);
+            render_song_underglow();
+        } else {
+            handle_song_overview_taps(now_ms);
+            render_song_overview(now_ms);
+        }
     } else {
         /* Real feedback: "make trisngle fhash if pattern is playing and
          * we exit to a different screen than the playing pattern."
@@ -4939,7 +5031,17 @@ void tiles_op_mode_scan(void) {
 }
 
 bool tiles_op_mode_owns_pad_grid(void) {
-    return s_menu_visible || s_scale_menu_visible || s_active_mode == OP_MODE_SEQUENCER;
+    /* mode_owns_standby_grid() -- also Song mode now. Matters for more
+     * than rendering: services/expression.c checks tiles_op_mode_owns_
+     * pad(pad), which defers to this blanket accessor for every mode
+     * except chord, before processing a touch as a live melodic note.
+     * Without Song mode included here, expression.c would ALSO fire a
+     * note for every touch during song_capture_handle_taps()'s own
+     * capture session -- that function already calls tiles_midi_note_
+     * on() directly, same as the regular sequencer's own capture, so
+     * letting expression.c ALSO process the same touch would double-
+     * fire every single note. */
+    return s_menu_visible || s_scale_menu_visible || mode_owns_standby_grid(s_active_mode);
 }
 
 /* See this accessor's own declaration in op_mode.h for the full
@@ -5104,11 +5206,13 @@ bool tiles_op_mode_has_menu_open(void) {
 #define OP_SONG_STEPS_PER_PAGE 16u
 #define OP_SONG_NUM_PAGES 8u
 #define OP_SONG_NUM_STEPS (OP_SONG_STEPS_PER_PAGE * OP_SONG_NUM_PAGES) /* 128 */
-/* One per pad on the (not yet built) track-overview screen -- see this
- * section's own header comment for why up to 24 real patterns can
- * exist despite only 9 being simultaneously playable. */
-#define OP_SONG_NUM_SLOTS TILES_NUM_PADS
-/* Real feedback: "we need up to 4 voices per step" -- same cap, same
+/* OP_SONG_NUM_SLOTS itself (one per pad on the track-overview screen)
+ * is declared much earlier in this file now, right before
+ * handle_diamond_transport() -- see that declaration's own comment
+ * for why. Real feedback for the count itself: "i want up to 24 real
+ * independent patterns," despite only 9 being simultaneously
+ * playable.
+ * Real feedback: "we need up to 4 voices per step" -- same cap, same
  * flash-capacity reasoning class as the regular sequencer's own OP_
  * SEQ_MAX_NOTES_PER_STEP (see that constant's own comment), but Song
  * mode's actual per-pattern footprint (see op_song_pattern_t below)
@@ -5690,14 +5794,296 @@ static void render_song_overview(uint32_t now_ms) {
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
     }
+    render_song_underglow();
+}
+
+/* Real feedback: "this mode is characterized by the color yellow like
+ * the underglow of capture." Plain, steady yellow -- not pulsing/
+ * animated (cross-capture's own underglow pulse is a DIFFERENT,
+ * ambient "something's recording" signal that doesn't fit Song mode's
+ * own always-on theme the same way), revisit once there's real
+ * playback to sync a pulse against. Factored out of render_song_
+ * overview() so tiles_op_mode_scan()'s own capture-active branch can
+ * show the same theme while the pad grid itself is busy showing
+ * melodic-style note coloring instead (see song_capture_enter()'s own
+ * comment). */
+static void render_song_underglow(void) {
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
-        /* Real feedback: "this mode is characterized by the color
-         * yellow like the underglow of capture." Plain, steady yellow
-         * -- not yet pulsing/animated (cross-capture's own underglow
-         * pulse is a DIFFERENT, ambient "something's recording" signal
-         * that doesn't fit Song mode's own always-on theme the same
-         * way), revisit once there's real playback to sync a pulse
-         * against. */
         tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 1.0f, 0.0f);
     }
+}
+
+/* ---- Song mode: playback engine (stage 3) --------------------------------
+ * Deliberately a separate, parallel copy of the regular sequencer's own
+ * seq_advance_clock()/seq_enter_step() shape rather than a shared/
+ * parameterized version of either -- Song's own per-slot data (op_
+ * song_pattern_t, 128 fixed steps, no probability/ratchet/length) is
+ * different enough from op_seq_pattern_t that trying to unify them
+ * would mean threading a bunch of "does this concept even apply here"
+ * branches through code that's supposed to be simple. Same OP_SEQ_
+ * CLOCKS_PER_STEP timing as the regular sequencer -- a step is the
+ * same musical unit regardless of which feature is playing it, so
+ * both stay in sync with the same tempo for free. */
+#define OP_SONG_VELOCITY 100u
+static bool s_song_pending_start[OP_SONG_NUM_SLOTS];
+
+static void song_enter_step(uint8_t slot, uint8_t step) {
+    song_end_current_note(slot);
+    s_song_current_step[slot] = step;
+    uint8_t notes[OP_SONG_MAX_NOTES_PER_STEP];
+    uint8_t count = 0u;
+    for (uint8_t i = 0; i < OP_SONG_MAX_NOTES_PER_STEP; i++) {
+        uint8_t note = s_song_pattern[slot].step_notes[step][i];
+        if (note != 0xFFu) {
+            notes[count] = note;
+            count++;
+        }
+    }
+    if (count == 0u) {
+        return;
+    }
+    for (uint8_t i = 0; i < count; i++) {
+        tiles_midi_note_on(s_song_slot_channel[slot], notes[i], OP_SONG_VELOCITY);
+        s_song_sounding_notes[slot][i] = notes[i];
+    }
+    s_song_sounding_note_count[slot] = count;
+    s_song_note_sounding[slot] = true;
+}
+
+/* Called for every slot every scan except the one currently being
+ * captured (see this function's own call site in tiles_op_mode_
+ * scan()) -- mirrors seq_advance_clock()'s own shape exactly,
+ * including its "stopped means end whatever's sounding and do
+ * nothing else" first check and its pending-start handling, just
+ * indexed by slot instead of lane and with no length/pending_restart
+ * concept (Song mode patterns are always the full OP_SONG_NUM_STEPS,
+ * and real feedback confirmed "always restarts from step 1" -- no
+ * pause-and-resume nuance to reconcile with a rewind). */
+static void song_advance_clock(uint8_t slot, tiles_midi_clock_state_t clock) {
+    if (!s_song_slot_running[slot]) {
+        song_end_current_note(slot);
+        return;
+    }
+    if (s_song_pending_start[slot]) {
+        s_song_pending_start[slot] = false;
+        s_song_step_started_at_pulse[slot] = clock.pulse_count;
+        song_enter_step(slot, 0u);
+        return;
+    }
+    if (!clock.running) {
+        song_end_current_note(slot);
+        return;
+    }
+    uint32_t elapsed = clock.pulse_count - s_song_step_started_at_pulse[slot];
+    if (elapsed < OP_SEQ_CLOCKS_PER_STEP) {
+        return;
+    }
+    uint32_t steps_to_advance = elapsed / OP_SEQ_CLOCKS_PER_STEP;
+    s_song_step_started_at_pulse[slot] += steps_to_advance * OP_SEQ_CLOCKS_PER_STEP;
+    uint8_t new_step = (uint8_t)((s_song_current_step[slot] + steps_to_advance) % OP_SONG_NUM_STEPS);
+    song_enter_step(slot, new_step);
+}
+
+/* ---- Song mode: capture (stage 3) -----------------------------------
+ * Real feedback: "Also support capturing while viewing Song mode."
+ * Shaped closely after the regular sequencer's own seq_capture_
+ * handle_taps()/seq_capture_advance_clock() (nearest-step
+ * quantization, a pending-cluster accumulator committed on the next
+ * step boundary, live-preview notes independent of any of that), with
+ * one real difference: there's no chord-region special case here at
+ * all -- capturing from within Song mode always reads a pad's note
+ * through the plain tiles_note_map_get_note() melodic mapping, since
+ * Song mode has no chord-region concept of its own and this capture
+ * source is never entered FROM chord mode (that's cross-capture's own
+ * job, still targeting the regular sequencer's lane 3 -- rewiring
+ * that to target Song mode instead is a real, separate ask ["song mode
+ * as the default capture mode instead of regular sequencer"] not yet
+ * done in this pass). s_song_capture_active/s_song_capture_slot
+ * themselves are declared much earlier in this file, right before
+ * handle_diamond_transport() -- see that declaration's own comment
+ * for why. */
+static tiles_scale_mode_t s_song_capture_prev_scale;
+static bool s_song_capture_prev_pad_touched[TILES_NUM_PADS];
+static uint8_t s_song_capture_armed_notes[OP_SONG_MAX_NOTES_PER_STEP];
+static uint8_t s_song_capture_armed_count;
+static uint8_t s_song_capture_target_step;
+static uint8_t s_song_capture_live_pads[OP_SONG_MAX_NOTES_PER_STEP];
+static uint8_t s_song_capture_live_notes[OP_SONG_MAX_NOTES_PER_STEP];
+static uint8_t s_song_capture_live_count;
+
+static void song_capture_end_one_sounding_note(uint8_t pad) {
+    uint8_t slot = s_song_capture_slot - 1u;
+    for (uint8_t i = 0; i < s_song_capture_live_count; i++) {
+        if (s_song_capture_live_pads[i] == pad) {
+            tiles_midi_note_off(s_song_slot_channel[slot], s_song_capture_live_notes[i]);
+            for (uint8_t j = i; (uint8_t)(j + 1u) < s_song_capture_live_count; j++) {
+                s_song_capture_live_pads[j] = s_song_capture_live_pads[j + 1u];
+                s_song_capture_live_notes[j] = s_song_capture_live_notes[j + 1u];
+            }
+            s_song_capture_live_count--;
+            return;
+        }
+    }
+}
+
+static void song_capture_end_all_sounding_notes(void) {
+    uint8_t slot = s_song_capture_slot - 1u;
+    for (uint8_t i = 0; i < s_song_capture_live_count; i++) {
+        tiles_midi_note_off(s_song_slot_channel[slot], s_song_capture_live_notes[i]);
+    }
+    s_song_capture_live_count = 0u;
+}
+
+static void song_capture_handle_taps(tiles_midi_clock_state_t clock) {
+    uint8_t slot = s_song_capture_slot - 1u;
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        bool touched = tiles_touch_is_touched(pad);
+        bool was_touched = s_song_capture_prev_pad_touched[pad - 1u];
+        if (touched && !was_touched) {
+            uint8_t note = tiles_note_map_get_note(pad);
+            tiles_haptics_trigger_kick(pad, OP_SONG_VELOCITY);
+            tiles_midi_note_on(s_song_slot_channel[slot], note, OP_SONG_VELOCITY);
+            if (s_song_capture_live_count < OP_SONG_MAX_NOTES_PER_STEP) {
+                s_song_capture_live_pads[s_song_capture_live_count] = pad;
+                s_song_capture_live_notes[s_song_capture_live_count] = note;
+                s_song_capture_live_count++;
+            }
+            uint32_t elapsed_in_step = clock.pulse_count - s_song_step_started_at_pulse[slot];
+            bool nearest_is_next_step = (elapsed_in_step * 2u) >= OP_SEQ_CLOCKS_PER_STEP;
+            uint8_t target = nearest_is_next_step ? (uint8_t)((s_song_current_step[slot] + 1u) % OP_SONG_NUM_STEPS)
+                                                   : s_song_current_step[slot];
+            if (s_song_capture_armed_count == 0u || s_song_capture_target_step != target) {
+                s_song_capture_target_step = target;
+                s_song_capture_armed_count = 0u;
+            }
+            if (s_song_capture_armed_count < OP_SONG_MAX_NOTES_PER_STEP) {
+                s_song_capture_armed_notes[s_song_capture_armed_count] = note;
+                s_song_capture_armed_count++;
+            }
+        } else if (!touched && was_touched) {
+            song_capture_end_one_sounding_note(pad);
+        }
+        s_song_capture_prev_pad_touched[pad - 1u] = touched;
+    }
+}
+
+static void song_capture_advance_clock(tiles_midi_clock_state_t clock) {
+    uint8_t slot = s_song_capture_slot - 1u;
+    if (clock.start_edge) {
+        s_song_current_step[slot] = 0u;
+        s_song_step_started_at_pulse[slot] = clock.pulse_count;
+        s_song_capture_armed_count = 0u;
+        s_song_pending_start[slot] = false;
+        return;
+    }
+    if (s_song_pending_start[slot]) {
+        s_song_pending_start[slot] = false;
+        s_song_current_step[slot] = 0u;
+        s_song_step_started_at_pulse[slot] = clock.pulse_count;
+        s_song_capture_armed_count = 0u;
+        return;
+    }
+    uint32_t elapsed = clock.pulse_count - s_song_step_started_at_pulse[slot];
+    if (elapsed < OP_SEQ_CLOCKS_PER_STEP) {
+        return;
+    }
+    uint32_t steps_to_advance = elapsed / OP_SEQ_CLOCKS_PER_STEP;
+    s_song_step_started_at_pulse[slot] += steps_to_advance * OP_SEQ_CLOCKS_PER_STEP;
+
+    if (s_song_capture_armed_count > 0u && s_song_capture_target_step == s_song_current_step[slot]) {
+        uint8_t step = s_song_current_step[slot];
+        uint8_t count = s_song_capture_armed_count;
+        if (count > OP_SONG_MAX_NOTES_PER_STEP) {
+            count = OP_SONG_MAX_NOTES_PER_STEP;
+        }
+        for (uint8_t i = 0; i < OP_SONG_MAX_NOTES_PER_STEP; i++) {
+            s_song_pattern[slot].step_notes[step][i] = (i < count) ? s_song_capture_armed_notes[i] : 0xFFu;
+        }
+        s_song_capture_armed_count = 0u;
+    }
+    s_song_current_step[slot] = (uint8_t)((s_song_current_step[slot] + steps_to_advance) % OP_SONG_NUM_STEPS);
+}
+
+static bool song_find_next_empty_slot(uint8_t *out_slot_index) {
+    for (uint8_t i = 0; i < OP_SONG_NUM_SLOTS; i++) {
+        if (!s_song_slot_occupied[i]) {
+            *out_slot_index = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Real feedback: "Blocked, No-op with red error confirmation" -- for a
+ * capture attempt with no empty slot left. Same for a capture attempt
+ * with all 9 channels already claimed by other playing tracks (not
+ * explicitly asked about for this specific case, but the same
+ * "blocked, no-op" rule already confirmed for the 10th-concurrent-play
+ * case applies for the identical underlying reason). Neither error
+ * gets a red flash from here -- there's no single pad to flash it on
+ * (this can be triggered from melodic/chord/guitar mode too, once
+ * cross-capture is rewired to target Song mode; for now, only from
+ * within Song mode's own track-overview, which also has no "the
+ * gesture" pad to point at) -- silently no-op for both, matching how
+ * a diamond click with no tempo yet already silently no-ops elsewhere
+ * in this file. */
+static void song_capture_enter(void) {
+    uint8_t slot_index;
+    if (!song_find_next_empty_slot(&slot_index)) {
+        return;
+    }
+    uint8_t channel;
+    if (!song_claim_channel(&channel)) {
+        return;
+    }
+    memset(s_song_pattern[slot_index].step_notes, 0xFF, sizeof(s_song_pattern[slot_index].step_notes));
+    /* Real feedback: "each sequence gets assigned a random color
+     * within a define hue range for cohesion" -- assigned once, right
+     * here, the moment a pattern is actually created; see song_hue_
+     * to_rgb()'s own comment for how this byte maps to an actual
+     * color. */
+    s_song_pattern[slot_index].hue_byte = (uint8_t)(get_rand_32() & 0xFFu);
+    s_song_slot_occupied[slot_index] = true;
+    s_song_slot_running[slot_index] = true;
+    s_song_slot_channel[slot_index] = channel;
+    s_song_note_sounding[slot_index] = false;
+    s_song_sounding_note_count[slot_index] = 0u;
+    s_song_pending_start[slot_index] = true;
+
+    s_song_capture_active = true;
+    s_song_capture_slot = (uint8_t)(slot_index + 1u);
+    /* Same "full chromatic access while recording" reasoning as the
+     * regular sequencer's own seq_capture_mode_enter() -- restored on
+     * exit below. */
+    s_song_capture_prev_scale = tiles_note_map_get_scale();
+    tiles_note_map_set_scale(TILES_SCALE_CHROMATIC);
+    s_song_capture_armed_count = 0u;
+    s_song_capture_live_count = 0u;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_song_capture_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+    }
+    /* mode_owns_standby_grid()'s own comment explains why Song mode
+     * claims standby_active while showing its track-overview -- this
+     * releases it for the DURATION of a capture session specifically,
+     * so services/lighting.c's own default melodic-style pad coloring
+     * (the surface every note actually gets captured from -- see this
+     * section's own header comment) shows through instead, exactly
+     * like it would if melodic mode itself were displayed. Re-claimed
+     * on exit below, returning to the track-overview's own render. */
+    tiles_lighting_set_standby_active(false);
+    tiles_buttons_set_standby_active(false);
+    printf("[op_mode] song capture -> on (slot %u)\n", (unsigned)s_song_capture_slot);
+}
+
+static void song_capture_exit(void) {
+    if (!s_song_capture_active) {
+        return;
+    }
+    song_capture_end_all_sounding_notes();
+    s_song_capture_active = false;
+    tiles_note_map_set_scale(s_song_capture_prev_scale);
+    tiles_lighting_set_standby_active(true);
+    tiles_buttons_set_standby_active(true);
+    song_store_write_all();
+    printf("[op_mode] song capture -> off\n");
 }

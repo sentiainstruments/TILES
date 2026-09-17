@@ -6797,5 +6797,65 @@ not its code.
     of capture." No hue_byte is ever actually assigned yet (nothing
     creates a pattern), so every slot would currently show the same
     warm end of the band if one somehow existed.
+- **Song mode stage 3: playback engine + capture from within Song mode
+  -- Stage 2's track-overview screen is now actually testable end to
+  end.** Real feedback confirmed capturing from within Song mode
+  itself is wanted (not just cross-capture, still unrewired -- see
+  below), so this pass builds a way to actually create a pattern and
+  hear it loop, closing the gap Stage 2 shipped with.
+  - **A real, and non-obvious, bug found before this ever reached
+    hardware**: sequencer mode is the ONLY mode that claims `standby_
+    active` for its entire duration, and `tiles_lighting_set_standby_
+    pad_rgb()`/`_underglow_rgb()` (which `render_song_overview()`
+    entirely depends on) are silent no-ops whenever it's false. Song
+    mode never claimed it, so Stage 2's whole screen would have
+    rendered nothing at all on real hardware. New `mode_owns_standby_
+    grid()` is now the one place that decides this (used by `set_
+    active_mode()`, `menu_exit()`, and `scale_menu_exit()` -- the
+    latter two needed it too, since the top-level mode picker and the
+    scale picker are both reachable from Song mode and have to know
+    whether to release standby on close or leave it claimed). Also
+    extended `tiles_op_mode_owns_pad_grid()` the same way, since
+    `services/expression.c` defers to it before processing a touch as
+    a live melodic note -- without this, capturing from within Song
+    mode would have double-fired every note (this function's own
+    `tiles_midi_note_on()` calls, plus expression.c's independent
+    pipeline reacting to the same touch).
+  - **Playback engine**: `song_advance_clock()`/`song_enter_step()`,
+    a deliberate parallel copy of the regular sequencer's own `seq_
+    advance_clock()`/`seq_enter_step()` shape rather than a shared/
+    parameterized version -- Song's data (128 fixed steps, no
+    probability/ratchet/length) is different enough that unifying them
+    would mean threading "does this even apply here" branches through
+    code that's supposed to stay simple. Same `OP_SEQ_CLOCKS_PER_STEP`
+    timing as the regular sequencer, so both stay in sync with the
+    same tempo for free. Called for every non-empty slot every scan
+    (mirroring the regular sequencer's own per-lane background loop),
+    except whichever ONE slot is currently being captured into.
+  - **Capture**: `song_capture_enter()`/`_exit()`, wired to shift+
+    diamond while `s_active_mode == OP_MODE_SONG` (a new branch in
+    `handle_diamond_transport()`, checked before the existing cross-
+    capture branch). Always claims the next empty library slot and a
+    channel from the 9-slot pool; silently no-ops (nothing to flash a
+    red error on yet -- there's no single pad this gesture points at)
+    if either is unavailable. Assigns `hue_byte` via `get_rand_32()`
+    right here, the moment a pattern is actually created. `song_
+    capture_handle_taps()`/`_advance_clock()` mirror the regular
+    sequencer's own capture shape closely (nearest-step quantization,
+    a pending-cluster accumulator, live-preview notes independent of
+    commit timing) with one real difference: no chord-region special
+    case at all, since capturing from within Song mode always reads a
+    pad through the plain melodic `tiles_note_map_get_note()` mapping
+    -- there's no chord-region concept in Song mode itself. The
+    captured slot is marked running immediately, before a single note
+    is even played, so the track-overview shows it as occupied+playing
+    right away, and it keeps looping seamlessly once capture ends
+    (same channel, same running state, same current step -- capture
+    just stops being the thing driving it forward).
+  - **Not done in this pass, flagged explicitly**: cross-capture
+    (shift+diamond from melodic/chord/guitar) still targets the
+    regular sequencer's lane 3, not Song mode -- the original ask was
+    "song mode as the default capture mode instead of regular
+    sequencer," which means rewiring that too, just not yet.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
