@@ -7049,5 +7049,30 @@ not its code.
   anything new is left completely untouched (the ORIGINAL single-note
   design's own "harmless no-op" close, from before multi-note existed
   at all).
+- **The sequencer's own strike-window fix above didn't survive real
+  hardware either -- multi-note manual pitch selection is now removed
+  entirely, back to single note only**: "the note select for
+  sequencer is not workig. remove mitiple note feature from that.
+  just do single note in seqwuencer mode." Two different multi-note
+  designs were tried here (an open-ended add/remove toggle, then a
+  Song-mode-style strike window) and both got rejected on real
+  hardware -- `handle_edit_mode()`'s `OP_SEQ_EDIT_PITCH` branch is now
+  back to the exact shape this section had before either attempt: any
+  touched pad commits that pad's own note as the step's ONE note and
+  closes immediately, no accumulator, no window, no separate close
+  gesture. This is a manual-edit-screen-only revert, not a data-model
+  rollback -- `step_notes[][]`/`step_note_count[]` keep their multi-
+  note shape (`OP_SEQ_MAX_NOTES_PER_STEP` stays 4) since live
+  capture's own chord-region recording (a separately-requested
+  feature, "steps should be able to capture chords") still needs up to
+  4 notes per step and this feedback never mentioned it. `render_
+  pitch_edit()` is untouched for the same reason: it just displays
+  whatever a step's actual note count is, whether 1 (always true for
+  a manually-edited step now) or up to 4 (still possible for a
+  captured chord) -- not part of "the note select" mechanism that was
+  actually broken. Song mode's OWN step-edit screen strike window
+  (`OP_SONG_EDIT_PICK_WINDOW_MS`) is a separate, untouched mechanism
+  and is not affected by this -- this feedback named "sequencer"
+  specifically.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

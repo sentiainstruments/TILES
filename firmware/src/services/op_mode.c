@@ -715,26 +715,23 @@ static op_seq_edit_mode_t s_seq_edit_mode;
 static uint8_t s_seq_edit_step;         /* 0..23, valid iff s_seq_edit_mode != OP_SEQ_EDIT_NONE */
 static uint32_t s_seq_edit_started_ms;  /* the ORIGINAL touch-down time -- escalation is timed from here, not from OP_SEQ_EDIT_PITCH's own entry */
 static bool s_pitch_edit_prev_pad_touched[TILES_NUM_PADS]; /* only meaningful during OP_SEQ_EDIT_PITCH */
-/* Real feedback: "fix the same chord thing on the sequencer, the many
- * notes posibility ruined the mechanism" -- same strike-window fix as
- * Song mode's own step-edit screen (see that feature's own "Song
- * mode: step-edit screen" section, OP_SONG_EDIT_PICK_WINDOW_MS's own
- * comment for the full reasoning), a separate copy here rather than a
- * shared constant/state, same "same convention, separate copy"
- * precedent this file already uses everywhere else so tuning one
- * screen's timing can't accidentally retune the other's. Before this,
- * tapping any pad other than the edited step's own toggled that pad's
- * note into or out of an OPEN-ENDED accumulator with no time bound at
- * all -- see handle_edit_mode()'s own OP_SEQ_EDIT_PITCH branch for
- * what that looked like. Replaced with the identical "notes struck
- * together or quickly rolled land in the same chord; a touch arriving
- * after the window closes starts a brand new one instead of silently
- * appending to the old" shape. */
-#define OP_SEQ_EDIT_PITCH_STRIKE_WINDOW_MS 200u
-static uint8_t s_seq_edit_pick_notes[OP_SEQ_MAX_NOTES_PER_STEP];
-static uint8_t s_seq_edit_pick_count;
-static bool s_seq_edit_pick_window_active;
-static uint32_t s_seq_edit_pick_window_start_ms;
+/* Manual per-step pitch selection is single-note only -- real feedback
+ * tried this as multiple notes twice now (first an open-ended add/
+ * remove toggle with no time bound, then a Song-mode-style strike
+ * window) and rejected both on real hardware: "the note select for
+ * sequencer is not workig. remove mitiple note feature from that.
+ * just do single note in seqwuencer mode." handle_edit_mode()'s own
+ * OP_SEQ_EDIT_PITCH branch is back to the ORIGINAL shape this section
+ * had before either multi-note attempt: any touched pad commits that
+ * pad's own note as the step's ONE note and closes immediately, full
+ * stop -- no accumulator, no window, no separate close gesture.
+ * step_notes[][]/step_note_count[] themselves keep their multi-note
+ * shape (OP_SEQ_MAX_NOTES_PER_STEP stays 4) -- this is a manual-EDIT-
+ * screen-only revert, not a data-model rollback, since live capture's
+ * own chord-region recording (seq_capture_handle_taps()'s "chord-
+ * region special case") is a completely different, separately-
+ * requested feature this feedback never mentioned and still needs up
+ * to 4 notes per step to keep working. */
 /* Real feedback: "im woried the value decreses before the mode is
  * exited... lets make sure the lift dosnt loose the feature." Lifting a
  * finger off a pad is a continuous, physical release -- Hall depth
@@ -1691,8 +1688,6 @@ static void edit_enter(uint8_t step, uint32_t started_ms) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_pitch_edit_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
     }
-    s_seq_edit_pick_count = 0u;
-    s_seq_edit_pick_window_active = false;
 }
 
 /* Ratchet's own, separate entry point -- real feedback: "time escalation
@@ -1756,17 +1751,18 @@ static uint8_t ratchet_count_from_depth(uint16_t depth) {
  * feedback: "it should be a toggle to set pitch of sequencer note. not a
  * momentary thing." Once opened, it stays open regardless of whether the
  * originally-held step pad is still touched -- release it freely, no
- * finger has to stay down. Tapping the held step's OWN pad again closes
- * it, committing whatever's been struck since it opened (see the
- * OP_SEQ_EDIT_PITCH branch below for the multi-note strike-window shape
- * that builds up) -- if nothing was struck at all and the step had no
- * prior note either, this falls back to the step's own live-resolved
- * note, same as an unarmed step already would; if the step already had
- * a note/chord and nothing new was struck, closing this way is a
- * harmless no-op, leaving it exactly as it was. Triangle+shift is the
- * escape hatch for "back out with no change at all" (handle_triangle_
- * click()'s own shift branch -- this used to be diamond's job before
- * diamond became a dedicated transport remote).
+ * finger has to stay down. A fresh touch on ANY pad (the held step
+ * included -- tapping your OWN step again re-commits it to its own
+ * current note, a harmless no-op unless it had a different override
+ * before, in which case it resets to default) commits that pad's current
+ * note and closes, same "closes on selection" rule this file's other
+ * pickers use. Single note only, permanently -- see s_pitch_edit_prev_
+ * pad_touched's own comment just above for why multi-note was tried
+ * twice and rejected both times; there is no cluster/chord shape here
+ * to build up at all anymore. Triangle+shift is the escape hatch for
+ * "back out with no change at all" (handle_triangle_click()'s own
+ * shift branch -- this used to be diamond's job before diamond became
+ * a dedicated transport remote).
  * Probability/ratchet: the OPPOSITE shape, a live DIAL -- Hall depth of
  * the SAME held pad maps continuously to the value while still held
  * (see probability_percent_from_depth()/ratchet_count_from_depth()
@@ -1815,72 +1811,19 @@ static void handle_edit_mode(uint32_t now_ms) {
             bool touched = tiles_touch_is_touched(pad);
             bool was_touched = s_pitch_edit_prev_pad_touched[pad - 1u];
             if (touched && !was_touched) {
+                /* Single note only -- see s_pitch_edit_prev_pad_
+                 * touched's own comment for why. Whichever pad is
+                 * touched first (the held step's own included) commits
+                 * ITS note as the step's one and only note and closes
+                 * immediately; there's no separate "other pads add to a
+                 * cluster" case left to branch on. */
                 op_seq_pattern_t *pat = active_pattern();
-                if (pad == edit_pad) {
-                    /* Real feedback: "sequencer real time and note
-                     * select should allow for multiple notes per step,"
-                     * later: "fix the same chord thing on the
-                     * sequencer, the many notes posibility ruined the
-                     * mechanism." Commits whatever was struck on OTHER
-                     * pads below (s_seq_edit_pick_notes/_count, built up
-                     * via the strike-window shape that branch's own
-                     * comment explains) as this step's WHOLE new chord,
-                     * replacing anything it held before -- if nothing
-                     * was struck at all, see this function's own header
-                     * comment for the two sub-cases (fresh unarmed step
-                     * vs. an already-armed one left untouched). */
-                    if (s_seq_edit_pick_count > 0u) {
-                        for (uint8_t i = 0u; i < s_seq_edit_pick_count; i++) {
-                            pat->step_notes[s_seq_edit_step][i] = s_seq_edit_pick_notes[i];
-                        }
-                        pat->step_note_count[s_seq_edit_step] = s_seq_edit_pick_count;
-                    } else if (pat->step_note_count[s_seq_edit_step] == 0u) {
-                        pat->step_notes[s_seq_edit_step][0] = tiles_note_map_get_note(edit_pad);
-                        pat->step_note_count[s_seq_edit_step] = 1u;
-                    }
-                    pat->step_pitch_override[s_seq_edit_step] = true;
-                    tiles_haptics_trigger_touch_pulse(pad);
-                    edit_exit();
-                    return; /* grid ownership just changed under this loop -- stop iterating it */
-                }
-                /* Real feedback: "the many notes posibility ruined the
-                 * mechanism" -- this used to toggle the touched pad's
-                 * note into or out of an accumulator with NO time bound
-                 * at all, so a step's chord could be built (or silently
-                 * mutated) across taps seconds or minutes apart, with no
-                 * way to tell "still building the same chord" apart from
-                 * "starting a new one." Same strike-window fix as Song
-                 * mode's own step-edit screen (OP_SEQ_EDIT_PITCH_STRIKE_
-                 * WINDOW_MS's own comment, right where it's declared,
-                 * has the full reasoning): any pad struck within the
-                 * window of the FIRST pad in a fresh strike joins the
-                 * same chord (up to OP_SEQ_MAX_NOTES_PER_STEP, silently
-                 * ignoring both an exact repeat and anything past the
-                 * cap); a touch arriving after the window closes starts
-                 * an entirely new chord instead of appending to the old
-                 * one. Nothing commits here -- only the edit_pad branch
-                 * above does, on close. */
-                uint8_t note = tiles_note_map_get_note(pad);
-                if (!s_seq_edit_pick_window_active ||
-                    (now_ms - s_seq_edit_pick_window_start_ms) > OP_SEQ_EDIT_PITCH_STRIKE_WINDOW_MS) {
-                    s_seq_edit_pick_count = 0u;
-                    s_seq_edit_pick_window_active = true;
-                    s_seq_edit_pick_window_start_ms = now_ms;
-                }
-                bool already_picked = false;
-                for (uint8_t i = 0u; i < s_seq_edit_pick_count; i++) {
-                    if (s_seq_edit_pick_notes[i] == note) {
-                        already_picked = true;
-                        break;
-                    }
-                }
-                if (!already_picked && s_seq_edit_pick_count < OP_SEQ_MAX_NOTES_PER_STEP) {
-                    s_seq_edit_pick_notes[s_seq_edit_pick_count] = note;
-                    s_seq_edit_pick_count++;
-                }
+                pat->step_notes[s_seq_edit_step][0] = tiles_note_map_get_note(pad);
+                pat->step_note_count[s_seq_edit_step] = 1u;
+                pat->step_pitch_override[s_seq_edit_step] = true;
                 tiles_haptics_trigger_touch_pulse(pad);
-                s_pitch_edit_prev_pad_touched[pad - 1u] = touched;
-                return;
+                edit_exit();
+                return; /* grid ownership just changed under this loop -- stop iterating it */
             }
             s_pitch_edit_prev_pad_touched[pad - 1u] = touched;
         }
