@@ -1687,9 +1687,9 @@ not its code.
   with hysteresis, polarity defaults to the usual normally-open
   footswitch convention and is switchable at runtime
   (`tiles_pedal_set_polarity()`). Expression (CC11, continuous) is
-  built but **disabled by default** -- `tiles_pedal_set_expression_enabled()`
-  is the runtime toggle, meant as the hook the companion app will
-  eventually control once `usb_vendor/` exists. Real auto-sensing of
+  also implemented -- see this file's own later entry for the mode-
+  select design (`tiles_pedal_set_mode()`) this grew into, replacing
+  the original plain enable/disable flag. Real auto-sensing of
   polarity/disconnected-pedal state is still a later layer, see
   `docs/architecture/defaults-and-safeguards.md` "Pedal polarity".
   Sends both CCs via `midi_out.h`'s `tiles_midi_send_cc_broadcast()`
@@ -7236,5 +7236,41 @@ not its code.
     convention), shown whenever the non-default (non-MPE) mode is
     active -- MPE stays the default with no ambient indicator, per
     "standard is mpe."
+- **Pedal: sustain and expression reworked into a real mode select**
+  (`services/pedal.h`/`.c`). Asked whether sustain and expression were
+  working: sustain (fully wired, on by default) should work as coded,
+  though not confirmed against a real pedal on record; expression was
+  built but genuinely unreachable -- disabled by default, and nothing
+  anywhere called its one enable toggle. Real feedback: "enable those
+  two as how they would work standard and lets keep sustain pedal as
+  the defoult but we can edit this in control software later."
+  - Both are now implemented to their own real MIDI standard: sustain
+    unchanged (CC64, debounced hysteresis); expression (CC11) linear
+    across the ADC's full range, heel-down = 0, toe-down = 127, the
+    conventional TRS expression-pedal wiring -- "implemented to the
+    standard," still not confirmed against a real expression pedal on
+    this circuit specifically, same open item as before.
+  - **The old plain boolean toggle was replaced with a real
+    `tiles_pedal_mode_t` (`TILES_PEDAL_MODE_SUSTAIN`/`_EXPRESSION`),
+    not just flipped on alongside sustain** -- this is a single
+    physical jack with one signal wired to the ADC, so it can do
+    sustain OR expression, never genuinely both: leaving both always
+    computed-and-sent (the previous boolean's own shape, just
+    defaulted true) would mean a real sustain footswitch's rail-to-
+    rail swing also spamming spurious CC11 messages, and a real
+    expression pedal's sweep also spuriously toggling CC64 sustain
+    every time it crossed the hysteresis band. `tiles_pedal_set_mode()`
+    is the new switch -- sustain stays the default, per real feedback,
+    with no on-device gesture calling it yet (same "companion app hook
+    for later" reasoning the old toggle already had).
+  - **A real stuck-state bug this rework fixes in passing**: switching
+    modes now cleanly winds down whichever one is being LEFT --
+    releasing sustain with a genuine CC64=0 if it was currently held
+    (a synth has no idea this jack changed function; without this,
+    switching away mid-hold would leave its dampers stuck down
+    forever, the pedal equivalent of a stuck note), and resetting
+    expression to CC11's own MIDI-spec default of 127 (full
+    expression) rather than leaving playback quietly capped at
+    whatever level the pedal happened to be sitting at.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

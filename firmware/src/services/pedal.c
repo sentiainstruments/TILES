@@ -23,7 +23,7 @@
 #define MIDI_CC_EXPRESSION 11u
 
 static tiles_pedal_polarity_t s_polarity = TILES_PEDAL_DEFAULT_POLARITY;
-static bool s_expression_enabled = TILES_PEDAL_DEFAULT_EXPRESSION_ENABLED;
+static tiles_pedal_mode_t s_mode = TILES_PEDAL_DEFAULT_MODE;
 
 static uint16_t s_raw;
 static bool s_raw_low;       /* most recent sample's side of the hysteresis band */
@@ -49,9 +49,11 @@ static bool low_side_means_pressed(void) {
     return s_polarity == TILES_PEDAL_POLARITY_NORMALLY_OPEN;
 }
 
-void tiles_pedal_scan(void) {
-    s_raw = adc_read();
-
+/* Sustain-only: hysteresis + debounce + broadcast. Factored out of
+ * tiles_pedal_scan() so tiles_pedal_set_mode() can't accidentally drift
+ * out of sync with it -- both now read/write the exact same s_raw_low/
+ * s_debounced_low/s_last_change_ms state through this one function. */
+static void scan_sustain(void) {
     bool raw_low = s_raw_low;
     if (s_raw_low && s_raw > SUSTAIN_RELEASE_THRESHOLD) {
         raw_low = false;
@@ -77,13 +79,35 @@ void tiles_pedal_scan(void) {
          * existed. */
         tiles_midi_send_cc_broadcast(MIDI_CC_SUSTAIN, pressed ? 127u : 0u);
     }
+}
 
-    if (s_expression_enabled) {
-        uint8_t cc = (uint8_t)(((uint32_t)s_raw * 127u) / ADC_MAX);
-        if (cc != s_last_sent_expression_cc) {
-            s_last_sent_expression_cc = cc;
-            tiles_midi_send_cc_broadcast(MIDI_CC_EXPRESSION, cc);
-        }
+/* Expression-only: standard TRS expression-pedal convention, heel-down
+ * (low raw reading) = 0, toe-down (high raw reading) = 127, linear
+ * across the ADC's full range -- see this file's own header comment
+ * for why this is "implemented to the standard," not "confirmed
+ * against real hardware" yet. */
+static void scan_expression(void) {
+    uint8_t cc = (uint8_t)(((uint32_t)s_raw * 127u) / ADC_MAX);
+    if (cc != s_last_sent_expression_cc) {
+        s_last_sent_expression_cc = cc;
+        tiles_midi_send_cc_broadcast(MIDI_CC_EXPRESSION, cc);
+    }
+}
+
+void tiles_pedal_scan(void) {
+    s_raw = adc_read();
+    /* Real feedback: "enable those two as how they would work
+     * standard" -- each mode implemented to its own real MIDI
+     * standard, but never both from the same scan: this is one
+     * physical signal, and running sustain's hysteresis/debounce
+     * against an expression pedal's continuous sweep (or feeding a
+     * footswitch's rail-to-rail swing through the expression mapping)
+     * would each spuriously trigger the OTHER function's output --
+     * see this file's own header comment for the full reasoning. */
+    if (s_mode == TILES_PEDAL_MODE_SUSTAIN) {
+        scan_sustain();
+    } else {
+        scan_expression();
     }
 }
 
@@ -95,23 +119,48 @@ tiles_pedal_polarity_t tiles_pedal_get_polarity(void) {
     return s_polarity;
 }
 
-void tiles_pedal_set_expression_enabled(bool enabled) {
-    s_expression_enabled = enabled;
-    if (!enabled) {
-        /* Leave the pedal in a known state if expression gets disabled
-         * mid-hold -- next enable will re-send whatever the pedal is
-         * actually at (forced by resetting the "last sent" tracker),
-         * rather than silently sitting on a stale value. */
-        s_last_sent_expression_cc = 0xFFu;
+/* Real feedback: "lets keep sustain pedal as the default but we can
+ * edit this in control software later." Cleanly winds down whichever
+ * mode is being LEFT, rather than just silently stopping its scan --
+ * a synth doesn't know this jack changed function, so from ITS side,
+ * sustain simply stops updating (if it was held down, it would stay
+ * held down forever, no different from a stuck note) or expression
+ * simply stops updating (stuck at whatever level the pedal was last
+ * physically at, quietly capping how loud/expressive every future
+ * note can sound for no reason the player can see). Reseeds the
+ * sustain hysteresis trackers off the CURRENT raw reading either way
+ * (not just when entering sustain mode) so a later switch back to
+ * sustain doesn't compare against a reading that's now stale by
+ * however long expression mode was active. */
+void tiles_pedal_set_mode(tiles_pedal_mode_t mode) {
+    if (mode == s_mode) {
+        return;
     }
+    if (s_mode == TILES_PEDAL_MODE_SUSTAIN && s_last_sent_sustained) {
+        s_last_sent_sustained = false;
+        tiles_midi_send_cc_broadcast(MIDI_CC_SUSTAIN, 0u);
+    } else if (s_mode == TILES_PEDAL_MODE_EXPRESSION) {
+        /* 127, not 0 -- the MIDI-spec default for CC11 (and what a
+         * synth already assumes before ever receiving one) is FULL
+         * expression, not silence. Leaving this jack's last value
+         * behind on a mode switch would otherwise quietly cap
+         * everything played afterward at whatever level the pedal
+         * happened to be sitting at. */
+        tiles_midi_send_cc_broadcast(MIDI_CC_EXPRESSION, 127u);
+    }
+    s_last_sent_expression_cc = 0xFFu; /* out of MIDI CC range -- forces a fresh send next time expression mode is entered */
+    s_raw_low = s_raw < SUSTAIN_PRESS_THRESHOLD;
+    s_debounced_low = s_raw_low;
+    s_last_change_ms = to_ms_since_boot(get_absolute_time());
+    s_mode = mode;
 }
 
-bool tiles_pedal_get_expression_enabled(void) {
-    return s_expression_enabled;
+tiles_pedal_mode_t tiles_pedal_get_mode(void) {
+    return s_mode;
 }
 
 bool tiles_pedal_is_sustained(void) {
-    return s_last_sent_sustained;
+    return s_mode == TILES_PEDAL_MODE_SUSTAIN && s_last_sent_sustained;
 }
 
 uint16_t tiles_pedal_get_raw(void) {
