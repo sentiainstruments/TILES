@@ -11,6 +11,8 @@ add_executable(sentia_tiles_firmware
     drivers/pca9685.c
     drivers/mpr121.c
     drivers/i2c_bus.c
+    drivers/dac80502.c
+    services/cv_gate.c
     services/lighting.c
     services/hall.c
     services/buttons.c
@@ -50,6 +52,7 @@ target_link_libraries(sentia_tiles_firmware
     pico_stdlib
     hardware_gpio
     hardware_i2c
+    hardware_spi
     hardware_pio
     hardware_clocks
     hardware_adc

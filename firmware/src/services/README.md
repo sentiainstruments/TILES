@@ -7272,5 +7272,80 @@ not its code.
     expression to CC11's own MIDI-spec default of 127 (full
     expression) rather than leaving playback quietly capped at
     whatever level the pedal happened to be sitting at.
-- Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
-  built yet.
+- **CV/gate, built for the first time this session** (`drivers/
+  dac80502.h`/`.c`, `services/cv_gate.h`/`.c`). Real feedback: "lets
+  implement cv/gate functionality as it would work standard but with
+  modifiable standard controls for the control software down the
+  line."
+  - **"As it would work standard"**: a classic monophonic MIDI-to-CV
+    converter -- 1V/octave pitch CV (DAC VOUTA), a pressure CV channel
+    (VOUTB, matching what the board map itself already labels that
+    channel), and a single active-high Gate high for as long as ANY
+    note this instrument is currently playing is held. Last-note-
+    priority when more than one note is held (an immediate legato
+    pitch jump, gate never dropping while at least one note stays
+    held) -- the same "most recently touched/bent pad wins" rule this
+    session's non-MPE pitch-bend mode already established for its own
+    shared-channel arbitration, reapplied here to a genuinely single-
+    voice CV output. Deliberately note-based, not pad/lane/slot-based:
+    `tiles_cv_gate_note_on()`/`_note_off()`/`_channel_pressure()` are
+    called explicitly alongside the matching MIDI send at every one of
+    this instrument's ~20 note-on/off/pressure sites across
+    `expression.c`, `game_mode.c`, and `op_mode.c` (live touch, the
+    regular sequencer's playback and capture preview, chord mode,
+    Song mode's playback and capture preview, the hidden game
+    melody) -- the same "explicit call at each site" shape
+    `services/haptics.h`'s own `trigger_kick()`/`stop()` already use
+    throughout those exact files, rather than a hidden hook inside
+    `midi/` (which has no business knowing about note priority or any
+    other `services/`-level concept, per the recommended module
+    boundary in `docs/hardware/SENTIA_TILES_FIRMWARE_HANDOFF.md`'s own
+    "Firmware structure" section).
+  - **"Modifiable standard controls for the control software down the
+    line"**: both CV channels' scaling are runtime-settable structs
+    (`tiles_cv_gate_set_pitch_calibration()`/`_set_pressure_
+    calibration()`), not fixed constants -- pitch defaults to the
+    standard convention (1V/octave, MIDI note 0 = 0V); pressure
+    defaults to the jack's own nominal 0-10V full range at
+    pressure=127. A separate, later zero+gain trim layer on each
+    (defaulting to identity, per `docs/architecture/defaults-and-
+    safeguards.md`'s own "CV range" section: "Build the per-channel
+    zero+gain trim slot into the calibration store from the start...
+    defaults to identity until measured") is meant for real hardware
+    correction once measured. Not yet persisted to flash -- same as
+    `pedal.c`'s mode/polarity and `expression.c`'s pitch-bend
+    sensitivity, this resets to standard defaults on every reboot;
+    real persistence belongs in a `storage/` module that doesn't exist
+    in this codebase yet, not invented here just for this one value.
+  - **Safety, both already-established hardware facts, neither
+    re-decided here**: hard-disabled unless `services/power.h`
+    reports `cv_gate_permitted` (external 12V confirmed via GP22) --
+    checked on every note event AND reacted to instantly via `tiles_
+    power_register_callback()` the moment power disappears mid-hold,
+    not on this module's next poll, exercising that callback path for
+    the first time since `power.h` was built specifically anticipating
+    it. Defaults **off** even with valid external power -- `tiles_cv_
+    gate_set_enabled()` is the separate, explicit software switch
+    (defaults false, no on-device gesture calls it yet, same
+    "companion app hook for later" shape pedal mode and MPE mode
+    already have). Both gates must hold before anything is ever
+    driven; either dropping forces gate low and both DAC channels back
+    to 0 immediately (`force_safe_off()`), clearing all tracked notes
+    so a later stray note-off can't act on stale state.
+  - **`drivers/dac80502.c` is a brand-new, unverified driver** -- unlike
+    every sensor driver this session already confirmed against real
+    hardware (Hall, touch), this chip has never been touched by this
+    codebase before. The 24-bit SPI register protocol (GAIN register
+    forcing the internal 2.5V reference undivided at 1x buffer gain,
+    matching the external OPA2990's own fixed gain-of-4 stage) is
+    implemented from the DAC8050x family's own documented protocol as
+    understood at write time, not confirmed against a logic analyzer
+    on this specific board. Worst-case failure mode if a register
+    value or timing detail is wrong is "outputs nothing, or the wrong
+    voltage within the chip's own bounded 0-2.5V rail" -- not a
+    destructive one, since a garbled SPI frame can't exceed the DAC's
+    own supply rails -- but real hardware bring-up (a multimeter on
+    the CV jack, at minimum) is still needed before trusting it the
+    way this codebase's other drivers now are.
+- Everything else (per-pad Hall calibration, DIN MIDI) is not built
+  yet.

@@ -31,13 +31,17 @@
  * click -- sequencer mode fully built (24 pads = 24 steps, played back
  * from a real external MIDI clock, see services/midi_clock.h and
  * services/op_mode.h), chord/arp modes selectable but not yet
- * implemented. Not yet built:
- * MPE, DIN, CV/gate, the usb_vendor diagnostics interface, a real
- * per-pad Hall calibration curve (this is capture only, no curve is
- * derived or applied yet) -- added module by module per the bring-up
- * order in docs/hardware/SENTIA_FIRMWARE_CODEX_START.md. Each phase must
- * leave this file building and the previous phase's safety guarantees
- * intact.
+ * implemented. CV/gate (services/cv_gate.h) mirrors this instrument's
+ * own note stream to a standard monophonic 1V/octave pitch CV + gate +
+ * pressure CV, hard-gated on services/power.h's own external-power
+ * confirmation and defaulting off even when power is present -- not
+ * yet confirmed against real hardware (drivers/dac80502.h is a new,
+ * unverified driver, see its own header comment). Not yet built: DIN,
+ * the usb_vendor diagnostics interface, a real per-pad Hall calibration
+ * curve (this is capture only, no curve is derived or applied yet) --
+ * added module by module per the bring-up order in
+ * docs/hardware/SENTIA_FIRMWARE_CODEX_START.md. Each phase must leave
+ * this file building and the previous phase's safety guarantees intact.
  */
 
 #include <stdio.h>
@@ -56,6 +60,7 @@
 #include "services/boot_sequence.h"
 #include "services/buttons.h"
 #include "services/crash_indicator.h"
+#include "services/cv_gate.h"
 #include "services/debug_mode.h"
 #include "services/expression.h"
 #include "services/expression_control.h"
@@ -223,6 +228,12 @@ int main(void) {
     /* Pedal: sustain (CC64) on by default; expression (CC11) built but
      * disabled by default -- see services/pedal.h. */
     tiles_pedal_init();
+
+    /* CV/gate: hard-gated on external power + its own explicit enable,
+     * both defaulting to "off" -- see services/cv_gate.h. Needs
+     * tiles_power_init() (already run above) so tiles_power_register_
+     * callback() has a real state to react to from the start. */
+    tiles_cv_gate_init();
 
     /* Phase 4 bring-up: one Hall sensor at a time, then the full 24-pad
      * scan (see SENTIA_FIRMWARE_CODEX_START.md). A false return means
@@ -451,6 +462,8 @@ int main(void) {
         tiles_touch_scan();
         tiles_debug_trace('d');
         tiles_pedal_scan();
+        tiles_debug_trace('C');
+        tiles_cv_gate_scan();
         /* Must run after tiles_buttons_scan() (fresh circle/square
          * state) and tiles_touch_scan() (fresh touch state for the
          * expression sub-menu's slider taps) above, and before

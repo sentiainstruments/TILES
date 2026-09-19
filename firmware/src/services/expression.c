@@ -5,6 +5,7 @@
 #include "hall.h"
 #include "touch.h"
 #include "note_map.h"
+#include "cv_gate.h"
 #include "midi_out.h"
 #include "haptics.h"
 #include "expression_control.h"
@@ -1842,6 +1843,7 @@ static uint8_t find_most_recent_held_pad(uint8_t exclude_pad) {
  * transition to different next states. */
 static void end_held_note(pad_expr_t *s, uint8_t pad) {
     tiles_midi_note_off(s->midi_channel, s->active_note);
+    tiles_cv_gate_note_off(s->active_note);
     tiles_haptics_stop(pad);
     tiles_midi_send_pitch_bend(s->midi_channel, PITCH_BEND_CENTER);
     s->pitch_bend_active = false;
@@ -2118,6 +2120,7 @@ void tiles_expression_scan(void) {
                     tiles_midi_send_pitch_bend(TILES_MIDI_MPE_MASTER_CHANNEL, PITCH_BEND_CENTER);
                 }
                 tiles_midi_note_on(s->midi_channel, s->active_note, velocity);
+                tiles_cv_gate_note_on(s->active_note, velocity);
                 /* Same velocity value driving both -- "mapped to the
                  * velocity curve by default" means the kick and the MIDI
                  * note agree exactly, not two independent estimates. */
@@ -2194,6 +2197,7 @@ void tiles_expression_scan(void) {
             if (!s_expression_muted && (s_mpe_enabled || s_non_mpe_owner_pad == pad)) {
                 tiles_midi_send_channel_pressure(s->midi_channel, at);
             }
+            tiles_cv_gate_channel_pressure(s->active_note, at);
             tiles_haptics_set_sustain_level(pad, at);
         }
 
