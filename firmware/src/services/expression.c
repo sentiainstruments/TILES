@@ -967,10 +967,21 @@ typedef struct {
     bool last_touched_valid;
 
     /* This pad's MPE Member Channel (status-byte nibble,
-     * TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL..+NUM_MEMBER_CHANNELS-1) while
-     * a note is held -- see claim_mpe_channel()/end_held_note() below.
-     * Only meaningful while state == PAD_STATE_NOTE_ON. */
+     * TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL..+NUM_MEMBER_CHANNELS-1)
+     * while a note is held -- see claim_mpe_channel()/end_held_note()
+     * below. While !tiles_expression_is_mpe_enabled(), this is always
+     * TILES_MIDI_MPE_MASTER_CHANNEL instead (every note shares that
+     * one channel -- see this file's own "non-MPE" section). Only
+     * meaningful while state == PAD_STATE_NOTE_ON. */
     uint8_t midi_channel;
+    /* Set from s_next_mpe_claim_seq at every note-on, regardless of
+     * MPE mode -- a monotonic "how recently was this pad struck"
+     * ordinal. Only actually consulted while !tiles_expression_is_
+     * mpe_enabled() (see s_non_mpe_owner_pad's own comment for why:
+     * "most recently touched/bent pad wins" needs to compare currently
+     * -held pads against each other), but set unconditionally so it's
+     * never stale garbage if the mode is toggled mid-performance. */
+    uint32_t touch_claim_seq;
 
     /* Per-note pitch bend -- one full independent set of state per pad,
      * not shared module-level state, now that MPE gives every held note
@@ -1145,15 +1156,39 @@ typedef struct {
 static mpe_channel_slot_t s_mpe_channels[TILES_MIDI_MPE_NUM_MEMBER_CHANNELS];
 static uint32_t s_next_mpe_claim_seq = 1u;
 
-/* "Expression mute" -- services/expression_control.h's circle+square
- * 3-second combo hold. A hard kill switch for pitch bend and poly
+/* ---- Non-MPE compatibility mode -----------------------------------------
+ * Real feedback: "lets make sure the pitch bend works with non mpe
+ * layouts meaning pitch bend wheel... look for the max most
+ * compatible and standardized version." Default true (MPE, this
+ * file's original and still-recommended behavior) -- see tiles_
+ * expression_set_mpe_enabled()'s own header-comment for what flipping
+ * this actually changes. */
+static bool s_mpe_enabled = true;
+
+/* Which pad currently drives the shared master channel's continuous
+ * controllers (pitch bend, channel pressure) while !s_mpe_enabled --
+ * 0 means no pad is currently held at all. Real feedback: "most
+ * recently touched/bent pad wins" -- set to the newly-struck pad on
+ * every note-on (see the note-on site below), and handed back to
+ * whichever OTHER currently-held pad has the highest touch_claim_seq
+ * when the current owner releases (see end_held_note()'s own non-MPE
+ * branch) -- never just reset to "none" while some other pad is still
+ * genuinely held, the same way a real pitch-bend wheel doesn't stop
+ * mattering just because a second finger also pressed a key. Unused,
+ * and left at whatever it last was, while s_mpe_enabled is true. */
+static uint8_t s_non_mpe_owner_pad;
+
+/* "Expression mute" -- a hard kill switch for pitch bend and poly
  * aftertouch, deliberately separate from s_pitch_bend_enabled above
  * (that's the player's own on/off preference; this overrides it
  * entirely, on top, without disturbing what it was set to) -- unmuting
  * restores exactly whatever tiles_expression_toggle_pitch_bend() state
  * was already in effect before muting. Note-on/off/velocity are read
  * directly from touch+Hall, never gated by this flag -- see
- * tiles_expression_set_muted()'s own comment. */
+ * tiles_expression_set_muted()'s own comment for the full history,
+ * including why this can no longer actually be triggered by anything
+ * in services/expression_control.c as of the MPE-toggle gesture that
+ * replaced it. */
 static bool s_expression_muted;
 
 void tiles_expression_init(void) {
@@ -1165,6 +1200,8 @@ void tiles_expression_init(void) {
         s_mpe_channels[i] = (mpe_channel_slot_t){0};
     }
     s_next_mpe_claim_seq = 1u;
+    s_mpe_enabled = true;
+    s_non_mpe_owner_pad = 0u;
     s_pitch_bend_enabled = false;
     s_expression_muted = false;
 }
@@ -1607,6 +1644,27 @@ void tiles_expression_set_muted(bool muted) {
     }
 }
 
+/* Real feedback: "lets make sure the pitch bend works with non mpe
+ * layouts meaning pitch bend wheel." Deliberately does NOT retroactively
+ * touch any note already held at the moment this is flipped -- a note
+ * struck under the OLD scheme keeps whatever channel it already claimed
+ * (its own Member Channel under MPE, or the shared master channel under
+ * non-MPE) until its own note-off, exactly the same "toggling mid-hold
+ * doesn't retroactively change an already-sounding note" precedent this
+ * file's own pitch_bend_active field already establishes elsewhere. Only
+ * the NEXT note-on picks up the new routing. s_non_mpe_owner_pad is left
+ * as-is rather than force-reset here for the same reason -- it's simply
+ * unconsulted while s_mpe_enabled is true, and the first note struck
+ * after switching back to non-MPE will correctly claim it fresh. */
+void tiles_expression_set_mpe_enabled(bool enabled) {
+    s_mpe_enabled = enabled;
+    printf("[expression] MPE mode %s\n", enabled ? "enabled" : "disabled (single-channel, standard MIDI)");
+}
+
+bool tiles_expression_is_mpe_enabled(void) {
+    return s_mpe_enabled;
+}
+
 static void begin_awaiting_strike(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
     s->state = PAD_STATE_AWAITING_STRIKE;
     s->touch_start_ms = now_ms;
@@ -1743,6 +1801,29 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
     s->pitch_bend_wiggle_active = false;
 }
 
+/* Scans every OTHER currently-held pad (excluding `exclude_pad`) and
+ * returns whichever has the highest touch_claim_seq -- i.e. whichever
+ * was struck most recently -- or 0 if none are held. Used only by
+ * end_held_note()'s own non-MPE branch below, to hand the shared
+ * channel's continuous-controller ownership back to an older still-
+ * held pad rather than dropping it to "nobody" the instant the most
+ * recent one releases. */
+static uint8_t find_most_recent_held_pad(uint8_t exclude_pad) {
+    uint8_t best_pad = 0u;
+    uint32_t best_seq = 0u;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        uint8_t pad = (uint8_t)(i + 1u);
+        if (pad == exclude_pad) {
+            continue;
+        }
+        if (s_pads[i].state == PAD_STATE_NOTE_ON && (best_pad == 0u || s_pads[i].touch_claim_seq > best_seq)) {
+            best_pad = pad;
+            best_seq = s_pads[i].touch_claim_seq;
+        }
+    }
+    return best_pad;
+}
+
 /* Ends `pad`'s currently-held note completely and cleanly: MIDI note-off,
  * haptic stop, pitch bend reset to center, and frees its MPE channel
  * slot -- the single place this whole sequence happens, used by every
@@ -1764,8 +1845,35 @@ static void end_held_note(pad_expr_t *s, uint8_t pad) {
     tiles_haptics_stop(pad);
     tiles_midi_send_pitch_bend(s->midi_channel, PITCH_BEND_CENTER);
     s->pitch_bend_active = false;
-    uint8_t idx = (uint8_t)(s->midi_channel - TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL);
-    s_mpe_channels[idx].in_use = false;
+    if (s->midi_channel == TILES_MIDI_MPE_MASTER_CHANNEL) {
+        /* Real bug this addition itself would otherwise introduce: the
+         * MPE-only cleanup below computes idx as midi_channel minus
+         * TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL (1u) -- on the shared
+         * master channel (0u) that underflows a uint8_t to 255, which
+         * would then write s_mpe_channels[255], 240 bytes past the end
+         * of a 15-entry array. Guarded here instead of changing that
+         * subtraction, since master-channel notes have no per-channel
+         * pool slot to release in the first place -- there's nothing
+         * for that line to correctly do for them at all. Real feedback:
+         * "most recently touched/bent pad wins" -- if this pad was the
+         * one currently driving the shared channel's pitch bend/
+         * pressure, hand that back to whichever OTHER held pad was
+         * touched most recently, and immediately resend ITS actual
+         * current bend so the channel reflects that pad's real tilt
+         * instead of staying wherever this departing pad (or the
+         * center send just above) left it. */
+        if (s_non_mpe_owner_pad == pad) {
+            uint8_t next_owner = find_most_recent_held_pad(pad);
+            s_non_mpe_owner_pad = next_owner;
+            if (next_owner != 0u) {
+                pad_expr_t *next = &s_pads[next_owner - 1u];
+                tiles_midi_send_pitch_bend(TILES_MIDI_MPE_MASTER_CHANNEL, next->pitch_bend_last_sent);
+            }
+        }
+    } else {
+        uint8_t idx = (uint8_t)(s->midi_channel - TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL);
+        s_mpe_channels[idx].in_use = false;
+    }
 }
 
 /* See this file's own header comment for the full "haptics vibration
@@ -1982,8 +2090,33 @@ void tiles_expression_scan(void) {
                  * ordering originally fixed, now guaranteed structurally
                  * by MPE's per-note channels in the common case and by
                  * this ordering in the channel-stealing edge case. */
-                s->midi_channel = claim_mpe_channel(pad);
+                /* Real feedback: "make sure the pitch bend works with
+                 * non mpe layouts meaning pitch bend wheel." Bypasses
+                 * claim_mpe_channel()'s whole pool entirely while
+                 * !s_mpe_enabled -- every note just goes out on the one
+                 * shared master channel, the same channel a plain non-
+                 * MPE synth already listens to by default, rather than
+                 * spending a Member Channel (and its steal-eviction
+                 * machinery) on a note that was never going to use it
+                 * as an independent channel anyway. */
+                s->midi_channel = s_mpe_enabled ? claim_mpe_channel(pad) : TILES_MIDI_MPE_MASTER_CHANNEL;
                 init_pitch_bend_for_pad(s, pad, now_ms);
+                s->touch_claim_seq = s_next_mpe_claim_seq++;
+                if (!s_mpe_enabled) {
+                    /* Real feedback: "most recently touched/bent pad
+                     * wins" -- the newly-struck pad always becomes the
+                     * new owner (it's unconditionally the most recent
+                     * touch by construction). Force-sends center rather
+                     * than relying on this pad's own next computed bend
+                     * to naturally differ from its last-sent value --
+                     * init_pitch_bend_for_pad() above already reset
+                     * THIS pad's own bookkeeping to center, but the
+                     * actual synth channel could still be sitting
+                     * wherever the PREVIOUS owner (a different pad)
+                     * left it. */
+                    s_non_mpe_owner_pad = pad;
+                    tiles_midi_send_pitch_bend(TILES_MIDI_MPE_MASTER_CHANNEL, PITCH_BEND_CENTER);
+                }
                 tiles_midi_note_on(s->midi_channel, s->active_note, velocity);
                 /* Same velocity value driving both -- "mapped to the
                  * velocity curve by default" means the kick and the MIDI
@@ -2044,17 +2177,37 @@ void tiles_expression_scan(void) {
              * poly aftertouch specifically -- basic note-on/off/velocity
              * above are unaffected. tiles_haptics_set_sustain_level()
              * doesn't need a matching guard here: haptics.c's own mute
-             * flag already makes it a no-op (see tiles_haptics_set_muted). */
-            if (!s_expression_muted) {
+             * flag already makes it a no-op (see tiles_haptics_set_muted).
+             * Also gated on non-MPE ownership (s_non_mpe_owner_pad) --
+             * while !s_mpe_enabled, every held pad shares this exact
+             * channel, so without this check whichever pad's channel
+             * pressure happened to change most recently on any given
+             * scan would silently steal the shared channel's pressure
+             * value out from under the others, flickering between
+             * pads with no real ownership rule at all. Deliberately no
+             * forced resync on ownership change here the way pitch
+             * bend gets (see the note-on/end_held_note() sites) --
+             * stale channel pressure for a scan or two is a much
+             * smaller, more cosmetic problem than a note landing at
+             * the wrong PITCH, which is the specific failure this
+             * feature exists to prevent. */
+            if (!s_expression_muted && (s_mpe_enabled || s_non_mpe_owner_pad == pad)) {
                 tiles_midi_send_channel_pressure(s->midi_channel, at);
             }
             tiles_haptics_set_sustain_level(pad, at);
         }
 
-        /* Pitch bend: genuinely per-note now -- every pad with
+        /* Pitch bend: genuinely per-note under MPE -- every pad with
          * pitch_bend_active runs this completely independently on its
-         * own MPE channel, no shared "owner" arbitration needed (see
-         * this file's "Pitch bend from sideways motion" section). */
+         * own MPE channel, no shared "owner" arbitration needed there
+         * (see this file's "Pitch bend from sideways motion" section).
+         * While !s_mpe_enabled, every pad computes its own bend exactly
+         * the same way (unchanged below -- deliberately not gating the
+         * COMPUTATION itself, only whether it actually reaches the
+         * wire, to avoid disturbing this cascade's own carefully-tuned
+         * timing for whichever pad happens to become owner later), but
+         * only the current s_non_mpe_owner_pad's value actually gets
+         * sent -- see the send site below and its own comment. */
         if (s->pitch_bend_active) {
             tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
             if (hs.valid) {
@@ -2446,8 +2599,18 @@ void tiles_expression_scan(void) {
                     uint16_t bend = pitch_bend_14bit_from_cosine_delta(s, delta, now_ms);
                     bend = pitch_bend_apply_vibrato(s, bend, now_ms);
                     if (bend != s->pitch_bend_last_sent) {
+                        /* Updated regardless of ownership below -- this
+                         * is deliberately this pad's own always-fresh
+                         * "true current bend," not just "what was last
+                         * actually transmitted." find_most_recent_
+                         * held_pad()'s caller (end_held_note()'s own
+                         * non-MPE branch) reads exactly this field to
+                         * resync the channel the instant ownership
+                         * hands back to this pad. */
                         s->pitch_bend_last_sent = bend;
-                        tiles_midi_send_pitch_bend(s->midi_channel, bend);
+                        if (s_mpe_enabled || s_non_mpe_owner_pad == pad) {
+                            tiles_midi_send_pitch_bend(s->midi_channel, bend);
+                        }
                     }
                 }
             }

@@ -71,6 +71,29 @@ void tiles_expression_toggle_pitch_bend(void);
  * drive the square button's persistent toggle-state LED glow. */
 bool tiles_expression_is_pitch_bend_enabled(void);
 
+/* Real feedback: "lets make sure the pitch bend works with non mpe
+ * layouts meaning pitch bend wheel... look for the max most
+ * compatible and standardized version." True (the default) is this
+ * file's existing MPE behavior, unchanged: every note claims its own
+ * dynamic Member Channel (see claim_mpe_channel()) so pitch bend and
+ * channel pressure are genuinely per-note. False switches to the
+ * single most standard, universally-supported MIDI layout instead --
+ * every note goes out on TILES_MIDI_MPE_MASTER_CHANNEL (MIDI channel
+ * 1) like a plain non-MPE synth expects, and pitch bend/channel
+ * pressure become the ordinary CHANNEL-WIDE messages a real pitch-
+ * bend wheel sends, not per-note ones. Real feedback on multi-pad
+ * bend ownership: "most recently touched/bent pad wins" -- whichever
+ * held pad was struck most recently drives the shared channel's
+ * continuous controllers; see expression.c's own s_non_mpe_owner_pad
+ * for the full mechanics, including hand-off back to an older still-
+ * held pad when the current owner releases. Toggled live (services/
+ * expression_control.h's own circle+square hold, see that file's own
+ * history of what that gesture used to do) -- see tiles_expression_
+ * set_mpe_enabled()'s own comment for the note/channel-routing
+ * consequences of flipping it while notes are already held. */
+void tiles_expression_set_mpe_enabled(bool enabled);
+bool tiles_expression_is_mpe_enabled(void);
+
 /* Runtime sensitivity setters for services/expression_control.h's
  * expression sub-menu (rows 2 and 4) -- replace what used to be fixed
  * expression.c compile-time constants (PITCH_BEND_MAX_COSINE_DEVIATION,
@@ -81,13 +104,18 @@ bool tiles_expression_is_pitch_bend_enabled(void);
 void tiles_expression_set_pitch_bend_sensitivity(float max_cosine_deviation);
 void tiles_expression_set_aftertouch_sensitivity(uint16_t depth_full_scale);
 
-/* Called by services/expression_control.h when "expression mute" (the
- * circle+square 3-second combo hold) toggles on/off. While muted, pitch
- * bend and poly aftertouch both stop being computed/sent -- if a note
- * currently owns pitch bend, it's reset to center immediately, the same
- * "never leave a note stuck bent" rule tiles_expression_toggle_pitch_bend
- * already follows. Note-on/off and velocity are NOT affected -- basic
- * MIDI keeps working while muted, only the expressive layer stops. */
+/* Called by services/expression_control.h when "expression mute"
+ * toggles on/off. While muted, pitch bend and poly aftertouch both
+ * stop being computed/sent -- if a note currently owns pitch bend,
+ * it's reset to center immediately, the same "never leave a note
+ * stuck bent" rule tiles_expression_toggle_pitch_bend already follows.
+ * Note-on/off and velocity are NOT affected -- basic MIDI keeps
+ * working while muted, only the expressive layer stops. The circle+
+ * square hold that used to trigger this was reassigned to tiles_
+ * expression_set_mpe_enabled()'s own toggle instead (real feedback:
+ * "replace haptic mute combo to the mpe vs regular mode selector") --
+ * this function itself is unchanged and still fully functional, just
+ * currently unreachable from any gesture in expression_control.c. */
 void tiles_expression_set_muted(bool muted);
 
 /* Real feedback: "we have haptics vibration randomly in mini games,

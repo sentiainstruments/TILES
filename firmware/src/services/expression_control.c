@@ -29,16 +29,24 @@
 #define SQUARE_LED_HELD_LEVEL 1.0f
 #define SQUARE_LED_TOGGLE_ON_LEVEL 0.8f
 
-/* How long circle+square must be held together before expression mute
- * toggles -- edge-latched (s_mute_fired below) so a single long hold
+/* How long circle+square must be held together before MPE mode toggles
+ * -- edge-latched (s_mpe_toggle_fired below) so a single long hold
  * can't re-fire, mirroring services/standby.h's own
- * TILES_CIRCLE_SCREENSAVER_HOLD_MS/_DEEP_SLEEP_HOLD_MS pattern. Real
- * feedback: "hold shift and sentia together for 3 seconds" -- lowered
- * 3000 -> 2000 after further real feedback found 3s "too long" in
- * practice. Independent of EXPRESSION_SUBMENU_TOGGLE_HOLD_MS below --
- * different numeric value now, and a completely separate gesture (this
- * needs circle too, that doesn't). */
-#define EXPRESSION_MUTE_HOLD_MS 2000u
+ * TILES_CIRCLE_SCREENSAVER_HOLD_MS/_DEEP_SLEEP_HOLD_MS pattern. This
+ * exact combo used to toggle "expression mute" instead (real feedback
+ * then: "hold shift and sentia together for 3 seconds," lowered 3000
+ * -> 2000 after further feedback found 3s "too long" in practice) --
+ * reassigned by real feedback: "replace haptic mute combo to the mpe
+ * vs regular mode selector standard is mpe." tiles_expression_set_
+ * muted() itself is untouched and still fully functional (see its own
+ * header comment in expression.h), just no longer reachable from any
+ * gesture here -- reusing this exact combo/threshold rather than
+ * inventing a new hold duration for the new meaning, since nothing
+ * about the physical gesture itself needed to change, only what it
+ * does on completion. Independent of EXPRESSION_SUBMENU_TOGGLE_HOLD_MS
+ * below -- different numeric value now, and a completely separate
+ * gesture (this needs circle too, that doesn't). */
+#define EXPRESSION_MPE_TOGGLE_HOLD_MS 2000u
 
 /* How long square must be held ALONE (circle NOT also held) before the
  * sub-menu's momentary preview LOCKS open (sticky) -- real feedback:
@@ -48,23 +56,28 @@
  * square is held (see tiles_expression_control_scan()); this threshold
  * only governs whether it disappears again on release (below the
  * threshold) or stays visible after release until toggled off the same
- * way (at/above it). Same edge-latch shape as EXPRESSION_MUTE_HOLD_MS
- * above (s_submenu_toggle_fired), but tracked against its own
+ * way (at/above it). Same edge-latch shape as EXPRESSION_MPE_TOGGLE_
+ * HOLD_MS above (s_submenu_toggle_fired), but tracked against its own
  * independent hold-start timestamp since it's a different gesture on a
  * different button combination -- deliberately NOT changed together with
  * that one; only "sentia" (square alone) was asked for. */
 #define EXPRESSION_SUBMENU_TOGGLE_HOLD_MS 2000u
 
-/* Mute's LED pattern on square -- "a blinking light with a two blink
- * pattern and rest at medium brightness." Two brief on/off blinks, then
- * a longer rest at MUTE_REST_LEVEL, then repeat. Unmeasured -- a first
- * attempt at pacing that reads clearly as "blink blink... pause" rather
- * than a flutter. */
-#define MUTE_BLINK_ON_MS 120u
-#define MUTE_BLINK_GAP_MS 120u
-#define MUTE_REST_MS 900u
-#define MUTE_BLINK_LEVEL 1.0f
-#define MUTE_REST_LEVEL 0.5f
+/* Non-MPE mode's own ambient LED indicator on square -- real feedback:
+ * "instead of flashing the light should do a soft pulse." MPE is the
+ * default/standard state (real feedback: "standard is mpe"), so this
+ * only ever shows while the NON-default, single-channel mode is
+ * active, the same "ambient reminder you're in a non-default state"
+ * role the mute blink this replaces used to play. Same slow-breathing
+ * shape as services/standby.c's own deep-sleep pulse (DEEP_SLEEP_
+ * PULSE_PERIOD_MS/_MIN/_MAX there) and this file's own transport-
+ * recording pulse elsewhere in this codebase -- a separate copy, same
+ * "same convention, separate copy" precedent this codebase already
+ * uses everywhere else, not a shared constant/function. Unmeasured --
+ * a first guess at pacing, not calibrated against real hardware. */
+#define MPE_DISABLED_PULSE_PERIOD_MS 3000.0f
+#define MPE_DISABLED_PULSE_MIN 0.03f
+#define MPE_DISABLED_PULSE_MAX 0.35f
 
 /* Sentia Instruments' own brand magenta -- reused here (also seen in
  * services/boot_sequence.c's final pulse phase) specifically because
@@ -181,7 +194,12 @@ static bool s_prev_dismiss_btn[4];
 
 static bool s_combo_was_held;
 static uint32_t s_combo_hold_start_ms;
-static bool s_mute_fired;
+static bool s_mpe_toggle_fired;
+/* No longer set by anything in this file (see EXPRESSION_MPE_TOGGLE_
+ * HOLD_MS's own comment) -- kept, not removed, since apply_row() below
+ * and the plain-click guard further down both still correctly react
+ * to it if it's ever true, and tiles_expression_set_muted() itself
+ * remains a real, callable feature. Currently permanently false. */
 static bool s_mute_active;
 
 static bool s_square_alone_was_held;
@@ -340,7 +358,7 @@ void tiles_expression_control_init(void) {
         s_prev_dismiss_btn[i] = false;
     }
     s_combo_was_held = false;
-    s_mute_fired = false;
+    s_mpe_toggle_fired = false;
     s_mute_active = false;
     s_square_alone_was_held = false;
     s_submenu_toggle_fired = false;
@@ -376,11 +394,14 @@ static void set_submenu_visible(bool visible) {
     printf("[expression_control] sub-menu %s\n", visible ? "visible" : "hidden");
 }
 
-static void toggle_mute(void) {
-    s_mute_active = !s_mute_active;
-    printf("[expression_control] expression mute %s\n", s_mute_active ? "enabled" : "disabled");
-    tiles_haptics_set_muted(s_mute_active);
-    tiles_expression_set_muted(s_mute_active);
+/* Real feedback: "replace haptic mute combo to the mpe vs regular
+ * mode selector standard is mpe" -- see EXPRESSION_MPE_TOGGLE_HOLD_MS's
+ * own comment for the full history of this gesture and why the old
+ * toggle_mute() this replaces was removed outright rather than kept
+ * as dead code (nothing calls it anymore). */
+static void toggle_mpe_mode(void) {
+    bool enabled = !tiles_expression_is_mpe_enabled();
+    tiles_expression_set_mpe_enabled(enabled);
 }
 
 /* Reads capacitive touch directly (not services/expression.c's state
@@ -476,25 +497,22 @@ static void handle_square_shift_input(void) {
     s_prev_plus_pressed = plus;
 }
 
-static float mute_blink_level(uint32_t now_ms) {
-    uint32_t cycle_ms = 2u * (MUTE_BLINK_ON_MS + MUTE_BLINK_GAP_MS) + MUTE_REST_MS;
-    uint32_t phase = now_ms % cycle_ms;
-    uint32_t blink_unit = MUTE_BLINK_ON_MS + MUTE_BLINK_GAP_MS;
-
-    if (phase < blink_unit) {
-        return (phase < MUTE_BLINK_ON_MS) ? MUTE_BLINK_LEVEL : 0.0f;
-    }
-    phase -= blink_unit;
-    if (phase < blink_unit) {
-        return (phase < MUTE_BLINK_ON_MS) ? MUTE_BLINK_LEVEL : 0.0f;
-    }
-    return MUTE_REST_LEVEL;
+static float mpe_disabled_pulse_level(uint32_t now_ms) {
+    float phase = (float)now_ms / MPE_DISABLED_PULSE_PERIOD_MS;
+    float raw = 0.5f + 0.5f * sinf(2.0f * EXPRESSION_CONTROL_PI * phase);
+    return MPE_DISABLED_PULSE_MIN + (MPE_DISABLED_PULSE_MAX - MPE_DISABLED_PULSE_MIN) * raw;
 }
 
 static void render_square_led(bool square_held, bool combo_held, uint32_t now_ms) {
     float level;
-    if (s_mute_active) {
-        level = mute_blink_level(now_ms);
+    if (!tiles_expression_is_mpe_enabled()) {
+        /* Real feedback: "standard is mpe... instead of flashing the
+         * light should do a soft pulse" -- ambient reminder that the
+         * non-default, single-channel mode is active, same priority
+         * (wins even while square is also currently held for some
+         * other reason, e.g. opening the sub-menu) the mute blink this
+         * replaced used to have. */
+        level = mpe_disabled_pulse_level(now_ms);
     } else if (combo_held || square_held) {
         level = SQUARE_LED_HELD_LEVEL;
     } else {
@@ -574,7 +592,7 @@ void tiles_expression_control_scan(void) {
      * would produce for as long as all four are going down or coming back
      * up. tiles_game_mode_is_active() above only guards AFTER game mode
      * has actually toggled on (its own hold threshold is shorter than
-     * EXPRESSION_MUTE_HOLD_MS/EXPRESSION_SUBMENU_TOGGLE_HOLD_MS, so that
+     * EXPRESSION_MPE_TOGGLE_HOLD_MS/EXPRESSION_SUBMENU_TOGGLE_HOLD_MS, so that
      * alone mostly avoids a false trigger) -- the real gap is that human
      * fingers don't press or release four buttons in perfect unison, so a
      * brief window where only circle+square (or just one of them) are
@@ -605,9 +623,10 @@ void tiles_expression_control_scan(void) {
      * diamond+square+circle hold (deliberately excludes triangle, see
      * that file's own comment, precisely so it wouldn't collide with
      * game_mode's combo), which still satisfies circle_held&&square_
-     * held for its entire duration -- EXPRESSION_MUTE_HOLD_MS (2s) is
+     * held for its entire duration -- EXPRESSION_MPE_TOGGLE_HOLD_MS (2s,
+     * still the same value this combo used when it toggled mute) is
      * shorter than debug mode's own 8s hold, so every attempt to enter
-     * debug mode was also toggling mute partway through. Requiring
+     * debug mode was also toggling mute (now MPE mode) partway through. Requiring
      * diamond AND triangle to BOTH be up, not just checked together,
      * makes this combo evaluate its own COMPLETE, exact button set --
      * closes the debug-mode gap directly and is strictly stronger
@@ -627,18 +646,18 @@ void tiles_expression_control_scan(void) {
         s_circle_press_had_long_action = false;
     }
 
-    /* Mute: circle+square held EXPRESSION_MUTE_HOLD_MS -- independent of
-     * the sub-menu below, see the file header. */
+    /* MPE mode toggle: circle+square held EXPRESSION_MPE_TOGGLE_HOLD_MS
+     * -- independent of the sub-menu below, see the file header. */
     if (combo_held && !s_combo_was_held) {
         s_combo_hold_start_ms = now_ms;
-        s_mute_fired = false;
+        s_mpe_toggle_fired = false;
     }
     if (combo_held) {
         s_square_press_had_long_action = true;
         s_circle_press_had_long_action = true;
-        if (!s_mute_fired && (now_ms - s_combo_hold_start_ms) >= EXPRESSION_MUTE_HOLD_MS) {
-            s_mute_fired = true;
-            toggle_mute();
+        if (!s_mpe_toggle_fired && (now_ms - s_combo_hold_start_ms) >= EXPRESSION_MPE_TOGGLE_HOLD_MS) {
+            s_mpe_toggle_fired = true;
+            toggle_mpe_mode();
         }
     }
     s_combo_was_held = combo_held;

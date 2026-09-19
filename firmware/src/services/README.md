@@ -7169,5 +7169,72 @@ not its code.
     doesn't resync its virtual-pulse timer when an external clock
     disconnects and tap tempo resumes, risking a burst of pulses fired
     in one scan.
+- **Non-MPE pitch-bend-wheel compatibility mode**, `services/
+  expression.c`/`expression_control.c`: "lets make sure the pitch bend
+  works with non mpe layouts meaning pitch bend wheel." Today, every
+  note claims its own dynamic MPE Member Channel and pitch bend/
+  channel pressure are genuinely per-note -- a receiver that isn't
+  MPE-aware (a plain single-channel synth, or a DAW track set to an
+  ordinary channel instead of an MPE zone) only listens on ONE
+  channel and would silently ignore bend/pressure sent on any of the
+  other 14. Asked what "most compatible" should mean concretely: "look
+  for the max most combaptible and standardized version" -- the answer
+  is MIDI's own original Basic Channel mode (all notes on one channel,
+  pitch bend and channel pressure as ordinary CHANNEL-WIDE messages),
+  the layout virtually every synth supports by default, so that's what
+  `!tiles_expression_is_mpe_enabled()` now switches to: every note
+  goes out on `TILES_MIDI_MPE_MASTER_CHANNEL` instead of a claimed
+  Member Channel, bypassing `claim_mpe_channel()`'s whole pool
+  entirely (nothing to steal-evict when every note already shares one
+  channel).
+  - **Multi-pad bend ownership**: a single shared channel has exactly
+    one live bend/pressure value, but this is a 24-pad polyphonic
+    controller -- asked who should win when more than one pad is held
+    and tilting: "most recently touched/bent pad wins." Each pad now
+    stamps a `touch_claim_seq` (from the same monotonic counter
+    `claim_mpe_channel()` already used for its own steal-priority) at
+    every note-on, regardless of mode. `s_non_mpe_owner_pad` tracks
+    whichever held pad currently drives the shared channel: set to the
+    newly-struck pad on every note-on (always the most recent by
+    construction), and hunted for again among the REMAINING held pads
+    (`find_most_recent_held_pad()`) when the current owner releases --
+    never just dropped to "nobody" while another pad is still
+    genuinely held. Both the note-on claim and the release hand-off
+    force-resend the (new) owner's actual current bend value rather
+    than waiting for it to naturally "change" from its own last-sent
+    value, since the shared channel could be sitting wherever a
+    DIFFERENT pad left it -- the exact "note lands in the wrong pitch"
+    failure this whole feature exists to prevent, just at the channel
+    level instead of the per-note level. Channel pressure gets the
+    same ownership gate (without it, multiple held pads would fight
+    over the shared channel's pressure value every scan) but
+    deliberately no forced resync on hand-off -- stale pressure for a
+    scan or two is a much smaller, more cosmetic problem than a
+    mis-pitched note.
+  - **A real bug this addition would otherwise have introduced,
+    caught before it shipped**: `end_held_note()`'s existing MPE-
+    channel-release line computes `idx = midi_channel -
+    TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL`. On the shared master channel
+    (0) that's `0 - 1`, which underflows a `uint8_t` to 255 --
+    `s_mpe_channels[255]` is 240 bytes past the end of a 15-entry
+    array. Guarded with an explicit `if (midi_channel ==
+    TILES_MIDI_MPE_MASTER_CHANNEL)` branch instead of changing that
+    subtraction, since master-channel notes have no per-channel pool
+    slot to release in the first place.
+  - **The toggle gesture replaces expression mute's old one**: "replace
+    haptic mute combo to the mpe vs regular mode selector standard is
+    mpe, isntead of flashing the light should do a soft pulse." The
+    circle+square 2-second hold that used to call `toggle_mute()` now
+    calls `toggle_mpe_mode()` instead, reusing the exact same combo/
+    threshold rather than inventing a new one. `tiles_expression_set_
+    muted()` itself is untouched and still fully callable -- only its
+    one gesture in `expression_control.c` was reassigned, so mute is
+    currently unreachable from any button until/unless it's given a
+    new one. The square LED's old two-blink mute pattern is replaced
+    with a slow breathing pulse (same shape as `services/standby.c`'s
+    own deep-sleep pulse, a separate copy per this codebase's own
+    convention), shown whenever the non-default (non-MPE) mode is
+    active -- MPE stays the default with no ambient indicator, per
+    "standard is mpe."
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.
