@@ -1842,6 +1842,18 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
     pad_expr_t *stolen = &s_pads[stolen_pad - 1u];
     end_held_note(stolen, stolen_pad);
     stolen->state = PAD_STATE_IDLE;
+    /* Real bug found reviewing this function, not from real feedback:
+     * end_held_note() above sets in_use=false for the stolen channel
+     * (freeing its OLD owner), and this steal path hands that same
+     * channel straight to the NEW pad without ever setting in_use back
+     * to true -- so the free-slot search at the top of this function
+     * would see this exact index as available again on the very next
+     * call, handing the identical channel to a THIRD pad while the
+     * second one is still actively sounding on it. Both would then
+     * share one MPE channel: pitch bend/pressure from either bends the
+     * other's note, and a note-off from either can strand or kill the
+     * other's. */
+    s_mpe_channels[oldest_idx].in_use = true;
     s_mpe_channels[oldest_idx].owner_pad = pad;
     s_mpe_channels[oldest_idx].claim_seq = s_next_mpe_claim_seq++;
     return (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx);

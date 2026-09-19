@@ -7074,5 +7074,100 @@ not its code.
   (`OP_SONG_EDIT_PICK_WINDOW_MS`) is a separate, untouched mechanism
   and is not affected by this -- this feedback named "sequencer"
   specifically.
+- **A proactive bug-hunt pass ("look for bugs elsewhere... and lets
+  optimize stuff"), not from a specific real-hardware report** --
+  8 parallel review passes across the files this session hadn't
+  already been staring at, verified by hand before fixing. Five real
+  ones fixed:
+  - **MPE channel double-assignment (`services/expression.c`,
+    `claim_mpe_channel()`)**: the voice-steal path (used once all 15
+    Member Channels are claimed) called `end_held_note()` on the
+    stolen channel, which correctly frees it (`in_use = false`), then
+    reassigned `owner_pad`/`claim_seq` to the new pad -- but never set
+    `in_use` back to `true`. The very next claim (any other pad) would
+    see that index as free and hand out the SAME channel a note was
+    still actively sounding on, so two pads would share one MIDI
+    channel: pitch-bend/pressure from either would bend the other's
+    note, and a note-off from either could strand or kill the other's.
+    This is the exact "stuck note" bug class this codebase has fought
+    all session, just in a code path (heavy polyphony forcing a steal)
+    nothing had specifically exercised yet. One-line fix: set `in_use
+    = true` right alongside the existing reassignment.
+  - **Triangle/diamond exited game mode instead of steering Snake or
+    controlling Tetris (`services/game_mode.c`,
+    `gm_override_button_pressed()`)**: this function's own comment
+    claimed "Triangle/diamond are never a live control in ANY of the
+    five games," which is simply false -- `gs_handle_input()` (Snake)
+    uses them as up/down, `gt_handle_input()` (Tetris) uses them as
+    rotate/hard-drop. Since this function is checked before either
+    game's own input handler runs, every steer/rotate/drop press
+    silently exited game mode instead. Fixed the same way circle/
+    square already are just below it (their own Pong-paddle carve-out)
+    -- excluded from the override specifically while `GM_STATE_
+    PLAYING_SNAKE`/`_TETRIS` is the active state, not menu-scoped like
+    circle/square (a blanket menu-only rule would also have blocked
+    triangle/diamond from exiting Pong/BreakoutBlocks/Simon Says
+    mid-game, which never used them live and lost nothing under the
+    old unconditional rule).
+  - **Song mode never got the sequencer's own "don't blank the board
+    over a running pattern" fix (`services/op_mode.c`,
+    `tiles_op_mode_is_sequencer_active()`)**: this predicate (which
+    `services/standby.c` uses to pick the long 20/30-minute idle/deep-
+    sleep timeout instead of the short default) only ever checked the
+    regular sequencer's 4 lanes. Song mode's own per-slot background
+    loop keeps advancing every scan regardless of what's displayed too
+    (the identical "keeps running regardless of what's shown" property
+    the sequencer's lanes already have), so a Song pattern looping
+    unattended got no timeout extension at all -- the board would
+    eventually blank over it, the exact regression this function's
+    sequencer-specific fix was originally built to prevent. Extended to
+    also check `s_active_mode == OP_MODE_SONG` and a new `any_song_
+    slot_running()` (mirroring the existing `any_lane_running()`);
+    `s_song_slot_running[]` itself had to move earlier in the file
+    (same "declare the specific array early" precedent as `s_song_
+    capture_active`) since this predicate is defined before Song
+    mode's own playback-state block.
+  - **Exiting Song capture while the step-edit screen's pitch-pick was
+    still open desynced the grid (`services/op_mode.c`, `song_capture_
+    exit()`)**: this function unconditionally re-claimed `standby_
+    active(true)` on exit. Harmless when capture was triggered from
+    melodic/chord/guitar (nothing reads that flag while those modes
+    are active anyway), but genuinely wrong for a case that didn't
+    exist when this was written: capture is a global shift+diamond
+    gesture reachable from anywhere, including while Song's own step-
+    edit screen has a pitch-pick session open on a DIFFERENT slot --
+    forcing standby back on mid-pick left the pads dark/stale instead
+    of the live melodic note-picking surface pick mode depends on.
+    Fixed by gating the restore on `mode_owns_standby_grid(s_active_
+    mode)` -- the exact same check `set_active_mode()` itself already
+    uses on every mode switch -- instead of assuming "true" is always
+    the right answer.
+  - **Step-edit's per-step commit rewrote all 4 flash sectors every
+    single step (`services/op_mode.c`, `song_edit_pick_commit()`)**:
+    unlike every other Song-mode save site (place/delete/capture-exit,
+    each writing once per discrete user action), committing one step's
+    pitch triggered a full `song_store_write_all()` -- a 4-sector
+    erase+program, interrupts disabled for tens of ms, immediately
+    after every individual step. Programming a 16-32 step pattern
+    manually meant 16-32 full flash rewrites instead of one. Fixed by
+    deferring the actual write to `song_edit_exit()` (a new `s_song_
+    edit_dirty` flag, set on any committed step, checked once on
+    leaving the screen) -- one write per editing session, and none at
+    all if nothing was ever committed.
+  - **Five more flagged, not fixed yet** (lower confidence or narrower
+    reach, worth a second look before touching): `end_held_note()`
+    frees an MPE channel by index with no ownership check (compounds
+    the channel bug above if it's ever hit on a stale/reassigned
+    channel); `services/lighting.c`'s underglow setter can race the
+    debug/crash/song-capture override priority chain (same bug class
+    as two already-fixed races this session, unconfirmed on real
+    hardware); `services/hall.c`'s `tiles_hall_init()` doesn't mark a
+    pad's calibration bad if its baseline-seeding read fails during
+    boot; `services/haptics.c`'s voice-ceiling check in `trigger_
+    kick()` treats a pad mid-touch-pulse as neither idle nor counted,
+    potentially bypassing `max_haptic_voices`; `services/midi_clock.c`
+    doesn't resync its virtual-pulse timer when an external clock
+    disconnects and tap tempo resumes, risking a burst of pulses fired
+    in one scan.
 - Everything else (per-pad Hall calibration, DIN MIDI, CV/gate) is not
   built yet.

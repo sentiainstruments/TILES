@@ -1553,13 +1553,25 @@ static void gm_check_toggle_gesture(uint32_t now_ms) {
 
 /* Real feedback: "if cicle cliucked in game menu it exxits to previuos
  * mode and each othere function button oversides gasme mode, exiting
- * and taking to respective menu." Triangle/diamond are never a live
- * control in ANY of the five games (see this file's own per-game input
- * handlers), so they override game mode unconditionally, menu or mid-
- * game alike. Circle/square ARE live Pong paddle controls (SW5/SW6,
- * gp_handle_input()), so overriding them mid-game would break Pong
- * itself -- they only override from the menu screen, matching the
- * "circle clicked in game MENU" framing in the feedback itself. This
+ * and taking to respective menu." This function used to claim
+ * "Triangle/diamond are never a live control in ANY of the five games"
+ * and override unconditionally on that basis -- false: gs_handle_input()
+ * (Snake) uses them as up/down steering and gt_handle_input() (Tetris)
+ * uses them as rotate/hard-drop, both live, both reachable while
+ * actually playing. That false premise meant pressing triangle to
+ * steer Snake upward, or diamond to drop a Tetris piece, silently
+ * exited game mode instead -- a real bug found reviewing this
+ * function, not from real feedback. Fixed the same way circle/square
+ * already are just below: excluded from the override while the
+ * specific game that uses them live is the one actually in progress
+ * (GM_STATE_PLAYING_SNAKE/_TETRIS), not menu-scoped like circle/square
+ * -- a blanket menu-only rule would also block triangle/diamond from
+ * exiting Pong/BreakoutBlocks/Simon Says mid-game, which never used
+ * them live and lost nothing by overriding unconditionally. Circle/
+ * square ARE live Pong paddle controls (SW5/SW6, gp_handle_input()),
+ * so overriding them mid-game would break Pong itself -- they only
+ * override from the menu screen, matching the "circle clicked in game
+ * MENU" framing in the feedback itself. This
  * function doesn't need to restore whatever mode was active before
  * game mode -- op_mode.c's own s_active_mode was never touched while
  * game mode ran (the two are already mutually exclusive by design), so
@@ -1587,14 +1599,14 @@ static bool gm_override_button_pressed(void) {
     bool square = tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
 
     bool triggered = false;
-    if (s_gm_state != GM_STATE_OFF) {
+    if (s_gm_state != GM_STATE_OFF && s_gm_state != GM_STATE_PLAYING_SNAKE && s_gm_state != GM_STATE_PLAYING_TETRIS) {
         if ((triangle && !s_gm_override_prev_triangle) || (diamond && !s_gm_override_prev_diamond)) {
             triggered = true;
         }
-        if (s_gm_state == GM_STATE_MENU &&
-            ((circle && !s_gm_override_prev_circle) || (square && !s_gm_override_prev_square))) {
-            triggered = true;
-        }
+    }
+    if (s_gm_state == GM_STATE_MENU &&
+        ((circle && !s_gm_override_prev_circle) || (square && !s_gm_override_prev_square))) {
+        triggered = true;
     }
 
     s_gm_override_prev_triangle = triangle;

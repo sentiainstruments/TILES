@@ -4427,6 +4427,39 @@ static bool any_lane_running(void) {
     return false;
 }
 
+/* Forward-declared this early (moved out of the rest of Song mode's
+ * own playback-state block, much further down) because tiles_op_mode_
+ * is_sequencer_active() just below needs it directly, same "declare
+ * the specific array early" precedent this file already uses for
+ * s_song_capture_active/s_song_edit_pick_active. Real feedback: "9
+ * song tracks" -- up to OP_SONG_MAX_CONCURRENT can be genuinely
+ * running at once, indexed by slot; see this file's own "Song mode"
+ * section for everything else that reads/writes it. */
+static bool s_song_slot_running[OP_SONG_NUM_SLOTS];
+
+/* Real bug found reviewing this function, not from real feedback:
+ * mirrors any_lane_running() above but for Song mode's own tracks,
+ * which tiles_op_mode_scan()'s own per-slot loop keeps advancing in
+ * the background regardless of which mode is displayed -- the exact
+ * same "keeps running regardless of what's displayed" property
+ * any_lane_running() already exists to answer for the regular
+ * sequencer's 4 lanes (see that loop's own comment, right where it
+ * calls song_advance_clock()). tiles_op_mode_is_sequencer_active()
+ * used to only check the sequencer's own lanes, so a Song pattern
+ * looping unattended in the background got no extension of standby's
+ * short idle/deep-sleep timeout at all -- the same regression the
+ * sequencer-specific version of this fix was built to prevent, just
+ * never extended to the mode that didn't exist yet when it was
+ * written. */
+static bool any_song_slot_running(void) {
+    for (uint8_t slot = 0u; slot < OP_SONG_NUM_SLOTS; slot++) {
+        if (s_song_slot_running[slot]) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* SW1/SW2 ("-"/"+") -- sequencer mode's own transport/length (unchanged),
  * plus guitar mode's fret-window shift (real feedback: "-+ change frets
  * up and down"). One function, not two, so both share a single press-
@@ -5112,8 +5145,23 @@ bool tiles_op_mode_is_sequencer_active(void) {
      * stopped (nothing started via "+" yet); this function's own point is
      * "is a pattern genuinely audible in the background," which any_lane_
      * running() answers directly instead of through the shared clock's
-     * derived flag. */
-    return s_active_mode == OP_MODE_SEQUENCER || any_lane_running();
+     * derived flag.
+     * Extended for Song mode -- real bug found reviewing this function,
+     * not from real feedback: Song mode's own per-slot loop in tiles_
+     * op_mode_scan() keeps advancing every scan regardless of what's
+     * displayed too (same "keeps running regardless of what's
+     * displayed" property, see that loop's own comment), but this
+     * function was never taught to recognize it, so a Song pattern
+     * looping unattended got no extension of the longer idle/deep-
+     * sleep timeout at all -- standby.c's short default would engage
+     * and eventually blank the board over a still-playing pattern,
+     * exactly the regression this function's own sequencer-specific
+     * fix above was written to prevent. Name is now a little narrower
+     * than what it actually answers ("is a pattern-based mode active
+     * or genuinely still running"), kept as-is rather than renaming a
+     * public accessor for two call sites' worth of clarity. */
+    return s_active_mode == OP_MODE_SEQUENCER || any_lane_running() || s_active_mode == OP_MODE_SONG ||
+           any_song_slot_running();
 }
 
 bool tiles_op_mode_has_menu_open(void) {
@@ -5263,8 +5311,9 @@ static bool s_song_slot_occupied[OP_SONG_NUM_SLOTS];
  * at_pulse[]/s_seq_note_sounding[]/s_seq_sounding_notes[][]/_note_
  * count[]) since the actual advance/fire logic (still to come) will
  * need the identical shape of bookkeeping, just indexed by slot
- * instead of lane. */
-static bool s_song_slot_running[OP_SONG_NUM_SLOTS];
+ * instead of lane. s_song_slot_running[] itself is declared much
+ * earlier now, right before any_lane_running()/tiles_op_mode_is_
+ * sequencer_active() -- see that declaration's own comment for why. */
 static uint8_t s_song_slot_channel[OP_SONG_NUM_SLOTS]; /* valid only while running */
 static uint8_t s_song_current_step[OP_SONG_NUM_SLOTS];
 static uint32_t s_song_step_started_at_pulse[OP_SONG_NUM_SLOTS];
@@ -5932,6 +5981,19 @@ static uint8_t s_song_edit_slot; /* 0-based, valid iff s_song_edit_active */
 static uint8_t s_song_edit_page; /* 0-7, which of the 8 pages is currently shown */
 static bool s_song_edit_step_prev_touched[OP_SONG_STEPS_PER_PAGE];
 static bool s_song_edit_page_prev_touched[OP_SONG_NUM_PAGES];
+/* Real bug found reviewing this section, not from real feedback:
+ * song_edit_pick_commit() used to call song_store_write_all() (a full
+ * 4-sector erase+program, interrupts disabled) on every single step's
+ * commit -- fine for a one-off tweak, but programming a pattern
+ * step-by-step meant a full flash rewrite after every individual
+ * step instead of once for the whole editing session, unlike every
+ * other Song-mode save site (song_place()/song_delete_slot()/song_
+ * capture_exit()), which each write once per discrete user action.
+ * Fixed by deferring the actual write to song_edit_exit() (once per
+ * session, and only if anything actually changed this session --
+ * opening edit and backing out without committing a single step
+ * writes nothing at all). */
+static bool s_song_edit_dirty;
 
 /* Valid only while s_song_edit_pick_active. */
 static uint8_t s_song_edit_pick_step;        /* 0..127 -- the step within the FULL pattern being picked */
@@ -5970,6 +6032,7 @@ static void song_edit_enter(uint8_t pad) {
     s_song_edit_slot = (uint8_t)(pad - 1u);
     s_song_edit_page = 0u;
     s_song_edit_pick_active = false;
+    s_song_edit_dirty = false;
     for (uint8_t s = 0u; s < OP_SONG_STEPS_PER_PAGE; s++) {
         s_song_edit_step_prev_touched[s] = false;
     }
@@ -6020,7 +6083,9 @@ static void song_edit_pick_commit(void) {
     for (uint8_t i = 0u; i < OP_SONG_MAX_NOTES_PER_STEP; i++) {
         pat->step_notes[s_song_edit_pick_step][i] = (i < s_song_edit_pick_count) ? s_song_edit_pick_notes[i] : 0xFFu;
     }
-    song_store_write_all();
+    /* Flash write deferred to song_edit_exit() -- see s_song_edit_
+     * dirty's own comment for why. */
+    s_song_edit_dirty = true;
     s_song_edit_pick_active = false;
     tiles_note_map_set_scale(s_song_edit_pick_prev_scale);
     tiles_lighting_set_standby_active(true);
@@ -6030,6 +6095,10 @@ static void song_edit_pick_commit(void) {
 static void song_edit_exit(void) {
     if (s_song_edit_pick_active) {
         song_edit_pick_cancel();
+    }
+    if (s_song_edit_dirty) {
+        song_store_write_all();
+        s_song_edit_dirty = false;
     }
     s_song_edit_active = false;
     printf("[op_mode] song edit -> off\n");
@@ -6494,8 +6563,31 @@ static void song_capture_exit(void) {
     song_capture_end_all_sounding_notes();
     s_song_capture_active = false;
     tiles_note_map_set_scale(s_song_capture_prev_scale);
-    tiles_lighting_set_standby_active(true);
-    tiles_buttons_set_standby_active(true);
+    /* Real bug found reviewing this function, not from real feedback:
+     * used to unconditionally re-claim standby_active(true), which is
+     * only actually correct when returning to a screen that owns the
+     * standby grid. Harmless when capture was triggered from melodic/
+     * chord/guitar (mode_owns_standby_grid() is false for those either
+     * way, so nothing ever reads the flag while they're active), but
+     * genuinely wrong for the one case that didn't exist when this was
+     * first written: capture triggered (via shift+diamond, reachable
+     * from anywhere) while Song mode's OWN step-edit screen has a
+     * pitch-pick session open (s_song_edit_pick_active) -- forcing
+     * standby back on mid-pick left the pad grid dark/stale instead of
+     * the live melodic note-picking surface pick mode depends on,
+     * since nothing else was painting pads for it. mode_owns_standby_
+     * grid() already correctly answers "should standby be on right
+     * now" for every case including this one (s_song_capture_active is
+     * already false by this point, so it reads s_song_edit_pick_
+     * active's CURRENT value) -- same pattern set_active_mode() itself
+     * already uses on every mode switch. */
+    if (mode_owns_standby_grid(s_active_mode)) {
+        tiles_lighting_set_standby_active(true);
+        tiles_buttons_set_standby_active(true);
+    } else {
+        tiles_lighting_set_standby_active(false);
+        tiles_buttons_set_standby_active(false);
+    }
     song_store_write_all();
     printf("[op_mode] song capture -> off\n");
 }

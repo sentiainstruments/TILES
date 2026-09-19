@@ -324,16 +324,20 @@ bool tiles_op_mode_owns_octave_buttons(void);
  * the blanket accessor above for exactly that reason. */
 bool tiles_op_mode_owns_pad(uint8_t logical_pad);
 
-/* True whenever sequencer mode is the currently active mode, regardless
- * of which sequencer sub-view (pitch assign, normal step view, the
- * restored pattern bank -- see this file's own "Pattern bank" section) is
- * showing -- OR whenever a pattern is genuinely still running in the
- * background while some OTHER mode is displayed (see op_mode.c's own
- * "sequencer should not stop if mode is changed" fix). Used by
- * services/standby.h to give sequencer mode a
- * longer idle timeout before screensaver/deep sleep than plain melodic
- * idle gets -- real feedback: "sleep screensaver should be set to 20
- * minute in sequencer mode since its a more stratic thing." */
+/* True whenever sequencer mode OR Song mode is the currently active
+ * mode, regardless of which sub-view (pitch assign, normal step view,
+ * the restored pattern bank for sequencer; track-overview or the
+ * step-edit screen for Song) is showing -- OR whenever a pattern is
+ * genuinely still running in the background while some OTHER mode is
+ * displayed (see op_mode.c's own "sequencer should not stop if mode is
+ * changed" fix, and its Song-mode equivalent). Used by services/
+ * standby.h to give both modes a longer idle timeout before
+ * screensaver/deep sleep than plain melodic idle gets -- real
+ * feedback: "sleep screensaver should be set to 20 minute in sequencer
+ * mode since its a more stratic thing" (Song mode's own inclusion is
+ * this codebase's own extension of that same reasoning, not separately
+ * requested -- a Song pattern looping unattended is exactly as
+ * "static" a thing as a sequencer pattern doing the same). */
 bool tiles_op_mode_is_sequencer_active(void);
 
 /* True while any of this module's own sub-views is open: the top-level
