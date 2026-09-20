@@ -3109,6 +3109,20 @@ static bool s_song_edit_active;
 static void song_edit_exit(void);
 static void song_edit_pick_cancel(void); /* needed this early too -- handle_diamond_transport()'s own back-gesture branch calls it directly */
 static void scene_send_stop_all(void); /* needed this early too -- handle_diamond_transport()'s own Scene Launch master-stop branch calls it directly */
+static void scene_send_track_offset(uint8_t offset); /* needed this early too -- handle_transport_and_length()'s own "-"/"+" pan branches and set_active_mode()'s own mode-entry broadcast both call it directly */
+
+/* Scene Launch mode's own track-pan state -- pulled up here (out of
+ * this file's own "Scene Launch mode" section, well further down)
+ * because set_active_mode() and handle_transport_and_length() both
+ * need it, same "declare the specific thing early" precedent this file
+ * already uses for Song mode's own early-needed statics. Column c
+ * (OP_SCENE_TRACK_COL_MIN..MAX) shows track (s_scene_track_offset + c
+ * - OP_SCENE_TRACK_COL_MIN); OP_SCENE_MAX_TRACKS bounds both this and
+ * the state array that actually stores per-track/scene clip data. */
+#define OP_SCENE_MAX_TRACKS 64u
+#define OP_SCENE_TRACK_COL_MIN 1u
+#define OP_SCENE_TRACK_COL_MAX 5u
+static uint8_t s_scene_track_offset;
 
 static void set_active_mode(tiles_op_mode_t mode) {
     if (s_song_capture_active && mode != s_active_mode) {
@@ -3246,6 +3260,15 @@ static void set_active_mode(tiles_op_mode_t mode) {
      * CHORD/GUITAR anyway (sequencer claims standby_active, making any
      * override here a no-op per buttons.h's own contract). */
     tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
+    if (mode == OP_MODE_SCENE_LAUNCH) {
+        /* Real feedback (pending): "i need that outline for tiles as
+         * well" -- Ableton's own session-ring overlay needs to know
+         * which 5-track window is visible the instant this mode opens,
+         * not just wait for the next "-"/"+" press (which may never
+         * come if the window was already panned before switching away
+         * and back). */
+        scene_send_track_offset(s_scene_track_offset);
+    }
     printf("[op_mode] active mode -> %d\n", (int)mode);
 }
 
@@ -4500,19 +4523,6 @@ static bool s_song_slot_running[OP_SONG_NUM_SLOTS];
  * sequencer-specific version of this fix was built to prevent, just
  * never extended to the mode that didn't exist yet when it was
  * written. */
-/* Scene Launch mode's own track-pan state -- pulled up here (out of
- * this file's own "Scene Launch mode" section, well further down)
- * because handle_transport_and_length() just below needs it for "-"/
- * "+", same "declare the specific thing early" precedent this file
- * already uses for Song mode's own early-needed statics. Column c
- * (OP_SCENE_TRACK_COL_MIN..MAX) shows track (s_scene_track_offset + c
- * - OP_SCENE_TRACK_COL_MIN); OP_SCENE_MAX_TRACKS bounds both this and
- * the state array that actually stores per-track/scene clip data. */
-#define OP_SCENE_MAX_TRACKS 64u
-#define OP_SCENE_TRACK_COL_MIN 1u
-#define OP_SCENE_TRACK_COL_MAX 5u
-static uint8_t s_scene_track_offset;
-
 static bool any_song_slot_running(void) {
     for (uint8_t slot = 0u; slot < OP_SONG_NUM_SLOTS; slot++) {
         if (s_song_slot_running[slot]) {
@@ -4615,6 +4625,7 @@ static void handle_transport_and_length(uint32_t now_ms) {
              * this file. */
             if (s_scene_track_offset > 0u) {
                 s_scene_track_offset--;
+                scene_send_track_offset(s_scene_track_offset);
             }
         }
         s_minus_used_as_combo = false;
@@ -4662,6 +4673,7 @@ static void handle_transport_and_length(uint32_t now_ms) {
         } else if (scene_launch_active) {
             if (s_scene_track_offset < OP_SCENE_MAX_TRACKS - OP_SCENE_TRACK_COL_MAX) {
                 s_scene_track_offset++;
+                scene_send_track_offset(s_scene_track_offset);
             }
         }
         s_plus_used_as_combo = false;
@@ -6757,6 +6769,20 @@ static void song_capture_exit(void) {
 #define OP_SCENE_MSG_FIRE_CLIP 0x01u
 #define OP_SCENE_MSG_LAUNCH_SCENE 0x02u
 #define OP_SCENE_MSG_STOP_ALL 0x03u
+/* Real feedback: "re pushing a playing clip pad all the way down or
+ * close to that stops the individual clip" -- distinct from FIRE_CLIP
+ * above (a fresh touch, which always launches/retriggers): this is a
+ * deep press on a clip already reported is_playing, checked continuously
+ * while held (not just the touch edge), see handle_scene_launch_taps()'s
+ * own deep-press branch below. */
+#define OP_SCENE_MSG_STOP_CLIP 0x04u
+/* Real feedback (pending): "i need that outline for tiles as well" --
+ * lets Ableton's own SessionComponent-driven session-ring overlay track
+ * which 5-track window is actually visible on the hardware right now.
+ * Sent once on Scene Launch mode entry and again every time "-"/"+"
+ * changes s_scene_track_offset -- see scene_send_track_offset()'s own
+ * call sites. */
+#define OP_SCENE_MSG_SET_TRACK_OFFSET 0x05u
 /* Ableton -> TILES (see this section's own scene_on_sysex() below). */
 #define OP_SCENE_MSG_CLIP_STATE 0x10u
 #define OP_SCENE_MSG_SCENE_STATE 0x11u
@@ -6801,6 +6827,22 @@ typedef struct {
 static op_scene_row_state_t s_scene_row[OP_SCENE_NUM_ROWS];
 
 static bool s_scene_prev_pad_touched[TILES_NUM_PADS];
+/* Edge-latches the deep-press stop-clip gesture so a continuous hold
+ * past the threshold sends OP_SCENE_MSG_STOP_CLIP exactly once, not
+ * every scan tick -- reset the moment the pad is released, same
+ * "sticky-until-release" shape s_pattern_bank_touch_started_with_shift
+ * already established elsewhere in this file. */
+static bool s_scene_deep_press_sent[TILES_NUM_PADS];
+
+/* Real feedback: "re pushing a playing clip pad all the way down or
+ * close to that stops the individual clip." Deliberately higher than
+ * OP_MENU_SELECT_DEPTH_THRESHOLD's 50% menu-select depth -- "all the
+ * way down" reads as a much deeper press than a menu tap, and this
+ * gesture only ever applies to a clip that's already playing, so a
+ * lower threshold risks stopping a clip the player only meant to
+ * retrigger. Unmeasured -- a first guess, not calibrated against real
+ * hardware. */
+#define OP_SCENE_STOP_CLIP_DEPTH_THRESHOLD 700.0f
 
 /* Real feedback: "when we trigger any scene it flashes once in sentia
  * color" -- same two-state flash/rest shape this file's other flash
@@ -6841,7 +6883,21 @@ static void scene_send_launch_scene(uint8_t scene) {
  * transport()'s own Scene Launch branch for why shift+diamond was free
  * to claim for this here). */
 static void scene_send_stop_all(void) {
+    printf("[op_mode] scene launch: shift+diamond -> stop all clips\n");
     uint8_t msg[3] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_STOP_ALL};
+    tiles_midi_send_sysex(msg, sizeof(msg));
+}
+
+static void scene_send_stop_clip(uint8_t track, uint8_t scene) {
+    uint8_t msg[5] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_STOP_CLIP, track, scene};
+    tiles_midi_send_sysex(msg, sizeof(msg));
+}
+
+/* See OP_SCENE_MSG_SET_TRACK_OFFSET's own comment -- keeps Ableton's
+ * SessionComponent-driven session-ring overlay in sync with whichever
+ * 5-track window s_scene_track_offset currently shows. */
+static void scene_send_track_offset(uint8_t offset) {
+    uint8_t msg[4] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_SET_TRACK_OFFSET, offset};
     tiles_midi_send_sysex(msg, sizeof(msg));
 }
 
@@ -6909,6 +6965,9 @@ static void scene_launch_init(void) {
     for (uint8_t row = 0u; row < OP_SCENE_NUM_ROWS; row++) {
         s_scene_row[row] = (op_scene_row_state_t){0};
     }
+    for (uint8_t pad = 0u; pad < TILES_NUM_PADS; pad++) {
+        s_scene_deep_press_sent[pad] = false;
+    }
     s_scene_track_offset = 0u;
     tiles_midi_in_register_sysex_callback(scene_on_sysex);
 }
@@ -6917,16 +6976,16 @@ static void handle_scene_launch_taps(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         bool touched = tiles_touch_is_touched(pad);
         bool was_touched = s_scene_prev_pad_touched[pad - 1u];
+        /* board_pad_for_row_col()'s own inverse -- pad = (row-1)*6
+         * + col, rows/cols both 1-based (see that function's own
+         * comment in board_layout.h). Row maps 1:1 onto scene
+         * index (row 1 = scene 0) since this mode owns the WHOLE
+         * grid, unlike the top-level mode menu's own single-row
+         * OP_MENU_ROW carve-out. */
+        uint8_t col = (uint8_t)(((pad - 1u) % 6u) + 1u);
+        uint8_t scene = (uint8_t)((pad - 1u) / 6u);
         if (touched && !was_touched) {
             tiles_haptics_trigger_touch_pulse(pad);
-            /* board_pad_for_row_col()'s own inverse -- pad = (row-1)*6
-             * + col, rows/cols both 1-based (see that function's own
-             * comment in board_layout.h). Row maps 1:1 onto scene
-             * index (row 1 = scene 0) since this mode owns the WHOLE
-             * grid, unlike the top-level mode menu's own single-row
-             * OP_MENU_ROW carve-out. */
-            uint8_t col = (uint8_t)(((pad - 1u) % 6u) + 1u);
-            uint8_t scene = (uint8_t)((pad - 1u) / 6u);
             if (col == OP_SCENE_LAUNCH_COL) {
                 scene_send_launch_scene(scene);
                 s_scene_trigger_flash_active = true;
@@ -6935,6 +6994,27 @@ static void handle_scene_launch_taps(void) {
                 uint8_t track = (uint8_t)(s_scene_track_offset + (col - OP_SCENE_TRACK_COL_MIN));
                 scene_send_fire_clip(track, scene);
             }
+        }
+        /* Real feedback: "re pushing a playing clip pad all the way
+         * down or close to that stops the individual clip." Checked
+         * every scan while held (not just the touch edge, unlike fire
+         * above) -- deepening an already-committed touch into a stop
+         * is exactly the gesture described, not a fresh press of its
+         * own. Scoped to track columns only (not the scene-launch
+         * column) and to a clip already reported is_playing -- pressing
+         * hard on a stopped clip should never accidentally stop
+         * something that isn't running. */
+        if (touched && col >= OP_SCENE_TRACK_COL_MIN && col <= OP_SCENE_TRACK_COL_MAX &&
+            !s_scene_deep_press_sent[pad - 1u]) {
+            uint8_t track = (uint8_t)(s_scene_track_offset + (col - OP_SCENE_TRACK_COL_MIN));
+            if (track < OP_SCENE_MAX_TRACKS && s_scene_clip[track][scene].is_playing &&
+                (float)tiles_hall_get_depth(pad) > OP_SCENE_STOP_CLIP_DEPTH_THRESHOLD) {
+                scene_send_stop_clip(track, scene);
+                s_scene_deep_press_sent[pad - 1u] = true;
+            }
+        }
+        if (!touched) {
+            s_scene_deep_press_sent[pad - 1u] = false;
         }
         s_scene_prev_pad_touched[pad - 1u] = touched;
     }

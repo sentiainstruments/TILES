@@ -89,6 +89,18 @@ copy of the folder and a restart so Ableton reloads it.
 should be shift diamond." Distinct from the diamond's own plain click
 (transport play/stop), which still works unchanged in this mode.
 
+**Stop one clip**: pressing a playing clip's pad all the way down (not
+just a normal touch) stops that one clip specifically -- real feedback,
+"re pushing a playing clip pad all the way down or close to that stops
+the individual clip."
+
+**Session-ring outline**: Scene Launch mode now shows Ableton's own
+built-in session-ring box in Session View, sized to the same 5-track x
+4-scene window the hardware shows and following the same "-"/"+" pan --
+real feedback, "i need that outline for tiles as well," after finding
+out the box the user had seen previously was actually their other
+(Novation) controller's own overlay, not anything TILES's script drew.
+
 **Debugging**: real feedback found colors weren't showing on first
 try -- root cause was `scene_launch.py` monkey-patching an attribute
 directly onto Ableton's own native `Clip` object, which isn't

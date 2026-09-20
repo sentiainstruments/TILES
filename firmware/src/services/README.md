@@ -7510,6 +7510,37 @@ not its code.
     the diamond's plain-click transport Stop, which still works
     unchanged in this mode. See `handle_diamond_transport()`'s own
     Scene Launch branch, checked ahead of the generic shift+diamond
-    branch so it wins over it for this one mode only.
+    branch so it wins over it for this one mode only. Also printf-traces
+    itself (`scene_send_stop_all()`'s own line) over the USB CDC console
+    as a debugging aid, since this specific gesture was reported not
+    firing in Ableton with no other lead yet to root-cause it against.
+  - **Stop one clip**: real feedback, "re pushing a playing clip pad all
+    the way down or close to that stops the individual clip." Checked
+    every scan while a pad is held (not just the touch edge, unlike
+    fire), scoped to a clip already reported `is_playing` and a deep
+    Hall-depth press (`OP_SCENE_STOP_CLIP_DEPTH_THRESHOLD`, deliberately
+    higher than the menu picker's own 50% select depth -- unmeasured,
+    a first guess). New SysEx message `0x04` calls the real per-clip
+    `Clip.stop()` (confirmed against AbletonOSC's own `clip.py`, which
+    wires the same method to its own `/live/clip/stop` handler) --
+    distinct from `ClipSlot.fire()`, which retriggers rather than stops
+    an already-playing clip.
+  - **Session-ring outline**: real feedback, "the box was from my
+    novation. i need that outline for tiles as well tho" -- the red box
+    the user saw was their OTHER (Novation) controller's own Ableton
+    session-ring overlay in Session View, not anything TILES's script
+    drew. `scene_launch.py` now owns a plain `_Framework.SessionComponent`
+    (Ableton's own framework class for exactly this box), sized to the
+    same 5-track x 4-scene window this file's own grid shows and kept
+    in sync via a new SysEx message `0x05` (sent once on Scene Launch
+    mode entry and again on every "-"/"+" pan, see `scene_send_track_
+    offset()`'s own call sites in `set_active_mode()`/`handle_transport_
+    and_length()`). This module's own first use of `SessionComponent`
+    rather than raw Live API listeners -- genuinely unconfirmed whether
+    Ableton draws the ring with no `ButtonMatrixElement` ever bound to
+    it, since this script keeps its own SysEx-based color feedback
+    instead of handing that job to the component; wrapped in the same
+    try/except `_connect()` already runs under, so a wrong guess here
+    can't take clip fires/colors down with it.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

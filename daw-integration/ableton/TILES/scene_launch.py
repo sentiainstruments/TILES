@@ -38,10 +38,26 @@ handle_sysex) -- see that method's own comment:
         F0 7D 01 01 <track> <scene>              F7   fire clip
         F0 7D 01 02 <scene>                       F7   launch scene
         F0 7D 01 03                               F7   stop all clips (master stop)
+        F0 7D 01 04 <track> <scene>               F7   stop that one clip
+        F0 7D 01 05 <offset>                      F7   visible track window changed (session ring only)
 
     Ableton -> TILES:
         F0 7D 01 10 <track> <scene> <flags> <r7> <g7> <b7> F7   clip state
         F0 7D 01 11 <scene> <flags> <r7> <g7> <b7>         F7   scene state
+
+Also owns a plain _Framework.SessionComponent (see _connect()'s own
+comment) purely for Ableton's own built-in session-ring overlay in
+Session View -- real feedback: "the box was from my novation. i need
+that outline for tiles as well tho." Sized to the same 5-track x
+4-scene window op_mode.c's own grid shows, kept in sync with
+s_scene_track_offset via message 0x05 above. This is this module's own
+first use of SessionComponent (previously: only raw Live API listeners)
+-- genuinely unconfirmed whether Ableton draws the ring without any
+ButtonMatrixElement ever bound to it, since this script keeps driving
+its own SysEx-based color feedback instead of handing that job to the
+component. Wrapped in the same try/except as the rest of _connect(), so
+if this guess is wrong it logs and leaves clip fires/colors working
+either way.
 
     flags bit 0 = has_clip (clip state only), bit 1 = is_playing (clip
     state only), bit 2 = is_triggered (both). <r7>/<g7>/<b7> are each
@@ -58,12 +74,16 @@ own Q&A settled "-"/"+" as a TRACK pan, not a scene page, for this
 version).
 """
 
+from _Framework.SessionComponent import SessionComponent
+
 SYSEX_MFR_ID = 0x7D
 SYSEX_SUB_ID = 0x01
 
 MSG_FIRE_CLIP = 0x01
 MSG_LAUNCH_SCENE = 0x02
 MSG_STOP_ALL = 0x03
+MSG_STOP_CLIP = 0x04
+MSG_SET_TRACK_OFFSET = 0x05
 MSG_CLIP_STATE = 0x10
 MSG_SCENE_STATE = 0x11
 
@@ -76,6 +96,13 @@ FLAG_IS_TRIGGERED = 0x04
 # ever change there.
 MAX_TRACKS = 64
 NUM_SCENES = 4
+
+# Must match op_mode.c's own OP_SCENE_TRACK_COL_MAX - OP_SCENE_TRACK_COL_MIN
+# + 1 -- the number of track columns actually shown on the hardware at
+# once, used only to size the SessionComponent ring, not the clip/scene
+# cache above (which still tracks every MAX_TRACKS regardless of what's
+# currently scrolled into view).
+NUM_VISIBLE_TRACKS = 5
 
 
 def _color_to_wire_rgb(color_int):
@@ -116,6 +143,7 @@ class SceneLaunch(object):
         # object's __init__ if it ever raised).
         self._clip_color_listeners = {}  # {(track_index, scene_index): (clip, color_cb)}
         self._scene_listeners = []  # list of (scene, is_triggered_cb, color_cb)
+        self._session = None  # SessionComponent, created in _connect() -- see that method's own comment
         try:
             self._connect()
             self._log("connected")
@@ -238,6 +266,30 @@ class SceneLaunch(object):
                 self._clip_slot_listeners.append((clip_slot, has_clip_cb, playing_status_cb, is_triggered_cb))
                 self._on_has_clip_changed(track_index, scene_index, clip_slot)
 
+        # Real feedback: "the box was from my novation. i need that
+        # outline for tiles as well tho" -- Ableton's own built-in
+        # session-ring overlay in Session View, which SessionComponent
+        # (Ableton's own framework class for exactly this) draws
+        # automatically once it's given a size and an offset. Created
+        # here, inside the same try/except _connect() already runs
+        # under, so a bad guess about this newer API can't take the
+        # already-working clip/scene state above down with it. Not
+        # wired to any ButtonMatrixElement -- this script keeps driving
+        # LED feedback itself over the existing SysEx protocol, so this
+        # component's only job is the visual ring; genuinely unconfirmed
+        # whether that ring still draws with no buttons ever bound to
+        # it (see this module's own docstring).
+        self._session = SessionComponent(NUM_VISIBLE_TRACKS, num_scenes)
+        self._session.set_offsets(0, 0)
+
+    def set_track_offset(self, offset):
+        """Called from handle_sysex() below whenever op_mode.c's own
+        "-"/"+" pan changes which 5-track window is visible, and once on
+        Scene Launch mode entry -- keeps the session-ring overlay
+        pointing at the same window the hardware is actually showing."""
+        if self._session is not None:
+            self._session.set_offsets(offset, 0)
+
     def _on_has_clip_changed(self, track_index, scene_index, clip_slot):
         """Fired whenever a slot gains or loses a clip (also called once
         directly from _connect() to seed the initial state) -- only
@@ -310,8 +362,35 @@ class SceneLaunch(object):
             # own handle_diamond_transport() for the firmware-side gating
             # that keeps this scoped to Scene Launch mode only).
             self._song.stop_all_clips()
+        elif msg_type == MSG_STOP_CLIP and len(midi_bytes) == 5:
+            # Real feedback: "re pushing a playing clip pad all the way
+            # down or close to that stops the individual clip." Clip.stop()
+            # is the real per-clip stop (confirmed against AbletonOSC's
+            # own clip.py, which registers a "/live/clip/stop" handler
+            # calling it directly) -- distinct from ClipSlot.fire(), which
+            # retriggers rather than stops an already-playing clip.
+            track_index, scene_index = midi_bytes[3], midi_bytes[4]
+            tracks = self._song.tracks
+            scenes = self._song.scenes
+            if track_index < len(tracks) and scene_index < len(scenes):
+                clip_slot = tracks[track_index].clip_slots[scene_index]
+                if clip_slot.has_clip:
+                    clip_slot.clip.stop()
+        elif msg_type == MSG_SET_TRACK_OFFSET and len(midi_bytes) == 4:
+            self.set_track_offset(midi_bytes[3])
 
     def disconnect(self):
+        if self._session is not None:
+            # Not registered via the control surface's own
+            # register_components() (this object was never passed to
+            # that), so nothing else calls this automatically -- but
+            # defensive all the same, matching every other cleanup call
+            # in this method, in case disconnecting twice or from a
+            # partially-failed connect ever raises.
+            try:
+                self._session.disconnect()
+            except RuntimeError:
+                pass
         for scene, is_triggered_cb, color_cb in self._scene_listeners:
             try:
                 scene.remove_is_triggered_listener(is_triggered_cb)

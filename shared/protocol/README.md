@@ -122,6 +122,8 @@ Real-Time bytes) and handled by `firmware/src/services/op_mode.c`'s own
 | TILES -> Ableton | `0x01` | `track, scene` | Fire that track's clip in that scene |
 | TILES -> Ableton | `0x02` | `scene` | Launch the whole scene (every track's clip in that row) |
 | TILES -> Ableton | `0x03` | none | Stop all clips (master stop) -- shift+diamond in Scene Launch mode, see op_mode.c's own handle_diamond_transport() |
+| TILES -> Ableton | `0x04` | `track, scene` | Stop that one clip -- deep press on an already-playing clip's pad |
+| TILES -> Ableton | `0x05` | `offset` | Visible track window changed -- keeps Ableton's own session-ring overlay in sync, no cell/color effect |
 | Ableton -> TILES | `0x10` | `track, scene, flags, r7, g7, b7` | One clip slot's current state |
 | Ableton -> TILES | `0x11` | `scene, flags, r7, g7, b7` | One scene's current state |
 
