@@ -13,24 +13,31 @@ Honesty about confidence, same spirit as firmware/src/drivers/
 dac80502.c's own header comment for its first-ever, unverified driver:
 this is the FIRST code in this repo that reads Ableton's Live Object
 Model (song/track/scene/clip-slot navigation, add_*_listener) or
-receives raw SysEx into a Control Surface script (handle_sysex) --
-TILES.py's own existing transport-remote code (ButtonElement + CC
-listeners) is a different, already-real-hardware-tested API surface
-from what this file uses. The MIDI wire format itself (SysEx framing,
-manufacturer ID 0x7D, message layout) is exactly specified and firmware-
-verified; the Live API calls below are this module's own best-effort
-understanding of Ableton's Remote Script API, not yet confirmed against
-a real Ableton session. If Scene Launch mode lights up but nothing
-updates, or clip fires don't work, start here before assuming the
-firmware side is wrong.
+receives raw SysEx into a Control Surface script (handle_sysex).
+Real testing against a live session found two real bugs in the first
+version of this file (see handle_sysex()'s and _connect()'s own
+comments for each) -- both now fixed and cross-checked against
+Ableton's own bundled Remote Script source (_APC/APC.py for the
+handle_sysex framing, _Framework/ClipSlotComponent.py and
+SessionComponent.py for the Live API property/listener names and
+stop_all_clips()), not just guessed at a second time. Still genuinely
+possible something else in here doesn't match a real session exactly
+-- if Scene Launch mode lights up but nothing updates, or clip fires
+don't work, check Log.txt for this file's own "[TILES scene_launch]"
+lines first (see daw-integration/README.md's own Debugging section).
 
 Wire protocol summary (manufacturer ID 0x7D = MMA-reserved "non-
 commercial/educational use", sub-ID 0x01 = TILES's own Scene Launch
-sub-protocol under it):
+sub-protocol under it). The framing below is the wire format actually
+sent/received over USB MIDI; handle_sysex()'s own `midi_bytes` does
+NOT include the leading F0/trailing F7 -- Ableton's framework strips
+both before calling back (confirmed against APC.py's own real
+handle_sysex) -- see that method's own comment:
 
     TILES -> Ableton:
         F0 7D 01 01 <track> <scene>              F7   fire clip
         F0 7D 01 02 <scene>                       F7   launch scene
+        F0 7D 01 03                               F7   stop all clips (master stop)
 
     Ableton -> TILES:
         F0 7D 01 10 <track> <scene> <flags> <r7> <g7> <b7> F7   clip state
@@ -56,6 +63,7 @@ SYSEX_SUB_ID = 0x01
 
 MSG_FIRE_CLIP = 0x01
 MSG_LAUNCH_SCENE = 0x02
+MSG_STOP_ALL = 0x03
 MSG_CLIP_STATE = 0x10
 MSG_SCENE_STATE = 0x11
 
@@ -210,12 +218,24 @@ class SceneLaunch(object):
                 # removed/replaced, unlike color below (a Clip-only
                 # property).
                 has_clip_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
-                is_playing_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
+                # Real bug found from live testing ("colors are not
+                # updating"): there is no add_is_playing_listener on the
+                # real ClipSlot object -- confirmed against Ableton's own
+                # bundled _Framework/ClipSlotComponent.py, which listens
+                # for playing-state changes on 'playing_status' instead
+                # (is_playing itself is only ever a plain, non-listenable
+                # property you re-read inside that callback -- see
+                # _send_clip_state() below). Calling the nonexistent
+                # method raised on the very first clip slot in this loop,
+                # which the try/except in __init__ then swallowed -- so
+                # _connect() aborted before registering ANYTHING or ever
+                # pushing a single state update, on every run until now.
+                playing_status_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
                 is_triggered_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
                 clip_slot.add_has_clip_listener(has_clip_cb)
-                clip_slot.add_is_playing_listener(is_playing_cb)
+                clip_slot.add_playing_status_listener(playing_status_cb)
                 clip_slot.add_is_triggered_listener(is_triggered_cb)
-                self._clip_slot_listeners.append((clip_slot, has_clip_cb, is_playing_cb, is_triggered_cb))
+                self._clip_slot_listeners.append((clip_slot, has_clip_cb, playing_status_cb, is_triggered_cb))
                 self._on_has_clip_changed(track_index, scene_index, clip_slot)
 
     def _on_has_clip_changed(self, track_index, scene_index, clip_slot):
@@ -253,27 +273,43 @@ class SceneLaunch(object):
         """Called by TILES.py's own handle_sysex() override -- see that
         file's own comment on why the base ControlSurface's raw SysEx
         hook is what delivers this rather than a ButtonElement/CC
-        listener the way the transport remote uses. `midi_bytes`
-        includes the F0/F7 framing -- this module's own best-effort
-        understanding of what this callback receives (see this file's
-        own module docstring on confidence level); the log line below
-        is exactly so that can be confirmed or corrected from a real
-        session instead of guessed at twice."""
+        listener the way the transport remote uses.
+
+        Real bug found from live testing ("colors are not updating...
+        in ableton", i.e. clip fires never reached Live): `midi_bytes`
+        does NOT include the F0/F7 framing -- confirmed against
+        Ableton's own bundled _APC/APC.py, whose real handle_sysex
+        indexes midi_bytes[3]/[4] directly with no offset for a leading
+        status byte, meaning the framework strips both ends before this
+        callback ever runs. This module's previous version assumed the
+        framing was still present and read one index too far right,
+        so the manufacturer/sub-ID check below was comparing the wrong
+        bytes and silently rejected every message TILES ever sent."""
         self._log("handle_sysex received: %s" % (tuple(midi_bytes),))
-        if len(midi_bytes) < 5 or midi_bytes[1] != SYSEX_MFR_ID or midi_bytes[2] != SYSEX_SUB_ID:
+        if len(midi_bytes) < 3 or midi_bytes[0] != SYSEX_MFR_ID or midi_bytes[1] != SYSEX_SUB_ID:
             return
-        msg_type = midi_bytes[3]
-        if msg_type == MSG_FIRE_CLIP and len(midi_bytes) == 7:
-            track_index, scene_index = midi_bytes[4], midi_bytes[5]
+        msg_type = midi_bytes[2]
+        if msg_type == MSG_FIRE_CLIP and len(midi_bytes) == 5:
+            track_index, scene_index = midi_bytes[3], midi_bytes[4]
             tracks = self._song.tracks
             scenes = self._song.scenes
             if track_index < len(tracks) and scene_index < len(scenes):
                 tracks[track_index].clip_slots[scene_index].fire()
-        elif msg_type == MSG_LAUNCH_SCENE and len(midi_bytes) == 6:
-            scene_index = midi_bytes[4]
+        elif msg_type == MSG_LAUNCH_SCENE and len(midi_bytes) == 4:
+            scene_index = midi_bytes[3]
             scenes = self._song.scenes
             if scene_index < len(scenes):
                 scenes[scene_index].fire()
+        elif msg_type == MSG_STOP_ALL and len(midi_bytes) == 3:
+            # Real feedback: "a master stop in this app should be shift
+            # diamond." Ableton's own real "stop all clips" action
+            # (confirmed against _Framework/SessionComponent.py's own
+            # self.song().stop_all_clips() call) -- stops every playing/
+            # queued clip without touching the transport itself, distinct
+            # from the diamond's plain-click transport Stop (see op_mode.c's
+            # own handle_diamond_transport() for the firmware-side gating
+            # that keeps this scoped to Scene Launch mode only).
+            self._song.stop_all_clips()
 
     def disconnect(self):
         for scene, is_triggered_cb, color_cb in self._scene_listeners:
@@ -282,10 +318,10 @@ class SceneLaunch(object):
                 scene.remove_color_listener(color_cb)
             except RuntimeError:
                 pass
-        for clip_slot, has_clip_cb, is_playing_cb, is_triggered_cb in self._clip_slot_listeners:
+        for clip_slot, has_clip_cb, playing_status_cb, is_triggered_cb in self._clip_slot_listeners:
             try:
                 clip_slot.remove_has_clip_listener(has_clip_cb)
-                clip_slot.remove_is_playing_listener(is_playing_cb)
+                clip_slot.remove_playing_status_listener(playing_status_cb)
                 clip_slot.remove_is_triggered_listener(is_triggered_cb)
             except RuntimeError:
                 pass

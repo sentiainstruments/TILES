@@ -121,6 +121,7 @@ Real-Time bytes) and handled by `firmware/src/services/op_mode.c`'s own
 |---|---|---|---|
 | TILES -> Ableton | `0x01` | `track, scene` | Fire that track's clip in that scene |
 | TILES -> Ableton | `0x02` | `scene` | Launch the whole scene (every track's clip in that row) |
+| TILES -> Ableton | `0x03` | none | Stop all clips (master stop) -- shift+diamond in Scene Launch mode, see op_mode.c's own handle_diamond_transport() |
 | Ableton -> TILES | `0x10` | `track, scene, flags, r7, g7, b7` | One clip slot's current state |
 | Ableton -> TILES | `0x11` | `scene, flags, r7, g7, b7` | One scene's current state |
 
@@ -143,11 +144,19 @@ then again on every real change via Live API listeners.
 
 **Confidence**: the wire format above is exact and firmware-verified.
 The Ableton-side Live API calls (`handle_sysex`, `add_*_listener`,
-`song().tracks`/`.scenes`/`.clip_slots` navigation) are this protocol's
-own first use of that part of Ableton's Remote Script API -- see
-`scene_launch.py`'s own module docstring for the honest confidence
-level, same spirit as `drivers/dac80502.c`'s own "new, unverified
-driver" framing for its first-ever hardware.
+`song().tracks`/`.scenes`/`.clip_slots` navigation) were this
+protocol's own first use of that part of Ableton's Remote Script API,
+and real testing found two real bugs in the first version: `handle_sysex`
+does NOT receive the `0xF0`/`0xF7` framing (Ableton's framework strips
+both before calling back -- the table above is the wire format actually
+sent, not what that callback sees), and `ClipSlot` has no
+`add_is_playing_listener` (the real listener for playing-state changes
+is `add_playing_status_listener`; `is_playing` itself is a plain,
+non-listenable property). Both fixed and cross-checked against
+Ableton's own bundled Remote Script source (`_APC/APC.py`,
+`_Framework/ClipSlotComponent.py`/`SessionComponent.py`) rather than
+guessed at a second time -- see `scene_launch.py`'s own module
+docstring and `handle_sysex()`'s own comment for the details.
 
 ## Not built yet
 

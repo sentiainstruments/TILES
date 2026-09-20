@@ -84,11 +84,24 @@ re-copy the `ableton/TILES/` folder** (step 1 above) to pick up the new
 Surface slot picked in step 3 doesn't need reselecting, just a fresh
 copy of the folder and a restart so Ableton reloads it.
 
+**Master stop**: shift+diamond in Scene Launch mode sends Ableton's own
+"stop all clips" action -- real feedback, "a master stop in this app
+should be shift diamond." Distinct from the diamond's own plain click
+(transport play/stop), which still works unchanged in this mode.
+
 **Debugging**: real feedback found colors weren't showing on first
 try -- root cause was `scene_launch.py` monkey-patching an attribute
 directly onto Ableton's own native `Clip` object, which isn't
 guaranteed to support that and could silently abort the whole script's
 setup (fixed: it now tracks state in a plain dict it owns instead).
+A second round found colors STILL not updating and clip fires not
+reaching Ableton either -- two more real bugs, root-caused against
+Ableton's own bundled Remote Script source rather than guessed at a
+third time: `handle_sysex` doesn't actually receive the `0xF0`/`0xF7`
+SysEx framing (Ableton's framework strips it first), and `ClipSlot` has
+no `add_is_playing_listener` (the real listener is `add_playing_status_
+listener`) -- see `scene_launch.py`'s own module docstring and
+`shared/protocol/README.md`'s "Scene Launch" section for the details.
 `scene_launch.py` logs every real action it takes (connecting, each
 state push, every SysEx it receives) to Ableton's own log -- if colors
 still aren't updating, check there first:

@@ -3108,6 +3108,7 @@ static void song_capture_exit(void);
 static bool s_song_edit_active;
 static void song_edit_exit(void);
 static void song_edit_pick_cancel(void); /* needed this early too -- handle_diamond_transport()'s own back-gesture branch calls it directly */
+static void scene_send_stop_all(void); /* needed this early too -- handle_diamond_transport()'s own Scene Launch master-stop branch calls it directly */
 
 static void set_active_mode(tiles_op_mode_t mode) {
     if (s_song_capture_active && mode != s_active_mode) {
@@ -4161,6 +4162,21 @@ static void handle_diamond_transport(uint32_t now_ms) {
                 } else {
                     pattern_bank_enter();
                 }
+            } else if (s_active_mode == OP_MODE_SCENE_LAUNCH && s_diamond_press_was_shift) {
+                /* Real feedback: "a master stop in this app should be
+                 * shift diamond. we dont use or have access to song
+                 * mode when ableton mode is on" -- explaining why it's
+                 * safe to claim shift+diamond here for something totally
+                 * unrelated to the universal song_capture_enter()/exit()
+                 * gesture the next branch down would otherwise send this
+                 * to: Song mode's own capture feature isn't reachable/
+                 * wanted from Scene Launch mode anyway, so nothing is
+                 * lost by branching here FIRST, ahead of that generic
+                 * case. Checked ahead of the sequencer_active branch's
+                 * own sibling below since this needs to win over it
+                 * specifically for Scene Launch mode, the same way that
+                 * branch already wins for sequencer mode. */
+                scene_send_stop_all();
             } else if (s_diamond_press_was_shift) {
                 /* Real feedback: "i also want to add a feature that
                  * captures from melodic mode or chord mode or any mode
@@ -6740,6 +6756,7 @@ static void song_capture_exit(void) {
  * own handle_sysex() for the receiving side). */
 #define OP_SCENE_MSG_FIRE_CLIP 0x01u
 #define OP_SCENE_MSG_LAUNCH_SCENE 0x02u
+#define OP_SCENE_MSG_STOP_ALL 0x03u
 /* Ableton -> TILES (see this section's own scene_on_sysex() below). */
 #define OP_SCENE_MSG_CLIP_STATE 0x10u
 #define OP_SCENE_MSG_SCENE_STATE 0x11u
@@ -6814,6 +6831,17 @@ static void scene_send_fire_clip(uint8_t track, uint8_t scene) {
 
 static void scene_send_launch_scene(uint8_t scene) {
     uint8_t msg[4] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_LAUNCH_SCENE, scene};
+    tiles_midi_send_sysex(msg, sizeof(msg));
+}
+
+/* Real feedback: "a master stop in this app should be shift diamond."
+ * No payload -- unlike fire-clip/launch-scene, this isn't about any one
+ * cell/row, it's Ableton's own "stop all clips" action (distinct from
+ * the diamond's own plain-click transport Stop -- see handle_diamond_
+ * transport()'s own Scene Launch branch for why shift+diamond was free
+ * to claim for this here). */
+static void scene_send_stop_all(void) {
+    uint8_t msg[3] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_STOP_ALL};
     tiles_midi_send_sysex(msg, sizeof(msg));
 }
 

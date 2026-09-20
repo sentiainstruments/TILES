@@ -7468,5 +7468,48 @@ not its code.
     first time. Every real action (connect, each state push, every
     SysEx received) now logs one line -- see `daw-integration/
     README.md`'s own "Debugging" note for where to actually look.
+  - **Second real-hardware round: colors STILL not updating, and clip
+    fires not reaching Ableton either.** Real feedback: "colors are not
+    updating in the instrument or ableton, the indicators are not
+    working well." Two more real bugs, both root-caused against
+    Ableton's own bundled Remote Script source (`_APC/APC.py`,
+    `_Framework/ClipSlotComponent.py`) rather than guessed at a third
+    time:
+    1. `handle_sysex(midi_bytes)` does NOT receive the `0xF0`/`0xF7`
+       framing -- Ableton's framework strips both before calling back
+       (confirmed: `APC.py`'s own real `handle_sysex` indexes
+       `midi_bytes[3]`/`[4]` directly, no offset for a leading status
+       byte). `scene_launch.py` assumed the framing was still present,
+       so its manufacturer/sub-ID check was reading one byte too far
+       right and silently rejected every Fire Clip/Launch Scene message
+       TILES ever sent -- the whole reason clip fires never reached
+       Ableton.
+    2. `ClipSlot.add_is_playing_listener` isn't a real method. The real
+       listener for playing-state changes is `add_playing_status_
+       listener` (confirmed against `ClipSlotComponent.py`'s own
+       `@subject_slot('playing_status')`); `is_playing` itself is only
+       ever a plain, non-listenable property you re-read inside that
+       callback. Calling the nonexistent method raised on the very
+       first clip slot in `_connect()`'s loop, which the previous
+       round's own try/except then swallowed and logged -- meaning
+       `_connect()` aborted before registering a single listener or
+       pushing a single state update, on every run since the feature
+       was built, regardless of the first round's monkey-patch fix.
+    Both fixed in `scene_launch.py`; see that file's own `handle_sysex()`
+    and `_connect()` comments for the corrected indices/method name.
+  - **Master stop**: real feedback, "a master stop in this app should
+    be shift diamond. we dont use or have access to song mode when
+    ableton mode is on" -- explaining why shift+diamond (which
+    otherwise universally means `song_capture_enter()`/`exit()`, see
+    that feature's own section) was free to repurpose for Scene Launch
+    mode specifically: Song mode's capture feature isn't reachable/
+    wanted from Ableton mode anyway. New SysEx message `0x03` (no
+    payload) triggers Ableton's own real "stop all clips" action
+    (`self.song().stop_all_clips()`, confirmed against `_Framework/
+    SessionComponent.py`'s own stop-all-clips button) -- distinct from
+    the diamond's plain-click transport Stop, which still works
+    unchanged in this mode. See `handle_diamond_transport()`'s own
+    Scene Launch branch, checked ahead of the generic shift+diamond
+    branch so it wins over it for this one mode only.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.
