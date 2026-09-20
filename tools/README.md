@@ -28,3 +28,21 @@ Run it manually before an actual playing/practice/performance session:
 Stop it (Ctrl+C) before deliberately reflashing a board -- it will otherwise
 race with `picotool load`, kicking the board back into the app before the
 flash tool gets to touch it.
+
+## tiles_control.py
+
+Host-side, not firmware -- exercises the USB vendor control protocol's
+first version end-to-end (real feedback: "keep cv gate implemented but off
+rn. we need the control software"). See `../shared/protocol/README.md` for
+the wire format and key catalog, and the script's own header for setup
+(`pip install pyusb`, plus `libusb` on macOS).
+
+```
+python3 tools/tiles_control.py list
+python3 tools/tiles_control.py get cv_gate.enabled
+python3 tools/tiles_control.py set cv_gate.enabled 1
+```
+
+Not the real companion app (`companion-app/` -- not built yet) -- this is
+the plain script that proves the protocol and USB vendor interface
+actually work before investing in that.

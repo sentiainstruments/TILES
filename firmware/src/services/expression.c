@@ -1627,10 +1627,18 @@ void tiles_expression_set_pitch_bend_sensitivity(float max_cosine_deviation) {
            (double)s_pitch_bend_max_cosine_deviation);
 }
 
+float tiles_expression_get_pitch_bend_sensitivity(void) {
+    return s_pitch_bend_max_cosine_deviation;
+}
+
 void tiles_expression_set_aftertouch_sensitivity(uint16_t depth_full_scale) {
     /* Never 0 -- aftertouch_from_depth() divides by this. */
     s_depth_to_aftertouch_full_scale = depth_full_scale > 0u ? depth_full_scale : 1u;
     printf("[expression] aftertouch sensitivity (full-scale depth) now %u\n", s_depth_to_aftertouch_full_scale);
+}
+
+uint16_t tiles_expression_get_aftertouch_sensitivity(void) {
+    return s_depth_to_aftertouch_full_scale;
 }
 
 void tiles_expression_set_muted(bool muted) {

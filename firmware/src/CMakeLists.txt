@@ -35,6 +35,7 @@ add_executable(sentia_tiles_firmware
     midi/usb_device.c
     midi/usb_descriptors.c
     midi/midi_out.c
+    usb_vendor/usb_vendor.c
 )
 
 pico_generate_pio_header(sentia_tiles_firmware ${CMAKE_CURRENT_SOURCE_DIR}/drivers/sk6805.pio)
@@ -46,6 +47,7 @@ target_include_directories(sentia_tiles_firmware PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/drivers
     ${CMAKE_CURRENT_SOURCE_DIR}/services
     ${CMAKE_CURRENT_SOURCE_DIR}/midi
+    ${CMAKE_CURRENT_SOURCE_DIR}/usb_vendor
 )
 
 target_link_libraries(sentia_tiles_firmware

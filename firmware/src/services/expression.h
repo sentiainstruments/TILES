@@ -100,9 +100,16 @@ bool tiles_expression_is_mpe_enabled(void);
  * DEPTH_TO_AFTERTOUCH_FULL_SCALE) so a pad tap in the sub-menu can adjust
  * them live. Both default to exactly their old fixed values (0.15f,
  * 900u) until changed -- see expression.c's own section comments for
- * what each value means and why those particular defaults were chosen. */
+ * what each value means and why those particular defaults were chosen.
+ * Getters added for firmware/src/usb_vendor.c's own settings protocol
+ * (real feedback: "we need the control software") -- a control surface
+ * reading back the current value before showing/editing it needs one,
+ * even though the on-device sub-menu itself never did (it only ever
+ * writes a fresh value on each pad tap, never reads one back). */
 void tiles_expression_set_pitch_bend_sensitivity(float max_cosine_deviation);
+float tiles_expression_get_pitch_bend_sensitivity(void);
 void tiles_expression_set_aftertouch_sensitivity(uint16_t depth_full_scale);
+uint16_t tiles_expression_get_aftertouch_sensitivity(void);
 
 /* Called by services/expression_control.h when "expression mute"
  * toggles on/off. While muted, pitch bend and poly aftertouch both

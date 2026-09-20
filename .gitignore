@@ -11,6 +11,10 @@ companion-app/dist/
 companion-app/out/
 companion-app/.vite/
 
+# Python (tools/tiles_control.py)
+__pycache__/
+*.pyc
+
 # OS
 .DS_Store
 Thumbs.db

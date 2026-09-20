@@ -28,7 +28,16 @@
 #define CFG_TUD_MIDI 1
 #define CFG_TUD_MSC 0
 #define CFG_TUD_HID 0
-#define CFG_TUD_VENDOR 0
+/* Real feedback: "we need the control software" -- the third composite
+ * interface, alongside CDC (this file's own diagnostics console) and
+ * MIDI: a separate USB vendor interface for firmware/src/usb_vendor.c's
+ * own settings protocol (see that file's own header comment), matching
+ * companion-app/README.md's already-documented intent ("Talks to the
+ * device over the USB vendor interface"). Deliberately NOT the same
+ * pipe as CDC -- that stays the human debug console; this is the
+ * structured control-software channel, kept separate per docs/protocol/
+ * README.md's own framing. */
+#define CFG_TUD_VENDOR 1
 
 /* CDC FIFO/endpoint buffer sizes -- same defaults pico_stdio_usb uses. */
 #define CFG_TUD_CDC_RX_BUFSIZE 64
@@ -39,3 +48,10 @@
  * always applies; matches TinyUSB's own midi_test example default. */
 #define CFG_TUD_MIDI_RX_BUFSIZE 64
 #define CFG_TUD_MIDI_TX_BUFSIZE 64
+
+/* Vendor FIFO sizes -- this protocol is a line at a time (see usb_
+ * vendor.c's own header comment), well under 64 bytes per command or
+ * response, so the same small default every other class here already
+ * uses is plenty. */
+#define CFG_TUD_VENDOR_RX_BUFSIZE 64
+#define CFG_TUD_VENDOR_TX_BUFSIZE 64

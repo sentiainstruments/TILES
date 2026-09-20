@@ -1,6 +1,8 @@
 /*
  * Composite USB device descriptors: CDC (the diagnostics console
- * everything so far has used) + MIDI, in one device.
+ * everything so far has used) + MIDI + Vendor (firmware/src/usb_
+ * vendor.c's own control-software settings protocol -- see that
+ * file's own header comment), in one device.
  *
  * Structure adapted from TinyUSB's own reference examples rather than
  * hand-built from scratch: the CDC+other-class composite pattern
@@ -80,6 +82,7 @@ enum {
     ITF_NUM_CDC_DATA,
     ITF_NUM_MIDI,
     ITF_NUM_MIDI_STREAMING,
+    ITF_NUM_VENDOR,
     ITF_NUM_TOTAL,
 };
 
@@ -90,7 +93,10 @@ enum {
 #define EPNUM_MIDI_OUT 0x03u
 #define EPNUM_MIDI_IN 0x83u
 
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_MIDI_DESC_LEN)
+#define EPNUM_VENDOR_OUT 0x04u
+#define EPNUM_VENDOR_IN 0x84u
+
+#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_MIDI_DESC_LEN + TUD_VENDOR_DESC_LEN)
 
 uint8_t const desc_fs_configuration[] = {
     /* Config number, interface count, string index, total length, attribute, power in mA */
@@ -101,6 +107,9 @@ uint8_t const desc_fs_configuration[] = {
 
     /* Interface number, string index, EP out & in address, EP size */
     TUD_MIDI_DESCRIPTOR(ITF_NUM_MIDI, 5, EPNUM_MIDI_OUT, EPNUM_MIDI_IN, 64),
+
+    /* Interface number, string index, EP out & in address, EP size */
+    TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 6, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
 };
 
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
@@ -119,6 +128,7 @@ enum {
     STRID_SERIAL,
     STRID_CDC,
     STRID_MIDI,
+    STRID_VENDOR,
 };
 
 static char const *string_desc_arr[] = {
@@ -128,6 +138,7 @@ static char const *string_desc_arr[] = {
     NULL, /* 3: serial, filled from the RP2350's unique flash ID below */
     "SENTIA TILES Diagnostics",
     "SENTIA TILES MIDI",
+    "SENTIA TILES Control",
 };
 
 static uint16_t desc_str[32 + 1];

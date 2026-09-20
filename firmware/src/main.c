@@ -36,12 +36,19 @@
  * pressure CV, hard-gated on services/power.h's own external-power
  * confirmation and defaulting off even when power is present -- not
  * yet confirmed against real hardware (drivers/dac80502.h is a new,
- * unverified driver, see its own header comment). Not yet built: DIN,
- * the usb_vendor diagnostics interface, a real per-pad Hall calibration
- * curve (this is capture only, no curve is derived or applied yet) --
- * added module by module per the bring-up order in
- * docs/hardware/SENTIA_FIRMWARE_CODEX_START.md. Each phase must leave
- * this file building and the previous phase's safety guarantees intact.
+ * unverified driver, see its own header comment). usb_vendor/usb_
+ * vendor.h is a first, deliberately simple line-based GET/SET/LIST
+ * settings protocol over a new USB vendor interface -- pedal mode/
+ * polarity, MPE enabled, pitch-bend/aftertouch sensitivity, CV/gate
+ * enable + calibration -- proven with tools/tiles_control.py, not yet
+ * the real Electron companion app or the fuller protocol (pad remap,
+ * calibration capture, live sensor streaming, profiles, firmware
+ * update) docs/protocol/README.md's own design notes describe. Not yet
+ * built: DIN, a real per-pad Hall calibration curve (this is capture
+ * only, no curve is derived or applied yet) -- added module by module
+ * per the bring-up order in docs/hardware/SENTIA_FIRMWARE_CODEX_START.md.
+ * Each phase must leave this file building and the previous phase's
+ * safety guarantees intact.
  */
 
 #include <stdio.h>
@@ -76,6 +83,7 @@
 #include "services/power.h"
 #include "services/standby.h"
 #include "services/touch.h"
+#include "usb_vendor/usb_vendor.h"
 
 /* See the registration call site (tiles_power_register_callback()
  * below) for the full reasoning -- fires on every debounced power-mode
@@ -234,6 +242,12 @@ int main(void) {
      * tiles_power_init() (already run above) so tiles_power_register_
      * callback() has a real state to react to from the start. */
     tiles_cv_gate_init();
+
+    /* USB vendor interface: the settings half of "the control
+     * software" -- see usb_vendor/usb_vendor.h. TinyUSB's own vendor
+     * endpoints are already live from tiles_usb_device_init() above;
+     * this just resets this module's own line-assembly buffer. */
+    tiles_usb_vendor_init();
 
     /* Phase 4 bring-up: one Hall sensor at a time, then the full 24-pad
      * scan (see SENTIA_FIRMWARE_CODEX_START.md). A false return means
@@ -464,6 +478,8 @@ int main(void) {
         tiles_pedal_scan();
         tiles_debug_trace('C');
         tiles_cv_gate_scan();
+        tiles_debug_trace('v');
+        tiles_usb_vendor_scan();
         /* Must run after tiles_buttons_scan() (fresh circle/square
          * state) and tiles_touch_scan() (fresh touch state for the
          * expression sub-menu's slider taps) above, and before

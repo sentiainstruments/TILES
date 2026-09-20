@@ -7347,5 +7347,30 @@ not its code.
     own supply rails -- but real hardware bring-up (a multimeter on
     the CV jack, at minimum) is still needed before trusting it the
     way this codebase's other drivers now are.
+- **USB vendor control protocol, first version** (`firmware/src/
+  usb_vendor/usb_vendor.c`, new module outside `services/` proper --
+  documented here anyway to keep this session's own running log in one
+  place). Real feedback: "keep cv gate implemented but off rn. we need
+  the control software." Scoped in Q&A to firmware + protocol only,
+  proven over a plain script -- not the real Electron companion app
+  yet, and not the fuller protocol (`docs/protocol/README.md`'s own
+  pad remap/calibration/streaming/profile/firmware-update design)
+  either. What's built: a new TinyUSB vendor-class interface
+  (`CFG_TUD_VENDOR`, previously 0) alongside the existing CDC+MIDI
+  composite descriptors, carrying a deliberately simple plain-text
+  `GET <key>` / `SET <key> <value>` / `LIST` line protocol -- see
+  `shared/protocol/README.md` for the full key catalog and
+  `tools/tiles_control.py` for the test script that exercises it.
+  Covers every runtime setting this session already built with a
+  companion-app hook in mind: `pedal.mode`/`pedal.polarity`,
+  `expression.mpe_enabled`, `expression.pitch_bend_sensitivity`/
+  `aftertouch_sensitivity` (gained real getters here -- they never had
+  one before, since the on-device sub-menu only ever wrote a fresh
+  value, never read one back), and all of `cv_gate`'s enable +
+  both calibration structs. `cv_gate.enabled=1` over this protocol
+  still doesn't drive anything unless `services/power.h` also confirms
+  external power -- that hardware-enforced gate has no override here,
+  by design. Nothing persists to flash yet, same as every setting this
+  protocol exposes already didn't before it existed.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.
