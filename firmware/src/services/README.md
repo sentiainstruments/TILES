@@ -7442,5 +7442,31 @@ not its code.
     Existing installs need to re-copy the `ableton/TILES/` folder to
     pick up the new file -- see `daw-integration/README.md`'s own
     "Scene Launch mode" section.
+  - **First real-hardware round found colors genuinely not showing --
+    root-caused, not just worked around.** Real feedback: "colors ar[e]
+    not showing." `scene_launch.py`'s own `_on_clip_slot_changed()` was
+    monkey-patching an identifying attribute directly onto Ableton's
+    native `Clip` object (`clip._tiles_slot_key = ...`) to recognize
+    which listener belonged to which slot when a clip changed -- Live
+    API objects aren't guaranteed to support arbitrary attribute
+    assignment, and if that ever raised, the exception propagated all
+    the way up through `TILES.__init__()`'s own `component_guard()`,
+    silently aborting the ENTIRE script (the already-working transport
+    remote included) rather than just this one feature. Fixed two ways:
+    (1) replaced the monkey-patch with a plain dict this object owns
+    itself, keyed by `(track_index, scene_index)`; (2) `is_playing`/
+    `is_triggered` moved from the `Clip` object onto the stable
+    `ClipSlot` itself, which never needs re-subscribing when a clip is
+    added/removed (only `color`, a `Clip`-only property, still does);
+    (3) `SceneLaunch.__init__()` now wraps `_connect()` in its own
+    try/except, logging any failure (`self.log_message()`, visible in
+    Ableton's own Log.txt) instead of ever letting a Scene-Launch-
+    specific bug take the transport remote down with it -- the same "a
+    failed subsystem disables itself, it never blocks or takes other
+    subsystems down with it" rule this session's own firmware work
+    already follows, just applied on the Ableton-script side for the
+    first time. Every real action (connect, each state push, every
+    SysEx received) now logs one line -- see `daw-integration/
+    README.md`'s own "Debugging" note for where to actually look.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

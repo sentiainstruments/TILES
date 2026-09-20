@@ -99,10 +99,40 @@ class SceneLaunch(object):
         # add_*_listener/remove_*_listener pattern needs the EXACT same
         # callable passed to both, not just an equivalent one, so these
         # have to be stored, not recreated on disconnect.
-        self._clip_slot_listeners = []  # list of (clip_slot, has_clip_cb)
-        self._clip_listeners = []  # list of (clip, is_playing_cb, is_triggered_cb, color_cb)
+        self._clip_slot_listeners = []  # list of (clip_slot, has_clip_cb, is_playing_cb, is_triggered_cb)
+        # keyed by (track_index, scene_index) -- see _on_has_clip_changed()'s
+        # own comment on why this replaced an earlier, real bug (monkey-
+        # patching an identifying attribute directly onto Ableton's own
+        # native Clip object, which isn't guaranteed to support arbitrary
+        # attribute assignment and could silently abort this whole
+        # object's __init__ if it ever raised).
+        self._clip_color_listeners = {}  # {(track_index, scene_index): (clip, color_cb)}
         self._scene_listeners = []  # list of (scene, is_triggered_cb, color_cb)
-        self._connect()
+        try:
+            self._connect()
+            self._log("connected")
+        except Exception as e:  # noqa: BLE001 -- see this except's own comment
+            # Real feedback: "colors ar[e] not showing." Whatever the
+            # exact cause, an exception anywhere in _connect() used to
+            # propagate all the way up through TILES.__init__()'s own
+            # component_guard(), which would silently abort the WHOLE
+            # script -- taking the already-working transport remote down
+            # with a completely unrelated Scene Launch bug, the opposite
+            # of "a failed subsystem disables itself, it never takes
+            # other subsystems down with it." Caught here instead, logged
+            # so it's actually visible (Ableton's own Log.txt, Help ->
+            # Show Log), and left non-fatal: the transport buttons in
+            # TILES.py keep working either way.
+            self._log("failed to connect: %s" % e)
+
+    def _log(self, message):
+        # self.log_message() writes to Ableton's own Log.txt -- the
+        # standard way to see what a Remote Script is actually doing,
+        # since there's no console output visible otherwise. Every real
+        # action this object takes logs one line, on purpose, while this
+        # is still unverified against a real session (see this module's
+        # own docstring) -- trim this down once it's confirmed working.
+        self._control_surface.log_message("[TILES scene_launch] " + message)
 
     # ---- Ableton -> TILES ------------------------------------------------
 
@@ -119,6 +149,10 @@ class SceneLaunch(object):
             flags |= FLAG_IS_PLAYING
         if is_triggered:
             flags |= FLAG_IS_TRIGGERED
+        self._log(
+            "clip_state track=%d scene=%d has_clip=%d playing=%d triggered=%d rgb=(%d,%d,%d)"
+            % (track_index, scene_index, has_clip, is_playing, is_triggered, r7, g7, b7)
+        )
         self._control_surface._send_midi(
             (
                 0xF0,
@@ -138,24 +172,28 @@ class SceneLaunch(object):
     def _send_scene_state(self, scene_index, scene):
         r7, g7, b7 = _color_to_wire_rgb(scene.color)
         flags = FLAG_IS_TRIGGERED if scene.is_triggered else 0
+        self._log("scene_state scene=%d triggered=%d rgb=(%d,%d,%d)" % (scene_index, scene.is_triggered, r7, g7, b7))
         self._control_surface._send_midi(
             (0xF0, SYSEX_MFR_ID, SYSEX_SUB_ID, MSG_SCENE_STATE, scene_index, flags, r7, g7, b7, 0xF7)
         )
+
+    def _make_scene_callback(self, scene_index, scene):
+        return lambda: self._send_scene_state(scene_index, scene)
+
+    def _make_slot_callback(self, track_index, scene_index, clip_slot):
+        return lambda: self._send_clip_state(track_index, scene_index, clip_slot)
 
     def _connect(self):
         tracks = self._song.tracks
         scenes = self._song.scenes
         num_tracks = min(len(tracks), MAX_TRACKS)
         num_scenes = min(len(scenes), NUM_SCENES)
+        self._log("connecting: %d track(s), %d scene(s) tracked" % (num_tracks, num_scenes))
 
         for scene_index in range(num_scenes):
             scene = scenes[scene_index]
-
-            def make_scene_callback(idx, sc):
-                return lambda: self._send_scene_state(idx, sc)
-
-            is_triggered_cb = make_scene_callback(scene_index, scene)
-            color_cb = make_scene_callback(scene_index, scene)
+            is_triggered_cb = self._make_scene_callback(scene_index, scene)
+            color_cb = self._make_scene_callback(scene_index, scene)
             scene.add_is_triggered_listener(is_triggered_cb)
             scene.add_color_listener(color_cb)
             self._scene_listeners.append((scene, is_triggered_cb, color_cb))
@@ -165,52 +203,47 @@ class SceneLaunch(object):
             track = tracks[track_index]
             for scene_index in range(num_scenes):
                 clip_slot = track.clip_slots[scene_index]
-
-                def make_slot_callback(t_idx, s_idx, slot):
-                    return lambda: self._on_clip_slot_changed(t_idx, s_idx, slot)
-
-                has_clip_cb = make_slot_callback(track_index, scene_index, clip_slot)
+                # is_playing/is_triggered are listened on the ClipSlot
+                # itself, not the Clip inside it -- the slot is stable
+                # for the lifetime of the (track, scene) position, so
+                # these never need re-registering when a clip is added/
+                # removed/replaced, unlike color below (a Clip-only
+                # property).
+                has_clip_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
+                is_playing_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
+                is_triggered_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
                 clip_slot.add_has_clip_listener(has_clip_cb)
-                self._clip_slot_listeners.append((clip_slot, has_clip_cb))
-                self._on_clip_slot_changed(track_index, scene_index, clip_slot)
+                clip_slot.add_is_playing_listener(is_playing_cb)
+                clip_slot.add_is_triggered_listener(is_triggered_cb)
+                self._clip_slot_listeners.append((clip_slot, has_clip_cb, is_playing_cb, is_triggered_cb))
+                self._on_has_clip_changed(track_index, scene_index, clip_slot)
 
-    def _on_clip_slot_changed(self, track_index, scene_index, clip_slot):
-        """Fired whenever a slot gains or loses a clip -- (re)subscribes
-        to that specific clip's own is_playing/is_triggered/color, since
-        those listeners have to be re-registered against whatever the
-        NEW clip object is (the old one, if any, is gone). Always sends
-        the slot's current full state too, whether or not a clip is
-        present."""
-        # Drop any listener registered against a previous clip in this
-        # exact slot -- keyed by identity (track_index, scene_index), not
-        # by clip object, since the old clip object may already be gone.
-        remaining = []
-        for clip, is_playing_cb, is_triggered_cb, color_cb in self._clip_listeners:
-            if getattr(clip, "_tiles_slot_key", None) == (track_index, scene_index):
-                try:
-                    clip.remove_is_playing_listener(is_playing_cb)
-                    clip.remove_is_triggered_listener(is_triggered_cb)
-                    clip.remove_color_listener(color_cb)
-                except RuntimeError:
-                    pass  # clip already gone -- nothing to remove
-            else:
-                remaining.append((clip, is_playing_cb, is_triggered_cb, color_cb))
-        self._clip_listeners = remaining
+    def _on_has_clip_changed(self, track_index, scene_index, clip_slot):
+        """Fired whenever a slot gains or loses a clip (also called once
+        directly from _connect() to seed the initial state) -- only
+        color needs re-subscribing here; is_playing/is_triggered stay
+        registered on the ClipSlot itself for its whole lifetime (see
+        _connect() above). Keyed by (track_index, scene_index) in a
+        plain dict -- NOT by tagging an attribute onto the Clip object
+        itself, which real feedback ("colors ar[e] not showing") traced
+        back to: Ableton's own Clip objects aren't guaranteed to support
+        arbitrary attribute assignment, and a raised AttributeError
+        there would abort this whole object's __init__ (see that
+        try/except's own comment)."""
+        key = (track_index, scene_index)
+        old = self._clip_color_listeners.pop(key, None)
+        if old is not None:
+            old_clip, old_color_cb = old
+            try:
+                old_clip.remove_color_listener(old_color_cb)
+            except RuntimeError:
+                pass  # old clip already gone -- nothing to remove
 
         if clip_slot.has_clip:
             clip = clip_slot.clip
-            clip._tiles_slot_key = (track_index, scene_index)  # tag for the lookup above
-
-            def make_clip_callback(t_idx, s_idx, slot):
-                return lambda: self._send_clip_state(t_idx, s_idx, slot)
-
-            is_playing_cb = make_clip_callback(track_index, scene_index, clip_slot)
-            is_triggered_cb = make_clip_callback(track_index, scene_index, clip_slot)
-            color_cb = make_clip_callback(track_index, scene_index, clip_slot)
-            clip.add_is_playing_listener(is_playing_cb)
-            clip.add_is_triggered_listener(is_triggered_cb)
+            color_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
             clip.add_color_listener(color_cb)
-            self._clip_listeners.append((clip, is_playing_cb, is_triggered_cb, color_cb))
+            self._clip_color_listeners[key] = (clip, color_cb)
 
         self._send_clip_state(track_index, scene_index, clip_slot)
 
@@ -221,7 +254,12 @@ class SceneLaunch(object):
         file's own comment on why the base ControlSurface's raw SysEx
         hook is what delivers this rather than a ButtonElement/CC
         listener the way the transport remote uses. `midi_bytes`
-        includes the F0/F7 framing."""
+        includes the F0/F7 framing -- this module's own best-effort
+        understanding of what this callback receives (see this file's
+        own module docstring on confidence level); the log line below
+        is exactly so that can be confirmed or corrected from a real
+        session instead of guessed at twice."""
+        self._log("handle_sysex received: %s" % (tuple(midi_bytes),))
         if len(midi_bytes) < 5 or midi_bytes[1] != SYSEX_MFR_ID or midi_bytes[2] != SYSEX_SUB_ID:
             return
         msg_type = midi_bytes[3]
@@ -244,15 +282,15 @@ class SceneLaunch(object):
                 scene.remove_color_listener(color_cb)
             except RuntimeError:
                 pass
-        for clip_slot, has_clip_cb in self._clip_slot_listeners:
+        for clip_slot, has_clip_cb, is_playing_cb, is_triggered_cb in self._clip_slot_listeners:
             try:
                 clip_slot.remove_has_clip_listener(has_clip_cb)
+                clip_slot.remove_is_playing_listener(is_playing_cb)
+                clip_slot.remove_is_triggered_listener(is_triggered_cb)
             except RuntimeError:
                 pass
-        for clip, is_playing_cb, is_triggered_cb, color_cb in self._clip_listeners:
+        for clip, color_cb in self._clip_color_listeners.values():
             try:
-                clip.remove_is_playing_listener(is_playing_cb)
-                clip.remove_is_triggered_listener(is_triggered_cb)
                 clip.remove_color_listener(color_cb)
             except RuntimeError:
                 pass

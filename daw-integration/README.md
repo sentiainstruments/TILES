@@ -84,6 +84,25 @@ re-copy the `ableton/TILES/` folder** (step 1 above) to pick up the new
 Surface slot picked in step 3 doesn't need reselecting, just a fresh
 copy of the folder and a restart so Ableton reloads it.
 
+**Debugging**: real feedback found colors weren't showing on first
+try -- root cause was `scene_launch.py` monkey-patching an attribute
+directly onto Ableton's own native `Clip` object, which isn't
+guaranteed to support that and could silently abort the whole script's
+setup (fixed: it now tracks state in a plain dict it owns instead).
+`scene_launch.py` logs every real action it takes (connecting, each
+state push, every SysEx it receives) to Ableton's own log -- if colors
+still aren't updating, check there first:
+
+- macOS: `~/Library/Preferences/Ableton/Live <version>/Log.txt`, or
+  Ableton's own Help menu -> Show Log.
+- Look for lines starting `[TILES scene_launch]`. No lines at all means
+  the script never even loaded/connected (check step 3's Control
+  Surface slot is actually set to TILES); a `failed to connect` line
+  names the real error; `connected` with no further `clip_state`/
+  `scene_state` lines after touching a clip means the listeners aren't
+  firing (a genuinely open question against a real session, see
+  `scene_launch.py`'s own module docstring).
+
 ## Other DAWs
 
 This specific script is Ableton-only -- Logic, Cubase, Reaper, Bitwig,
