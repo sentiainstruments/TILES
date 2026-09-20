@@ -6889,6 +6889,7 @@ static void scene_send_stop_all(void) {
 }
 
 static void scene_send_stop_clip(uint8_t track, uint8_t scene) {
+    printf("[op_mode] scene launch: deep press -> stop clip track=%u scene=%u\n", track, scene);
     uint8_t msg[5] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_STOP_CLIP, track, scene};
     tiles_midi_send_sysex(msg, sizeof(msg));
 }

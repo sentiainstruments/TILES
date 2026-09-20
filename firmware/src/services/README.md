@@ -7542,5 +7542,23 @@ not its code.
     instead of handing that job to the component; wrapped in the same
     try/except `_connect()` already runs under, so a wrong guess here
     can't take clip fires/colors down with it.
+  - **First real-hardware round of the ring found it genuinely not
+    showing.** Real feedback: "ableton is not showing ring." Root
+    cause: constructing a `SessionComponent` alone doesn't do anything
+    -- a `ControlSurfaceComponent` only gets pulled into the framework's
+    own per-tick update cycle (which is what actually pushes its state,
+    including the ring paint, out to Live's UI) once it's passed to
+    `register_components()`, confirmed against `_Framework/
+    SceneComponent.py`'s own real use of that call to wire its child
+    `ClipSlotComponent`s in. Fixed: `_connect()` now calls
+    `self._control_surface.register_components(self._session)` right
+    after creating it. Same real feedback also reported the shift+
+    diamond master stop and the deep-press individual stop not firing
+    -- no bug found in either path by inspection against the real Live
+    API (both re-verified line by line), so both gained a debug trace
+    instead (`scene_send_stop_all()`/`scene_send_stop_clip()`'s own
+    `printf`s over the USB CDC console, plus a `self._log()` line on
+    the Ableton side for each) to actually observe which side of the
+    wire, if either, the gesture reaches next time.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

@@ -281,6 +281,17 @@ class SceneLaunch(object):
         # it (see this module's own docstring).
         self._session = SessionComponent(NUM_VISIBLE_TRACKS, num_scenes)
         self._session.set_offsets(0, 0)
+        # Real bug found from live testing (first attempt at this
+        # feature: "ableton is not showing ring"): a bare, unregistered
+        # ControlSurfaceComponent never gets pulled into the framework's
+        # own per-tick update cycle, which is what actually pushes a
+        # component's state (including the session-ring paint) out to
+        # Live's UI -- confirmed against SceneComponent.py's own real
+        # use of register_components() to wire ITS OWN child
+        # ClipSlotComponents into the same cycle. Constructing the
+        # object alone, as the first version of this did, compiles and
+        # runs without error but never actually draws anything.
+        self._control_surface.register_components(self._session)
 
     def set_track_offset(self, offset):
         """Called from handle_sysex() below whenever op_mode.c's own
@@ -361,6 +372,7 @@ class SceneLaunch(object):
             # from the diamond's plain-click transport Stop (see op_mode.c's
             # own handle_diamond_transport() for the firmware-side gating
             # that keeps this scoped to Scene Launch mode only).
+            self._log("stop_all_clips")
             self._song.stop_all_clips()
         elif msg_type == MSG_STOP_CLIP and len(midi_bytes) == 5:
             # Real feedback: "re pushing a playing clip pad all the way
@@ -374,9 +386,15 @@ class SceneLaunch(object):
             scenes = self._song.scenes
             if track_index < len(tracks) and scene_index < len(scenes):
                 clip_slot = tracks[track_index].clip_slots[scene_index]
+                self._log(
+                    "stop_clip track=%d scene=%d has_clip=%d" % (track_index, scene_index, clip_slot.has_clip)
+                )
                 if clip_slot.has_clip:
                     clip_slot.clip.stop()
+            else:
+                self._log("stop_clip track=%d scene=%d out of range" % (track_index, scene_index))
         elif msg_type == MSG_SET_TRACK_OFFSET and len(midi_bytes) == 4:
+            self._log("set_track_offset %d" % midi_bytes[3])
             self.set_track_offset(midi_bytes[3])
 
     def disconnect(self):
