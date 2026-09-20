@@ -7590,5 +7590,38 @@ not its code.
     `printf`s over the USB CDC console, plus a `self._log()` line on
     the Ableton side for each) to actually observe which side of the
     wire, if either, the gesture reaches next time.
+  - **Diamond transport LED found dark specifically in this mode.**
+    Real feedback: "for the diamond transport controls ive noticed it
+    behaves properly in all modes except for ableton clip mode."
+    Genuinely root-caused, not a guess: `tiles_buttons_set_override_led()`
+    (what `handle_diamond_transport()` uses to draw diamond's four-state
+    transport LED) is a transparent no-op for EVERY button, diamond
+    included, the entire time `mode_owns_standby_grid()` is true --
+    which it is for Scene Launch. `render_scene_launch()`'s own button-
+    column loop was ALSO blanket-zeroing all 6 columns including
+    diamond's every single scan, so nothing else ever wrote a real
+    value there either -- diamond simply stayed dark for the whole time
+    this mode was on screen. Same latent gap found in Song mode's
+    `render_song_overview()`/`render_song_edit()` (invisible there only
+    because 0.0f happened to already be correct in Sequencer mode's own
+    equivalent, which reroutes diamond to a capture indicator instead).
+    Fixed by extracting the four-state computation into a shared
+    `transport_led_level()` and having all three render functions write
+    it through their own `tiles_buttons_set_standby_led()` calls for
+    diamond's column specifically -- the one path that actually lands
+    while they own the grid.
+  - **Playing-clip pulse strengthened.** Real feedback: "only the
+    playing pad should pulse and should pulse more strongly." Was
+    reusing `menu_selected_pulse_level()` (0.5-1.0, deliberately subtle
+    for the mode picker's own "selected" indicator) -- too weak a swing
+    to read as "this one is live" next to a steady dim clip. New
+    `scene_playing_pulse_level()`: near-off to full (0.15-1.0) at a
+    faster 600ms period, a much more pronounced breathing pulse,
+    matching real Launchpad-family convention for a playing clip
+    specifically (confirmed the general listener-driven design, and
+    Ableton's own `stop_all_clips()`/`handle_sysex` reception mechanism,
+    against Ableton's real bundled `_Framework` source and the
+    community AbletonOSC project -- both match established, working
+    patterns, not an invented architecture).
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

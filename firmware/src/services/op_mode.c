@@ -4111,6 +4111,52 @@ static void handle_triangle_click(void) {
 #define OP_SONG_NUM_SLOTS TILES_NUM_PADS
 static uint8_t s_song_capture_slot; /* 1..24 -- which pad/slot is being recorded into */
 
+/* Real feedback: "for the diamond transport controls ive noticed it
+ * behaves properly in all modes except for ableton clip mode." Root
+ * cause, on inspection: tiles_buttons_set_override_led() (what
+ * handle_diamond_transport() below uses) is a transparent no-op for
+ * EVERY button, diamond included, the entire time mode_owns_standby_
+ * grid() is true (Sequencer/Song/Scene Launch) -- see that function's
+ * own "no-op during standby" comment. While one of those modes owns
+ * the grid, a button's ACTUAL LED can only come from that mode's own
+ * render function explicitly writing tiles_buttons_set_standby_led()
+ * instead. Sequencer mode already does this correctly (its own diamond
+ * meaning -- capture/pattern-bank -- is rendered directly by render_
+ * sequencer()/render_seq_capture()); Song mode's render_song_overview()/
+ * render_song_edit() and Scene Launch's render_scene_launch() were all
+ * blanket-zeroing every button column including diamond's, silently
+ * discarding whatever this function already computed below and never
+ * writing anything in its place -- diamond's transport LED was simply
+ * frozen/dark the entire time any of those three screens was on
+ * screen, invisible in Song/Sequencer's own plain views only because
+ * 0.0f happened to already be the right answer there by coincidence.
+ * Factored out so those three render functions can each write the SAME
+ * real state through the one path that actually lands while they own
+ * the grid, instead of hardcoding 0.0f for a button none of them have
+ * their own competing use for. */
+static float transport_led_level(uint32_t now_ms) {
+    float led_level;
+    if (s_diamond_record_armed) {
+        uint32_t cycle_ms =
+            OP_TRANSPORT_ARMED_BLINK_ON_MS * 2u + OP_TRANSPORT_ARMED_BLINK_GAP_MS + OP_TRANSPORT_ARMED_PAUSE_MS;
+        uint32_t t = now_ms % cycle_ms;
+        bool on = (t < OP_TRANSPORT_ARMED_BLINK_ON_MS) ||
+                  (t >= OP_TRANSPORT_ARMED_BLINK_ON_MS + OP_TRANSPORT_ARMED_BLINK_GAP_MS &&
+                   t < OP_TRANSPORT_ARMED_BLINK_ON_MS * 2u + OP_TRANSPORT_ARMED_BLINK_GAP_MS);
+        led_level = on ? 1.0f : 0.0f;
+    } else if (s_transport_recording) {
+        float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
+        float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
+        led_level = OP_TRANSPORT_RECORDING_PULSE_MIN +
+                    (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
+    } else if (tiles_midi_clock_is_running()) {
+        led_level = OP_TRANSPORT_LED_PLAYING_LEVEL;
+    } else {
+        led_level = OP_TRANSPORT_LED_STOPPED_LEVEL;
+    }
+    return led_level;
+}
+
 static void handle_diamond_transport(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
@@ -4354,26 +4400,7 @@ static void handle_diamond_transport(uint32_t now_ms) {
          * decide what a click sends -- Stop vs Play/Record -- which is
          * inherently about intent, not something a clock signal alone
          * could ever answer), just no longer drives this LED directly. */
-        float led_level;
-        if (s_diamond_record_armed) {
-            uint32_t cycle_ms =
-                OP_TRANSPORT_ARMED_BLINK_ON_MS * 2u + OP_TRANSPORT_ARMED_BLINK_GAP_MS + OP_TRANSPORT_ARMED_PAUSE_MS;
-            uint32_t t = now_ms % cycle_ms;
-            bool on = (t < OP_TRANSPORT_ARMED_BLINK_ON_MS) ||
-                      (t >= OP_TRANSPORT_ARMED_BLINK_ON_MS + OP_TRANSPORT_ARMED_BLINK_GAP_MS &&
-                       t < OP_TRANSPORT_ARMED_BLINK_ON_MS * 2u + OP_TRANSPORT_ARMED_BLINK_GAP_MS);
-            led_level = on ? 1.0f : 0.0f;
-        } else if (s_transport_recording) {
-            float phase = (float)now_ms / OP_TRANSPORT_RECORDING_PULSE_PERIOD_MS;
-            float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
-            led_level = OP_TRANSPORT_RECORDING_PULSE_MIN +
-                        (OP_TRANSPORT_RECORDING_PULSE_MAX - OP_TRANSPORT_RECORDING_PULSE_MIN) * raw;
-        } else if (tiles_midi_clock_is_running()) {
-            led_level = OP_TRANSPORT_LED_PLAYING_LEVEL;
-        } else {
-            led_level = OP_TRANSPORT_LED_STOPPED_LEVEL;
-        }
-        tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, led_level);
+        tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, transport_led_level(now_ms));
     }
 
     s_diamond_was_held = held;
@@ -6015,7 +6042,12 @@ static void render_song_overview(uint32_t now_ms) {
         }
     }
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+        /* See transport_led_level()'s own comment -- this screen owns
+         * standby, so diamond's real transport LED can only land here,
+         * not through handle_diamond_transport()'s own now-no-op
+         * override write. */
+        float level = (col == TILES_DIAMOND_BUTTON_COL) ? transport_led_level(now_ms) : 0.0f;
+        tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
     render_song_underglow();
 }
@@ -6304,7 +6336,12 @@ static void render_song_edit(uint32_t now_ms) {
         }
     }
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+        /* See transport_led_level()'s own comment -- this screen owns
+         * standby, so diamond's real transport LED can only land here,
+         * not through handle_diamond_transport()'s own now-no-op
+         * override write. */
+        float level = (col == TILES_DIAMOND_BUTTON_COL) ? transport_led_level(now_ms) : 0.0f;
+        tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
     render_song_underglow();
 }
@@ -6866,6 +6903,29 @@ static float scene_triggered_blink_level(uint32_t now_ms) {
     return (phase < OP_SCENE_TRIGGERED_BLINK_PERIOD_MS / 2u) ? 1.0f : 0.2f;
 }
 
+/* Real feedback: "only the playing pad should pulse and should pulse
+ * more strongly." render_scene_launch() used to reuse menu_selected_
+ * pulse_level() for this (0.5-1.0, a deliberately subtle breathing
+ * meant for the mode picker's own "currently selected" indicator) --
+ * too weak a swing to read as "this one is live" at a glance against a
+ * steady dim clip right next to it, the same distinction real
+ * Launchpad-family controllers draw with a much more pronounced
+ * near-off-to-full breathing pulse for a playing clip specifically.
+ * Near-off rather than fully off at the low end so the clip's own
+ * color stays barely visible through the trough instead of blacking
+ * out every cycle. A faster period than the menu's own 900ms too --
+ * meant to read as "active," not "idle." Unmeasured -- a first guess
+ * at both amplitude and pacing, not calibrated against real hardware. */
+#define OP_SCENE_PLAYING_PULSE_PERIOD_MS 600.0f
+#define OP_SCENE_PLAYING_PULSE_MIN 0.15f
+#define OP_SCENE_PLAYING_PULSE_MAX 1.0f
+
+static float scene_playing_pulse_level(uint32_t now_ms) {
+    float phase = (float)now_ms / OP_SCENE_PLAYING_PULSE_PERIOD_MS;
+    float raw = 0.5f + 0.5f * sinf(2.0f * OP_MODE_PI * phase);
+    return OP_SCENE_PLAYING_PULSE_MIN + (OP_SCENE_PLAYING_PULSE_MAX - OP_SCENE_PLAYING_PULSE_MIN) * raw;
+}
+
 static void scene_send_fire_clip(uint8_t track, uint8_t scene) {
     uint8_t msg[5] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_FIRE_CLIP, track, scene};
     tiles_midi_send_sysex(msg, sizeof(msg));
@@ -7040,7 +7100,7 @@ static void render_scene_launch_underglow(uint32_t now_ms) {
 }
 
 static void render_scene_launch(uint32_t now_ms) {
-    float pulse = menu_selected_pulse_level(now_ms);
+    float pulse = scene_playing_pulse_level(now_ms);
     float blink = scene_triggered_blink_level(now_ms);
 
     for (uint8_t row = 0u; row < OP_SCENE_NUM_ROWS; row++) {
@@ -7076,7 +7136,14 @@ static void render_scene_launch(uint32_t now_ms) {
     }
 
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+        /* Real feedback: "for the diamond transport controls ive
+         * noticed it behaves properly in all modes except for ableton
+         * clip mode." See transport_led_level()'s own comment -- this
+         * mode owns standby, so diamond's real transport LED can only
+         * land here, not through handle_diamond_transport()'s own
+         * now-no-op override write. */
+        float level = (col == TILES_DIAMOND_BUTTON_COL) ? transport_led_level(now_ms) : 0.0f;
+        tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
     render_scene_launch_underglow(now_ms);
 }
