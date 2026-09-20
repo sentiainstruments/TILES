@@ -1,8 +1,8 @@
 #include "midi_clock.h"
 
-#include "pico/time.h"
+#include "midi_in.h"
 
-#include "tusb.h"
+#include "pico/time.h"
 
 #include <math.h>
 
@@ -85,6 +85,11 @@ static bool s_session_hit_minimum;
 static float s_tap_interval_ms; /* averaged ms per quarter-note tap, valid only once established */
 static uint32_t s_next_virtual_pulse_due_ms;
 
+/* Defined below, right where the read loop it replaces used to live --
+ * forward-declared here only so tiles_midi_clock_init() can register it
+ * with midi/midi_in.h. */
+static void midi_clock_on_realtime_byte(uint8_t realtime_byte, uint32_t now_ms);
+
 void tiles_midi_clock_init(void) {
     s_pulse_count = 0u;
     s_running = false;
@@ -99,6 +104,16 @@ void tiles_midi_clock_init(void) {
     s_session_hit_minimum = false;
     s_tap_interval_ms = 0.0f;
     s_next_virtual_pulse_due_ms = 0u;
+    /* Real-Time bytes used to be read directly by this file's own
+     * tiles_midi_clock_scan() -- refactored to register a callback with
+     * midi/midi_in.h instead once that file needed to become the ONE
+     * owner of the shared USB MIDI IN FIFO (see its own header comment
+     * for why: services/op_mode.c's new Scene Launch mode needs to read
+     * SysEx from the SAME stream, and two independent readers can't both
+     * drain one FIFO without racing each other for bytes). The callback
+     * body below is byte-for-byte what this file's own read loop used
+     * to do inline. */
+    tiles_midi_in_register_realtime_callback(midi_clock_on_realtime_byte);
 }
 
 bool tiles_midi_clock_is_running(void) {
@@ -238,66 +253,61 @@ void tiles_midi_clock_set_running(bool running) {
     s_running = running;
 }
 
+/* Byte-for-byte the same logic this file's own read loop used to run
+ * inline -- see tiles_midi_clock_init()'s own comment on why this is
+ * now a callback registered with midi/midi_in.h instead. `now_ms` is
+ * midi_in.c's own single-capture-per-scan timestamp, not re-read here. */
+static void midi_clock_on_realtime_byte(uint8_t realtime_byte, uint32_t now_ms) {
+    switch (realtime_byte) {
+    case MIDI_REALTIME_CLOCK:
+        s_pulse_count++;
+        s_last_external_pulse_ms = now_ms;
+        s_ever_seen_external_pulse = true;
+        /* One beat's worth of real pulses just completed -- measure it,
+         * sanity-bounded (~15-1200bpm) against a stale s_last_external_
+         * beat_ms from a much earlier, unrelated tempo (a fresh Start
+         * doesn't reset this timestamp, so the very first beat after a
+         * long gap would otherwise compute nonsense) rather than
+         * trusting every measurement blindly. */
+        if (s_pulse_count % 24u == 0u) {
+            if (s_last_external_beat_ms != 0u) {
+                uint32_t interval = now_ms - s_last_external_beat_ms;
+                if (interval >= 50u && interval <= 4000u) {
+                    s_external_ms_per_beat = (float)interval;
+                }
+            }
+            s_last_external_beat_ms = now_ms;
+        }
+        break;
+    case MIDI_REALTIME_START:
+        s_running = true;
+        s_start_edge = true;
+        s_last_external_pulse_ms = now_ms;
+        s_ever_seen_external_pulse = true;
+        break;
+    case MIDI_REALTIME_CONTINUE:
+        /* Resumes wherever playback already was -- deliberately does
+         * NOT set start_edge (that's reset-to-step-zero, Continue is
+         * the opposite of that). */
+        s_running = true;
+        s_last_external_pulse_ms = now_ms;
+        s_ever_seen_external_pulse = true;
+        break;
+    case MIDI_REALTIME_STOP:
+        s_running = false;
+        s_last_external_pulse_ms = now_ms;
+        s_ever_seen_external_pulse = true;
+        break;
+    default:
+        /* midi_in.c only ever calls this for one of the four cases
+         * above -- unreachable in practice, kept only so this switch
+         * doesn't need a -Wswitch-default suppression. */
+        break;
+    }
+}
+
 void tiles_midi_clock_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-
-    uint8_t buf[16];
-    uint32_t read;
-    /* Loop, not a single read -- tud_midi_stream_read() only fills up to
-     * sizeof(buf) per call; draining the whole RX FIFO this tick (rather
-     * than leaving bytes queued for next scan) keeps clock latency down
-     * to whatever the main loop's own iteration time is. */
-    while ((read = tud_midi_stream_read(buf, sizeof(buf))) > 0u) {
-        for (uint32_t i = 0; i < read; i++) {
-            switch (buf[i]) {
-            case MIDI_REALTIME_CLOCK:
-                s_pulse_count++;
-                s_last_external_pulse_ms = now_ms;
-                s_ever_seen_external_pulse = true;
-                /* One beat's worth of real pulses just completed --
-                 * measure it, sanity-bounded (~15-1200bpm) against a
-                 * stale s_last_external_beat_ms from a much earlier,
-                 * unrelated tempo (a fresh Start doesn't reset this
-                 * timestamp, so the very first beat after a long gap
-                 * would otherwise compute nonsense) rather than trusting
-                 * every measurement blindly. */
-                if (s_pulse_count % 24u == 0u) {
-                    if (s_last_external_beat_ms != 0u) {
-                        uint32_t interval = now_ms - s_last_external_beat_ms;
-                        if (interval >= 50u && interval <= 4000u) {
-                            s_external_ms_per_beat = (float)interval;
-                        }
-                    }
-                    s_last_external_beat_ms = now_ms;
-                }
-                break;
-            case MIDI_REALTIME_START:
-                s_running = true;
-                s_start_edge = true;
-                s_last_external_pulse_ms = now_ms;
-                s_ever_seen_external_pulse = true;
-                break;
-            case MIDI_REALTIME_CONTINUE:
-                /* Resumes wherever playback already was -- deliberately
-                 * does NOT set start_edge (that's reset-to-step-zero,
-                 * Continue is the opposite of that). */
-                s_running = true;
-                s_last_external_pulse_ms = now_ms;
-                s_ever_seen_external_pulse = true;
-                break;
-            case MIDI_REALTIME_STOP:
-                s_running = false;
-                s_last_external_pulse_ms = now_ms;
-                s_ever_seen_external_pulse = true;
-                break;
-            default:
-                /* Everything else (notes, CC, sysex bytes, etc.) is out
-                 * of scope for this clock-only receiver -- see the
-                 * header's own "Scope" section. */
-                break;
-            }
-        }
-    }
 
     /* Real feedback: "there is a sync issue between the clock on tiles
      * and ableton. its not auto latching to ableton clock. it should

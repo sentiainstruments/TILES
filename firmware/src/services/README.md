@@ -7372,5 +7372,75 @@ not its code.
   external power -- that hardware-enforced gate has no override here,
   by design. Nothing persists to flash yet, same as every setting this
   protocol exposes already didn't before it existed.
+- **Scene Launch mode -- a 6th top-level mode, triggering Ableton Live
+  scenes/clips.** Real feedback: "lets implemebt a new mode that
+  triggers scenes in ableton live keep it simple for now, push
+  triggers it. 4 vertical and the 6 horizontal and the 6th is full row
+  trigger as usual. the -+ browse left and right on the visible
+  scenes, can we pull the colors of the scenes from ableton ? and
+  light behaviour to feel intuitive? also in that mode the underglow
+  must do fun stuff, keep it white and when we trigger any scene it
+  flashes onece in sentia color."
+  - **Layout**: rows 1-4 = Ableton's first 4 scenes, always (no scene
+    paging in this version -- confirmed in Q&A, "-"/"+" pans TRACKS
+    instead). Columns 1-5 = 5 consecutive tracks' clip slots for that
+    row (`s_scene_track_offset`, panned by "-"/"+", one step per
+    press, no shift-combo, same convention guitar mode's own fret-
+    shift already established in `handle_transport_and_length()`).
+    Column 6, one pad per row, is that row's Scene Launch button --
+    fires the WHOLE scene (every track's clip in that row at once),
+    the same convention real Launchpad-style controllers already use.
+  - **A real incoming-MIDI capability this codebase never had before**:
+    pulling real scene/clip colors needed reading SysEx from USB MIDI
+    IN, and `services/midi_clock.c` already owned the ENTIRE RX FIFO
+    (silently discarding every byte that wasn't one of 4 Real-Time
+    bytes it cared about) -- two independent readers can't both drain
+    one shared FIFO without racing for bytes. Fixed with a new shared
+    parser, `midi/midi_in.c`, that becomes the ONE owner of `tud_midi_
+    stream_read()`; `midi_clock.c` was refactored to register a
+    callback with it instead of reading MIDI itself (byte-for-byte
+    the same Real-Time-byte logic it already had, just moved into a
+    callback -- see `midi_clock.c`'s own comment). `midi_in.c` also
+    recognizes SysEx frames (`0xF0`...`0xF7`) and dispatches complete
+    ones to registered callbacks, which Scene Launch mode uses for its
+    own protocol. `midi/midi_out.c` gained a matching `tiles_midi_
+    send_sysex()` for the outgoing half.
+  - **Wire protocol**: manufacturer ID `0x7D` (MIDI Association's own
+    reserved "non-commercial/educational use" ID -- the correct choice
+    for DIY hardware with no registered ID, unlike `usb_descriptors.c`'s
+    own borrowed-but-documented Raspberry Pi USB VID, this one is
+    actually reserved for exactly this situation). Full catalog:
+    `shared/protocol/README.md`'s own "Scene Launch" section. Colors
+    are real Ableton `Clip.color`/`Scene.color` values, not a fixed/
+    quantized palette older controllers needed -- this hardware
+    already has real per-pad RGB.
+  - **"Intuitive" light behavior**: no clip ever reported = fully off;
+    has a clip, not playing = lit at its own color dimmed to
+    `OP_SCALE_AVAILABLE_LEVEL` (this file's own established "available
+    but not selected" level); playing = full brightness, pulsing with
+    `menu_selected_pulse_level()` (the same "this one's active" pulse
+    `render_song_overview()` already established for a running Song
+    pattern); triggered (queued, Ableton's own `is_triggered`) = a
+    faster, plainer on/off blink -- deliberately a DIFFERENT shape
+    from the smoother "currently active" pulse, so "about to change"
+    reads apart from "already changed" at a glance, the same
+    distinction real Launchpad-family scripts already draw. Column 6
+    mirrors the same three levels off the Scene's own color/
+    `is_triggered` instead of any one clip's (a Scene has no
+    "is playing" of its own).
+  - **Underglow**: steady white at rest; "any scene" (real feedback's
+    own phrase) scopes the single Sentia-magenta flash to the column-6
+    Scene Launch gesture specifically, not every individual clip fire.
+  - **Ableton side**: `daw-integration/ableton/TILES/scene_launch.py`,
+    a new module alongside the already-real-hardware-tested transport-
+    remote code in `TILES.py` (untouched by this addition). Pushes
+    every tracked clip/scene's state once on connect, then again on
+    every real Live API change, via `add_*_listener` -- not yet
+    confirmed against a real Ableton session, see that file's own
+    module docstring for the honest confidence level (same spirit as
+    `drivers/dac80502.c`'s own "new, unverified driver" framing).
+    Existing installs need to re-copy the `ableton/TILES/` folder to
+    pick up the new file -- see `daw-integration/README.md`'s own
+    "Scene Launch mode" section.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

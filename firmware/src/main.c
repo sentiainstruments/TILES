@@ -62,6 +62,7 @@
 #include "board/unit_id.h"
 #include "diagnostics/calibration.h"
 #include "diagnostics/i2c_scan.h"
+#include "midi/midi_in.h"
 #include "midi/midi_out.h"
 #include "midi/usb_device.h"
 #include "services/boot_sequence.h"
@@ -343,6 +344,12 @@ int main(void) {
      * above, whose rendering path it shares. See services/game_mode.h. */
     tiles_game_mode_init();
 
+    /* Shared USB MIDI IN parser -- must run before tiles_midi_clock_
+     * init() below, which registers a callback with it; this resets
+     * that registration table, so registering before this ran would
+     * get silently wiped. See midi/midi_in.h. */
+    tiles_midi_in_init();
+
     /* MIDI clock RX (USB MIDI IN) -- the timing source op_mode.h's
      * sequencer mode runs from. See services/midi_clock.h. */
     tiles_midi_clock_init();
@@ -413,11 +420,20 @@ int main(void) {
         }
         s_mpe_was_mounted = mpe_mounted_now;
 
-        /* Drains USB MIDI IN for Start/Continue/Stop/Clock bytes --
-         * needs tud_task() above already run this iteration so the RX
-         * FIFO is current, and must run before tiles_op_mode_scan()
-         * below so this tick's fresh clock state is what sequencer mode
-         * sees. See services/midi_clock.h. */
+        /* Drains USB MIDI IN (Real-Time bytes AND, since Scene Launch
+         * mode, SysEx) -- needs tud_task() above already run this
+         * iteration so the RX FIFO is current, and must run before
+         * tiles_midi_clock_scan() below (which reacts to a callback this
+         * fires, rather than reading MIDI itself) and tiles_op_mode_scan()
+         * further down (which owns the Scene Launch SysEx callback). See
+         * midi/midi_in.h. */
+        tiles_debug_trace('i');
+        tiles_midi_in_scan();
+
+        /* Reacts to whatever Start/Continue/Stop/Clock bytes the scan
+         * just above found -- must run before tiles_op_mode_scan() below
+         * so this tick's fresh clock state is what sequencer mode sees.
+         * See services/midi_clock.h. */
         tiles_debug_trace('M');
         tiles_midi_clock_scan();
 

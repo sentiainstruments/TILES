@@ -172,3 +172,15 @@ void tiles_midi_send_pitch_bend(uint8_t channel, uint16_t bend_14bit);
  * resume. */
 void tiles_midi_send_start(void);
 void tiles_midi_send_stop(void);
+
+/* Real feedback: "lets implemebt a new mode that triggers scenes in
+ * ableton live... can we pull the colors of the scenes from ableton?"
+ * -- services/op_mode.c's Scene Launch mode's own outgoing half (fire
+ * clip/launch scene) needs a real SysEx sender, this codebase's first;
+ * see midi/midi_in.h for the matching incoming half and shared/protocol/
+ * README.md's own "Scene Launch" section for the actual message
+ * catalog. Wraps `data`/`len` in 0xF0/0xF7 and writes it in one
+ * tud_midi_stream_write() call -- `len` is expected to comfortably fit
+ * this codebase's own message sizes (well under TUD_MIDI's own 64-byte
+ * packet), not a general large-SysEx streaming API. */
+void tiles_midi_send_sysex(const uint8_t *data, uint32_t len);

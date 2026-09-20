@@ -38,11 +38,19 @@ immediately 0 -- see OP_TRANSPORT_PLAY_CC's own comment in op_mode.c for
 why: a clean on/off pair, not a value left dangling at 127). Only the
 value > 0 message should act; the 0 that follows is just that trigger's
 own release and must be ignored, not treated as a second event.
+
+Also owns Scene Launch mode's own Ableton-side half (real feedback:
+"lets implemebt a new mode that triggers scenes in ableton live...
+can we pull the colors of the scenes from ableton?") -- see
+scene_launch.py's own module docstring for that protocol and this
+class's handle_sysex()/disconnect() for how it's wired in here.
 """
 
 from _Framework.ControlSurface import ControlSurface
 from _Framework.ButtonElement import ButtonElement
 from _Framework.InputControlElement import MIDI_CC_TYPE
+
+from .scene_launch import SceneLaunch
 
 # Wire values, matching firmware/src/midi/midi_out.h's own
 # TILES_MIDI_MPE_MASTER_CHANNEL (0 = MIDI channel 1, the status-byte
@@ -65,6 +73,13 @@ class TILES(ControlSurface):
             self._play_button.add_value_listener(self._on_play)
             self._stop_button.add_value_listener(self._on_stop)
             self._record_button.add_value_listener(self._on_record)
+            # Real feedback: "lets implemebt a new mode that triggers
+            # scenes in ableton live... can we pull the colors of the
+            # scenes from ableton?" -- see scene_launch.py's own module
+            # docstring for the full protocol and this addition's
+            # confidence level (newer/less-verified Live API surface
+            # than the transport buttons above).
+            self._scene_launch = SceneLaunch(self)
 
     def _on_play(self, value):
         if value > 0:
@@ -91,8 +106,18 @@ class TILES(ControlSurface):
             # further action needed here.
             self.song().record_mode = True
 
+    def handle_sysex(self, midi_bytes):
+        # Real feedback: "can we pull the colors of the scenes from
+        # ableton?" -- ControlSurface's own raw-SysEx receive hook,
+        # same override point Ableton's bundled Launchpad-family
+        # scripts use for their own hardware<->DAW SysEx traffic (see
+        # scene_launch.py's own module docstring for this addition's
+        # confidence level).
+        self._scene_launch.handle_sysex(midi_bytes)
+
     def disconnect(self):
         self._play_button.remove_value_listener(self._on_play)
         self._stop_button.remove_value_listener(self._on_stop)
         self._record_button.remove_value_listener(self._on_record)
+        self._scene_launch.disconnect()
         super(TILES, self).disconnect()

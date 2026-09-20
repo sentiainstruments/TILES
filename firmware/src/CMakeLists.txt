@@ -35,6 +35,7 @@ add_executable(sentia_tiles_firmware
     midi/usb_device.c
     midi/usb_descriptors.c
     midi/midi_out.c
+    midi/midi_in.c
     usb_vendor/usb_vendor.c
 )
 

@@ -98,6 +98,57 @@ needs `libusb` installed, and vendor-class devices sometimes need the
 terminal running it to have been granted the OS's own USB-device
 permission prompt the first time).
 
+## Scene Launch (Ableton Live, over standard USB MIDI SysEx)
+
+A second, separate protocol over the SAME USB-MIDI port TILES already
+uses for notes/CC/clock -- NOT the vendor-interface settings protocol
+above (this one talks to Ableton Live's own Remote Script, not a host
+control app). Real feedback: "lets implemebt a new mode that triggers
+scenes in ableton live keep it simple for now... can we pull the colors
+of the scenes from ableton?"
+
+Manufacturer ID `0x7D` -- the MIDI Association's own reserved
+"non-commercial/educational use" ID, the correct choice for DIY
+hardware with no registered ID of its own. Sub-ID `0x01` scopes this
+specific message set under it. All messages are ordinary SysEx (`0xF0`
+... `0xF7`), parsed firmware-side by `firmware/src/midi/midi_in.c`
+(this codebase's first real incoming-MIDI-message parser beyond System
+Real-Time bytes) and handled by `firmware/src/services/op_mode.c`'s own
+"Scene Launch mode" section; sent/received Ableton-side by
+`daw-integration/ableton/TILES/scene_launch.py`.
+
+| Direction | Byte 4 (type) | Payload | Meaning |
+|---|---|---|---|
+| TILES -> Ableton | `0x01` | `track, scene` | Fire that track's clip in that scene |
+| TILES -> Ableton | `0x02` | `scene` | Launch the whole scene (every track's clip in that row) |
+| Ableton -> TILES | `0x10` | `track, scene, flags, r7, g7, b7` | One clip slot's current state |
+| Ableton -> TILES | `0x11` | `scene, flags, r7, g7, b7` | One scene's current state |
+
+Full frame: `F0 7D 01 <type> <payload...> F7`. `track` is 0-based, up
+to 63 (`OP_SCENE_MAX_TRACKS`/`MAX_TRACKS` in the firmware/Python side
+respectively -- keep both in sync if this ever changes); `scene` is
+0-based, up to 3 (only Ableton's first 4 scenes are ever tracked --
+this version doesn't page scenes, only tracks, see op_mode.c's own
+section header for why). `flags` bit 0 = has_clip (clip state only),
+bit 1 = is_playing (clip state only), bit 2 = is_triggered (both).
+`r7`/`g7`/`b7` are each 0-127 -- Ableton's own 0-255 color channel
+halved; the firmware doubles it back toward 8-bit on receipt, losing
+the bottom bit, not the top (this hardware's LEDs don't need it back).
+
+Ableton pushes state for every tracked cell once on script connect
+(not just whatever's currently scrolled into view on the hardware --
+see scene_launch.py's own module docstring for why this stays a plain
+broadcast instead of needing a "which window is visible" handshake),
+then again on every real change via Live API listeners.
+
+**Confidence**: the wire format above is exact and firmware-verified.
+The Ableton-side Live API calls (`handle_sysex`, `add_*_listener`,
+`song().tracks`/`.scenes`/`.clip_slots` navigation) are this protocol's
+own first use of that part of Ableton's Remote Script API -- see
+`scene_launch.py`'s own module docstring for the honest confidence
+level, same spirit as `drivers/dac80502.c`'s own "new, unverified
+driver" framing for its first-ever hardware.
+
 ## Not built yet
 
 Everything `docs/protocol/README.md`'s own design notes list beyond
@@ -106,4 +157,7 @@ profile read/write, firmware update, and the real framing/versioning/
 schema decisions those need. This document's own scope will need
 revisiting, not just extending, once any of those get designed --
 they're likely to need actual binary framing and sequencing this
-version deliberately does without.
+version deliberately does without. Scene Launch above is a separate,
+narrower SysEx sub-protocol built alongside this one, not folded into
+it -- it talks to Ableton's Remote Script, not the vendor-interface
+settings channel this document is otherwise about.

@@ -133,3 +133,28 @@ void tiles_midi_send_start(void) {
 void tiles_midi_send_stop(void) {
     send1(0xFCu);
 }
+
+/* 32 bytes is generous headroom over this codebase's own actual SysEx
+ * message sizes (see midi/midi_in.h's own MIDI_IN_SYSEX_MAX for the
+ * receive side's matching ceiling) -- callers passing more than fits
+ * (len clamped below) would indicate a genuine bug in whatever's
+ * building the message, not a real, larger protocol message this
+ * function needs to support. */
+#define SYSEX_SEND_BUF_MAX 32u
+
+void tiles_midi_send_sysex(const uint8_t *data, uint32_t len) {
+    if (!tud_midi_mounted()) {
+        return;
+    }
+    if (len > SYSEX_SEND_BUF_MAX - 2u) {
+        len = SYSEX_SEND_BUF_MAX - 2u;
+    }
+    uint8_t msg[SYSEX_SEND_BUF_MAX];
+    msg[0] = 0xF0u;
+    for (uint32_t i = 0; i < len; i++) {
+        msg[1u + i] = data[i];
+    }
+    msg[1u + len] = 0xF7u;
+    uint32_t total = len + 2u;
+    warn_if_truncated("send_sysex", tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, total), total);
+}

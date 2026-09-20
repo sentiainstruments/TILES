@@ -52,23 +52,27 @@
  *      that half.
  *
  * USB MIDI IN only for now: midi/midi_out.h's own header notes DIN MIDI
- * IN isn't built yet, so RX only reads tud_midi_stream_read() (the
- * composite device's descriptor already includes a full IN+OUT endpoint
- * pair, see midi/usb_descriptors.c's TUD_MIDI_DESCRIPTOR call, so no
- * descriptor change was needed, just actually calling the read side).
- * Once DIN MIDI IN exists, its own byte stream would feed the exact same
- * parser this file already has.
+ * IN isn't built yet. RX bytes come from midi/midi_in.h now, not read
+ * directly here -- this file registers a callback with that module
+ * (tiles_midi_in_register_realtime_callback()) instead of calling
+ * tud_midi_stream_read() itself, since services/op_mode.c's Scene
+ * Launch mode also needs to read the SAME shared RX FIFO (for its own
+ * SysEx-based Ableton-color-feedback protocol) and two independent
+ * readers can't both drain one FIFO without racing each other for
+ * bytes -- see midi_in.h's own header comment for the full reasoning.
+ * The callback body is byte-for-byte what this file's own read loop
+ * used to do inline; only WHERE the bytes come from changed. Once DIN
+ * MIDI IN exists, its own byte stream would feed the exact same
+ * midi_in.h parser, not a second one here.
  *
  * Scope: ONLY the four System Real-Time bytes that matter for
- * transport/tempo are parsed from incoming MIDI; everything else read
- * from the USB MIDI IN stream is silently discarded. Real-time bytes are
- * always single, complete messages that can legally appear anywhere in a
- * MIDI byte stream (never as a data byte of another message, per the
- * MIDI spec's real-time priority rule), so no running-status/data-byte
- * state machine is needed to find them safely -- a plain byte-by-byte
- * scan is correct. Full MIDI IN (note events, CC, etc. -- e.g. for a
- * future live-input-driven arp) is a separate, not-yet-built feature;
- * this file is intentionally narrow.
+ * transport/tempo are consumed by this file's own callback -- SysEx and
+ * everything else midi_in.h's own parser doesn't recognize is out of
+ * scope for THIS file regardless (Scene Launch mode's own SysEx
+ * callback, registered separately with midi_in.h, is what actually
+ * reads that). Full channel-message MIDI IN (note events, CC, etc. --
+ * e.g. for a future live-input-driven arp) is still a separate,
+ * not-yet-built feature; this file remains intentionally narrow.
  *
  * Pulse counting, not a callback: `pulse_count` increments regardless of
  * transport (`running`) state -- matching real MIDI clock behavior,
@@ -112,13 +116,15 @@ typedef struct {
 
 void tiles_midi_clock_init(void);
 
-/* Drains and parses every byte currently available from USB MIDI IN, and
- * advances the internal tap-tempo generator (if it's the currently
- * active source -- see this file's own header) by whatever real time has
- * elapsed since the last call. Call every main-loop iteration, after
- * tud_task() (so this iteration's USB RX FIFO is current) and before
- * anything that reads tiles_midi_clock_get_state() or
- * tiles_midi_clock_external_active(). */
+/* Reacts to whatever Real-Time bytes midi/midi_in.h's own tiles_midi_in_
+ * scan() already found this same scan (via this file's registered
+ * callback -- see this file's own header), and advances the internal
+ * tap-tempo generator (if it's the currently active source -- see this
+ * file's own header) by whatever real time has elapsed since the last
+ * call. Call every main-loop iteration, after tiles_midi_in_scan() (so
+ * this scan's callback has already fired) and before anything that
+ * reads tiles_midi_clock_get_state() or tiles_midi_clock_external_
+ * active(). */
 void tiles_midi_clock_scan(void);
 
 /* Snapshot of current clock/transport state -- see the struct's own

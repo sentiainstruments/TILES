@@ -1,0 +1,258 @@
+"""
+Ableton-side half of TILES's Scene Launch mode (see
+firmware/src/services/op_mode.c's own "Scene Launch mode" section for
+the hardware side, and shared/protocol/README.md's "Scene Launch"
+section for the full message catalog this implements).
+
+Real feedback: "lets implemebt a new mode that triggers scenes in
+ableton live keep it simple for now, push triggers it... can we pull
+the colors of the scenes from ableton? and light behaviour to feel
+intuitive?"
+
+Honesty about confidence, same spirit as firmware/src/drivers/
+dac80502.c's own header comment for its first-ever, unverified driver:
+this is the FIRST code in this repo that reads Ableton's Live Object
+Model (song/track/scene/clip-slot navigation, add_*_listener) or
+receives raw SysEx into a Control Surface script (handle_sysex) --
+TILES.py's own existing transport-remote code (ButtonElement + CC
+listeners) is a different, already-real-hardware-tested API surface
+from what this file uses. The MIDI wire format itself (SysEx framing,
+manufacturer ID 0x7D, message layout) is exactly specified and firmware-
+verified; the Live API calls below are this module's own best-effort
+understanding of Ableton's Remote Script API, not yet confirmed against
+a real Ableton session. If Scene Launch mode lights up but nothing
+updates, or clip fires don't work, start here before assuming the
+firmware side is wrong.
+
+Wire protocol summary (manufacturer ID 0x7D = MMA-reserved "non-
+commercial/educational use", sub-ID 0x01 = TILES's own Scene Launch
+sub-protocol under it):
+
+    TILES -> Ableton:
+        F0 7D 01 01 <track> <scene>              F7   fire clip
+        F0 7D 01 02 <scene>                       F7   launch scene
+
+    Ableton -> TILES:
+        F0 7D 01 10 <track> <scene> <flags> <r7> <g7> <b7> F7   clip state
+        F0 7D 01 11 <scene> <flags> <r7> <g7> <b7>         F7   scene state
+
+    flags bit 0 = has_clip (clip state only), bit 1 = is_playing (clip
+    state only), bit 2 = is_triggered (both). <r7>/<g7>/<b7> are each
+    0-127 (Ableton's own 0-255 channel value halved, see
+    _color_to_wire_rgb() below) -- this hardware doubles them back
+    toward 8-bit on receipt (see op_mode.c's own scene_on_sysex()),
+    losing the bottom bit, not the top.
+
+Only the first OP_SCENE_MAX_TRACKS tracks and OP_SCENE_NUM_ROWS scenes
+are ever pushed or listened to -- matches firmware/src/services/
+op_mode.c's own fixed-size state table, and "keep it simple for now"
+means no attempt yet to page scenes beyond the first 4 (real feedback's
+own Q&A settled "-"/"+" as a TRACK pan, not a scene page, for this
+version).
+"""
+
+SYSEX_MFR_ID = 0x7D
+SYSEX_SUB_ID = 0x01
+
+MSG_FIRE_CLIP = 0x01
+MSG_LAUNCH_SCENE = 0x02
+MSG_CLIP_STATE = 0x10
+MSG_SCENE_STATE = 0x11
+
+FLAG_HAS_CLIP = 0x01
+FLAG_IS_PLAYING = 0x02
+FLAG_IS_TRIGGERED = 0x04
+
+# Must match firmware/src/services/op_mode.c's own OP_SCENE_MAX_TRACKS/
+# OP_SCENE_NUM_ROWS -- keep these three in sync with that file if they
+# ever change there.
+MAX_TRACKS = 64
+NUM_SCENES = 4
+
+
+def _color_to_wire_rgb(color_int):
+    """Ableton clip/scene `.color` is a packed 0xRRGGBB int. Halves each
+    8-bit channel down to a 7-bit MIDI data byte (0-127) -- lossy, and
+    deliberately so: matches op_mode.c's own scene_on_sysex() comment on
+    why this hardware's LEDs don't need the missing bit of precision
+    back badly enough to justify a more expensive/complex lossless
+    encoding for this first version."""
+    r = (color_int >> 16) & 0xFF
+    g = (color_int >> 8) & 0xFF
+    b = color_int & 0xFF
+    return r >> 1, g >> 1, b >> 1
+
+
+class SceneLaunch(object):
+    """Owned by TILES.py (see that file's own __init__/disconnect) --
+    kept as a separate object rather than folded into the TILES class
+    itself so the already-real-hardware-tested transport-remote code
+    stays completely undisturbed by this newer, unverified addition.
+    """
+
+    def __init__(self, control_surface):
+        self._control_surface = control_surface
+        self._song = control_surface.song()
+        # One listener closure per (track, scene) clip slot and per
+        # scene, kept alive for as long as this object exists so they
+        # can be individually removed in disconnect() -- Ableton's own
+        # add_*_listener/remove_*_listener pattern needs the EXACT same
+        # callable passed to both, not just an equivalent one, so these
+        # have to be stored, not recreated on disconnect.
+        self._clip_slot_listeners = []  # list of (clip_slot, has_clip_cb)
+        self._clip_listeners = []  # list of (clip, is_playing_cb, is_triggered_cb, color_cb)
+        self._scene_listeners = []  # list of (scene, is_triggered_cb, color_cb)
+        self._connect()
+
+    # ---- Ableton -> TILES ------------------------------------------------
+
+    def _send_clip_state(self, track_index, scene_index, clip_slot):
+        has_clip = clip_slot.has_clip
+        is_playing = has_clip and clip_slot.is_playing
+        is_triggered = clip_slot.is_triggered
+        color = clip_slot.clip.color if has_clip else 0
+        r7, g7, b7 = _color_to_wire_rgb(color)
+        flags = 0
+        if has_clip:
+            flags |= FLAG_HAS_CLIP
+        if is_playing:
+            flags |= FLAG_IS_PLAYING
+        if is_triggered:
+            flags |= FLAG_IS_TRIGGERED
+        self._control_surface._send_midi(
+            (
+                0xF0,
+                SYSEX_MFR_ID,
+                SYSEX_SUB_ID,
+                MSG_CLIP_STATE,
+                track_index,
+                scene_index,
+                flags,
+                r7,
+                g7,
+                b7,
+                0xF7,
+            )
+        )
+
+    def _send_scene_state(self, scene_index, scene):
+        r7, g7, b7 = _color_to_wire_rgb(scene.color)
+        flags = FLAG_IS_TRIGGERED if scene.is_triggered else 0
+        self._control_surface._send_midi(
+            (0xF0, SYSEX_MFR_ID, SYSEX_SUB_ID, MSG_SCENE_STATE, scene_index, flags, r7, g7, b7, 0xF7)
+        )
+
+    def _connect(self):
+        tracks = self._song.tracks
+        scenes = self._song.scenes
+        num_tracks = min(len(tracks), MAX_TRACKS)
+        num_scenes = min(len(scenes), NUM_SCENES)
+
+        for scene_index in range(num_scenes):
+            scene = scenes[scene_index]
+
+            def make_scene_callback(idx, sc):
+                return lambda: self._send_scene_state(idx, sc)
+
+            is_triggered_cb = make_scene_callback(scene_index, scene)
+            color_cb = make_scene_callback(scene_index, scene)
+            scene.add_is_triggered_listener(is_triggered_cb)
+            scene.add_color_listener(color_cb)
+            self._scene_listeners.append((scene, is_triggered_cb, color_cb))
+            self._send_scene_state(scene_index, scene)
+
+        for track_index in range(num_tracks):
+            track = tracks[track_index]
+            for scene_index in range(num_scenes):
+                clip_slot = track.clip_slots[scene_index]
+
+                def make_slot_callback(t_idx, s_idx, slot):
+                    return lambda: self._on_clip_slot_changed(t_idx, s_idx, slot)
+
+                has_clip_cb = make_slot_callback(track_index, scene_index, clip_slot)
+                clip_slot.add_has_clip_listener(has_clip_cb)
+                self._clip_slot_listeners.append((clip_slot, has_clip_cb))
+                self._on_clip_slot_changed(track_index, scene_index, clip_slot)
+
+    def _on_clip_slot_changed(self, track_index, scene_index, clip_slot):
+        """Fired whenever a slot gains or loses a clip -- (re)subscribes
+        to that specific clip's own is_playing/is_triggered/color, since
+        those listeners have to be re-registered against whatever the
+        NEW clip object is (the old one, if any, is gone). Always sends
+        the slot's current full state too, whether or not a clip is
+        present."""
+        # Drop any listener registered against a previous clip in this
+        # exact slot -- keyed by identity (track_index, scene_index), not
+        # by clip object, since the old clip object may already be gone.
+        remaining = []
+        for clip, is_playing_cb, is_triggered_cb, color_cb in self._clip_listeners:
+            if getattr(clip, "_tiles_slot_key", None) == (track_index, scene_index):
+                try:
+                    clip.remove_is_playing_listener(is_playing_cb)
+                    clip.remove_is_triggered_listener(is_triggered_cb)
+                    clip.remove_color_listener(color_cb)
+                except RuntimeError:
+                    pass  # clip already gone -- nothing to remove
+            else:
+                remaining.append((clip, is_playing_cb, is_triggered_cb, color_cb))
+        self._clip_listeners = remaining
+
+        if clip_slot.has_clip:
+            clip = clip_slot.clip
+            clip._tiles_slot_key = (track_index, scene_index)  # tag for the lookup above
+
+            def make_clip_callback(t_idx, s_idx, slot):
+                return lambda: self._send_clip_state(t_idx, s_idx, slot)
+
+            is_playing_cb = make_clip_callback(track_index, scene_index, clip_slot)
+            is_triggered_cb = make_clip_callback(track_index, scene_index, clip_slot)
+            color_cb = make_clip_callback(track_index, scene_index, clip_slot)
+            clip.add_is_playing_listener(is_playing_cb)
+            clip.add_is_triggered_listener(is_triggered_cb)
+            clip.add_color_listener(color_cb)
+            self._clip_listeners.append((clip, is_playing_cb, is_triggered_cb, color_cb))
+
+        self._send_clip_state(track_index, scene_index, clip_slot)
+
+    # ---- TILES -> Ableton --------------------------------------------------
+
+    def handle_sysex(self, midi_bytes):
+        """Called by TILES.py's own handle_sysex() override -- see that
+        file's own comment on why the base ControlSurface's raw SysEx
+        hook is what delivers this rather than a ButtonElement/CC
+        listener the way the transport remote uses. `midi_bytes`
+        includes the F0/F7 framing."""
+        if len(midi_bytes) < 5 or midi_bytes[1] != SYSEX_MFR_ID or midi_bytes[2] != SYSEX_SUB_ID:
+            return
+        msg_type = midi_bytes[3]
+        if msg_type == MSG_FIRE_CLIP and len(midi_bytes) == 7:
+            track_index, scene_index = midi_bytes[4], midi_bytes[5]
+            tracks = self._song.tracks
+            scenes = self._song.scenes
+            if track_index < len(tracks) and scene_index < len(scenes):
+                tracks[track_index].clip_slots[scene_index].fire()
+        elif msg_type == MSG_LAUNCH_SCENE and len(midi_bytes) == 6:
+            scene_index = midi_bytes[4]
+            scenes = self._song.scenes
+            if scene_index < len(scenes):
+                scenes[scene_index].fire()
+
+    def disconnect(self):
+        for scene, is_triggered_cb, color_cb in self._scene_listeners:
+            try:
+                scene.remove_is_triggered_listener(is_triggered_cb)
+                scene.remove_color_listener(color_cb)
+            except RuntimeError:
+                pass
+        for clip_slot, has_clip_cb in self._clip_slot_listeners:
+            try:
+                clip_slot.remove_has_clip_listener(has_clip_cb)
+            except RuntimeError:
+                pass
+        for clip, is_playing_cb, is_triggered_cb, color_cb in self._clip_listeners:
+            try:
+                clip.remove_is_playing_listener(is_playing_cb)
+                clip.remove_is_triggered_listener(is_triggered_cb)
+                clip.remove_color_listener(color_cb)
+            except RuntimeError:
+                pass

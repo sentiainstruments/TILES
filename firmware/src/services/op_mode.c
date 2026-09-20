@@ -12,6 +12,7 @@
 #include "haptics.h"
 #include "lighting.h"
 #include "midi_clock.h"
+#include "midi_in.h"
 #include "midi_out.h"
 #include "note_map.h"
 #include "octave_control.h"
@@ -58,9 +59,8 @@ typedef enum {
     OP_MODE_SEQUENCER,
     OP_MODE_GUITAR,
     OP_MODE_SONG,
+    OP_MODE_SCENE_LAUNCH,
 } tiles_op_mode_t;
-
-#define OP_NUM_MODES 4u
 
 /* Menu layout: one pad per mode, packed together on a single row, each
  * its own color -- real feedback: "the row thing for the mode menu on
@@ -88,6 +88,9 @@ typedef enum {
 /* Song mode takes the next free column -- see this file's own "Song
  * mode" section for the feature itself. */
 #define OP_MENU_COL_SONG 5u
+/* Scene Launch takes the last free column -- see this file's own
+ * "Scene Launch mode" section for the feature itself. */
+#define OP_MENU_COL_SCENE_LAUNCH 6u
 
 /* Mode-selector row colors -- real feedback's own phrase, "mode selector
  * color": melodic = Sentia magenta (this codebase's brand color,
@@ -124,6 +127,13 @@ typedef enum {
 #define OP_MENU_SONG_R 1.0f
 #define OP_MENU_SONG_G 1.0f
 #define OP_MENU_SONG_B 0.0f
+/* Scene Launch = green -- Ableton's own Session View already uses green
+ * for "this clip is playing," so this mode's own menu-slot color leans
+ * into that existing association rather than picking an arbitrary new
+ * one. */
+#define OP_MENU_SCENE_LAUNCH_R 0.0f
+#define OP_MENU_SCENE_LAUNCH_G 1.0f
+#define OP_MENU_SCENE_LAUNCH_B 0.0f
 
 /* Triangle LED glow while the top-level mode picker is actually open --
  * the button itself is monochrome PWM (not addressable RGB like the
@@ -2048,7 +2058,11 @@ static bool mode_owns_standby_grid(tiles_op_mode_t mode) {
     if (mode == OP_MODE_SONG) {
         return !s_song_capture_active && !s_song_edit_pick_active;
     }
-    return mode == OP_MODE_SEQUENCER;
+    /* Scene Launch's whole grid is clip/scene launch pads -- no live-
+     * feel/melodic exception the way Song mode's own capture needs
+     * (this mode never plays a melodic note at all, so there's no
+     * competing "let live touches through" concern to carve out). */
+    return mode == OP_MODE_SEQUENCER || mode == OP_MODE_SCENE_LAUNCH;
 }
 
 /* ---- Menu -------------------------------------------------------------- */
@@ -2105,6 +2119,7 @@ static bool col_is_available(uint8_t col) {
     case OP_MENU_COL_GUITAR:
     case OP_MENU_COL_CHORD:
     case OP_MENU_COL_SONG:
+    case OP_MENU_COL_SCENE_LAUNCH:
         return true;
     default: /* outside the menu entirely */
         return false;
@@ -2133,10 +2148,15 @@ static void render_menu_col_color(uint8_t col, float *r, float *g, float *b) {
         *g = OP_MENU_SONG_G;
         *b = OP_MENU_SONG_B;
         break;
+    case OP_MENU_COL_SCENE_LAUNCH:
+        *r = OP_MENU_SCENE_LAUNCH_R;
+        *g = OP_MENU_SCENE_LAUNCH_G;
+        *b = OP_MENU_SCENE_LAUNCH_B;
+        break;
     default: /* OP_MENU_COL_GUITAR -- only ever called for an available
               * column (see render_menu() below), so this catch-all is
-              * safe: melodic/sequencer/chord/song are handled above,
-              * leaving only guitar. */
+              * safe: melodic/sequencer/chord/song/scene launch are
+              * handled above, leaving only guitar. */
         *r = OP_MENU_GUITAR_R;
         *g = OP_MENU_GUITAR_G;
         *b = OP_MENU_GUITAR_B;
@@ -2164,6 +2184,8 @@ static bool col_is_current_mode(uint8_t col) {
         return s_active_mode == OP_MODE_CHORD;
     case OP_MENU_COL_SONG:
         return s_active_mode == OP_MODE_SONG;
+    case OP_MENU_COL_SCENE_LAUNCH:
+        return s_active_mode == OP_MODE_SCENE_LAUNCH;
     default:
         return false;
     }
@@ -3796,6 +3818,8 @@ static void handle_menu_taps(void) {
                     mode = OP_MODE_GUITAR;
                 } else if (col == OP_MENU_COL_SONG) {
                     mode = OP_MODE_SONG;
+                } else if (col == OP_MENU_COL_SCENE_LAUNCH) {
+                    mode = OP_MODE_SCENE_LAUNCH;
                 }
                 menu_exit();
                 set_active_mode(mode);
@@ -4460,6 +4484,19 @@ static bool s_song_slot_running[OP_SONG_NUM_SLOTS];
  * sequencer-specific version of this fix was built to prevent, just
  * never extended to the mode that didn't exist yet when it was
  * written. */
+/* Scene Launch mode's own track-pan state -- pulled up here (out of
+ * this file's own "Scene Launch mode" section, well further down)
+ * because handle_transport_and_length() just below needs it for "-"/
+ * "+", same "declare the specific thing early" precedent this file
+ * already uses for Song mode's own early-needed statics. Column c
+ * (OP_SCENE_TRACK_COL_MIN..MAX) shows track (s_scene_track_offset + c
+ * - OP_SCENE_TRACK_COL_MIN); OP_SCENE_MAX_TRACKS bounds both this and
+ * the state array that actually stores per-track/scene clip data. */
+#define OP_SCENE_MAX_TRACKS 64u
+#define OP_SCENE_TRACK_COL_MIN 1u
+#define OP_SCENE_TRACK_COL_MAX 5u
+static uint8_t s_scene_track_offset;
+
 static bool any_song_slot_running(void) {
     for (uint8_t slot = 0u; slot < OP_SONG_NUM_SLOTS; slot++) {
         if (s_song_slot_running[slot]) {
@@ -4498,6 +4535,7 @@ static void handle_transport_and_length(uint32_t now_ms) {
     bool active =
         (s_active_mode == OP_MODE_SEQUENCER) && s_seq_edit_mode == OP_SEQ_EDIT_NONE && !s_seq_capture_mode_active;
     bool guitar_active = (s_active_mode == OP_MODE_GUITAR);
+    bool scene_launch_active = (s_active_mode == OP_MODE_SCENE_LAUNCH);
 
     if (active && minus_held && !s_minus_was_held && circle_held) {
         op_seq_pattern_t *pat = active_pattern();
@@ -4552,6 +4590,16 @@ static void handle_transport_and_length(uint32_t now_ms) {
             if (offset > 0u) {
                 tiles_note_map_set_guitar_fret_offset((uint8_t)(offset - 1u));
             }
+        } else if (scene_launch_active) {
+            /* Real feedback: "the -+ browse left and right on the
+             * visible scenes" -- confirmed this pans which 5 tracks
+             * show in columns 1-5 (rows/scenes always fixed at the
+             * first 4), same "one step per press, no auto-repeat"
+             * convention "-"/"+" already follow everywhere else in
+             * this file. */
+            if (s_scene_track_offset > 0u) {
+                s_scene_track_offset--;
+            }
         }
         s_minus_used_as_combo = false;
     }
@@ -4595,6 +4643,10 @@ static void handle_transport_and_length(uint32_t now_ms) {
             /* tiles_note_map_set_guitar_fret_offset() clamps internally
              * (GUITAR_MAX_FRET_OFFSET), no bound check needed here. */
             tiles_note_map_set_guitar_fret_offset((uint8_t)(tiles_note_map_get_guitar_fret_offset() + 1u));
+        } else if (scene_launch_active) {
+            if (s_scene_track_offset < OP_SCENE_MAX_TRACKS - OP_SCENE_TRACK_COL_MAX) {
+                s_scene_track_offset++;
+            }
         }
         s_plus_used_as_combo = false;
     }
@@ -4649,6 +4701,15 @@ static void song_edit_enter(uint8_t pad);
 static void handle_song_edit_taps(uint32_t now_ms);
 static void render_song_edit(uint32_t now_ms);
 static void handle_song_edit_pick_taps(uint32_t now_ms);
+
+/* Defined down in this file's own "Scene Launch mode" section, same
+ * "declare here, define later" precedent as the Song mode forward
+ * declarations just above. scene_launch_init() specifically registers
+ * this mode's SysEx callback with midi/midi_in.h -- see tiles_op_mode_
+ * init()'s own call site below. */
+static void scene_launch_init(void);
+static void handle_scene_launch_taps(void);
+static void render_scene_launch(uint32_t now_ms);
 
 void tiles_op_mode_init(bool crash_recovered) {
     if (!crash_recovered) {
@@ -4737,6 +4798,13 @@ void tiles_op_mode_init(bool crash_recovered) {
      * either -- revisit __uninitialized_ram for these once that
      * exists, matching the sequencer's own precedent. */
     song_store_load_all();
+
+    /* Registers this mode's own SysEx callback with midi/midi_in.h --
+     * see this file's own "Scene Launch mode" section for what it
+     * does. Harmless to register even if the mode is never entered
+     * this boot; midi_in.c's own dispatch is a no-op for anyone who
+     * never sends a matching message. */
+    scene_launch_init();
 
     if (crash_recovered) {
         /* s_active_mode/s_seq_active_alt[]/s_seq_lane_running[] were all
@@ -5007,6 +5075,9 @@ void tiles_op_mode_scan(void) {
             handle_song_overview_taps(now_ms);
             render_song_overview(now_ms);
         }
+    } else if (s_active_mode == OP_MODE_SCENE_LAUNCH) {
+        handle_scene_launch_taps();
+        render_scene_launch(now_ms);
     } else {
         /* Real feedback: "make trisngle fhash if pattern is playing and
          * we exit to a different screen than the playing pattern."
@@ -6604,4 +6675,299 @@ static void song_capture_exit(void) {
     }
     song_store_write_all();
     printf("[op_mode] song capture -> off\n");
+}
+
+/* ---- Scene Launch mode ---------------------------------------------------
+ * Real feedback: "lets implemebt a new mode that triggers scenes in
+ * ableton live keep it simple for now, push triggers it. 4 vertical and
+ * the 6 horizontal and the 6th is full row trigger as usual." A classic
+ * Session View grid: rows 1-4 are Ableton's own first 4 scenes, ALWAYS
+ * (no scene paging in this version -- confirmed in this feature's own
+ * Q&A, "-"/"+" pan tracks instead, see handle_transport_and_length()'s
+ * own scene-launch branch and OP_SCENE_TRACK_COL_MIN/MAX's own comment
+ * further up); columns 1-5 are 5 consecutive tracks' own clip slots for
+ * that row; column 6, one pad per row, is that row's own Scene Launch
+ * button -- "as usual" meaning the same convention real Launchpad-style
+ * controllers already use (fires the WHOLE scene, every track's clip in
+ * that row at once), not a per-cell clip fire.
+ *
+ * Real feedback: "can we pull the colors of the scenes from ableton?...
+ * light behaviour to feel intuitive?" -- yes, via the SAME Remote
+ * Script this codebase's transport remote already uses (daw-
+ * integration/ableton/TILES/TILES.py), extended with a real SysEx
+ * protocol (daw-integration/ableton/TILES/scene_launch.py, this
+ * section's own OP_SCENE_MSG_* below, shared/protocol/README.md's own
+ * "Scene Launch" section) rather than a fixed/quantized color palette
+ * older controllers needed -- this hardware already has real per-pad
+ * RGB, so there's no reason to downgrade Ableton's own arbitrary clip/
+ * scene colors to a small fixed set. "Intuitive," concretely: a slot
+ * with no clip ever reported is fully off; a clip that exists but isn't
+ * playing shows at its own real color, dimmed to OP_SCALE_AVAILABLE_
+ * LEVEL (this file's own established "available but not selected"
+ * level, same one the mode-picker menu and scale picker already use);
+ * a playing clip is full brightness, pulsing with menu_selected_pulse_
+ * level() (the same "this one's active" pulse render_song_overview()
+ * already established for a running Song pattern); a triggered clip
+ * (queued to start/stop on the next quantization boundary, Ableton's
+ * own ClipSlot.is_triggered) blinks fast -- a deliberately DIFFERENT,
+ * faster shape from the slower "currently active" pulse, since "about
+ * to change" and "already changed" are different facts worth reading
+ * apart at a glance, the same distinction real Launchpad-family
+ * scripts already draw. Column 6 mirrors the same three levels off
+ * Scene.color/is_triggered instead of any one clip's -- a Scene has no
+ * "is playing" of its own, only "is triggered," so playing-pulse never
+ * applies to it.
+ *
+ * Real feedback: "in that mode the underglow must do fun stuff, keep it
+ * white and when we trigger any scene it flashes once in sentia color."
+ * Steady white at rest; "any scene" means the column-6 Scene Launch
+ * gesture specifically (not every individual clip fire) -- see
+ * handle_scene_launch_taps()'s own scene-launch branch for what starts
+ * the flash, and render_scene_launch_underglow() for what ends it. */
+
+/* MMA-reserved "non-commercial/educational use" manufacturer ID -- the
+ * correct, spec-sanctioned choice for DIY hardware with no registered
+ * ID of its own (same spirit as usb_descriptors.c's own borrowed-but-
+ * documented Raspberry Pi USB VID, except this is an ACTUAL reserved-
+ * for-this-situation value, not a borrowed one). Sub-ID scopes this
+ * codebase's own messages under it, in case a future feature also
+ * wants a SysEx channel under the same manufacturer ID without
+ * colliding with this one. */
+#define OP_SCENE_SYSEX_MFR_ID 0x7Du
+#define OP_SCENE_SYSEX_SUB_ID 0x01u
+
+/* TILES -> Ableton (see daw-integration/ableton/TILES/scene_launch.py's
+ * own handle_sysex() for the receiving side). */
+#define OP_SCENE_MSG_FIRE_CLIP 0x01u
+#define OP_SCENE_MSG_LAUNCH_SCENE 0x02u
+/* Ableton -> TILES (see this section's own scene_on_sysex() below). */
+#define OP_SCENE_MSG_CLIP_STATE 0x10u
+#define OP_SCENE_MSG_SCENE_STATE 0x11u
+
+/* CLIP_STATE/SCENE_STATE flag bits, packed into one 7-bit byte on the
+ * wire (see scene_on_sysex() below) -- SCENE_STATE only ever uses bit
+ * 0, a Scene has no "is playing" of its own. */
+#define OP_SCENE_FLAG_HAS_CLIP 0x01u
+#define OP_SCENE_FLAG_IS_PLAYING 0x02u
+#define OP_SCENE_FLAG_IS_TRIGGERED 0x04u
+
+#define OP_SCENE_NUM_ROWS 4u
+#define OP_SCENE_LAUNCH_COL 6u
+
+typedef struct {
+    bool has_clip;
+    bool is_playing;
+    bool is_triggered;
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+} op_scene_cell_state_t;
+
+/* [track][scene] -- every track this session has ever heard about,
+ * regardless of s_scene_track_offset's current position, so panning
+ * left/right never loses state that arrived while a different window
+ * was showing. daw-integration/ableton/TILES/scene_launch.py pushes
+ * every track/scene combination up front on connect (not just whatever
+ * happens to be currently visible), exactly so this can stay a plain
+ * "cache everything, render whichever slice is scrolled into view"
+ * table instead of needing to tell the DAW script which window is
+ * visible at all. */
+static op_scene_cell_state_t s_scene_clip[OP_SCENE_MAX_TRACKS][OP_SCENE_NUM_ROWS];
+
+typedef struct {
+    bool is_triggered;
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+} op_scene_row_state_t;
+
+static op_scene_row_state_t s_scene_row[OP_SCENE_NUM_ROWS];
+
+static bool s_scene_prev_pad_touched[TILES_NUM_PADS];
+
+/* Real feedback: "when we trigger any scene it flashes once in sentia
+ * color" -- same two-state flash/rest shape this file's other flash
+ * confirmations already use (OP_SONG_FLASH_BLINK_MS etc.), just a
+ * single flash here rather than a double-blink, since this means
+ * "an action happened," not "a save/delete succeeded." */
+#define OP_SCENE_TRIGGER_FLASH_MS 150u
+static bool s_scene_trigger_flash_active;
+static uint32_t s_scene_trigger_flash_start_ms;
+
+/* A deliberately faster, plainer on/off blink than menu_selected_
+ * pulse_level()'s own smooth sine breathing -- "about to change" reads
+ * as more urgent than "currently active," the same distinction real
+ * Launchpad-family scripts already draw between a playing clip and a
+ * queued one. Unmeasured -- a first guess at pacing, not calibrated
+ * against real hardware/Ableton's own default quantization feel. */
+#define OP_SCENE_TRIGGERED_BLINK_PERIOD_MS 250u
+
+static float scene_triggered_blink_level(uint32_t now_ms) {
+    uint32_t phase = now_ms % OP_SCENE_TRIGGERED_BLINK_PERIOD_MS;
+    return (phase < OP_SCENE_TRIGGERED_BLINK_PERIOD_MS / 2u) ? 1.0f : 0.2f;
+}
+
+static void scene_send_fire_clip(uint8_t track, uint8_t scene) {
+    uint8_t msg[5] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_FIRE_CLIP, track, scene};
+    tiles_midi_send_sysex(msg, sizeof(msg));
+}
+
+static void scene_send_launch_scene(uint8_t scene) {
+    uint8_t msg[4] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_LAUNCH_SCENE, scene};
+    tiles_midi_send_sysex(msg, sizeof(msg));
+}
+
+/* Registered with midi/midi_in.h once at boot (see scene_launch_init()
+ * below) -- fires for EVERY SysEx frame this board ever receives, not
+ * just ones from this protocol, so the manufacturer/sub-ID check below
+ * is load-bearing, not defensive-for-its-own-sake: without it, any
+ * other SysEx (a future feature's own, or a stray one from something
+ * else entirely on the same USB MIDI port) could be misread as clip/
+ * scene state. Payload lengths are checked exactly, not just a minimum
+ * -- a malformed or future/newer-version message with a different
+ * shape is silently ignored rather than partially, wrongly applied. */
+static void scene_on_sysex(const uint8_t *data, size_t len) {
+    if (len < 3u || data[0] != OP_SCENE_SYSEX_MFR_ID || data[1] != OP_SCENE_SYSEX_SUB_ID) {
+        return;
+    }
+    uint8_t msg_type = data[2];
+    if (msg_type == OP_SCENE_MSG_CLIP_STATE) {
+        if (len != 9u) {
+            return;
+        }
+        uint8_t track = data[3];
+        uint8_t scene = data[4];
+        if (track >= OP_SCENE_MAX_TRACKS || scene >= OP_SCENE_NUM_ROWS) {
+            return;
+        }
+        uint8_t flags = data[5];
+        op_scene_cell_state_t *cell = &s_scene_clip[track][scene];
+        cell->has_clip = (flags & OP_SCENE_FLAG_HAS_CLIP) != 0u;
+        cell->is_playing = (flags & OP_SCENE_FLAG_IS_PLAYING) != 0u;
+        cell->is_triggered = (flags & OP_SCENE_FLAG_IS_TRIGGERED) != 0u;
+        /* Wire values are 7-bit (0-127, standard MIDI data-byte range)
+         * -- doubled back toward 8-bit (0-254) rather than a lossless
+         * but more expensive rescale; this hardware's own LEDs don't
+         * need the missing single bit of precision back. */
+        cell->r = (uint8_t)(data[6] * 2u);
+        cell->g = (uint8_t)(data[7] * 2u);
+        cell->b = (uint8_t)(data[8] * 2u);
+    } else if (msg_type == OP_SCENE_MSG_SCENE_STATE) {
+        if (len != 8u) {
+            return;
+        }
+        uint8_t scene = data[3];
+        if (scene >= OP_SCENE_NUM_ROWS) {
+            return;
+        }
+        uint8_t flags = data[4];
+        op_scene_row_state_t *row = &s_scene_row[scene];
+        row->is_triggered = (flags & OP_SCENE_FLAG_IS_TRIGGERED) != 0u;
+        row->r = (uint8_t)(data[5] * 2u);
+        row->g = (uint8_t)(data[6] * 2u);
+        row->b = (uint8_t)(data[7] * 2u);
+    }
+    /* Any other msg_type: not yet defined, silently ignored -- forward-
+     * compatible with a future firmware/script version adding a new
+     * message type without breaking this one. */
+}
+
+static void scene_launch_init(void) {
+    for (uint8_t track = 0u; track < OP_SCENE_MAX_TRACKS; track++) {
+        for (uint8_t row = 0u; row < OP_SCENE_NUM_ROWS; row++) {
+            s_scene_clip[track][row] = (op_scene_cell_state_t){0};
+        }
+    }
+    for (uint8_t row = 0u; row < OP_SCENE_NUM_ROWS; row++) {
+        s_scene_row[row] = (op_scene_row_state_t){0};
+    }
+    s_scene_track_offset = 0u;
+    tiles_midi_in_register_sysex_callback(scene_on_sysex);
+}
+
+static void handle_scene_launch_taps(void) {
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        bool touched = tiles_touch_is_touched(pad);
+        bool was_touched = s_scene_prev_pad_touched[pad - 1u];
+        if (touched && !was_touched) {
+            tiles_haptics_trigger_touch_pulse(pad);
+            /* board_pad_for_row_col()'s own inverse -- pad = (row-1)*6
+             * + col, rows/cols both 1-based (see that function's own
+             * comment in board_layout.h). Row maps 1:1 onto scene
+             * index (row 1 = scene 0) since this mode owns the WHOLE
+             * grid, unlike the top-level mode menu's own single-row
+             * OP_MENU_ROW carve-out. */
+            uint8_t col = (uint8_t)(((pad - 1u) % 6u) + 1u);
+            uint8_t scene = (uint8_t)((pad - 1u) / 6u);
+            if (col == OP_SCENE_LAUNCH_COL) {
+                scene_send_launch_scene(scene);
+                s_scene_trigger_flash_active = true;
+                s_scene_trigger_flash_start_ms = to_ms_since_boot(get_absolute_time());
+            } else if (col >= OP_SCENE_TRACK_COL_MIN && col <= OP_SCENE_TRACK_COL_MAX) {
+                uint8_t track = (uint8_t)(s_scene_track_offset + (col - OP_SCENE_TRACK_COL_MIN));
+                scene_send_fire_clip(track, scene);
+            }
+        }
+        s_scene_prev_pad_touched[pad - 1u] = touched;
+    }
+}
+
+static void render_scene_launch_underglow(uint32_t now_ms) {
+    bool flashing = s_scene_trigger_flash_active && (now_ms - s_scene_trigger_flash_start_ms) < OP_SCENE_TRIGGER_FLASH_MS;
+    if (s_scene_trigger_flash_active && !flashing) {
+        s_scene_trigger_flash_active = false;
+    }
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        if (flashing) {
+            /* OP_MENU_MELODIC_R/G/B is literally Sentia magenta, reused
+             * directly rather than a second same-file definition of an
+             * identical color -- see this section's own header
+             * comment. */
+            tiles_lighting_set_standby_underglow_rgb(i, OP_MENU_MELODIC_R, OP_MENU_MELODIC_G, OP_MENU_MELODIC_B);
+        } else {
+            tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 1.0f, 1.0f);
+        }
+    }
+}
+
+static void render_scene_launch(uint32_t now_ms) {
+    float pulse = menu_selected_pulse_level(now_ms);
+    float blink = scene_triggered_blink_level(now_ms);
+
+    for (uint8_t row = 0u; row < OP_SCENE_NUM_ROWS; row++) {
+        uint8_t grid_row = (uint8_t)(row + TILES_GRID_MIN_ROW + 1u);
+        for (uint8_t col = OP_SCENE_TRACK_COL_MIN; col <= OP_SCENE_TRACK_COL_MAX; col++) {
+            uint8_t track = (uint8_t)(s_scene_track_offset + (col - OP_SCENE_TRACK_COL_MIN));
+            float r = 0.0f, g = 0.0f, b = 0.0f;
+            if (track < OP_SCENE_MAX_TRACKS) {
+                op_scene_cell_state_t *cell = &s_scene_clip[track][row];
+                if (cell->has_clip) {
+                    float level;
+                    if (cell->is_triggered) {
+                        level = blink;
+                    } else if (cell->is_playing) {
+                        level = pulse;
+                    } else {
+                        level = OP_SCALE_AVAILABLE_LEVEL;
+                    }
+                    r = (float)cell->r / 255.0f * level;
+                    g = (float)cell->g / 255.0f * level;
+                    b = (float)cell->b / 255.0f * level;
+                }
+            }
+            tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(grid_row, col), r, g, b);
+        }
+
+        op_scene_row_state_t *scene_row = &s_scene_row[row];
+        float row_level = scene_row->is_triggered ? blink : OP_SCALE_AVAILABLE_LEVEL;
+        tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(grid_row, OP_SCENE_LAUNCH_COL),
+                                            (float)scene_row->r / 255.0f * row_level,
+                                            (float)scene_row->g / 255.0f * row_level,
+                                            (float)scene_row->b / 255.0f * row_level);
+    }
+
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
+    }
+    render_scene_launch_underglow(now_ms);
 }

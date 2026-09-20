@@ -66,6 +66,24 @@ See `ableton/TILES/TILES.py`'s own module docstring for exactly what it
 listens for and why, and `firmware/src/services/op_mode.c`'s
 `handle_diamond_transport()` for the hardware side sending it.
 
+## Scene Launch mode
+
+Real feedback: "lets implemebt a new mode that triggers scenes in
+ableton live... can we pull the colors of the scenes from ableton?"
+The same `TILES/` script folder now also carries `scene_launch.py`
+(imported by `TILES.py`), which fires clips/scenes on TILES's own
+button presses and pushes real clip/scene colors and playing/queued
+state back to the hardware -- see `shared/protocol/README.md`'s own
+"Scene Launch" section for the wire format and
+`firmware/src/services/op_mode.c`'s own "Scene Launch mode" section for
+the hardware side.
+
+**If you installed the Ableton script before this feature existed,
+re-copy the `ableton/TILES/` folder** (step 1 above) to pick up the new
+`scene_launch.py` file, then restart Ableton -- the existing Control
+Surface slot picked in step 3 doesn't need reselecting, just a fresh
+copy of the folder and a restart so Ableton reloads it.
+
 ## Other DAWs
 
 This specific script is Ableton-only -- Logic, Cubase, Reaper, Bitwig,
