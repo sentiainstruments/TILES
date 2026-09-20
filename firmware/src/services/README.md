@@ -2273,6 +2273,36 @@ not its code.
   real Start/Stop still behaves exactly as always; this only covers the
   gap where external clock's PRESENCE itself, not a specific byte
   within it, is what should have triggered the switch.
+  **Diagnostics added for a follow-up report of the same symptom
+  family.** Real feedback: "midi clock in sequencer ius not syinking to
+  ableton clock, its not quantizing snapping how it should, its always
+  at the right tempo but not quite synked. make sure it operates like
+  in other hardware with precise sync." Audited this file's own receive
+  path end to end: while a real external clock is active, `pulse_count`
+  only ever increments from genuine 0xF8 bytes (the internal tap-tempo
+  generator is hard-gated off by `tiles_midi_clock_external_active()`),
+  and `op_mode.c`'s own step-boundary reference always re-anchors by an
+  exact multiple of `OP_SEQ_CLOCKS_PER_STEP` off that same counter (see
+  that file's own `seq_advance_clock()`) -- no interpolation or
+  wall-clock extrapolation anywhere in the phase math that could drift
+  once a real clock is genuinely present. That leaves the most likely
+  real cause outside this file's own code: Ableton's Sync OUTPUT for
+  whichever port TILES uses isn't ticked in Preferences -> Link/Tempo/
+  MIDI (distinct from that same row's Track/Remote columns, which are
+  what the transport-remote CCs already rely on and don't imply Sync is
+  also on) -- TILES would then never see a real clock at all and fall
+  back to its own free-running tap-tempo generator, which can
+  coincidentally land near the right BPM (if a tap session or the
+  default happens to be close) while never actually being phase-locked
+  to Ableton's transport, matching "always the right tempo but not
+  quite synced" precisely. Added `printf` tracing (`[midi_clock]`
+  prefix, USB CDC console) for every real Start/Continue/Stop byte and
+  for every `external clock ACQUIRED/LOST` transition, specifically so
+  this can be confirmed or ruled out directly instead of guessed at: if
+  `ACQUIRED` never prints while Ableton is audibly playing, that's the
+  DAW-side Sync setting above, not a firmware bug; if it does print,
+  the gap is genuinely in this file's own math and needs a second look
+  with that confirmed.
 - `op_mode.h`/`.c` — done for V1: operation modes (melodic/chord/
   sequencer/arpeggiator), SW4 ("diamond")'s function -- real feedback:
   "its time to implement the operation modes. we have standard melodic,

@@ -5,6 +5,7 @@
 #include "pico/time.h"
 
 #include <math.h>
+#include <stdio.h>
 
 /* MIDI System Real-Time status bytes -- single-byte messages, no data
  * bytes ever follow. See this file's header for why a plain byte scan
@@ -280,6 +281,7 @@ static void midi_clock_on_realtime_byte(uint8_t realtime_byte, uint32_t now_ms) 
         }
         break;
     case MIDI_REALTIME_START:
+        printf("[midi_clock] real Start (0xFA) received, pulse_count=%lu\n", (unsigned long)s_pulse_count);
         s_running = true;
         s_start_edge = true;
         s_last_external_pulse_ms = now_ms;
@@ -289,11 +291,13 @@ static void midi_clock_on_realtime_byte(uint8_t realtime_byte, uint32_t now_ms) 
         /* Resumes wherever playback already was -- deliberately does
          * NOT set start_edge (that's reset-to-step-zero, Continue is
          * the opposite of that). */
+        printf("[midi_clock] real Continue (0xFB) received, pulse_count=%lu\n", (unsigned long)s_pulse_count);
         s_running = true;
         s_last_external_pulse_ms = now_ms;
         s_ever_seen_external_pulse = true;
         break;
     case MIDI_REALTIME_STOP:
+        printf("[midi_clock] real Stop (0xFC) received, pulse_count=%lu\n", (unsigned long)s_pulse_count);
         s_running = false;
         s_last_external_pulse_ms = now_ms;
         s_ever_seen_external_pulse = true;
@@ -342,6 +346,24 @@ void tiles_midi_clock_scan(void) {
      * particular byte within it, is what should have triggered the
      * switch. */
     bool external_active_now = tiles_midi_clock_external_active(now_ms);
+    if (external_active_now != s_external_was_active) {
+        /* Direct visibility into whether a real external clock is
+         * actually reaching this board at all -- real feedback: "midi
+         * clock in sequencer is not syinking to ableton clock... always
+         * at the right tempo but not quite synked." If ACQUIRED never
+         * prints while Ableton is audibly playing, Ableton isn't
+         * actually sending this port real MIDI Clock bytes at all (most
+         * commonly: that port's own Sync output checkbox in Preferences
+         * -> Link/Tempo/MIDI isn't ticked) -- TILES would then be
+         * running on its own internal tap-tempo generator the whole
+         * time, which can coincidentally land near the right BPM
+         * without ever being phase-locked to Ableton's actual transport,
+         * exactly matching this report. If ACQUIRED does print, the
+         * clock genuinely is arriving and the gap is somewhere in this
+         * file's own phase math instead. */
+        printf("[midi_clock] external clock %s (ms_per_beat=%.1f)\n", external_active_now ? "ACQUIRED" : "LOST",
+               (double)s_external_ms_per_beat);
+    }
     if (external_active_now && !s_external_was_active) {
         s_running = true;
         s_start_edge = true;
