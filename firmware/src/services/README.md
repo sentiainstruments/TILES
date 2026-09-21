@@ -7623,5 +7623,28 @@ not its code.
     against Ableton's real bundled `_Framework` source and the
     community AbletonOSC project -- both match established, working
     patterns, not an invented architecture).
+  - **Whole TILES -> Ableton direction rearchitected off SysEx.** Real
+    feedback, after none of the above ever had one confirmed
+    successful delivery: "master stop doesnt work at all, individual
+    start and stop doesnt work and hasent for the past few pushes. i
+    need you to look at how a lounchapd works or abletoun push works
+    to pull the exxact same standardizre behaviour." Fire clip, launch
+    scene, stop all, stop one clip, and the track-offset sync all
+    moved from this file's own custom SysEx sub-protocol onto plain
+    Note-On/CC (`OP_SCENE_NOTE_GRID_BASE`/`_STOP_BASE`,
+    `OP_SCENE_CC_MASTER_STOP`/`_TRACK_OFFSET`) sent via
+    `tiles_midi_note_on`/`_off`/`tiles_midi_send_cc` -- the exact
+    mechanism this file's own transport CCs already use, with actual
+    confirmed real-hardware delivery, and the same mechanism real
+    Launchpad-family Remote Scripts use for their own hardware buttons
+    (confirmed against Ableton's bundled `Launchpad/
+    MainSelectorComponent.py`: `ButtonElement` handed to `clip_slot.
+    set_launch_button()`). The Ableton -> TILES color-feedback SysEx
+    (`scene_on_sysex()`) is unchanged -- that direction was never
+    reported broken, and real per-pad RGB has no equivalent in a
+    single CC/Note value anyway. See `shared/protocol/README.md`'s own
+    "Scene Launch" section for the full new wire format, and
+    `daw-integration/ableton/TILES/scene_launch.py`'s own module
+    docstring for the Ableton-side rewrite.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

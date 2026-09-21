@@ -101,6 +101,20 @@ real feedback, "i need that outline for tiles as well," after finding
 out the box the user had seen previously was actually their other
 (Novation) controller's own overlay, not anything TILES's script drew.
 
+**Architecture change**: after several real-hardware rounds with no
+confirmed successful delivery of master stop, fire, or individual stop
+-- "master stop doesnt work at all, individual start and stop doesnt
+work and hasent for the past few pushes. i need you to look at how a
+lounchapd works or abletoun push works to pull the exxact same
+standardizre behaviour" -- every TILES -> Ableton message (fire clip,
+launch scene, stop all, stop one clip, track-offset sync) moved off a
+custom SysEx sub-protocol onto plain Note-On/CC, matching real
+Launchpad-family Remote Scripts (and this project's own already-
+working transport CCs) exactly. Ableton -> TILES color feedback is
+still SysEx, unchanged. See `scene_launch.py`'s own module docstring
+and `shared/protocol/README.md`'s "Scene Launch" section for the full
+wire format.
+
 **Debugging**: real feedback found colors weren't showing on first
 try -- root cause was `scene_launch.py` monkey-patching an attribute
 directly onto Ableton's own native `Clip` object, which isn't
@@ -112,11 +126,13 @@ Ableton's own bundled Remote Script source rather than guessed at a
 third time: `handle_sysex` doesn't actually receive the `0xF0`/`0xF7`
 SysEx framing (Ableton's framework strips it first), and `ClipSlot` has
 no `add_is_playing_listener` (the real listener is `add_playing_status_
-listener`) -- see `scene_launch.py`'s own module docstring and
-`shared/protocol/README.md`'s "Scene Launch" section for the details.
+listener`). A third round found master stop and individual stop STILL
+not working with no further bug findable by inspection -- see the
+architecture change above for how that direction was rebuilt entirely.
 `scene_launch.py` logs every real action it takes (connecting, each
-state push, every SysEx it receives) to Ableton's own log -- if colors
-still aren't updating, check there first:
+clip/scene color push, every grid touch/stop/master-stop it receives)
+to Ableton's own log -- if something still isn't updating, check there
+first:
 
 - macOS: `~/Library/Preferences/Ableton/Live <version>/Log.txt`, or
   Ableton's own Help menu -> Show Log.

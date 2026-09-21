@@ -98,7 +98,7 @@ needs `libusb` installed, and vendor-class devices sometimes need the
 terminal running it to have been granted the OS's own USB-device
 permission prompt the first time).
 
-## Scene Launch (Ableton Live, over standard USB MIDI SysEx)
+## Scene Launch (Ableton Live)
 
 A second, separate protocol over the SAME USB-MIDI port TILES already
 uses for notes/CC/clock -- NOT the vendor-interface settings protocol
@@ -107,58 +107,74 @@ control app). Real feedback: "lets implemebt a new mode that triggers
 scenes in ableton live keep it simple for now... can we pull the colors
 of the scenes from ableton?"
 
-Manufacturer ID `0x7D` -- the MIDI Association's own reserved
-"non-commercial/educational use" ID, the correct choice for DIY
-hardware with no registered ID of its own. Sub-ID `0x01` scopes this
-specific message set under it. All messages are ordinary SysEx (`0xF0`
-... `0xF7`), parsed firmware-side by `firmware/src/midi/midi_in.c`
-(this codebase's first real incoming-MIDI-message parser beyond System
-Real-Time bytes) and handled by `firmware/src/services/op_mode.c`'s own
-"Scene Launch mode" section; sent/received Ableton-side by
-`daw-integration/ableton/TILES/scene_launch.py`.
+**Architecture, rewritten after several real-hardware rounds with no
+confirmed successful delivery**: "master stop doesnt work at all,
+individual start and stop doesnt work and hasent for the past few
+pushes. i need you to look at how a lounchapd works or abletoun push
+works to pull the exxact same standardizre behaviour." The TILES ->
+Ableton direction used to be a custom SysEx sub-protocol; despite
+passing review against Ableton's own real Remote Script source
+multiple times, it never had one confirmed successful round-trip on
+real hardware. Replaced with plain Note-On/CC messages bound through
+`ButtonElement` + `add_value_listener()` -- the same mechanism this
+project's own transport-remote CCs (`OP_TRANSPORT_PLAY_CC` etc.)
+already use, with actual confirmed real-hardware delivery, and the
+same mechanism real Launchpad-family Remote Scripts use for their own
+hardware buttons (confirmed against Ableton's bundled
+`Launchpad/MainSelectorComponent.py`). The Ableton -> TILES direction
+(clip/scene color feedback) is unchanged, still plain SysEx -- that
+direction was never reported broken, and a full RGB color feed has no
+equivalent in a single CC/Note value anyway.
 
-| Direction | Byte 4 (type) | Payload | Meaning |
-|---|---|---|---|
-| TILES -> Ableton | `0x01` | `track, scene` | Fire that track's clip in that scene |
-| TILES -> Ableton | `0x02` | `scene` | Launch the whole scene (every track's clip in that row) |
-| TILES -> Ableton | `0x03` | none | Stop all clips (master stop) -- shift+diamond in Scene Launch mode, see op_mode.c's own handle_diamond_transport() |
-| TILES -> Ableton | `0x04` | `track, scene` | Stop that one clip -- deep press on an already-playing clip's pad |
-| TILES -> Ableton | `0x05` | `offset` | Visible track window changed -- keeps Ableton's own session-ring overlay in sync, no cell/color effect |
-| Ableton -> TILES | `0x10` | `track, scene, flags, r7, g7, b7` | One clip slot's current state |
-| Ableton -> TILES | `0x11` | `scene, flags, r7, g7, b7` | One scene's current state |
+| Direction | Transport | Meaning |
+|---|---|---|
+| TILES -> Ableton | Note-On, note = `NOTE_GRID_BASE` (60) + pad | Grid touch: fire that pad's clip (track columns 1-5) or launch that pad's whole scene (column 6) |
+| TILES -> Ableton | Note-On, note = `NOTE_STOP_BASE` (100) + pad | Deep-press stop of that one clip (track columns 1-5 only) |
+| TILES -> Ableton | CC `CC_MASTER_STOP` (105), 127 then 0 | Stop all clips (master stop) -- shift+diamond in Scene Launch mode |
+| TILES -> Ableton | CC `CC_TRACK_OFFSET` (106), value = offset | Visible track window changed -- keeps the session-ring overlay and the pad-to-track mapping in sync |
+| Ableton -> TILES | SysEx `F0 7D 01 10 track scene flags r7 g7 b7 F7` | One clip slot's current state |
+| Ableton -> TILES | SysEx `F0 7D 01 11 scene flags r7 g7 b7 F7` | One scene's current state |
 
-Full frame: `F0 7D 01 <type> <payload...> F7`. `track` is 0-based, up
-to 63 (`OP_SCENE_MAX_TRACKS`/`MAX_TRACKS` in the firmware/Python side
-respectively -- keep both in sync if this ever changes); `scene` is
-0-based, up to 3 (only Ableton's first 4 scenes are ever tracked --
-this version doesn't page scenes, only tracks, see op_mode.c's own
-section header for why). `flags` bit 0 = has_clip (clip state only),
-bit 1 = is_playing (clip state only), bit 2 = is_triggered (both).
-`r7`/`g7`/`b7` are each 0-127 -- Ableton's own 0-255 color channel
-halved; the firmware doubles it back toward 8-bit on receipt, losing
-the bottom bit, not the top (this hardware's LEDs don't need it back).
+All TILES -> Ableton messages are on `TILES_MIDI_MPE_MASTER_CHANNEL`
+(channel 1) -- the same channel the transport CCs use, and one that
+carries no real MPE note content of its own to collide with (actual
+notes live on the member-channel pool). `pad` is 1-24
+(`TILES_NUM_PADS`); Ableton-side, `scene_launch.py` derives `(column,
+row)` from `pad` exactly like `op_mode.c`'s own
+`handle_scene_launch_taps()` does, and derives the real track index
+from `column` plus whatever `CC_TRACK_OFFSET` last reported (it has to
+track that itself now, mirroring `op_mode.c`'s own
+`s_scene_track_offset`).
+
+The Ableton -> TILES SysEx frames are unchanged: manufacturer ID
+`0x7D` (MMA-reserved "non-commercial/educational use"), sub-ID `0x01`,
+parsed firmware-side by `firmware/src/midi/midi_in.c` and handled by
+`op_mode.c`'s own "Scene Launch mode" section. `track` is 0-based, up
+to 63 (`OP_SCENE_MAX_TRACKS`/`MAX_TRACKS`, firmware/Python
+respectively); `scene` is 0-based, up to 3 (only Ableton's first 4
+scenes are ever tracked -- no scene paging in this version). `flags`
+bit 0 = has_clip (clip state only), bit 1 = is_playing (clip state
+only), bit 2 = is_triggered (both). `r7`/`g7`/`b7` are each 0-127 --
+Ableton's own 0-255 color channel halved; the firmware doubles it back
+toward 8-bit on receipt, losing the bottom bit, not the top.
 
 Ableton pushes state for every tracked cell once on script connect
-(not just whatever's currently scrolled into view on the hardware --
-see scene_launch.py's own module docstring for why this stays a plain
-broadcast instead of needing a "which window is visible" handshake),
+(not just whatever's currently scrolled into view on the hardware),
 then again on every real change via Live API listeners.
 
-**Confidence**: the wire format above is exact and firmware-verified.
-The Ableton-side Live API calls (`handle_sysex`, `add_*_listener`,
-`song().tracks`/`.scenes`/`.clip_slots` navigation) were this
-protocol's own first use of that part of Ableton's Remote Script API,
-and real testing found two real bugs in the first version: `handle_sysex`
-does NOT receive the `0xF0`/`0xF7` framing (Ableton's framework strips
-both before calling back -- the table above is the wire format actually
-sent, not what that callback sees), and `ClipSlot` has no
-`add_is_playing_listener` (the real listener for playing-state changes
-is `add_playing_status_listener`; `is_playing` itself is a plain,
-non-listenable property). Both fixed and cross-checked against
-Ableton's own bundled Remote Script source (`_APC/APC.py`,
-`_Framework/ClipSlotComponent.py`/`SessionComponent.py`) rather than
-guessed at a second time -- see `scene_launch.py`'s own module
-docstring and `handle_sysex()`'s own comment for the details.
+**Confidence**: the Ableton -> TILES SysEx wire format is exact and
+firmware-verified. The Note-On/CC reception mechanism for the other
+direction matches this project's own already-confirmed-working
+transport CCs and Ableton's own bundled Launchpad script exactly, so
+confidence there is materially higher than the custom SysEx path it
+replaced -- but real-hardware confirmation of THIS specific version is
+still pending as of this writing. The Live API calls themselves
+(`add_playing_status_listener`, `song().stop_all_clips()`,
+`Clip.stop()`, `SessionComponent`/`register_components()`) are each
+individually confirmed against Ableton's own bundled Remote Script
+source or the community AbletonOSC project -- see `scene_launch.py`'s
+own module docstring for the specific source each claim was checked
+against.
 
 ## Not built yet
 

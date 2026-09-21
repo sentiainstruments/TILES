@@ -6801,26 +6801,11 @@ static void song_capture_exit(void) {
 #define OP_SCENE_SYSEX_MFR_ID 0x7Du
 #define OP_SCENE_SYSEX_SUB_ID 0x01u
 
-/* TILES -> Ableton (see daw-integration/ableton/TILES/scene_launch.py's
- * own handle_sysex() for the receiving side). */
-#define OP_SCENE_MSG_FIRE_CLIP 0x01u
-#define OP_SCENE_MSG_LAUNCH_SCENE 0x02u
-#define OP_SCENE_MSG_STOP_ALL 0x03u
-/* Real feedback: "re pushing a playing clip pad all the way down or
- * close to that stops the individual clip" -- distinct from FIRE_CLIP
- * above (a fresh touch, which always launches/retriggers): this is a
- * deep press on a clip already reported is_playing, checked continuously
- * while held (not just the touch edge), see handle_scene_launch_taps()'s
- * own deep-press branch below. */
-#define OP_SCENE_MSG_STOP_CLIP 0x04u
-/* Real feedback (pending): "i need that outline for tiles as well" --
- * lets Ableton's own SessionComponent-driven session-ring overlay track
- * which 5-track window is actually visible on the hardware right now.
- * Sent once on Scene Launch mode entry and again every time "-"/"+"
- * changes s_scene_track_offset -- see scene_send_track_offset()'s own
- * call sites. */
-#define OP_SCENE_MSG_SET_TRACK_OFFSET 0x05u
-/* Ableton -> TILES (see this section's own scene_on_sysex() below). */
+/* Ableton -> TILES only now (see this section's own scene_on_sysex()
+ * below) -- the TILES -> Ableton direction (fire/launch/stop-all/
+ * stop-clip/track-offset) moved off this SysEx sub-protocol onto plain
+ * Note-On/CC messages, see OP_SCENE_NOTE_GRID_BASE's own comment for
+ * why. */
 #define OP_SCENE_MSG_CLIP_STATE 0x10u
 #define OP_SCENE_MSG_SCENE_STATE 0x11u
 
@@ -6865,10 +6850,10 @@ static op_scene_row_state_t s_scene_row[OP_SCENE_NUM_ROWS];
 
 static bool s_scene_prev_pad_touched[TILES_NUM_PADS];
 /* Edge-latches the deep-press stop-clip gesture so a continuous hold
- * past the threshold sends OP_SCENE_MSG_STOP_CLIP exactly once, not
- * every scan tick -- reset the moment the pad is released, same
- * "sticky-until-release" shape s_pattern_bank_touch_started_with_shift
- * already established elsewhere in this file. */
+ * past the threshold sends the stop-clip note exactly once, not every
+ * scan tick -- reset the moment the pad is released, same "sticky-
+ * until-release" shape s_pattern_bank_touch_started_with_shift already
+ * established elsewhere in this file. */
 static bool s_scene_deep_press_sent[TILES_NUM_PADS];
 
 /* Real feedback: "re pushing a playing clip pad all the way down or
@@ -6926,40 +6911,72 @@ static float scene_playing_pulse_level(uint32_t now_ms) {
     return OP_SCENE_PLAYING_PULSE_MIN + (OP_SCENE_PLAYING_PULSE_MAX - OP_SCENE_PLAYING_PULSE_MIN) * raw;
 }
 
-static void scene_send_fire_clip(uint8_t track, uint8_t scene) {
-    uint8_t msg[5] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_FIRE_CLIP, track, scene};
-    tiles_midi_send_sysex(msg, sizeof(msg));
-}
+/* Real feedback, after several real-hardware rounds with no confirmed
+ * successful delivery: "master stop doesnt work at all, individual
+ * start and stop doesnt work and hasent for the past few pushes. i
+ * need you to look at how a lounchapd works or abletoun push works to
+ * pull the exxact same standardizre behaviour." Migrated this whole
+ * TILES -> Ableton control direction off this file's own custom SysEx
+ * sub-protocol onto plain Note-On/CC messages -- the SAME mechanism
+ * (ButtonElement + add_value_listener, see TILES.py) this file's own
+ * transport CCs (OP_TRANSPORT_PLAY_CC etc.) already use, with actual
+ * confirmed real-hardware delivery, rather than continuing to debug a
+ * custom SysEx path that's never had a single confirmed successful
+ * round-trip. Also matches how real Launchpad-family Remote Scripts
+ * bind their OWN hardware (confirmed against Ableton's bundled
+ * Launchpad/MainSelectorComponent.py: ButtonElement -> clip_slot.
+ * set_launch_button()/scene.set_launch_button()) -- this file keeps
+ * its own fire/stop logic in scene_launch.py rather than handing it to
+ * SessionComponent/ClipSlotComponent directly (those components' own
+ * LED feedback is a small quantized palette; this keeps real per-pad
+ * RGB, which scene_on_sysex()'s own CLIP_STATE/SCENE_STATE messages
+ * still deliver unchanged -- only the INBOUND control direction below
+ * changed transport), but the RECEPTION half now matches their
+ * standard approach exactly.
+ *
+ * Grid touch (fire a clip, or launch a whole scene for column 6) is
+ * one Note-On per pad: note = OP_SCENE_NOTE_GRID_BASE + pad (61-84).
+ * The deep-press stop-one-clip gesture is a separate note per pad,
+ * OP_SCENE_NOTE_STOP_BASE + pad (101-124), sent only for track columns
+ * (1-5). Both immediately followed by the matching Note-Off, mirroring
+ * the transport CCs' own on/off pair convention -- neither is a real
+ * musical note, just a momentary trigger, and TILES_MIDI_MPE_MASTER_
+ * CHANNEL carries no real note content of its own to collide with
+ * (actual MPE notes live on the member-channel pool). */
+#define OP_SCENE_NOTE_GRID_BASE 60u
+#define OP_SCENE_NOTE_STOP_BASE 100u
+#define OP_SCENE_CC_MASTER_STOP 105u
+#define OP_SCENE_CC_TRACK_OFFSET 106u
 
-static void scene_send_launch_scene(uint8_t scene) {
-    uint8_t msg[4] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_LAUNCH_SCENE, scene};
-    tiles_midi_send_sysex(msg, sizeof(msg));
+static void scene_send_grid_touch(uint8_t pad) {
+    uint8_t note = (uint8_t)(OP_SCENE_NOTE_GRID_BASE + pad);
+    tiles_midi_note_on(TILES_MIDI_MPE_MASTER_CHANNEL, note, 127u);
+    tiles_midi_note_off(TILES_MIDI_MPE_MASTER_CHANNEL, note);
 }
 
 /* Real feedback: "a master stop in this app should be shift diamond."
- * No payload -- unlike fire-clip/launch-scene, this isn't about any one
- * cell/row, it's Ableton's own "stop all clips" action (distinct from
- * the diamond's own plain-click transport Stop -- see handle_diamond_
- * transport()'s own Scene Launch branch for why shift+diamond was free
- * to claim for this here). */
+ * Distinct from the diamond's own plain-click transport Stop -- see
+ * handle_diamond_transport()'s own Scene Launch branch for why
+ * shift+diamond was free to claim for this here. */
 static void scene_send_stop_all(void) {
     printf("[op_mode] scene launch: shift+diamond -> stop all clips\n");
-    uint8_t msg[3] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_STOP_ALL};
-    tiles_midi_send_sysex(msg, sizeof(msg));
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_MASTER_STOP, 127u);
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_MASTER_STOP, 0u);
 }
 
-static void scene_send_stop_clip(uint8_t track, uint8_t scene) {
-    printf("[op_mode] scene launch: deep press -> stop clip track=%u scene=%u\n", track, scene);
-    uint8_t msg[5] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_STOP_CLIP, track, scene};
-    tiles_midi_send_sysex(msg, sizeof(msg));
+static void scene_send_stop_clip_note(uint8_t pad) {
+    printf("[op_mode] scene launch: deep press -> stop clip pad=%u\n", pad);
+    uint8_t note = (uint8_t)(OP_SCENE_NOTE_STOP_BASE + pad);
+    tiles_midi_note_on(TILES_MIDI_MPE_MASTER_CHANNEL, note, 127u);
+    tiles_midi_note_off(TILES_MIDI_MPE_MASTER_CHANNEL, note);
 }
 
-/* See OP_SCENE_MSG_SET_TRACK_OFFSET's own comment -- keeps Ableton's
- * SessionComponent-driven session-ring overlay in sync with whichever
- * 5-track window s_scene_track_offset currently shows. */
+/* See OP_SCENE_CC_TRACK_OFFSET's own comment -- keeps Ableton's
+ * SessionComponent-driven session-ring overlay (and its own grid-
+ * touch-to-track translation) in sync with whichever 5-track window
+ * s_scene_track_offset currently shows. */
 static void scene_send_track_offset(uint8_t offset) {
-    uint8_t msg[4] = {OP_SCENE_SYSEX_MFR_ID, OP_SCENE_SYSEX_SUB_ID, OP_SCENE_MSG_SET_TRACK_OFFSET, offset};
-    tiles_midi_send_sysex(msg, sizeof(msg));
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_TRACK_OFFSET, offset);
 }
 
 /* Registered with midi/midi_in.h once at boot (see scene_launch_init()
@@ -7047,13 +7064,10 @@ static void handle_scene_launch_taps(void) {
         uint8_t scene = (uint8_t)((pad - 1u) / 6u);
         if (touched && !was_touched) {
             tiles_haptics_trigger_touch_pulse(pad);
+            scene_send_grid_touch(pad);
             if (col == OP_SCENE_LAUNCH_COL) {
-                scene_send_launch_scene(scene);
                 s_scene_trigger_flash_active = true;
                 s_scene_trigger_flash_start_ms = to_ms_since_boot(get_absolute_time());
-            } else if (col >= OP_SCENE_TRACK_COL_MIN && col <= OP_SCENE_TRACK_COL_MAX) {
-                uint8_t track = (uint8_t)(s_scene_track_offset + (col - OP_SCENE_TRACK_COL_MIN));
-                scene_send_fire_clip(track, scene);
             }
         }
         /* Real feedback: "re pushing a playing clip pad all the way
@@ -7070,7 +7084,7 @@ static void handle_scene_launch_taps(void) {
             uint8_t track = (uint8_t)(s_scene_track_offset + (col - OP_SCENE_TRACK_COL_MIN));
             if (track < OP_SCENE_MAX_TRACKS && s_scene_clip[track][scene].is_playing &&
                 (float)tiles_hall_get_depth(pad) > OP_SCENE_STOP_CLIP_DEPTH_THRESHOLD) {
-                scene_send_stop_clip(track, scene);
+                scene_send_stop_clip_note(pad);
                 s_scene_deep_press_sent[pad - 1u] = true;
             }
         }

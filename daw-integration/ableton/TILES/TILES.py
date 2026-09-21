@@ -43,7 +43,14 @@ Also owns Scene Launch mode's own Ableton-side half (real feedback:
 "lets implemebt a new mode that triggers scenes in ableton live...
 can we pull the colors of the scenes from ableton?") -- see
 scene_launch.py's own module docstring for that protocol and this
-class's handle_sysex()/disconnect() for how it's wired in here.
+class's disconnect() for how it's wired in here. Scene Launch's own
+TILES -> Ableton messages (fire/launch/stop-all/stop-clip) arrive as
+plain Note-On/CC on this same MPE Zone Master Channel, exactly like
+the three transport CCs above -- SceneLaunch binds its own
+ButtonElements directly (see that file's own _connect()) rather than
+this class needing a handle_sysex() override the way an earlier,
+custom-SysEx version of that protocol once did (see scene_launch.py's
+own module docstring for why that was replaced).
 """
 
 from _Framework.ControlSurface import ControlSurface
@@ -105,15 +112,6 @@ class TILES(ControlSurface):
             # automatically on record_mode becoming True with no
             # further action needed here.
             self.song().record_mode = True
-
-    def handle_sysex(self, midi_bytes):
-        # Real feedback: "can we pull the colors of the scenes from
-        # ableton?" -- ControlSurface's own raw-SysEx receive hook,
-        # same override point Ableton's bundled Launchpad-family
-        # scripts use for their own hardware<->DAW SysEx traffic (see
-        # scene_launch.py's own module docstring for this addition's
-        # confidence level).
-        self._scene_launch.handle_sysex(midi_bytes)
 
     def disconnect(self):
         self._play_button.remove_value_listener(self._on_play)

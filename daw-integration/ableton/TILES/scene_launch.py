@@ -9,55 +9,51 @@ ableton live keep it simple for now, push triggers it... can we pull
 the colors of the scenes from ableton? and light behaviour to feel
 intuitive?"
 
-Honesty about confidence, same spirit as firmware/src/drivers/
-dac80502.c's own header comment for its first-ever, unverified driver:
-this is the FIRST code in this repo that reads Ableton's Live Object
-Model (song/track/scene/clip-slot navigation, add_*_listener) or
-receives raw SysEx into a Control Surface script (handle_sysex).
-Real testing against a live session found two real bugs in the first
-version of this file (see handle_sysex()'s and _connect()'s own
-comments for each) -- both now fixed and cross-checked against
-Ableton's own bundled Remote Script source (_APC/APC.py for the
-handle_sysex framing, _Framework/ClipSlotComponent.py and
-SessionComponent.py for the Live API property/listener names and
-stop_all_clips()), not just guessed at a second time. Still genuinely
-possible something else in here doesn't match a real session exactly
--- if Scene Launch mode lights up but nothing updates, or clip fires
-don't work, check Log.txt for this file's own "[TILES scene_launch]"
-lines first (see daw-integration/README.md's own Debugging section).
+Architecture, rewritten after several real-hardware rounds with no
+confirmed successful delivery of any TILES -> Ableton action (fire,
+launch scene, stop all, stop one clip): "master stop doesnt work at
+all, individual start and stop doesnt work and hasent for the past few
+pushes. i need you to look at how a lounchapd works or abletoun push
+works to pull the exxact same standardizre behaviour." The TILES ->
+Ableton direction used to be a custom SysEx sub-protocol, handled by a
+`handle_sysex()` override -- despite passing every review against
+Ableton's own real Remote Script source, it never had one single
+confirmed successful round-trip on real hardware. It's been replaced
+with plain Note-On/CC messages bound through `ButtonElement` +
+`add_value_listener()` -- the EXACT mechanism TILES.py's own transport
+buttons (play/stop/record) already use, with actual confirmed delivery
+on this exact hardware/Ableton/script combination, and the same
+mechanism real Launchpad-family Remote Scripts use for their own
+hardware buttons (confirmed against Ableton's bundled
+Launchpad/MainSelectorComponent.py: a `ButtonElement` handed to
+`clip_slot.set_launch_button()`/`scene.set_launch_button()`). This
+file keeps its own fire/stop logic here rather than handing it to
+`SessionComponent`/`ClipSlotComponent` directly -- those components'
+own LED feedback is a small quantized color palette, and keeping this
+file's own logic preserves real per-pad RGB feedback (see below) --
+but the RECEPTION half now matches the standard approach exactly.
 
-Wire protocol summary (manufacturer ID 0x7D = MMA-reserved "non-
-commercial/educational use", sub-ID 0x01 = TILES's own Scene Launch
-sub-protocol under it). The framing below is the wire format actually
-sent/received over USB MIDI; handle_sysex()'s own `midi_bytes` does
-NOT include the leading F0/trailing F7 -- Ableton's framework strips
-both before calling back (confirmed against APC.py's own real
-handle_sysex) -- see that method's own comment:
+The Ableton -> TILES direction (clip/scene color + state) is
+UNCHANGED, still plain SysEx -- that direction was never reported
+broken, and a real RGB color feed has no equivalent in a single
+CC/Note value anyway.
 
-    TILES -> Ableton:
-        F0 7D 01 01 <track> <scene>              F7   fire clip
-        F0 7D 01 02 <scene>                       F7   launch scene
-        F0 7D 01 03                               F7   stop all clips (master stop)
-        F0 7D 01 04 <track> <scene>               F7   stop that one clip
-        F0 7D 01 05 <offset>                      F7   visible track window changed (session ring only)
+Wire protocol summary:
 
-    Ableton -> TILES:
+    TILES -> Ableton (plain Note-On/CC, TILES_MASTER_CHANNEL, no SysEx):
+        Note-On, note = NOTE_GRID_BASE + pad (61-84)   grid touch: fire
+            that pad's clip (columns 1-5) or launch that pad's whole
+            scene (column 6, OP_SCENE_LAUNCH_COL in op_mode.c)
+        Note-On, note = NOTE_STOP_BASE + pad (101-124)  deep-press stop
+            of that one clip (columns 1-5 only)
+        CC CC_MASTER_STOP (105), value 127 then 0        stop all clips
+        CC CC_TRACK_OFFSET (106), value = offset         visible track
+            window changed (session ring + grid-touch track mapping)
+
+    Ableton -> TILES (SysEx, manufacturer ID 0x7D = MMA-reserved
+    "non-commercial/educational use", sub-ID 0x01):
         F0 7D 01 10 <track> <scene> <flags> <r7> <g7> <b7> F7   clip state
         F0 7D 01 11 <scene> <flags> <r7> <g7> <b7>         F7   scene state
-
-Also owns a plain _Framework.SessionComponent (see _connect()'s own
-comment) purely for Ableton's own built-in session-ring overlay in
-Session View -- real feedback: "the box was from my novation. i need
-that outline for tiles as well tho." Sized to the same 5-track x
-4-scene window op_mode.c's own grid shows, kept in sync with
-s_scene_track_offset via message 0x05 above. This is this module's own
-first use of SessionComponent (previously: only raw Live API listeners)
--- genuinely unconfirmed whether Ableton draws the ring without any
-ButtonMatrixElement ever bound to it, since this script keeps driving
-its own SysEx-based color feedback instead of handing that job to the
-component. Wrapped in the same try/except as the rest of _connect(), so
-if this guess is wrong it logs and leaves clip fires/colors working
-either way.
 
     flags bit 0 = has_clip (clip state only), bit 1 = is_playing (clip
     state only), bit 2 = is_triggered (both). <r7>/<g7>/<b7> are each
@@ -66,24 +62,61 @@ either way.
     toward 8-bit on receipt (see op_mode.c's own scene_on_sysex()),
     losing the bottom bit, not the top.
 
-Only the first OP_SCENE_MAX_TRACKS tracks and OP_SCENE_NUM_ROWS scenes
-are ever pushed or listened to -- matches firmware/src/services/
+A grid-touch/stop Note-On's pad number maps to (column, row) exactly
+like op_mode.c's own handle_scene_launch_taps() does (column = (pad-1)
+% 6 + 1, row/scene = (pad-1) // 6); the real track index is column-1
+offset by whatever CC_TRACK_OFFSET last reported (see
+_pad_to_col_track_scene() below) -- this script has to track that
+itself now, the same thing op_mode.c's own s_scene_track_offset already
+does firmware-side.
+
+Also owns a plain _Framework.SessionComponent (see _connect()'s own
+comment) purely for Ableton's own built-in session-ring overlay in
+Session View -- real feedback: "the box was from my novation. i need
+that outline for tiles as well tho." Sized to the same 5-track x
+4-scene window op_mode.c's own grid shows, kept in sync via
+CC_TRACK_OFFSET above. Genuinely unconfirmed whether Ableton draws the
+ring without any ButtonMatrixElement ever bound to it, since this
+script keeps driving its own SysEx-based color feedback instead of
+handing that job to the component -- wrapped in the same try/except as
+the rest of _connect(), so if this guess is wrong it logs and leaves
+everything else working either way.
+
+Only the first MAX_TRACKS tracks and NUM_SCENES scenes are ever pushed
+or listened to for color feedback -- matches firmware/src/services/
 op_mode.c's own fixed-size state table, and "keep it simple for now"
 means no attempt yet to page scenes beyond the first 4 (real feedback's
 own Q&A settled "-"/"+" as a TRACK pan, not a scene page, for this
 version).
 """
 
+from _Framework.ButtonElement import ButtonElement
+from _Framework.InputControlElement import MIDI_CC_TYPE, MIDI_NOTE_TYPE
 from _Framework.SessionComponent import SessionComponent
+
+# Must match op_mode.c's own TILES_MIDI_MPE_MASTER_CHANNEL (0 = MIDI
+# channel 1) -- same channel TILES.py's own transport buttons already
+# use; not imported from TILES.py to avoid a circular import (TILES.py
+# imports this module).
+TILES_MASTER_CHANNEL = 0
+
+# Must match op_mode.c's own OP_SCENE_NOTE_GRID_BASE/_STOP_BASE and
+# OP_SCENE_CC_MASTER_STOP/_TRACK_OFFSET -- keep all four in sync with
+# that file if they ever change there.
+NOTE_GRID_BASE = 60
+NOTE_STOP_BASE = 100
+CC_MASTER_STOP = 105
+CC_TRACK_OFFSET = 106
+
+# Must match TILES_NUM_PADS (board_layout.h) -- every pad on the grid,
+# used to build one grid-touch and one stop-touch ButtonElement per
+# pad (the stop ones for column-6 pads are simply never triggered,
+# op_mode.c only ever sends that note for track columns 1-5).
+NUM_GRID_PADS = 24
 
 SYSEX_MFR_ID = 0x7D
 SYSEX_SUB_ID = 0x01
 
-MSG_FIRE_CLIP = 0x01
-MSG_LAUNCH_SCENE = 0x02
-MSG_STOP_ALL = 0x03
-MSG_STOP_CLIP = 0x04
-MSG_SET_TRACK_OFFSET = 0x05
 MSG_CLIP_STATE = 0x10
 MSG_SCENE_STATE = 0x11
 
@@ -118,11 +151,19 @@ def _color_to_wire_rgb(color_int):
     return r >> 1, g >> 1, b >> 1
 
 
+def _pad_to_col_row(pad):
+    """Inverse of op_mode.c's own board_pad_for_row_col() as used by
+    handle_scene_launch_taps() -- pad is 1-based (1..NUM_GRID_PADS)."""
+    col = (pad - 1) % 6 + 1
+    row = (pad - 1) // 6
+    return col, row
+
+
 class SceneLaunch(object):
     """Owned by TILES.py (see that file's own __init__/disconnect) --
     kept as a separate object rather than folded into the TILES class
     itself so the already-real-hardware-tested transport-remote code
-    stays completely undisturbed by this newer, unverified addition.
+    stays completely undisturbed by this newer addition.
     """
 
     def __init__(self, control_surface):
@@ -134,7 +175,7 @@ class SceneLaunch(object):
         # add_*_listener/remove_*_listener pattern needs the EXACT same
         # callable passed to both, not just an equivalent one, so these
         # have to be stored, not recreated on disconnect.
-        self._clip_slot_listeners = []  # list of (clip_slot, has_clip_cb, is_playing_cb, is_triggered_cb)
+        self._clip_slot_listeners = []  # list of (clip_slot, has_clip_cb, playing_status_cb, is_triggered_cb)
         # keyed by (track_index, scene_index) -- see _on_has_clip_changed()'s
         # own comment on why this replaced an earlier, real bug (monkey-
         # patching an identifying attribute directly onto Ableton's own
@@ -144,19 +185,28 @@ class SceneLaunch(object):
         self._clip_color_listeners = {}  # {(track_index, scene_index): (clip, color_cb)}
         self._scene_listeners = []  # list of (scene, is_triggered_cb, color_cb)
         self._session = None  # SessionComponent, created in _connect() -- see that method's own comment
+        self._grid_button_listeners = []  # list of (button, callback), pad 1..NUM_GRID_PADS
+        self._stop_button_listeners = []  # list of (button, callback), pad 1..NUM_GRID_PADS
+        self._master_stop_button = None
+        self._track_offset_button = None
+        # Mirrors op_mode.c's own s_scene_track_offset -- this script
+        # has to track it independently now that grid-touch/stop
+        # messages carry only a pad number, not a track index (see
+        # CC_TRACK_OFFSET's own comment above).
+        self._track_offset = 0
         try:
             self._connect()
             self._log("connected")
         except Exception as e:  # noqa: BLE001 -- see this except's own comment
-            # Real feedback: "colors ar[e] not showing." Whatever the
-            # exact cause, an exception anywhere in _connect() used to
-            # propagate all the way up through TILES.__init__()'s own
-            # component_guard(), which would silently abort the WHOLE
-            # script -- taking the already-working transport remote down
-            # with a completely unrelated Scene Launch bug, the opposite
-            # of "a failed subsystem disables itself, it never takes
-            # other subsystems down with it." Caught here instead, logged
-            # so it's actually visible (Ableton's own Log.txt, Help ->
+            # Whatever the exact cause, an exception anywhere in
+            # _connect() used to propagate all the way up through
+            # TILES.__init__()'s own component_guard(), which would
+            # silently abort the WHOLE script -- taking the already-
+            # working transport remote down with a completely
+            # unrelated Scene Launch bug, the opposite of "a failed
+            # subsystem disables itself, it never takes other
+            # subsystems down with it." Caught here instead, logged so
+            # it's actually visible (Ableton's own Log.txt, Help ->
             # Show Log), and left non-fatal: the transport buttons in
             # TILES.py keep working either way.
             self._log("failed to connect: %s" % e)
@@ -166,11 +216,11 @@ class SceneLaunch(object):
         # standard way to see what a Remote Script is actually doing,
         # since there's no console output visible otherwise. Every real
         # action this object takes logs one line, on purpose, while this
-        # is still unverified against a real session (see this module's
-        # own docstring) -- trim this down once it's confirmed working.
+        # is still being confirmed against a real session -- trim this
+        # down once it's confirmed working end to end.
         self._control_surface.log_message("[TILES scene_launch] " + message)
 
-    # ---- Ableton -> TILES ------------------------------------------------
+    # ---- Ableton -> TILES (SysEx, unchanged) --------------------------------
 
     def _send_clip_state(self, track_index, scene_index, clip_slot):
         has_clip = clip_slot.has_clip
@@ -244,20 +294,10 @@ class SceneLaunch(object):
                 # for the lifetime of the (track, scene) position, so
                 # these never need re-registering when a clip is added/
                 # removed/replaced, unlike color below (a Clip-only
-                # property).
+                # property). playing_status (NOT is_playing, which has
+                # no listener of its own) confirmed against Ableton's
+                # bundled _Framework/ClipSlotComponent.py.
                 has_clip_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
-                # Real bug found from live testing ("colors are not
-                # updating"): there is no add_is_playing_listener on the
-                # real ClipSlot object -- confirmed against Ableton's own
-                # bundled _Framework/ClipSlotComponent.py, which listens
-                # for playing-state changes on 'playing_status' instead
-                # (is_playing itself is only ever a plain, non-listenable
-                # property you re-read inside that callback -- see
-                # _send_clip_state() below). Calling the nonexistent
-                # method raised on the very first clip slot in this loop,
-                # which the try/except in __init__ then swallowed -- so
-                # _connect() aborted before registering ANYTHING or ever
-                # pushing a single state update, on every run until now.
                 playing_status_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
                 is_triggered_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
                 clip_slot.add_has_clip_listener(has_clip_cb)
@@ -270,41 +310,59 @@ class SceneLaunch(object):
         # outline for tiles as well tho" -- Ableton's own built-in
         # session-ring overlay in Session View, which SessionComponent
         # (Ableton's own framework class for exactly this) draws
-        # automatically once it's given a size and an offset. Created
-        # here, inside the same try/except _connect() already runs
-        # under, so a bad guess about this newer API can't take the
-        # already-working clip/scene state above down with it. Not
-        # wired to any ButtonMatrixElement -- this script keeps driving
-        # LED feedback itself over the existing SysEx protocol, so this
-        # component's only job is the visual ring; genuinely unconfirmed
-        # whether that ring still draws with no buttons ever bound to
-        # it (see this module's own docstring).
+        # automatically once it's given a size, an offset, AND is
+        # registered (see register_components() below). Not wired to
+        # any ButtonMatrixElement -- this script keeps driving LED
+        # feedback itself over the existing SysEx protocol, so this
+        # component's only job is the visual ring.
         self._session = SessionComponent(NUM_VISIBLE_TRACKS, num_scenes)
         self._session.set_offsets(0, 0)
-        # Real bug found from live testing (first attempt at this
-        # feature: "ableton is not showing ring"): a bare, unregistered
-        # ControlSurfaceComponent never gets pulled into the framework's
-        # own per-tick update cycle, which is what actually pushes a
-        # component's state (including the session-ring paint) out to
-        # Live's UI -- confirmed against SceneComponent.py's own real
-        # use of register_components() to wire ITS OWN child
-        # ClipSlotComponents into the same cycle. Constructing the
-        # object alone, as the first version of this did, compiles and
-        # runs without error but never actually draws anything.
+        # A bare, unregistered ControlSurfaceComponent never gets
+        # pulled into the framework's own per-tick update cycle, which
+        # is what actually pushes a component's state (including the
+        # session-ring paint) out to Live's UI -- confirmed against
+        # SceneComponent.py's own real use of register_components() to
+        # wire ITS OWN child ClipSlotComponents into the same cycle.
         self._control_surface.register_components(self._session)
 
+        # ---- TILES -> Ableton: plain Note-On/CC, see this module's own
+        # docstring for why this replaced a custom SysEx sub-protocol
+        # that never had one confirmed successful delivery. Mirrors
+        # TILES.py's own transport-button setup exactly (ButtonElement
+        # + add_value_listener), the one reception mechanism with
+        # actual confirmed real-hardware delivery on this project. ----
+        for pad in range(1, NUM_GRID_PADS + 1):
+            grid_button = ButtonElement(True, MIDI_NOTE_TYPE, TILES_MASTER_CHANNEL, NOTE_GRID_BASE + pad)
+            grid_cb = self._make_grid_touch_callback(pad)
+            grid_button.add_value_listener(grid_cb)
+            self._grid_button_listeners.append((grid_button, grid_cb))
+
+            stop_button = ButtonElement(True, MIDI_NOTE_TYPE, TILES_MASTER_CHANNEL, NOTE_STOP_BASE + pad)
+            stop_cb = self._make_stop_touch_callback(pad)
+            stop_button.add_value_listener(stop_cb)
+            self._stop_button_listeners.append((stop_button, stop_cb))
+
+        self._master_stop_button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, CC_MASTER_STOP)
+        self._master_stop_button.add_value_listener(self._on_master_stop)
+
+        self._track_offset_button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, CC_TRACK_OFFSET)
+        self._track_offset_button.add_value_listener(self._on_track_offset_cc)
+
     def set_track_offset(self, offset):
-        """Called from handle_sysex() below whenever op_mode.c's own
-        "-"/"+" pan changes which 5-track window is visible, and once on
-        Scene Launch mode entry -- keeps the session-ring overlay
-        pointing at the same window the hardware is actually showing."""
+        """The single source of truth for "which 5-track window is
+        currently visible" -- updates both the session-ring overlay
+        and the value _pad_to_col_track_scene() uses to translate an
+        incoming grid-touch/stop pad number into a real track index.
+        Called from _on_track_offset_cc() below whenever op_mode.c's
+        own "-"/"+" changes it, and once on Scene Launch mode entry."""
+        self._track_offset = offset
         if self._session is not None:
             self._session.set_offsets(offset, 0)
 
     def _on_has_clip_changed(self, track_index, scene_index, clip_slot):
         """Fired whenever a slot gains or loses a clip (also called once
         directly from _connect() to seed the initial state) -- only
-        color needs re-subscribing here; is_playing/is_triggered stay
+        color needs re-subscribing here; playing_status/is_triggered stay
         registered on the ClipSlot itself for its whole lifetime (see
         _connect() above). Keyed by (track_index, scene_index) in a
         plain dict -- NOT by tagging an attribute onto the Clip object
@@ -330,83 +388,102 @@ class SceneLaunch(object):
 
         self._send_clip_state(track_index, scene_index, clip_slot)
 
-    # ---- TILES -> Ableton --------------------------------------------------
+    # ---- TILES -> Ableton: grid touch, stop, master stop, track offset -----
 
-    def handle_sysex(self, midi_bytes):
-        """Called by TILES.py's own handle_sysex() override -- see that
-        file's own comment on why the base ControlSurface's raw SysEx
-        hook is what delivers this rather than a ButtonElement/CC
-        listener the way the transport remote uses.
+    def _pad_to_col_track_scene(self, pad):
+        col, row = _pad_to_col_row(pad)
+        track_index = self._track_offset + (col - 1)
+        return col, track_index, row
 
-        Real bug found from live testing ("colors are not updating...
-        in ableton", i.e. clip fires never reached Live): `midi_bytes`
-        does NOT include the F0/F7 framing -- confirmed against
-        Ableton's own bundled _APC/APC.py, whose real handle_sysex
-        indexes midi_bytes[3]/[4] directly with no offset for a leading
-        status byte, meaning the framework strips both ends before this
-        callback ever runs. This module's previous version assumed the
-        framing was still present and read one index too far right,
-        so the manufacturer/sub-ID check below was comparing the wrong
-        bytes and silently rejected every message TILES ever sent."""
-        self._log("handle_sysex received: %s" % (tuple(midi_bytes),))
-        if len(midi_bytes) < 3 or midi_bytes[0] != SYSEX_MFR_ID or midi_bytes[1] != SYSEX_SUB_ID:
+    def _make_grid_touch_callback(self, pad):
+        return lambda value: self._on_grid_touch(pad, value)
+
+    def _make_stop_touch_callback(self, pad):
+        return lambda value: self._on_stop_touch(pad, value)
+
+    def _on_grid_touch(self, pad, value):
+        # Note-On then immediately Note-Off, same on/off pair
+        # convention the transport CCs already use -- only the press
+        # (value > 0) is a real action, the release that follows is
+        # just that trigger's own tail end.
+        if value <= 0:
             return
-        msg_type = midi_bytes[2]
-        if msg_type == MSG_FIRE_CLIP and len(midi_bytes) == 5:
-            track_index, scene_index = midi_bytes[3], midi_bytes[4]
-            tracks = self._song.tracks
-            scenes = self._song.scenes
-            if track_index < len(tracks) and scene_index < len(scenes):
-                tracks[track_index].clip_slots[scene_index].fire()
-        elif msg_type == MSG_LAUNCH_SCENE and len(midi_bytes) == 4:
-            scene_index = midi_bytes[3]
-            scenes = self._song.scenes
+        col, track_index, scene_index = self._pad_to_col_track_scene(pad)
+        self._log("grid_touch pad=%d col=%d track=%d scene=%d" % (pad, col, track_index, scene_index))
+        scenes = self._song.scenes
+        if col == 6:
             if scene_index < len(scenes):
                 scenes[scene_index].fire()
-        elif msg_type == MSG_STOP_ALL and len(midi_bytes) == 3:
-            # Real feedback: "a master stop in this app should be shift
-            # diamond." Ableton's own real "stop all clips" action
-            # (confirmed against _Framework/SessionComponent.py's own
-            # self.song().stop_all_clips() call) -- stops every playing/
-            # queued clip without touching the transport itself, distinct
-            # from the diamond's plain-click transport Stop (see op_mode.c's
-            # own handle_diamond_transport() for the firmware-side gating
-            # that keeps this scoped to Scene Launch mode only).
-            self._log("stop_all_clips")
-            self._song.stop_all_clips()
-        elif msg_type == MSG_STOP_CLIP and len(midi_bytes) == 5:
-            # Real feedback: "re pushing a playing clip pad all the way
-            # down or close to that stops the individual clip." Clip.stop()
-            # is the real per-clip stop (confirmed against AbletonOSC's
-            # own clip.py, which registers a "/live/clip/stop" handler
-            # calling it directly) -- distinct from ClipSlot.fire(), which
-            # retriggers rather than stops an already-playing clip.
-            track_index, scene_index = midi_bytes[3], midi_bytes[4]
+        else:
             tracks = self._song.tracks
-            scenes = self._song.scenes
             if track_index < len(tracks) and scene_index < len(scenes):
-                clip_slot = tracks[track_index].clip_slots[scene_index]
-                self._log(
-                    "stop_clip track=%d scene=%d has_clip=%d" % (track_index, scene_index, clip_slot.has_clip)
-                )
-                if clip_slot.has_clip:
-                    clip_slot.clip.stop()
-            else:
-                self._log("stop_clip track=%d scene=%d out of range" % (track_index, scene_index))
-        elif msg_type == MSG_SET_TRACK_OFFSET and len(midi_bytes) == 4:
-            self._log("set_track_offset %d" % midi_bytes[3])
-            self.set_track_offset(midi_bytes[3])
+                tracks[track_index].clip_slots[scene_index].fire()
+
+    def _on_stop_touch(self, pad, value):
+        if value <= 0:
+            return
+        col, track_index, scene_index = self._pad_to_col_track_scene(pad)
+        if col == 6:
+            # op_mode.c never actually sends this note for column 6 --
+            # defensive only, there's no per-scene "stop" concept.
+            return
+        tracks = self._song.tracks
+        scenes = self._song.scenes
+        if track_index < len(tracks) and scene_index < len(scenes):
+            clip_slot = tracks[track_index].clip_slots[scene_index]
+            self._log("stop_touch pad=%d track=%d scene=%d has_clip=%d" % (pad, track_index, scene_index, clip_slot.has_clip))
+            # Real feedback: "re pushing a playing clip pad all the way
+            # down or close to that stops the individual clip."
+            # Clip.stop() is the real per-clip stop (confirmed against
+            # AbletonOSC's own clip.py, which wires the same method to
+            # its own "/live/clip/stop" handler) -- distinct from
+            # ClipSlot.fire(), which retriggers rather than stops an
+            # already-playing clip.
+            if clip_slot.has_clip:
+                clip_slot.clip.stop()
+
+    def _on_master_stop(self, value):
+        if value <= 0:
+            return
+        # Real feedback: "a master stop in this app should be shift
+        # diamond." Ableton's own real "stop all clips" action
+        # (confirmed against _Framework/SessionComponent.py's own
+        # self.song().stop_all_clips() call) -- stops every playing/
+        # queued clip without touching the transport itself, distinct
+        # from the diamond's plain-click transport Stop (see op_mode.c's
+        # own handle_diamond_transport() for the firmware-side gating
+        # that keeps this scoped to Scene Launch mode only).
+        self._log("stop_all_clips")
+        self._song.stop_all_clips()
+
+    def _on_track_offset_cc(self, value):
+        self._log("track_offset -> %d" % value)
+        self.set_track_offset(value)
 
     def disconnect(self):
         if self._session is not None:
-            # Not registered via the control surface's own
-            # register_components() (this object was never passed to
-            # that), so nothing else calls this automatically -- but
-            # defensive all the same, matching every other cleanup call
-            # in this method, in case disconnecting twice or from a
-            # partially-failed connect ever raises.
             try:
                 self._session.disconnect()
+            except RuntimeError:
+                pass
+        for button, callback in self._grid_button_listeners:
+            try:
+                button.remove_value_listener(callback)
+            except RuntimeError:
+                pass
+        for button, callback in self._stop_button_listeners:
+            try:
+                button.remove_value_listener(callback)
+            except RuntimeError:
+                pass
+        if self._master_stop_button is not None:
+            try:
+                self._master_stop_button.remove_value_listener(self._on_master_stop)
+            except RuntimeError:
+                pass
+        if self._track_offset_button is not None:
+            try:
+                self._track_offset_button.remove_value_listener(self._on_track_offset_cc)
             except RuntimeError:
                 pass
         for scene, is_triggered_cb, color_cb in self._scene_listeners:
