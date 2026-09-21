@@ -97,6 +97,11 @@ mode menu) is what acts: fire a clip, launch a scene (right-hand
 column), or stop a clip that's already playing. Underglow flashes Sentia
 purple for a scene, the clip's own color for a clip.
 
+**Delete a clip**: hold shift and touch a clip's pad for 3 seconds (pad
+and underglow go red); the clip is deleted in Ableton (Cmd+Z undoes
+it). Releasing either early cancels. The right-hand scene column glows
+Sentia purple whenever anything in that scene has a clip, on any track.
+
 **Record a new clip**: a pressure click on an EMPTY slot arms that track
 and starts recording into the slot; if the track takes MIDI, TILES then
 opens melodic mode (once your fingers are off the pads) so you can play

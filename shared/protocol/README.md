@@ -151,6 +151,7 @@ real-hardware delivery.
 | TILES -> Ableton | CC `CC_MASTER_STOP` (105), 127 then 0 | Stop all clips (master stop) -- shift+diamond in Scene Launch mode |
 | TILES -> Ableton | CC `CC_TRACK_OFFSET` (106), value = offset | Visible track window changed -- keeps the session-ring overlay and the pad-to-track mapping in sync |
 | TILES -> Ableton | CC `CC_END_CAPTURE` (107), 127 then 0 | Shift+diamond during a live capture (melodic mode opened by a record-a-new-clip click): end that recording; the firmware returns to Scene Launch mode itself |
+| TILES -> Ableton | CC, controller = `CC_DELETE_BASE` (70) + pad, 127 then 0 | Shift held + pad touched 3 seconds on a clip: delete that clip (track columns 1-5 only; the firmware times the hold) |
 | Ableton -> TILES | SysEx `F0 7D 01 10 track scene flags r7 g7 b7 F7` | One clip slot's current state |
 | Ableton -> TILES | SysEx `F0 7D 01 11 scene flags r7 g7 b7 F7` | One scene's current state |
 | Ableton -> TILES | SysEx `F0 7D 01 12 F7` | A track was just armed for a new recording -- open melodic mode (firmware waits until every pad is released) |

@@ -7762,5 +7762,30 @@ not its code.
     keeps shift+diamond = Song capture. Not covered: chord/guitar mode
     picked from the menu mid-capture still keeps the flag, so the combo
     still ends the capture there.
+  - **Delete a clip (shift + pad, 3s) and an always-lit scene column.**
+    Real feedback: "shift and pad for 3 seconds dletes clip, visuals
+    flash red and underglow does red as well for delete. also main scene
+    trigger row should be it in sentia color always that theres soemthing
+    in that scene regarles of track."
+    - Shift (circle) held while a pad with a clip is touched starts a
+      hold; both must stay down or it cancels. The pad blinks red and
+      the underglow goes red for the hold, then the delete fires (new CC
+      `OP_SCENE_CC_DELETE_BASE` 70 + pad, Ableton runs
+      `ClipSlot.delete_clip()`), the pad goes steady red until Ableton
+      reports the clip gone, and the underglow stays red another 500ms.
+      A pressure click while shift is held is swallowed so the delete
+      gesture can't also fire/stop the clip. Track columns only.
+    - Column 6 is now always Sentia purple whenever ANY tracked track
+      has a clip in that scene (`scene_row_has_clips()` scans all 64,
+      not just the 5 panned into view), dark otherwise, still blinking
+      while the scene is queued. It no longer uses Ableton's own scene
+      color. The scene pad's haptic "ready" click follows the same rule,
+      which replaced the short-lived per-row `exists` flag.
+    - Found while tracing what happens after a delete: the slot's
+      `has_clip` listener only re-sent state, so a clip recorded into (or
+      deleted from) a slot after the initial connect never had its
+      Clip-level color/playing_status listeners (re)subscribed --
+      `_on_has_clip_changed()` was only ever called once, at connect.
+      It's now what `has_clip` calls.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

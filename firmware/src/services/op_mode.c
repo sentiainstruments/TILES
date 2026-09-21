@@ -6888,11 +6888,6 @@ typedef struct {
 static op_scene_cell_state_t s_scene_clip[OP_SCENE_MAX_TRACKS][OP_SCENE_NUM_ROWS];
 
 typedef struct {
-    /* True once Ableton has ever reported this row's scene -- a scene
-     * that doesn't exist in the Live set (fewer than 4 scenes) never
-     * gets a SCENE_STATE at all, and shouldn't give the "ready" haptic
-     * click on touch. */
-    bool exists;
     bool is_triggered;
     uint8_t r;
     uint8_t g;
@@ -6920,6 +6915,23 @@ static op_scene_row_state_t s_scene_row[OP_SCENE_NUM_ROWS];
 #define OP_SCENE_CLICK_REARM_DEPTH 250.0f
 static bool s_scene_prev_pad_touched[TILES_NUM_PADS];
 static bool s_scene_click_latched[TILES_NUM_PADS];
+
+/* Real feedback: "shift and pad for 3 seconds dletes clip, visuals flash
+ * red and underglow does red as well for delete." Shift (circle) held
+ * while a pad with a clip is touched starts a hold; after
+ * OP_SCENE_DELETE_HOLD_MS the clip is deleted in Ableton. Both must stay
+ * down the whole time -- releasing either cancels. While holding, that
+ * pad blinks red and the underglow goes red; after the delete fires the
+ * underglow stays red a moment longer as confirmation. Same "shift + pad,
+ * hold 3 seconds to delete" gesture Song mode's own pattern bank
+ * already uses (OP_PATTERN_DELETE_HOLD_MS), so the two modes agree. */
+#define OP_SCENE_DELETE_HOLD_MS 3000u
+#define OP_SCENE_DELETE_CONFIRM_MS 500u
+static bool s_scene_delete_holding[TILES_NUM_PADS];
+static bool s_scene_delete_fired[TILES_NUM_PADS];
+static uint32_t s_scene_delete_hold_start_ms[TILES_NUM_PADS];
+static bool s_scene_delete_confirm_active;
+static uint32_t s_scene_delete_confirm_until_ms;
 
 /* Per-pad haptic state -- NONE: nothing running; CLICK: the one-shot
  * "ready" kick is in flight and gets cut at s_scene_haptic_click_end_ms
@@ -7057,6 +7069,7 @@ static float scene_playing_pulse_level(uint32_t now_ms) {
 #define OP_SCENE_CC_MASTER_STOP 105u
 #define OP_SCENE_CC_TRACK_OFFSET 106u
 #define OP_SCENE_CC_END_CAPTURE 107u
+#define OP_SCENE_CC_DELETE_BASE 70u
 
 static void scene_send_grid_touch(uint8_t pad) {
     uint8_t cc = (uint8_t)(OP_SCENE_CC_GRID_BASE + pad);
@@ -7087,6 +7100,30 @@ static void scene_send_stop_clip_cc(uint8_t pad) {
  * s_scene_track_offset currently shows. */
 static void scene_send_track_offset(uint8_t offset) {
     tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_TRACK_OFFSET, offset);
+}
+
+/* Delete that pad's clip (see OP_SCENE_DELETE_HOLD_MS) -- controller =
+ * OP_SCENE_CC_DELETE_BASE + pad (71-94), the same on/off pair as every
+ * other CC here. Track columns only; the firmware never sends it for
+ * column 6. */
+static void scene_send_delete_clip(uint8_t pad) {
+    printf("[op_mode] scene launch: shift+pad hold -> delete clip pad=%u\n", pad);
+    uint8_t cc = (uint8_t)(OP_SCENE_CC_DELETE_BASE + pad);
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
+}
+
+/* True if ANY tracked track has a clip in this scene row -- not just the
+ * 5 currently panned into view. Real feedback: "main scene trigger row
+ * should be in sentia color always that theres something in that scene
+ * regardles of track." */
+static bool scene_row_has_clips(uint8_t row) {
+    for (uint8_t track = 0u; track < OP_SCENE_MAX_TRACKS; track++) {
+        if (s_scene_clip[track][row].has_clip) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /* Ends Ableton's live capture and returns to Scene Launch mode. Tells
@@ -7146,7 +7183,6 @@ static void scene_on_sysex(const uint8_t *data, size_t len) {
         }
         uint8_t flags = data[4];
         op_scene_row_state_t *row = &s_scene_row[scene];
-        row->exists = true;
         row->is_triggered = (flags & OP_SCENE_FLAG_IS_TRIGGERED) != 0u;
         row->r = (uint8_t)(data[5] * 2u);
         row->g = (uint8_t)(data[6] * 2u);
@@ -7181,7 +7217,10 @@ static void scene_launch_init(void) {
         s_scene_prev_pad_touched[pad] = false;
         s_scene_click_latched[pad] = false;
         s_scene_haptic_state[pad] = OP_SCENE_HAPTIC_NONE;
+        s_scene_delete_holding[pad] = false;
+        s_scene_delete_fired[pad] = false;
     }
+    s_scene_delete_confirm_active = false;
     s_scene_track_offset = 0u;
     s_scene_pending_melodic = false;
     tiles_midi_in_register_sysex_callback(scene_on_sysex);
@@ -7207,7 +7246,10 @@ static void scene_launch_enter(void) {
         s_scene_prev_pad_touched[pad - 1u] = touched;
         s_scene_click_latched[pad - 1u] = touched;
         s_scene_haptic_state[pad - 1u] = OP_SCENE_HAPTIC_NONE;
+        s_scene_delete_holding[pad - 1u] = false;
+        s_scene_delete_fired[pad - 1u] = false;
     }
+    s_scene_delete_confirm_active = false;
     scene_send_track_offset(s_scene_track_offset);
 }
 
@@ -7340,6 +7382,8 @@ static void scene_handle_click(uint8_t pad, uint8_t col, const op_scene_cell_sta
  * -- the caller then skips this frame's Scene Launch render. */
 static bool handle_scene_launch_taps(uint32_t now_ms) {
     bool any_touched = false;
+    /* Circle is this board's shift -- see s_scene_delete_holding. */
+    bool shift = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         uint8_t idx = (uint8_t)(pad - 1u);
         bool touched = tiles_touch_is_touched(pad);
@@ -7357,7 +7401,7 @@ static bool handle_scene_launch_taps(uint32_t now_ms) {
         bool has_content;
         bool playing = false;
         if (col == OP_SCENE_LAUNCH_COL) {
-            has_content = s_scene_row[scene].exists;
+            has_content = scene_row_has_clips(scene);
         } else {
             uint8_t track = (uint8_t)(s_scene_track_offset + (col - OP_SCENE_TRACK_COL_MIN));
             if (track < OP_SCENE_MAX_TRACKS) {
@@ -7372,12 +7416,41 @@ static bool handle_scene_launch_taps(uint32_t now_ms) {
         }
         scene_update_haptics(pad, touched, was_touched, has_content, playing, now_ms);
 
+        /* Shift + touch + a clip under the pad = a delete hold in
+         * progress; anything else (shift or touch released, clip gone,
+         * a scene pad, an empty slot) cancels it. `has_content` is only
+         * a CLIP for track columns, so the column-6 scene pad never
+         * qualifies. */
+        bool delete_eligible = shift && touched && col != OP_SCENE_LAUNCH_COL && has_content;
+        if (delete_eligible) {
+            if (!s_scene_delete_holding[idx]) {
+                s_scene_delete_holding[idx] = true;
+                s_scene_delete_fired[idx] = false;
+                s_scene_delete_hold_start_ms[idx] = now_ms;
+            } else if (!s_scene_delete_fired[idx] &&
+                       (now_ms - s_scene_delete_hold_start_ms[idx]) >= OP_SCENE_DELETE_HOLD_MS) {
+                s_scene_delete_fired[idx] = true;
+                scene_send_delete_clip(pad);
+                s_scene_delete_confirm_active = true;
+                s_scene_delete_confirm_until_ms = now_ms + OP_SCENE_DELETE_CONFIRM_MS;
+            }
+        } else {
+            s_scene_delete_holding[idx] = false;
+            s_scene_delete_fired[idx] = false;
+        }
+
         float depth = touched ? (float)tiles_hall_get_depth(pad) : 0.0f;
         if (!touched || depth < OP_SCENE_CLICK_REARM_DEPTH) {
             s_scene_click_latched[idx] = false;
         } else if (!s_scene_click_latched[idx] && depth > OP_SCENE_CLICK_DEPTH_THRESHOLD) {
             s_scene_click_latched[idx] = true;
-            scene_handle_click(pad, col, cell, now_ms);
+            /* Latched either way, but only ACTS without shift -- shift
+             * + pad is the delete gesture, and pressing down while
+             * holding it must not also fire/stop the clip, or let go of
+             * shift mid-press and fire it. */
+            if (!shift) {
+                scene_handle_click(pad, col, cell, now_ms);
+            }
         }
 
         s_scene_prev_pad_touched[idx] = touched;
@@ -7399,8 +7472,22 @@ static void render_scene_launch_underglow(uint32_t now_ms) {
     if (s_scene_trigger_flash_active && !flashing) {
         s_scene_trigger_flash_active = false;
     }
+    bool delete_active = s_scene_delete_confirm_active && now_ms < s_scene_delete_confirm_until_ms;
+    if (s_scene_delete_confirm_active && !delete_active) {
+        s_scene_delete_confirm_active = false;
+    }
+    for (uint8_t pad = 0u; pad < TILES_NUM_PADS && !delete_active; pad++) {
+        if (s_scene_delete_holding[pad]) {
+            delete_active = true;
+        }
+    }
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
-        if (flashing) {
+        if (delete_active) {
+            /* Red for as long as a delete hold is in progress, and for
+             * OP_SCENE_DELETE_CONFIRM_MS after it fires -- takes priority
+             * over a click flash. */
+            tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 0.0f, 0.0f);
+        } else if (flashing) {
             tiles_lighting_set_standby_underglow_rgb(i, s_scene_flash_r, s_scene_flash_g, s_scene_flash_b);
         } else {
             tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 1.0f, 1.0f);
@@ -7417,9 +7504,15 @@ static void render_scene_launch(uint32_t now_ms) {
         for (uint8_t col = OP_SCENE_TRACK_COL_MIN; col <= OP_SCENE_TRACK_COL_MAX; col++) {
             uint8_t track = (uint8_t)(s_scene_track_offset + (col - OP_SCENE_TRACK_COL_MIN));
             float r = 0.0f, g = 0.0f, b = 0.0f;
+            uint8_t pad_for_cell = board_pad_for_row_col(grid_row, col);
             if (track < OP_SCENE_MAX_TRACKS) {
                 op_scene_cell_state_t *cell = &s_scene_clip[track][row];
-                if (cell->has_clip) {
+                if (cell->has_clip && s_scene_delete_holding[pad_for_cell - 1u]) {
+                    /* Delete hold in progress: blinks red while the 3s
+                     * runs, then goes steady red once the delete has
+                     * fired, until Ableton reports the clip gone. */
+                    r = s_scene_delete_fired[pad_for_cell - 1u] ? 1.0f : blink;
+                } else if (cell->has_clip) {
                     float level;
                     if (cell->is_triggered) {
                         level = blink;
@@ -7433,15 +7526,22 @@ static void render_scene_launch(uint32_t now_ms) {
                     b = (float)cell->b / 255.0f * level;
                 }
             }
-            tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(grid_row, col), r, g, b);
+            tiles_lighting_set_standby_pad_rgb(pad_for_cell, r, g, b);
         }
 
+        /* Real feedback: "main scene trigger row should be in sentia
+         * color always that theres soemthing in that scene regarles of
+         * track." Fixed Sentia purple (not the scene's own Ableton
+         * color) whenever ANY track has a clip in this scene, dark
+         * otherwise -- still blinks while the scene is queued. */
         op_scene_row_state_t *scene_row = &s_scene_row[row];
-        float row_level = scene_row->is_triggered ? blink : OP_SCALE_AVAILABLE_LEVEL;
+        float row_level = 0.0f;
+        if (scene_row_has_clips(row)) {
+            row_level = scene_row->is_triggered ? blink : OP_SCALE_AVAILABLE_LEVEL;
+        }
         tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(grid_row, OP_SCENE_LAUNCH_COL),
-                                            (float)scene_row->r / 255.0f * row_level,
-                                            (float)scene_row->g / 255.0f * row_level,
-                                            (float)scene_row->b / 255.0f * row_level);
+                                            OP_MENU_MELODIC_R * row_level, OP_MENU_MELODIC_G * row_level,
+                                            OP_MENU_MELODIC_B * row_level);
     }
 
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
