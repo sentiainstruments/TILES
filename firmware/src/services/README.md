@@ -7745,5 +7745,22 @@ not its code.
     - Not covered: tracks/scenes added after the script loads aren't
       tracked until Ableton reloads it (colors/state won't arrive for
       them; fires still work).
+  - **Shift+diamond ends an Ableton live capture, never Song mode.**
+    Real feedback: "after entering melodic mode for live capture in
+    ableton mode the shift diamond combo dosnt do song mode capture, it
+    triggerers stop capture and return to ableton mode. basicallhy this
+    mode should become like a self contained ableton thing not using
+    song mode at all." New `s_ableton_capture_active`, set when the
+    record-a-new-clip flow drops the player into melodic mode and
+    cleared on entering Scene Launch/sequencer/Song mode. While set,
+    `handle_diamond_transport()` routes shift+diamond to
+    `scene_end_capture()` (new CC 107, then back to Scene Launch mode)
+    ahead of the universal `song_capture_enter()` branch. Ableton
+    (`_on_end_capture()`) fires the slot it armed a second time, which
+    is Live's own way of ending a recording -- the clip then plays as a
+    loop; the track stays armed. Plain melodic mode outside this flow
+    keeps shift+diamond = Song capture. Not covered: chord/guitar mode
+    picked from the menu mid-capture still keeps the flag, so the combo
+    still ends the capture there.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

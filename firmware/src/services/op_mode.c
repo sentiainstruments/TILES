@@ -3123,6 +3123,20 @@ static void scene_launch_leave(void); /* needed this early too -- set_active_mod
  * other mode. Declared this early because set_active_mode() clears it. */
 static bool s_scene_pending_melodic;
 
+/* Real feedback: "after entering melodic mode for live capture in ableton
+ * mode the shift diamond combo dosnt do song mode capture, it triggerers
+ * stop capture and return to ableton mode. basicallhy this mode should
+ * become like a self contained ableton thing not using song mode at
+ * all." True from the moment Ableton's record-a-new-clip flow drops the
+ * player into melodic mode (see s_scene_pending_melodic) until they end
+ * the capture (shift+diamond, see handle_diamond_transport()'s own
+ * branch and scene_end_capture()) or leave that flow some other way
+ * (set_active_mode() clears it on entering Scene Launch/sequencer/Song
+ * mode). While it's set, shift+diamond belongs to Ableton -- it must
+ * NOT fall through to the universal song_capture_enter() gesture. */
+static bool s_ableton_capture_active;
+static void scene_end_capture(void); /* needed this early -- handle_diamond_transport()'s own Ableton-capture branch calls it */
+
 /* Scene Launch mode's own track-pan state -- pulled up here (out of
  * this file's own "Scene Launch mode" section, well further down)
  * because set_active_mode() and handle_transport_and_length() both
@@ -3276,6 +3290,9 @@ static void set_active_mode(tiles_op_mode_t mode) {
      * override here a no-op per buttons.h's own contract). */
     tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
     s_scene_pending_melodic = false;
+    if (mode == OP_MODE_SCENE_LAUNCH || mode == OP_MODE_SEQUENCER || mode == OP_MODE_SONG) {
+        s_ableton_capture_active = false;
+    }
     if (mode == OP_MODE_SCENE_LAUNCH) {
         scene_launch_enter();
     }
@@ -4256,6 +4273,15 @@ static void handle_diamond_transport(uint32_t now_ms) {
                  * specifically for Scene Launch mode, the same way that
                  * branch already wins for sequencer mode. */
                 scene_send_stop_all();
+            } else if (s_ableton_capture_active && s_diamond_press_was_shift) {
+                /* Real feedback: "shift diamond ... triggerers stop
+                 * capture and return to ableton mode ... not using song
+                 * mode at all." Checked ahead of the generic shift+
+                 * diamond branch just below (Song mode's universal
+                 * capture gesture) for the same reason the Scene Launch
+                 * master-stop branch above is: while Ableton's own
+                 * capture flow owns this mode, this combo is Ableton's. */
+                scene_end_capture();
             } else if (s_diamond_press_was_shift) {
                 /* Real feedback: "i also want to add a feature that
                  * captures from melodic mode or chord mode or any mode
@@ -7030,6 +7056,7 @@ static float scene_playing_pulse_level(uint32_t now_ms) {
 #define OP_SCENE_CC_STOP_BASE 40u
 #define OP_SCENE_CC_MASTER_STOP 105u
 #define OP_SCENE_CC_TRACK_OFFSET 106u
+#define OP_SCENE_CC_END_CAPTURE 107u
 
 static void scene_send_grid_touch(uint8_t pad) {
     uint8_t cc = (uint8_t)(OP_SCENE_CC_GRID_BASE + pad);
@@ -7060,6 +7087,18 @@ static void scene_send_stop_clip_cc(uint8_t pad) {
  * s_scene_track_offset currently shows. */
 static void scene_send_track_offset(uint8_t offset) {
     tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_TRACK_OFFSET, offset);
+}
+
+/* Ends Ableton's live capture and returns to Scene Launch mode. Tells
+ * Ableton first (it remembers which slot it armed and is recording into,
+ * see scene_launch.py's _record_new_clip()/_on_end_capture()), then
+ * switches this side back -- one gesture does both, so the two can't
+ * drift apart. */
+static void scene_end_capture(void) {
+    printf("[op_mode] ableton capture: shift+diamond -> end capture, back to scene launch\n");
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_END_CAPTURE, 127u);
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_END_CAPTURE, 0u);
+    set_active_mode(OP_MODE_SCENE_LAUNCH);
 }
 
 /* Registered with midi/midi_in.h once at boot (see scene_launch_init()
@@ -7347,6 +7386,9 @@ static bool handle_scene_launch_taps(uint32_t now_ms) {
     if (s_scene_pending_melodic && !any_touched) {
         s_scene_pending_melodic = false;
         set_active_mode(OP_MODE_MELODIC);
+        /* After the switch, not before -- set_active_mode() clears this
+         * flag when entering some modes, and melodic isn't one of them. */
+        s_ableton_capture_active = true;
         return true;
     }
     return false;

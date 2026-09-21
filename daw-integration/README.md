@@ -101,7 +101,10 @@ purple for a scene, the clip's own color for a clip.
 and starts recording into the slot; if the track takes MIDI, TILES then
 opens melodic mode (once your fingers are off the pads) so you can play
 straight into it. Relies on Live's own Exclusive Arm preference to
-disarm other tracks -- the script doesn't disarm anything itself.
+disarm other tracks -- the script doesn't disarm anything itself. Shift+diamond
+while in that melodic capture ends the recording (the clip starts
+looping) and returns to Scene Launch mode -- it never enters Song mode
+capture from this flow.
 
 **Session-ring outline**: Scene Launch mode now shows Ableton's own
 built-in session-ring box in Session View, sized to the same 5-track x

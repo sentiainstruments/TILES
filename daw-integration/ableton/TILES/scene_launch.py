@@ -93,6 +93,9 @@ Wire protocol summary:
         CC CC_MASTER_STOP (105), value 127 then 0        stop all clips
         CC CC_TRACK_OFFSET (106), value = offset         visible track
             window changed (session ring + grid-touch track mapping)
+        CC CC_END_CAPTURE (107), value 127 then 0        shift+diamond
+            during a live capture: end the recording that
+            _record_new_clip() started (see _on_end_capture())
 
     Ableton -> TILES (SysEx, manufacturer ID 0x7D = MMA-reserved
     "non-commercial/educational use", sub-ID 0x01):
@@ -159,6 +162,7 @@ CC_GRID_BASE = 10
 CC_STOP_BASE = 40
 CC_MASTER_STOP = 105
 CC_TRACK_OFFSET = 106
+CC_END_CAPTURE = 107
 
 # Must match TILES_NUM_PADS (board_layout.h) -- every pad on the grid,
 # used to build one grid-touch and one stop-touch ButtonElement per
@@ -246,6 +250,10 @@ class SceneLaunch(object):
         self._stop_button_listeners = []  # list of (button, callback), pad 1..NUM_GRID_PADS
         self._master_stop_button = None
         self._track_offset_button = None
+        self._end_capture_button = None
+        # The slot _record_new_clip() last armed and started recording
+        # into -- what CC_END_CAPTURE ends. None when nothing's recording.
+        self._capture_slot = None
         # Mirrors op_mode.c's own s_scene_track_offset -- this script
         # has to track it independently now that grid-touch/stop
         # messages carry only a pad number, not a track index (see
@@ -453,6 +461,9 @@ class SceneLaunch(object):
         self._track_offset_button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, CC_TRACK_OFFSET)
         self._track_offset_button.add_value_listener(self._on_track_offset_cc)
 
+        self._end_capture_button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, CC_END_CAPTURE)
+        self._end_capture_button.add_value_listener(self._on_end_capture)
+
     def set_track_offset(self, offset):
         """The single source of truth for "which 5-track window is
         currently visible" -- updates both the session-ring overlay
@@ -571,6 +582,7 @@ class SceneLaunch(object):
             % (track_index, scene_index, armed, track.has_midi_input)
         )
         clip_slot.fire()
+        self._capture_slot = clip_slot
         if armed and track.has_midi_input:
             self._control_surface._send_midi((0xF0, SYSEX_MFR_ID, SYSEX_SUB_ID, MSG_OPEN_MELODIC, 0xF7))
 
@@ -614,6 +626,33 @@ class SceneLaunch(object):
         self._log("stop_all_clips")
         self._song.stop_all_clips()
 
+    def _on_end_capture(self, value):
+        """Shift+diamond while TILES is in melodic mode for a live capture
+        (real feedback: "it triggerers stop capture and return to ableton
+        mode ... not using song mode at all"). Ends the recording that
+        _record_new_clip() started by firing that same slot again --
+        Live's own behavior for a recording clip's launch button: the
+        recording ends and the clip starts playing back as a loop. Does
+        NOT disarm the track (a plain Live "stop recording" doesn't
+        either). The firmware returns itself to Scene Launch mode; this
+        side only has to end the recording. Clip.is_recording confirmed
+        against AbletonOSC's own clip.py property list."""
+        if value <= 0:
+            return
+        slot = self._capture_slot
+        self._capture_slot = None
+        if slot is None:
+            self._log("end_capture: nothing was being captured")
+            return
+        try:
+            if slot.has_clip and slot.clip.is_recording:
+                self._log("end_capture: ending recording")
+                slot.fire()
+            else:
+                self._log("end_capture: slot is no longer recording")
+        except RuntimeError as e:
+            self._log("end_capture: slot is gone (%s)" % e)
+
     def _on_track_offset_cc(self, value):
         self._log("track_offset -> %d" % value)
         self.set_track_offset(value)
@@ -646,6 +685,11 @@ class SceneLaunch(object):
         if self._track_offset_button is not None:
             try:
                 self._track_offset_button.remove_value_listener(self._on_track_offset_cc)
+            except RuntimeError:
+                pass
+        if self._end_capture_button is not None:
+            try:
+                self._end_capture_button.remove_value_listener(self._on_end_capture)
             except RuntimeError:
                 pass
         for scene, is_triggered_cb, color_cb in self._scene_listeners:
