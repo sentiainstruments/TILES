@@ -54,6 +54,22 @@ directly -- those components' own LED feedback is a small quantized
 color palette, and keeping this file's own logic preserves real
 per-pad RGB feedback (see below).
 
+Real bug found from live testing after the CC rewrite: "no click is
+triggering anything," even though colors had started updating
+correctly. Root cause: `_connect()` used to call `self._control_
+surface.register_components(self._session)` to wire up the session
+ring below -- `ControlSurface` has no such public method (confirmed
+directly in `_Framework/ControlSurface.py`'s own source: only a
+private `_register_component`, exposed to real `ControlSurfaceComponent`
+instances via dependency injection, not callable externally like
+this). That raised an `AttributeError` immediately, aborting the rest
+of `_connect()` -- everything before it (the clip/scene color
+listeners) had already run, which is exactly why colors worked but no
+button below that line ever got bound. Fixed with the real, public
+API for this -- `set_highlighting_session_component()`, confirmed both
+in `ControlSurface.py`'s own source and by Ableton's bundled
+`Launchpad.py`, which calls this exact method on itself.
+
 The Ableton -> TILES direction (clip/scene color + state) is
 UNCHANGED, still plain SysEx -- that direction was never reported
 broken, and a real RGB color feed has no equivalent in a single CC
@@ -98,12 +114,15 @@ comment) purely for Ableton's own built-in session-ring overlay in
 Session View -- real feedback: "the box was from my novation. i need
 that outline for tiles as well tho." Sized to the same 5-track x
 4-scene window op_mode.c's own grid shows, kept in sync via
-CC_TRACK_OFFSET above. Genuinely unconfirmed whether Ableton draws the
-ring without any ButtonMatrixElement ever bound to it, since this
-script keeps driving its own SysEx-based color feedback instead of
-handing that job to the component -- wrapped in the same try/except as
-the rest of _connect(), so if this guess is wrong it logs and leaves
-everything else working either way.
+CC_TRACK_OFFSET above, and wired to the control surface via
+set_highlighting_session_component() -- the same real API Ableton's
+own bundled Launchpad.py uses for its own ring. Still genuinely
+unconfirmed whether Ableton draws the ring without any
+ButtonMatrixElement ever bound to the component (this script keeps
+driving its own SysEx-based color feedback instead of handing that job
+to it) -- wrapped in the same try/except as the rest of _connect(), so
+if that guess is wrong it logs and leaves everything else working
+either way.
 
 Only the first MAX_TRACKS tracks and NUM_SCENES scenes are ever pushed
 or listened to for color feedback -- matches firmware/src/services/
@@ -334,21 +353,33 @@ class SceneLaunch(object):
         # Real feedback: "the box was from my novation. i need that
         # outline for tiles as well tho" -- Ableton's own built-in
         # session-ring overlay in Session View, which SessionComponent
-        # (Ableton's own framework class for exactly this) draws
-        # automatically once it's given a size, an offset, AND is
-        # registered (see register_components() below). Not wired to
-        # any ButtonMatrixElement -- this script keeps driving LED
-        # feedback itself over the existing SysEx protocol, so this
-        # component's only job is the visual ring.
+        # (Ableton's own framework class for exactly this) draws once
+        # it's given a size/offset and hooked up as the control
+        # surface's highlighting source. Not wired to any
+        # ButtonMatrixElement -- this script keeps driving LED feedback
+        # itself over the existing SysEx protocol, so this component's
+        # only job is the visual ring.
         self._session = SessionComponent(NUM_VISIBLE_TRACKS, num_scenes)
         self._session.set_offsets(0, 0)
-        # A bare, unregistered ControlSurfaceComponent never gets
-        # pulled into the framework's own per-tick update cycle, which
-        # is what actually pushes a component's state (including the
-        # session-ring paint) out to Live's UI -- confirmed against
-        # SceneComponent.py's own real use of register_components() to
-        # wire ITS OWN child ClipSlotComponents into the same cycle.
-        self._control_surface.register_components(self._session)
+        # Real bug found from live testing ("no click is triggering
+        # anything," after colors started working): `ControlSurface`
+        # has NO public `register_components()`/`register_component()`
+        # method -- those names are dependency-injected onto actual
+        # `ControlSurfaceComponent` instances (confirmed directly in
+        # `_Framework/ControlSurface.py`'s own source: the base class
+        # only defines a private `_register_component`, exposed to
+        # components via `inject(...).everywhere()`), not something a
+        # plain helper object like this one can call on the control
+        # surface directly. Calling it raised an AttributeError right
+        # here, silently aborting the rest of _connect() -- everything
+        # BEFORE this line (the clip/scene color listeners above) kept
+        # working, which is exactly why colors updated but no button
+        # below this point ever got bound. The real, public API for
+        # wiring a SessionComponent's session-ring overlay is
+        # set_highlighting_session_component() -- confirmed both in
+        # ControlSurface.py's own source and by Ableton's bundled
+        # Launchpad.py, which calls this exact method on itself.
+        self._control_surface.set_highlighting_session_component(self._session)
 
         # ---- TILES -> Ableton: plain CC, see this module's own docstring
         # for why this replaced a custom SysEx sub-protocol (never had
@@ -490,6 +521,10 @@ class SceneLaunch(object):
 
     def disconnect(self):
         if self._session is not None:
+            try:
+                self._control_surface.set_highlighting_session_component(None)
+            except RuntimeError:
+                pass
             try:
                 self._session.disconnect()
             except RuntimeError:

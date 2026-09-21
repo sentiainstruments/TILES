@@ -7665,5 +7665,26 @@ not its code.
     stop-touch (`OP_SCENE_CC_STOP_BASE`, 40) off Note-On entirely, onto
     CC, matching everything else in this section. `tiles_midi_note_on`/
     `_off` are no longer used anywhere in Scene Launch mode.
+  - **Third bug in the same Ableton-side rewrite, purely Python-side
+    this time (no firmware change).** Real feedback: "no click is
+    triggering anything," even after the CC fix above -- colors were
+    confirmed updating, but no fire/launch/stop ever reached Ableton.
+    Root cause: `scene_launch.py`'s own `_connect()` called `self.
+    _control_surface.register_components(self._session)` to wire up
+    the session-ring component -- `ControlSurface` has no such public
+    method (confirmed directly in Ableton's own `_Framework/
+    ControlSurface.py` source: only a private `_register_component`,
+    exposed to real `ControlSurfaceComponent`s via dependency
+    injection, not callable externally). Raised an `AttributeError`
+    immediately, silently aborting the rest of `_connect()` -- the
+    clip/scene color listeners just above it had already run
+    successfully, which is exactly why colors worked while every
+    button bound after that line never got created. Fixed with the
+    real, public API for this -- `set_highlighting_session_component()`
+    -- confirmed both in `ControlSurface.py`'s own source and by
+    Ableton's bundled `Launchpad.py`, which calls this exact method.
+    Every other external API call in that file was re-verified against
+    real source at the same time; this was the only one that didn't
+    exist.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

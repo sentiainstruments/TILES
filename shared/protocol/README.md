@@ -184,15 +184,15 @@ firmware-verified. The CC reception mechanism for the other direction
 matches this project's own already-confirmed-working transport CCs
 exactly, and avoids the real, confirmed flaw the Note-On version hit
 (leaking through as playable/recordable note content on any track
-with this port's Track input enabled) -- but real-hardware
-confirmation of THIS specific version is still pending as of this
-writing. The Live API calls themselves
+with this port's Track input enabled). A real bug in the CC version's
+own `_connect()` -- calling a `register_components()` method that
+doesn't exist on `ControlSurface` -- silently aborted button binding
+on every load until fixed (replaced with the real, public
+`set_highlighting_session_component()`); see `scene_launch.py`'s own
+module docstring for the full story. The Live API calls themselves
 (`add_playing_status_listener`, `song().stop_all_clips()`,
-`Clip.stop()`, `SessionComponent`/`register_components()`) are each
-individually confirmed against Ableton's own bundled Remote Script
-source or the community AbletonOSC project -- see `scene_launch.py`'s
-own module docstring for the specific source each claim was checked
-against.
+`Clip.stop()`) are each individually confirmed against Ableton's own
+bundled Remote Script source or the community AbletonOSC project.
 
 ## Not built yet
 
