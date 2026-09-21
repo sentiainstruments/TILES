@@ -146,12 +146,15 @@ real-hardware delivery.
 
 | Direction | Transport | Meaning |
 |---|---|---|
-| TILES -> Ableton | CC, controller = `CC_GRID_BASE` (10) + pad, 127 then 0 | Grid touch: fire that pad's clip (track columns 1-5) or launch that pad's whole scene (column 6) |
-| TILES -> Ableton | CC, controller = `CC_STOP_BASE` (40) + pad, 127 then 0 | Deep-press stop of that one clip (track columns 1-5 only) |
+| TILES -> Ableton | CC, controller = `CC_GRID_BASE` (10) + pad, 127 then 0 | Pressure click: fire that pad's clip (track columns 1-5), launch that pad's whole scene (column 6), or -- on an EMPTY slot -- arm the track and record into it |
+| TILES -> Ableton | CC, controller = `CC_STOP_BASE` (40) + pad, 127 then 0 | Pressure click on a clip that's already playing: stop that one clip (track columns 1-5 only) |
 | TILES -> Ableton | CC `CC_MASTER_STOP` (105), 127 then 0 | Stop all clips (master stop) -- shift+diamond in Scene Launch mode |
 | TILES -> Ableton | CC `CC_TRACK_OFFSET` (106), value = offset | Visible track window changed -- keeps the session-ring overlay and the pad-to-track mapping in sync |
 | Ableton -> TILES | SysEx `F0 7D 01 10 track scene flags r7 g7 b7 F7` | One clip slot's current state |
 | Ableton -> TILES | SysEx `F0 7D 01 11 scene flags r7 g7 b7 F7` | One scene's current state |
+| Ableton -> TILES | SysEx `F0 7D 01 12 F7` | A track was just armed for a new recording -- open melodic mode (firmware waits until every pad is released) |
+
+A bare capacitive touch sends NOTHING to Ableton -- it's haptics-only on the hardware side (a strong "ready" click on a pad with a clip, a continuous buzz while that clip is playing). Only a pressure click (Hall depth past the same 50% "push to select" threshold the mode menu uses) sends the CCs below.
 
 All TILES -> Ableton messages are plain CC on
 `TILES_MIDI_MPE_MASTER_CHANNEL` (channel 1) -- the same channel the

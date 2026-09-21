@@ -3109,7 +3109,19 @@ static bool s_song_edit_active;
 static void song_edit_exit(void);
 static void song_edit_pick_cancel(void); /* needed this early too -- handle_diamond_transport()'s own back-gesture branch calls it directly */
 static void scene_send_stop_all(void); /* needed this early too -- handle_diamond_transport()'s own Scene Launch master-stop branch calls it directly */
-static void scene_send_track_offset(uint8_t offset); /* needed this early too -- handle_transport_and_length()'s own "-"/"+" pan branches and set_active_mode()'s own mode-entry broadcast both call it directly */
+static void scene_send_track_offset(uint8_t offset); /* needed this early too -- handle_transport_and_length()'s own "-"/"+" pan branches call it directly */
+static void scene_launch_enter(void); /* needed this early too -- set_active_mode() calls it on entering Scene Launch mode */
+static void scene_launch_leave(void); /* needed this early too -- set_active_mode() calls it on leaving Scene Launch mode */
+
+/* Set by Ableton (see scene_on_sysex()'s OPEN_MELODIC handling) once a
+ * pressure click on an EMPTY clip slot has armed a track and started
+ * recording into it -- the switch to melodic mode itself is deferred
+ * until every pad has been released (handle_scene_launch_taps()), so
+ * the finger that just clicked the slot can't read as a fresh note
+ * strike the instant melodic mode takes over. Cleared by any mode
+ * change (set_active_mode()), so it can never fire late into some
+ * other mode. Declared this early because set_active_mode() clears it. */
+static bool s_scene_pending_melodic;
 
 /* Scene Launch mode's own track-pan state -- pulled up here (out of
  * this file's own "Scene Launch mode" section, well further down)
@@ -3193,6 +3205,9 @@ static void set_active_mode(tiles_op_mode_t mode) {
         s_seq_edit_mode = OP_SEQ_EDIT_NONE;
         s_pattern_bank_visible = false;
     }
+    if (s_active_mode == OP_MODE_SCENE_LAUNCH && mode != OP_MODE_SCENE_LAUNCH) {
+        scene_launch_leave();
+    }
     s_active_mode = mode;
     if (mode == OP_MODE_SEQUENCER) {
         seq_start();
@@ -3260,14 +3275,9 @@ static void set_active_mode(tiles_op_mode_t mode) {
      * CHORD/GUITAR anyway (sequencer claims standby_active, making any
      * override here a no-op per buttons.h's own contract). */
     tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
+    s_scene_pending_melodic = false;
     if (mode == OP_MODE_SCENE_LAUNCH) {
-        /* Real feedback (pending): "i need that outline for tiles as
-         * well" -- Ableton's own session-ring overlay needs to know
-         * which 5-track window is visible the instant this mode opens,
-         * not just wait for the next "-"/"+" press (which may never
-         * come if the window was already panned before switching away
-         * and back). */
-        scene_send_track_offset(s_scene_track_offset);
+        scene_launch_enter();
     }
     printf("[op_mode] active mode -> %d\n", (int)mode);
 }
@@ -4763,7 +4773,7 @@ static void handle_song_edit_pick_taps(uint32_t now_ms);
  * this mode's SysEx callback with midi/midi_in.h -- see tiles_op_mode_
  * init()'s own call site below. */
 static void scene_launch_init(void);
-static void handle_scene_launch_taps(void);
+static bool handle_scene_launch_taps(uint32_t now_ms);
 static void render_scene_launch(uint32_t now_ms);
 
 void tiles_op_mode_init(bool crash_recovered) {
@@ -5131,8 +5141,14 @@ void tiles_op_mode_scan(void) {
             render_song_overview(now_ms);
         }
     } else if (s_active_mode == OP_MODE_SCENE_LAUNCH) {
-        handle_scene_launch_taps();
-        render_scene_launch(now_ms);
+        /* Returns true only when it just switched modes out from under
+         * this branch (Ableton armed a track for a new recording, see
+         * s_scene_pending_melodic) -- skip this frame's Scene Launch
+         * render rather than paint the old mode's screen onto a grid
+         * that no longer belongs to it. */
+        if (!handle_scene_launch_taps(now_ms)) {
+            render_scene_launch(now_ms);
+        }
     } else {
         /* Real feedback: "make trisngle fhash if pattern is playing and
          * we exit to a different screen than the playing pattern."
@@ -6807,6 +6823,13 @@ static void song_capture_exit(void) {
  * CC messages, see OP_SCENE_CC_GRID_BASE's own comment for why. */
 #define OP_SCENE_MSG_CLIP_STATE 0x10u
 #define OP_SCENE_MSG_SCENE_STATE 0x11u
+/* Real feedback: "if were recording a new clip make it open melodic mode
+ * automatically and arm that channel." Ableton (scene_launch.py) arms
+ * the track and starts recording when a pressure click lands on an
+ * EMPTY slot, then sends this (no payload) only if that track takes
+ * MIDI -- Ableton is the one that knows the track type, this side
+ * can't tell. See s_scene_pending_melodic. */
+#define OP_SCENE_MSG_OPEN_MELODIC 0x12u
 
 /* CLIP_STATE/SCENE_STATE flag bits, packed into one 7-bit byte on the
  * wire (see scene_on_sysex() below) -- SCENE_STATE only ever uses bit
@@ -6839,6 +6862,11 @@ typedef struct {
 static op_scene_cell_state_t s_scene_clip[OP_SCENE_MAX_TRACKS][OP_SCENE_NUM_ROWS];
 
 typedef struct {
+    /* True once Ableton has ever reported this row's scene -- a scene
+     * that doesn't exist in the Live set (fewer than 4 scenes) never
+     * gets a SCENE_STATE at all, and shouldn't give the "ready" haptic
+     * click on touch. */
+    bool exists;
     bool is_triggered;
     uint8_t r;
     uint8_t g;
@@ -6847,32 +6875,76 @@ typedef struct {
 
 static op_scene_row_state_t s_scene_row[OP_SCENE_NUM_ROWS];
 
+/* Real feedback: "capacitive touch has a new function here, it wont
+ * trigger or arm or anything in ableton, the pressure click does that.
+ * the capacitive touch uniquely triggers the haptic feel of what clip is
+ * playing." Two separate inputs per pad, on purpose:
+ *   - capacitive TOUCH: haptics only, never sends anything to Ableton
+ *     (see scene_update_haptics()).
+ *   - PRESSURE CLICK (Hall depth crossing OP_SCENE_CLICK_DEPTH_
+ *     THRESHOLD while touched): the only thing that acts in Ableton --
+ *     fire/stop/record a clip, or launch a whole scene (see
+ *     scene_handle_click()).
+ * The click threshold reuses OP_MENU_SELECT_DEPTH_THRESHOLD's own 50%
+ * "push the pad to select" precedent rather than inventing a second
+ * definition of "a click" for this same hardware. The re-arm threshold
+ * sits well below it so pressure jitter right at the click point can't
+ * double-fire. */
+#define OP_SCENE_CLICK_DEPTH_THRESHOLD OP_MENU_SELECT_DEPTH_THRESHOLD
+#define OP_SCENE_CLICK_REARM_DEPTH 250.0f
 static bool s_scene_prev_pad_touched[TILES_NUM_PADS];
-/* Edge-latches the deep-press stop-clip gesture so a continuous hold
- * past the threshold sends the stop-clip note exactly once, not every
- * scan tick -- reset the moment the pad is released, same "sticky-
- * until-release" shape s_pattern_bank_touch_started_with_shift already
- * established elsewhere in this file. */
-static bool s_scene_deep_press_sent[TILES_NUM_PADS];
+static bool s_scene_click_latched[TILES_NUM_PADS];
 
-/* Real feedback: "re pushing a playing clip pad all the way down or
- * close to that stops the individual clip." Deliberately higher than
- * OP_MENU_SELECT_DEPTH_THRESHOLD's 50% menu-select depth -- "all the
- * way down" reads as a much deeper press than a menu tap, and this
- * gesture only ever applies to a clip that's already playing, so a
- * lower threshold risks stopping a clip the player only meant to
- * retrigger. Unmeasured -- a first guess, not calibrated against real
- * hardware. */
-#define OP_SCENE_STOP_CLIP_DEPTH_THRESHOLD 700.0f
+/* Per-pad haptic state -- NONE: nothing running; CLICK: the one-shot
+ * "ready" kick is in flight and gets cut at s_scene_haptic_click_end_ms
+ * (a kick otherwise rolls straight into haptics.c's SUSTAIN buzz);
+ * SUSTAINING: this pad's clip is playing, so the voice is kept alive
+ * as a continuous vibration for as long as the finger stays on. */
+typedef enum {
+    OP_SCENE_HAPTIC_NONE = 0,
+    OP_SCENE_HAPTIC_CLICK,
+    OP_SCENE_HAPTIC_SUSTAINING,
+} op_scene_haptic_state_t;
+static op_scene_haptic_state_t s_scene_haptic_state[TILES_NUM_PADS];
+static uint32_t s_scene_haptic_click_end_ms[TILES_NUM_PADS];
+
+/* Real feedback: "if that space has a clip we get a very strong haptic
+ * click to indicate ready." Velocity 127 = haptics.c's full-duty kick
+ * (overdrive spike, then MAX_KICK_DUTY); OP_SCENE_HAPTIC_CLICK_MS just
+ * needs to outlast KICK_DURATION_MS + KICK_GAP_MS (45 + 8ms) so the
+ * whole click plays, while still cutting the voice before SUSTAIN's
+ * slow attack builds into anything audible/felt. */
+#define OP_SCENE_HAPTIC_CLICK_VELOCITY 127u
+#define OP_SCENE_HAPTIC_CLICK_MS 56u
+/* Real feedback: "if clip is playing we get continuous haptic
+ * vibrations on contact with capacitive touch surface only." Feeds
+ * haptics.c's sustain target as a fixed stand-in for aftertouch (the
+ * sustain duty is a blend of this and the kick's own velocity, see
+ * sustain_target_duty() there) -- a steady, clearly-felt buzz, not a
+ * pressure-following one, since capacitive contact carries no pressure
+ * to follow. Unmeasured -- a first guess at the feel. */
+#define OP_SCENE_HAPTIC_PLAYING_LEVEL 90u
+/* Kick used when a clip STARTS playing under an already-resting finger
+ * (the click that fired it has long since finished) -- just enough of a
+ * bump to open a voice for the sustain to ride on and to read as "it's
+ * live now." */
+#define OP_SCENE_HAPTIC_PLAYING_ONSET_VELOCITY 100u
 
 /* Real feedback: "when we trigger any scene it flashes once in sentia
- * color" -- same two-state flash/rest shape this file's other flash
- * confirmations already use (OP_SONG_FLASH_BLINK_MS etc.), just a
- * single flash here rather than a double-blink, since this means
- * "an action happened," not "a save/delete succeeded." */
-#define OP_SCENE_TRIGGER_FLASH_MS 150u
+ * color" ... "for lights full scene trigger does the sentia purple glow
+ * underlights, for individual clips we get that channel color as an
+ * underglow flash." One single flash, color chosen per action (see
+ * scene_handle_click()) -- same two-state flash/rest shape this file's
+ * other flash confirmations already use (OP_SONG_FLASH_BLINK_MS etc.),
+ * a single flash rather than a double-blink since this means "an action
+ * happened," not "a save/delete succeeded." Slightly longer than the
+ * first version's 150ms so a clip-colored flash reads at a glance. */
+#define OP_SCENE_TRIGGER_FLASH_MS 200u
 static bool s_scene_trigger_flash_active;
 static uint32_t s_scene_trigger_flash_start_ms;
+static float s_scene_flash_r;
+static float s_scene_flash_g;
+static float s_scene_flash_b;
 
 /* A deliberately faster, plainer on/off blink than menu_selected_
  * pulse_level()'s own smooth sine breathing -- "about to change" reads
@@ -7035,10 +7107,22 @@ static void scene_on_sysex(const uint8_t *data, size_t len) {
         }
         uint8_t flags = data[4];
         op_scene_row_state_t *row = &s_scene_row[scene];
+        row->exists = true;
         row->is_triggered = (flags & OP_SCENE_FLAG_IS_TRIGGERED) != 0u;
         row->r = (uint8_t)(data[5] * 2u);
         row->g = (uint8_t)(data[6] * 2u);
         row->b = (uint8_t)(data[7] * 2u);
+    } else if (msg_type == OP_SCENE_MSG_OPEN_MELODIC) {
+        if (len != 3u) {
+            return;
+        }
+        /* Only meaningful while Scene Launch is what's on screen --
+         * a stale message landing after the player already switched
+         * away must not yank them into melodic mode later. */
+        if (s_active_mode == OP_MODE_SCENE_LAUNCH) {
+            printf("[op_mode] scene launch: Ableton armed a track -> melodic mode once pads are released\n");
+            s_scene_pending_melodic = true;
+        }
     }
     /* Any other msg_type: not yet defined, silently ignored -- forward-
      * compatible with a future firmware/script version adding a new
@@ -7055,16 +7139,172 @@ static void scene_launch_init(void) {
         s_scene_row[row] = (op_scene_row_state_t){0};
     }
     for (uint8_t pad = 0u; pad < TILES_NUM_PADS; pad++) {
-        s_scene_deep_press_sent[pad] = false;
+        s_scene_prev_pad_touched[pad] = false;
+        s_scene_click_latched[pad] = false;
+        s_scene_haptic_state[pad] = OP_SCENE_HAPTIC_NONE;
     }
     s_scene_track_offset = 0u;
+    s_scene_pending_melodic = false;
     tiles_midi_in_register_sysex_callback(scene_on_sysex);
 }
 
-static void handle_scene_launch_taps(void) {
+/* Called from set_active_mode() every time Scene Launch mode becomes the
+ * active mode. Seeds every pad's edge/click latch from what's touched
+ * RIGHT NOW rather than leaving whatever stale value the last visit
+ * left -- the finger that just picked this mode in the top-level menu is
+ * still resting (and still pressed past the click threshold) on the
+ * menu's column-6 pad, which is this mode's own scene-1 launch pad; an
+ * unseeded latch would read that as a fresh click and launch scene 1
+ * the instant the mode opens. Latched-true means "release first," the
+ * same don't-let-a-resting-finger-read-as-a-fresh-strike precedent
+ * chord mode's own entry already follows. Also tells Ableton which
+ * 5-track window is visible right now (real feedback: "i need that
+ * outline for tiles as well") -- not just after the next "-"/"+" press,
+ * which may never come if the window was already panned before
+ * switching away and back. */
+static void scene_launch_enter(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         bool touched = tiles_touch_is_touched(pad);
-        bool was_touched = s_scene_prev_pad_touched[pad - 1u];
+        s_scene_prev_pad_touched[pad - 1u] = touched;
+        s_scene_click_latched[pad - 1u] = touched;
+        s_scene_haptic_state[pad - 1u] = OP_SCENE_HAPTIC_NONE;
+    }
+    scene_send_track_offset(s_scene_track_offset);
+}
+
+/* Called from set_active_mode() when Scene Launch mode stops being the
+ * active mode. Cuts every haptic voice this mode started -- a clip's
+ * continuous "playing" buzz is held open across scans, so leaving with a
+ * finger still down would otherwise leave a motor running with nothing
+ * left to ever stop it. */
+static void scene_launch_leave(void) {
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        if (s_scene_haptic_state[pad - 1u] != OP_SCENE_HAPTIC_NONE) {
+            tiles_haptics_stop(pad);
+            s_scene_haptic_state[pad - 1u] = OP_SCENE_HAPTIC_NONE;
+        }
+    }
+}
+
+static void scene_start_flash(float r, float g, float b, uint32_t now_ms) {
+    s_scene_flash_r = r;
+    s_scene_flash_g = g;
+    s_scene_flash_b = b;
+    s_scene_trigger_flash_active = true;
+    s_scene_trigger_flash_start_ms = now_ms;
+}
+
+/* Capacitive touch -> haptics ONLY, never anything sent to Ableton --
+ * real feedback: "the capacitive touch uniquely triggers the haptic feel
+ * of what clip is playing. if that space has a clip we get a very
+ * strong haptic click to indicate ready, if clip is playing we get
+ * continuous haptic vibrations on contact with capacitive touch surface
+ * only." `has_content` is "there's something launchable under this pad"
+ * (a clip in a track column, an existing scene in column 6); an empty
+ * slot gets no haptics at all. `playing` is only ever true for a track
+ * column whose clip Ableton reports is_playing.
+ * Uses haptics.c's kick for the click (a kick otherwise rolls into a
+ * SUSTAIN buzz until tiles_haptics_stop() -- see OP_SCENE_HAPTIC_CLICK_MS
+ * for why the click is cut on a short timer) and keeps that same voice
+ * alive as the continuous vibration for a playing clip. */
+static void scene_update_haptics(uint8_t pad, bool touched, bool was_touched, bool has_content, bool playing,
+                                 uint32_t now_ms) {
+    uint8_t idx = (uint8_t)(pad - 1u);
+    op_scene_haptic_state_t state = s_scene_haptic_state[idx];
+
+    if (!touched) {
+        if (state != OP_SCENE_HAPTIC_NONE) {
+            tiles_haptics_stop(pad);
+            s_scene_haptic_state[idx] = OP_SCENE_HAPTIC_NONE;
+        }
+        return;
+    }
+
+    if (!was_touched && has_content) {
+        tiles_haptics_trigger_kick(pad, OP_SCENE_HAPTIC_CLICK_VELOCITY);
+        if (playing) {
+            tiles_haptics_set_sustain_level(pad, OP_SCENE_HAPTIC_PLAYING_LEVEL);
+            s_scene_haptic_state[idx] = OP_SCENE_HAPTIC_SUSTAINING;
+        } else {
+            s_scene_haptic_click_end_ms[idx] = now_ms + OP_SCENE_HAPTIC_CLICK_MS;
+            s_scene_haptic_state[idx] = OP_SCENE_HAPTIC_CLICK;
+        }
+        return;
+    }
+
+    state = s_scene_haptic_state[idx];
+    if (playing) {
+        if (state == OP_SCENE_HAPTIC_NONE) {
+            /* The clip only just STARTED playing (a quantized launch
+             * lands after the click that fired it) while the finger
+             * kept resting here -- open a voice for the buzz to ride
+             * on. */
+            tiles_haptics_trigger_kick(pad, OP_SCENE_HAPTIC_PLAYING_ONSET_VELOCITY);
+        }
+        if (state != OP_SCENE_HAPTIC_SUSTAINING) {
+            s_scene_haptic_state[idx] = OP_SCENE_HAPTIC_SUSTAINING;
+        }
+        tiles_haptics_set_sustain_level(pad, OP_SCENE_HAPTIC_PLAYING_LEVEL);
+    } else if (state == OP_SCENE_HAPTIC_SUSTAINING) {
+        /* Stopped (or replaced by another clip in the track) under a
+         * resting finger -- the buzz ends with it. */
+        tiles_haptics_stop(pad);
+        s_scene_haptic_state[idx] = OP_SCENE_HAPTIC_NONE;
+    } else if (state == OP_SCENE_HAPTIC_CLICK && now_ms >= s_scene_haptic_click_end_ms[idx]) {
+        tiles_haptics_stop(pad);
+        s_scene_haptic_state[idx] = OP_SCENE_HAPTIC_NONE;
+    }
+}
+
+/* The pressure click -- the ONLY thing in this mode that acts in
+ * Ableton. Real feedback: "the preassure click does that" (trigger/
+ * arm), "for lights full scene trigger does the sentia purple glow
+ * underlights, for individual clips we get that channel color as an
+ * underglow flash."
+ *   - column 6: launch that whole scene, Sentia purple flash.
+ *   - a clip that's playing: stop it (a click toggles -- this replaces
+ *     the earlier separate "push all the way down to stop" gesture, one
+ *     click now does both jobs depending on state), its own color.
+ *   - a clip that isn't playing: fire it, its own color.
+ *   - an EMPTY slot: the same fire CC -- scene_launch.py sees there's no
+ *     clip, arms that track and starts recording into the slot (and
+ *     tells this side to open melodic mode if the track takes MIDI, see
+ *     OP_SCENE_MSG_OPEN_MELODIC). No clip means no clip color to flash,
+ *     so this one flashes red -- the universal "recording/armed" color
+ *     -- rather than nothing. */
+static void scene_handle_click(uint8_t pad, uint8_t col, const op_scene_cell_state_t *cell, uint32_t now_ms) {
+    if (col == OP_SCENE_LAUNCH_COL) {
+        scene_send_grid_touch(pad);
+        /* OP_MENU_MELODIC_R/G/B is literally Sentia magenta, reused
+         * directly rather than a second same-file definition of an
+         * identical color -- see this section's own header comment. */
+        scene_start_flash(OP_MENU_MELODIC_R, OP_MENU_MELODIC_G, OP_MENU_MELODIC_B, now_ms);
+        return;
+    }
+    if (cell == NULL) {
+        return;
+    }
+    if (!cell->has_clip) {
+        scene_send_grid_touch(pad);
+        scene_start_flash(1.0f, 0.0f, 0.0f, now_ms);
+        return;
+    }
+    if (cell->is_playing) {
+        scene_send_stop_clip_cc(pad);
+    } else {
+        scene_send_grid_touch(pad);
+    }
+    scene_start_flash((float)cell->r / 255.0f, (float)cell->g / 255.0f, (float)cell->b / 255.0f, now_ms);
+}
+
+/* Returns true only when it switched modes (see s_scene_pending_melodic)
+ * -- the caller then skips this frame's Scene Launch render. */
+static bool handle_scene_launch_taps(uint32_t now_ms) {
+    bool any_touched = false;
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        uint8_t idx = (uint8_t)(pad - 1u);
+        bool touched = tiles_touch_is_touched(pad);
+        bool was_touched = s_scene_prev_pad_touched[idx];
         /* board_pad_for_row_col()'s own inverse -- pad = (row-1)*6
          * + col, rows/cols both 1-based (see that function's own
          * comment in board_layout.h). Row maps 1:1 onto scene
@@ -7073,37 +7313,43 @@ static void handle_scene_launch_taps(void) {
          * OP_MENU_ROW carve-out. */
         uint8_t col = (uint8_t)(((pad - 1u) % 6u) + 1u);
         uint8_t scene = (uint8_t)((pad - 1u) / 6u);
-        if (touched && !was_touched) {
-            tiles_haptics_trigger_touch_pulse(pad);
-            scene_send_grid_touch(pad);
-            if (col == OP_SCENE_LAUNCH_COL) {
-                s_scene_trigger_flash_active = true;
-                s_scene_trigger_flash_start_ms = to_ms_since_boot(get_absolute_time());
-            }
-        }
-        /* Real feedback: "re pushing a playing clip pad all the way
-         * down or close to that stops the individual clip." Checked
-         * every scan while held (not just the touch edge, unlike fire
-         * above) -- deepening an already-committed touch into a stop
-         * is exactly the gesture described, not a fresh press of its
-         * own. Scoped to track columns only (not the scene-launch
-         * column) and to a clip already reported is_playing -- pressing
-         * hard on a stopped clip should never accidentally stop
-         * something that isn't running. */
-        if (touched && col >= OP_SCENE_TRACK_COL_MIN && col <= OP_SCENE_TRACK_COL_MAX &&
-            !s_scene_deep_press_sent[pad - 1u]) {
+
+        const op_scene_cell_state_t *cell = NULL;
+        bool has_content;
+        bool playing = false;
+        if (col == OP_SCENE_LAUNCH_COL) {
+            has_content = s_scene_row[scene].exists;
+        } else {
             uint8_t track = (uint8_t)(s_scene_track_offset + (col - OP_SCENE_TRACK_COL_MIN));
-            if (track < OP_SCENE_MAX_TRACKS && s_scene_clip[track][scene].is_playing &&
-                (float)tiles_hall_get_depth(pad) > OP_SCENE_STOP_CLIP_DEPTH_THRESHOLD) {
-                scene_send_stop_clip_cc(pad);
-                s_scene_deep_press_sent[pad - 1u] = true;
+            if (track < OP_SCENE_MAX_TRACKS) {
+                cell = &s_scene_clip[track][scene];
             }
+            has_content = (cell != NULL) && cell->has_clip;
+            playing = has_content && cell->is_playing;
         }
-        if (!touched) {
-            s_scene_deep_press_sent[pad - 1u] = false;
+
+        if (touched) {
+            any_touched = true;
         }
-        s_scene_prev_pad_touched[pad - 1u] = touched;
+        scene_update_haptics(pad, touched, was_touched, has_content, playing, now_ms);
+
+        float depth = touched ? (float)tiles_hall_get_depth(pad) : 0.0f;
+        if (!touched || depth < OP_SCENE_CLICK_REARM_DEPTH) {
+            s_scene_click_latched[idx] = false;
+        } else if (!s_scene_click_latched[idx] && depth > OP_SCENE_CLICK_DEPTH_THRESHOLD) {
+            s_scene_click_latched[idx] = true;
+            scene_handle_click(pad, col, cell, now_ms);
+        }
+
+        s_scene_prev_pad_touched[idx] = touched;
     }
+
+    if (s_scene_pending_melodic && !any_touched) {
+        s_scene_pending_melodic = false;
+        set_active_mode(OP_MODE_MELODIC);
+        return true;
+    }
+    return false;
 }
 
 static void render_scene_launch_underglow(uint32_t now_ms) {
@@ -7113,11 +7359,7 @@ static void render_scene_launch_underglow(uint32_t now_ms) {
     }
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
         if (flashing) {
-            /* OP_MENU_MELODIC_R/G/B is literally Sentia magenta, reused
-             * directly rather than a second same-file definition of an
-             * identical color -- see this section's own header
-             * comment. */
-            tiles_lighting_set_standby_underglow_rgb(i, OP_MENU_MELODIC_R, OP_MENU_MELODIC_G, OP_MENU_MELODIC_B);
+            tiles_lighting_set_standby_underglow_rgb(i, s_scene_flash_r, s_scene_flash_g, s_scene_flash_b);
         } else {
             tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 1.0f, 1.0f);
         }

@@ -89,10 +89,19 @@ copy of the folder and a restart so Ableton reloads it.
 should be shift diamond." Distinct from the diamond's own plain click
 (transport play/stop), which still works unchanged in this mode.
 
-**Stop one clip**: pressing a playing clip's pad all the way down (not
-just a normal touch) stops that one clip specifically -- real feedback,
-"re pushing a playing clip pad all the way down or close to that stops
-the individual clip."
+**Touch vs. click**: a bare capacitive touch never does anything in
+Ableton -- it only gives haptics (a strong "ready" click on a pad with a
+clip, a continuous buzz while that clip is playing). A pressure click
+(push the pad ~half way down, the same "push to select" feel as the
+mode menu) is what acts: fire a clip, launch a scene (right-hand
+column), or stop a clip that's already playing. Underglow flashes Sentia
+purple for a scene, the clip's own color for a clip.
+
+**Record a new clip**: a pressure click on an EMPTY slot arms that track
+and starts recording into the slot; if the track takes MIDI, TILES then
+opens melodic mode (once your fingers are off the pads) so you can play
+straight into it. Relies on Live's own Exclusive Arm preference to
+disarm other tracks -- the script doesn't disarm anything itself.
 
 **Session-ring outline**: Scene Launch mode now shows Ableton's own
 built-in session-ring box in Session View, sized to the same 5-track x

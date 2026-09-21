@@ -78,13 +78,18 @@ value anyway.
 Wire protocol summary:
 
     TILES -> Ableton (plain CC, TILES_MASTER_CHANNEL, no SysEx, no
-    Note-On -- see above for why Note-On specifically doesn't work here):
+    Note-On -- see above for why Note-On specifically doesn't work here).
+    Sent ONLY on a PRESSURE CLICK -- a bare capacitive touch sends
+    nothing at all (it's haptics-only on the hardware side, see
+    op_mode.c's handle_scene_launch_taps()):
         CC, controller = CC_GRID_BASE + pad (11-34), 127 then 0
-            grid touch: fire that pad's clip (columns 1-5) or launch
-            that pad's whole scene (column 6, OP_SCENE_LAUNCH_COL in
-            op_mode.c)
+            click: fire that pad's clip (columns 1-5), launch that
+            pad's whole scene (column 6, OP_SCENE_LAUNCH_COL in
+            op_mode.c), or -- on an EMPTY slot -- arm the track and
+            start recording into it (see _record_new_clip())
         CC, controller = CC_STOP_BASE + pad (41-64), 127 then 0
-            deep-press stop of that one clip (columns 1-5 only)
+            click on a clip that's already playing: stop that one clip
+            (columns 1-5 only)
         CC CC_MASTER_STOP (105), value 127 then 0        stop all clips
         CC CC_TRACK_OFFSET (106), value = offset         visible track
             window changed (session ring + grid-touch track mapping)
@@ -93,6 +98,9 @@ Wire protocol summary:
     "non-commercial/educational use", sub-ID 0x01):
         F0 7D 01 10 <track> <scene> <flags> <r7> <g7> <b7> F7   clip state
         F0 7D 01 11 <scene> <flags> <r7> <g7> <b7>         F7   scene state
+        F0 7D 01 12                                        F7   open melodic mode
+            (a track was just armed for a new recording; firmware waits
+            until every pad is released, then switches)
 
     flags bit 0 = has_clip (clip state only), bit 1 = is_playing (clip
     state only), bit 2 = is_triggered (both). <r7>/<g7>/<b7> are each
@@ -163,6 +171,10 @@ SYSEX_SUB_ID = 0x01
 
 MSG_CLIP_STATE = 0x10
 MSG_SCENE_STATE = 0x11
+# No payload -- tells the firmware to open melodic mode (once the pads
+# are released) because a track was just armed for a new recording. See
+# _record_new_clip().
+MSG_OPEN_MELODIC = 0x12
 
 FLAG_HAS_CLIP = 0x01
 FLAG_IS_PLAYING = 0x02
@@ -226,8 +238,9 @@ class SceneLaunch(object):
         # native Clip object, which isn't guaranteed to support arbitrary
         # attribute assignment and could silently abort this whole
         # object's __init__ if it ever raised).
-        self._clip_color_listeners = {}  # {(track_index, scene_index): (clip, color_cb)}
+        self._clip_color_listeners = {}  # {(track_index, scene_index): (clip, clip_cb)} -- clip_cb covers color AND playing_status
         self._scene_listeners = []  # list of (scene, is_triggered_cb, color_cb)
+        self._track_listeners = []  # list of (track, refresh_cb) -- see _refresh_track()
         self._session = None  # SessionComponent, created in _connect() -- see that method's own comment
         self._grid_button_listeners = []  # list of (button, callback), pad 1..NUM_GRID_PADS
         self._stop_button_listeners = []  # list of (button, callback), pad 1..NUM_GRID_PADS
@@ -267,10 +280,15 @@ class SceneLaunch(object):
     # ---- Ableton -> TILES (SysEx, unchanged) --------------------------------
 
     def _send_clip_state(self, track_index, scene_index, clip_slot):
+        # Read playing/triggered off the Clip itself when there is one --
+        # exactly what Ableton's own bundled ClipSlotComponent does
+        # (`slot_or_clip = clip if has_clip else slot`) -- rather than
+        # off the ClipSlot.
         has_clip = clip_slot.has_clip
-        is_playing = has_clip and clip_slot.is_playing
-        is_triggered = clip_slot.is_triggered
-        color = clip_slot.clip.color if has_clip else 0
+        clip = clip_slot.clip if has_clip else None
+        is_playing = bool(clip is not None and clip.is_playing)
+        is_triggered = bool(clip.is_triggered if clip is not None else clip_slot.is_triggered)
+        color = clip.color if clip is not None else 0
         r7, g7, b7 = _color_to_wire_rgb(color)
         flags = 0
         if has_clip:
@@ -313,6 +331,28 @@ class SceneLaunch(object):
     def _make_slot_callback(self, track_index, scene_index, clip_slot):
         return lambda: self._send_clip_state(track_index, scene_index, clip_slot)
 
+    def _refresh_track(self, track_index):
+        """Re-sends EVERY tracked slot on one track, not just the one
+        that changed. Real feedback: "when we switch to a new clip the
+        not playing clips keep flashing." Launching clip B on a track
+        stops clip A as a SIDE EFFECT -- nothing guarantees A's own
+        per-slot listeners fire (or that they see the final state), so
+        A's last-sent "playing" state could stay on the hardware
+        forever. A track's own playing/fired slot index does change
+        whenever the playing clip does (Ableton's own SessionComponent
+        listens to exactly these two for its stop-button LEDs), so
+        refreshing the whole track off those makes the stale sibling
+        impossible regardless of what its own listeners did."""
+        tracks = self._song.tracks
+        if track_index >= len(tracks):
+            return
+        slots = tracks[track_index].clip_slots
+        for scene_index in range(min(len(slots), NUM_SCENES)):
+            self._send_clip_state(track_index, scene_index, slots[scene_index])
+
+    def _make_track_refresh_callback(self, track_index):
+        return lambda: self._refresh_track(track_index)
+
     def _connect(self):
         tracks = self._song.tracks
         scenes = self._song.scenes
@@ -349,6 +389,12 @@ class SceneLaunch(object):
                 clip_slot.add_is_triggered_listener(is_triggered_cb)
                 self._clip_slot_listeners.append((clip_slot, has_clip_cb, playing_status_cb, is_triggered_cb))
                 self._on_has_clip_changed(track_index, scene_index, clip_slot)
+
+            # playing_slot_index/fired_slot_index -- see _refresh_track().
+            refresh_cb = self._make_track_refresh_callback(track_index)
+            track.add_playing_slot_index_listener(refresh_cb)
+            track.add_fired_slot_index_listener(refresh_cb)
+            self._track_listeners.append((track, refresh_cb))
 
         # Real feedback: "the box was from my novation. i need that
         # outline for tiles as well tho" -- Ableton's own built-in
@@ -433,19 +479,35 @@ class SceneLaunch(object):
         key = (track_index, scene_index)
         old = self._clip_color_listeners.pop(key, None)
         if old is not None:
-            old_clip, old_color_cb = old
-            try:
-                old_clip.remove_color_listener(old_color_cb)
-            except RuntimeError:
-                pass  # old clip already gone -- nothing to remove
+            self._remove_clip_listeners(*old)
 
         if clip_slot.has_clip:
             clip = clip_slot.clip
-            color_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
-            clip.add_color_listener(color_cb)
-            self._clip_color_listeners[key] = (clip, color_cb)
+            # Also listens on the Clip's own playing_status, not just
+            # the slot's -- Ableton's own ClipSlotComponent registers
+            # both (`_on_slot_playing_state_changed` and
+            # `_on_clip_playing_state_changed`), see _refresh_track()
+            # for the bug this is one of two layers against. One shared
+            # callable is fine: each add_*_listener keeps its own list.
+            clip_cb = self._make_slot_callback(track_index, scene_index, clip_slot)
+            clip.add_color_listener(clip_cb)
+            clip.add_playing_status_listener(clip_cb)
+            self._clip_color_listeners[key] = (clip, clip_cb)
 
         self._send_clip_state(track_index, scene_index, clip_slot)
+
+    @staticmethod
+    def _remove_clip_listeners(clip, clip_cb):
+        # Separate try blocks so one failing removal (e.g. the clip
+        # already deleted) can't skip the other.
+        try:
+            clip.remove_color_listener(clip_cb)
+        except RuntimeError:
+            pass
+        try:
+            clip.remove_playing_status_listener(clip_cb)
+        except RuntimeError:
+            pass
 
     # ---- TILES -> Ableton: grid touch, stop, master stop, track offset -----
 
@@ -465,6 +527,9 @@ class SceneLaunch(object):
         # the transport CCs already use -- only the press (value > 0)
         # is a real action, the release that follows is just that
         # trigger's own tail end.
+        # (Firmware sends this only on a PRESSURE CLICK now, never on a
+        # bare capacitive touch -- capacitive touch is haptics-only on
+        # the hardware side, see op_mode.c's handle_scene_launch_taps().)
         if value <= 0:
             return
         col, track_index, scene_index = self._pad_to_col_track_scene(pad)
@@ -476,7 +541,38 @@ class SceneLaunch(object):
         else:
             tracks = self._song.tracks
             if track_index < len(tracks) and scene_index < len(scenes):
-                tracks[track_index].clip_slots[scene_index].fire()
+                track = tracks[track_index]
+                clip_slot = track.clip_slots[scene_index]
+                if clip_slot.has_clip:
+                    clip_slot.fire()
+                else:
+                    self._record_new_clip(track, clip_slot, track_index, scene_index)
+
+    def _record_new_clip(self, track, clip_slot, track_index, scene_index):
+        """A pressure click on an EMPTY slot. Real feedback: "if were
+        recording a new clip make it open melodic mode automatically and
+        arm that channel." Arms the track (if Live lets that track be
+        armed at all -- group tracks can't be) and fires the slot, which
+        on an armed track starts recording a new clip into it; then, only
+        if the track takes MIDI, tells the firmware to open melodic mode
+        so the player can immediately play into the recording. Audio
+        tracks still arm and record, they just don't get a melodic mode
+        to play into. Relies on Live's own Exclusive Arm preference to
+        disarm other tracks -- deliberately doesn't disarm anything
+        itself, so a deliberately multi-armed setup isn't undone.
+        (Track.can_be_armed/arm/has_midi_input confirmed against
+        AbletonOSC's own track.py property lists.)"""
+        armed = False
+        if track.can_be_armed:
+            track.arm = True
+            armed = True
+        self._log(
+            "record_new_clip track=%d scene=%d armed=%d midi_input=%d"
+            % (track_index, scene_index, armed, track.has_midi_input)
+        )
+        clip_slot.fire()
+        if armed and track.has_midi_input:
+            self._control_surface._send_midi((0xF0, SYSEX_MFR_ID, SYSEX_SUB_ID, MSG_OPEN_MELODIC, 0xF7))
 
     def _on_stop_touch(self, pad, value):
         if value <= 0:
@@ -491,8 +587,11 @@ class SceneLaunch(object):
         if track_index < len(tracks) and scene_index < len(scenes):
             clip_slot = tracks[track_index].clip_slots[scene_index]
             self._log("stop_touch pad=%d track=%d scene=%d has_clip=%d" % (pad, track_index, scene_index, clip_slot.has_clip))
-            # Real feedback: "re pushing a playing clip pad all the way
-            # down or close to that stops the individual clip."
+            # A pressure click on a clip that's already playing (the
+            # firmware picks fire vs. stop from the state Ableton last
+            # reported -- one click toggles). Earlier feedback: "re
+            # pushing a playing clip pad all the way down or close to
+            # that stops the individual clip."
             # Clip.stop() is the real per-clip stop (confirmed against
             # AbletonOSC's own clip.py, which wires the same method to
             # its own "/live/clip/stop" handler) -- distinct from
@@ -562,8 +661,14 @@ class SceneLaunch(object):
                 clip_slot.remove_is_triggered_listener(is_triggered_cb)
             except RuntimeError:
                 pass
-        for clip, color_cb in self._clip_color_listeners.values():
+        for track, refresh_cb in self._track_listeners:
             try:
-                clip.remove_color_listener(color_cb)
+                track.remove_playing_slot_index_listener(refresh_cb)
             except RuntimeError:
                 pass
+            try:
+                track.remove_fired_slot_index_listener(refresh_cb)
+            except RuntimeError:
+                pass
+        for clip, clip_cb in self._clip_color_listeners.values():
+            self._remove_clip_listeners(clip, clip_cb)

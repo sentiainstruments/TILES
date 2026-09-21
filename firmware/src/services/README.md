@@ -7686,5 +7686,64 @@ not its code.
     Every other external API call in that file was re-verified against
     real source at the same time; this was the only one that didn't
     exist.
+  - **Touch vs. click split, record-a-new-clip, underglow colors, stale
+    sibling fix.** Real feedback: "if were recording a new clip make it
+    open melodic mode automatically and arm that channel. the flashing
+    is mostly working but when we switch to a new clip the not playing
+    clips keep flashing. also capacitive touch has a new function here,
+    it wont trigger or arm or anything in ableton, the pressure click
+    does that. the capacitive touch uniquely triggers the haptic feel of
+    what clip is playing. if that space has a clip we get a very strong
+    haptic click to indicate ready, if clip is playing we get continuous
+    haptic vibrations on contact with capacitive touch surface only. for
+    lights full scene trigger does the sentia purple glow underlights,
+    for individual clips we get that channel color as an underglow
+    flash."
+    - **Two separate inputs per pad now.** Capacitive TOUCH is haptics
+      only (`scene_update_haptics()`): a full-velocity kick as the
+      "ready" click when the slot has a clip (or column 6's scene
+      exists), cut on a 56ms timer so it doesn't roll into haptics.c's
+      SUSTAIN buzz; if that clip is playing, the same voice is kept
+      alive as a continuous vibration for as long as the finger rests
+      there, and a clip that only STARTS playing under a resting finger
+      (quantized launch) opens a voice then. Empty slots get no
+      haptics. A PRESSURE CLICK (Hall depth past
+      `OP_SCENE_CLICK_DEPTH_THRESHOLD`, i.e. the mode menu's own 50%
+      "push to select", re-arming below 250) is the only thing that
+      sends anything to Ableton (`scene_handle_click()`): column 6
+      launches the scene; a playing clip is stopped; a non-playing clip
+      is fired; an EMPTY slot sends the same fire CC and Ableton arms +
+      records. This replaces the earlier separate "push past 700 to
+      stop" gesture -- one click toggles by state. `scene_launch_enter()`
+      seeds the click/touch latches from what's touched at mode entry
+      (the finger that just picked this mode in the menu is still
+      pressing this mode's scene-1 pad) so it can't launch scene 1 the
+      instant the mode opens; `scene_launch_leave()` cuts any held
+      haptic voice.
+    - **Record a new clip -> melodic.** `scene_launch.py`'s
+      `_record_new_clip()` arms the track (if `can_be_armed`), fires the
+      slot, and -- only if `has_midi_input` -- sends new SysEx `0x12`
+      (`OP_SCENE_MSG_OPEN_MELODIC`). Ableton decides because only it
+      knows the track type. The firmware sets `s_scene_pending_melodic`
+      and switches only once every pad is released, so the finger that
+      just clicked can't read as a note strike the moment melodic mode
+      takes over; any mode change clears the flag.
+    - **Underglow.** Scene click: Sentia purple (unchanged). Clip
+      click (fire or stop): that clip's own color. Empty-slot click
+      (record): red, since there's no clip color yet. One 200ms flash,
+      steady white otherwise.
+    - **Stale sibling clips kept flashing.** Root cause: launching clip
+      B on a track stops clip A as a side effect, and nothing guaranteed
+      A's own per-slot listeners fired (or saw the final state), so A's
+      last-sent "playing" state stuck on the hardware. Two layers: (1)
+      `scene_launch.py` now refreshes EVERY tracked slot on a track
+      whenever that track's `playing_slot_index`/`fired_slot_index`
+      changes -- the two properties Ableton's own SessionComponent
+      listens to for exactly this -- and (2) it also listens on the
+      Clip's own `playing_status` (as Ableton's ClipSlotComponent does)
+      and reads playing/triggered off the Clip when there is one.
+    - Not covered: tracks/scenes added after the script loads aren't
+      tracked until Ableton reloads it (colors/state won't arrive for
+      them; fires still work).
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.
