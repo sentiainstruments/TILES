@@ -6804,8 +6804,7 @@ static void song_capture_exit(void) {
 /* Ableton -> TILES only now (see this section's own scene_on_sysex()
  * below) -- the TILES -> Ableton direction (fire/launch/stop-all/
  * stop-clip/track-offset) moved off this SysEx sub-protocol onto plain
- * Note-On/CC messages, see OP_SCENE_NOTE_GRID_BASE's own comment for
- * why. */
+ * CC messages, see OP_SCENE_CC_GRID_BASE's own comment for why. */
 #define OP_SCENE_MSG_CLIP_STATE 0x10u
 #define OP_SCENE_MSG_SCENE_STATE 0x11u
 
@@ -6917,41 +6916,53 @@ static float scene_playing_pulse_level(uint32_t now_ms) {
  * need you to look at how a lounchapd works or abletoun push works to
  * pull the exxact same standardizre behaviour." Migrated this whole
  * TILES -> Ableton control direction off this file's own custom SysEx
- * sub-protocol onto plain Note-On/CC messages -- the SAME mechanism
- * (ButtonElement + add_value_listener, see TILES.py) this file's own
- * transport CCs (OP_TRANSPORT_PLAY_CC etc.) already use, with actual
- * confirmed real-hardware delivery, rather than continuing to debug a
- * custom SysEx path that's never had a single confirmed successful
- * round-trip. Also matches how real Launchpad-family Remote Scripts
- * bind their OWN hardware (confirmed against Ableton's bundled
- * Launchpad/MainSelectorComponent.py: ButtonElement -> clip_slot.
- * set_launch_button()/scene.set_launch_button()) -- this file keeps
- * its own fire/stop logic in scene_launch.py rather than handing it to
- * SessionComponent/ClipSlotComponent directly (those components' own
- * LED feedback is a small quantized palette; this keeps real per-pad
- * RGB, which scene_on_sysex()'s own CLIP_STATE/SCENE_STATE messages
- * still deliver unchanged -- only the INBOUND control direction below
- * changed transport), but the RECEPTION half now matches their
- * standard approach exactly.
+ * sub-protocol onto plain CC messages -- the SAME mechanism (ButtonElement
+ * + add_value_listener, see TILES.py) this file's own transport CCs
+ * (OP_TRANSPORT_PLAY_CC etc.) already use, with actual confirmed
+ * real-hardware delivery.
+ *
+ * Real feedback, second round: "you fully broke how clip lounching
+ * works now its just sending regular midi notes for me to map. thats
+ * not how this feature operates ever in any device." The first version
+ * of this migration used Note-On/Off, matching how a REAL Launchpad
+ * sends its own grid (confirmed against Ableton's bundled Launchpad.py:
+ * ConfigurableButtonElement(is_momentary, MIDI_NOTE_TYPE, 0, ...)) --
+ * but a real Launchpad is a DEDICATED grid controller that never sends
+ * musical note content at all, so nobody ever enables that port's
+ * "Track" MIDI input in Ableton's Preferences. TILES is NOT that: this
+ * exact same USB-MIDI port ALSO carries real musical Note-On for
+ * melodic/chord/guitar/sequencer play, which means the user's own
+ * instrument track almost certainly already has this port's Track
+ * input enabled (that's the whole point of the instrument), typically
+ * listening on "All Channels" (required for real MPE playback across
+ * the member-channel pool) -- so a Scene Launch "button" Note-On,
+ * regardless of which channel it's sent on, is ALSO delivered to that
+ * track as ordinary playable/recordable note content, on top of
+ * whatever the Remote Script's own ButtonElement does with it. Being
+ * claimed by the Control Surface's Remote path and ALSO reaching a
+ * Track's input are not mutually exclusive in Ableton -- both can
+ * receive the identical byte. A Control Change never has this problem:
+ * Ableton never treats a CC as note/audio content for an instrument
+ * regardless of Track/Remote routing, which is exactly why the
+ * transport CCs above have always been safe on this same port. Fixed
+ * by moving grid-touch/stop-touch off Note-On entirely, onto CC, same
+ * as everything else in this section already was.
  *
  * Grid touch (fire a clip, or launch a whole scene for column 6) is
- * one Note-On per pad: note = OP_SCENE_NOTE_GRID_BASE + pad (61-84).
- * The deep-press stop-one-clip gesture is a separate note per pad,
- * OP_SCENE_NOTE_STOP_BASE + pad (101-124), sent only for track columns
- * (1-5). Both immediately followed by the matching Note-Off, mirroring
- * the transport CCs' own on/off pair convention -- neither is a real
- * musical note, just a momentary trigger, and TILES_MIDI_MPE_MASTER_
- * CHANNEL carries no real note content of its own to collide with
- * (actual MPE notes live on the member-channel pool). */
-#define OP_SCENE_NOTE_GRID_BASE 60u
-#define OP_SCENE_NOTE_STOP_BASE 100u
+ * one CC per pad: controller = OP_SCENE_CC_GRID_BASE + pad (11-34).
+ * The deep-press stop-one-clip gesture is a separate CC per pad,
+ * OP_SCENE_CC_STOP_BASE + pad (41-64), sent only for track columns
+ * (1-5). Both sent as the same 127-then-0 on/off pair the transport
+ * CCs already use. */
+#define OP_SCENE_CC_GRID_BASE 10u
+#define OP_SCENE_CC_STOP_BASE 40u
 #define OP_SCENE_CC_MASTER_STOP 105u
 #define OP_SCENE_CC_TRACK_OFFSET 106u
 
 static void scene_send_grid_touch(uint8_t pad) {
-    uint8_t note = (uint8_t)(OP_SCENE_NOTE_GRID_BASE + pad);
-    tiles_midi_note_on(TILES_MIDI_MPE_MASTER_CHANNEL, note, 127u);
-    tiles_midi_note_off(TILES_MIDI_MPE_MASTER_CHANNEL, note);
+    uint8_t cc = (uint8_t)(OP_SCENE_CC_GRID_BASE + pad);
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
 }
 
 /* Real feedback: "a master stop in this app should be shift diamond."
@@ -6964,11 +6975,11 @@ static void scene_send_stop_all(void) {
     tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_MASTER_STOP, 0u);
 }
 
-static void scene_send_stop_clip_note(uint8_t pad) {
+static void scene_send_stop_clip_cc(uint8_t pad) {
     printf("[op_mode] scene launch: deep press -> stop clip pad=%u\n", pad);
-    uint8_t note = (uint8_t)(OP_SCENE_NOTE_STOP_BASE + pad);
-    tiles_midi_note_on(TILES_MIDI_MPE_MASTER_CHANNEL, note, 127u);
-    tiles_midi_note_off(TILES_MIDI_MPE_MASTER_CHANNEL, note);
+    uint8_t cc = (uint8_t)(OP_SCENE_CC_STOP_BASE + pad);
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
 }
 
 /* See OP_SCENE_CC_TRACK_OFFSET's own comment -- keeps Ableton's
@@ -7084,7 +7095,7 @@ static void handle_scene_launch_taps(void) {
             uint8_t track = (uint8_t)(s_scene_track_offset + (col - OP_SCENE_TRACK_COL_MIN));
             if (track < OP_SCENE_MAX_TRACKS && s_scene_clip[track][scene].is_playing &&
                 (float)tiles_hall_get_depth(pad) > OP_SCENE_STOP_CLIP_DEPTH_THRESHOLD) {
-                scene_send_stop_clip_note(pad);
+                scene_send_stop_clip_cc(pad);
                 s_scene_deep_press_sent[pad - 1u] = true;
             }
         }

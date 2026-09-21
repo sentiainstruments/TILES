@@ -7631,20 +7631,39 @@ not its code.
     to pull the exxact same standardizre behaviour." Fire clip, launch
     scene, stop all, stop one clip, and the track-offset sync all
     moved from this file's own custom SysEx sub-protocol onto plain
-    Note-On/CC (`OP_SCENE_NOTE_GRID_BASE`/`_STOP_BASE`,
-    `OP_SCENE_CC_MASTER_STOP`/`_TRACK_OFFSET`) sent via
-    `tiles_midi_note_on`/`_off`/`tiles_midi_send_cc` -- the exact
-    mechanism this file's own transport CCs already use, with actual
-    confirmed real-hardware delivery, and the same mechanism real
-    Launchpad-family Remote Scripts use for their own hardware buttons
-    (confirmed against Ableton's bundled `Launchpad/
-    MainSelectorComponent.py`: `ButtonElement` handed to `clip_slot.
-    set_launch_button()`). The Ableton -> TILES color-feedback SysEx
+    CC, sent via `tiles_midi_send_cc` -- the exact mechanism this
+    file's own transport CCs already use, with actual confirmed
+    real-hardware delivery. The Ableton -> TILES color-feedback SysEx
     (`scene_on_sysex()`) is unchanged -- that direction was never
     reported broken, and real per-pad RGB has no equivalent in a
-    single CC/Note value anyway. See `shared/protocol/README.md`'s own
-    "Scene Launch" section for the full new wire format, and
-    `daw-integration/ableton/TILES/scene_launch.py`'s own module
-    docstring for the Ableton-side rewrite.
+    single CC value anyway.
+  - **First attempt used Note-On, not CC -- real feedback found the
+    real flaw.** "you fully broke how clip lounching works now its
+    just sending regular midi notes for me to map. thats not how this
+    feature operates ever in any device." The first version above
+    sent Note-On (matching how a REAL Launchpad sends its own grid,
+    confirmed against Ableton's bundled `Launchpad.py`), reasoning
+    that `TILES_MIDI_MPE_MASTER_CHANNEL` carries no real note content
+    of its own to collide with. That reasoning missed the actual
+    conflict: a real Launchpad is a dedicated grid controller that
+    never sends musical notes at ALL, so nobody ever enables that
+    port's "Track" MIDI input in Ableton's Preferences -- TILES is not
+    that. This exact same USB-MIDI port also carries real musical
+    Note-On for melodic/chord/guitar/sequencer play, so the user's own
+    instrument track almost certainly already has this port's Track
+    input enabled (typically "All Channels," required for real MPE
+    playback across the member-channel pool) -- meaning a Scene
+    Launch "button" Note-On, on ANY channel, was ALSO delivered to
+    that track as ordinary playable/recordable content, on top of
+    whatever the Remote Script's own `ButtonElement` did with it.
+    Being claimed by the Control Surface's Remote path and reaching a
+    Track's input are not mutually exclusive in Ableton. A CC never
+    has this problem -- Ableton never treats a CC as note/audio
+    content for an instrument regardless of Track/Remote routing,
+    exactly why the transport CCs have always been safe on this same
+    port. Fixed by moving grid-touch (`OP_SCENE_CC_GRID_BASE`, 10) and
+    stop-touch (`OP_SCENE_CC_STOP_BASE`, 40) off Note-On entirely, onto
+    CC, matching everything else in this section. `tiles_midi_note_on`/
+    `_off` are no longer used anywhere in Scene Launch mode.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

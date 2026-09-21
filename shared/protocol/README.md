@@ -107,40 +107,57 @@ control app). Real feedback: "lets implemebt a new mode that triggers
 scenes in ableton live keep it simple for now... can we pull the colors
 of the scenes from ableton?"
 
-**Architecture, rewritten after several real-hardware rounds with no
-confirmed successful delivery**: "master stop doesnt work at all,
-individual start and stop doesnt work and hasent for the past few
+**Architecture, rewritten twice after several real-hardware rounds
+with no confirmed successful delivery**: "master stop doesnt work at
+all, individual start and stop doesnt work and hasent for the past few
 pushes. i need you to look at how a lounchapd works or abletoun push
 works to pull the exxact same standardizre behaviour." The TILES ->
 Ableton direction used to be a custom SysEx sub-protocol; despite
 passing review against Ableton's own real Remote Script source
 multiple times, it never had one confirmed successful round-trip on
-real hardware. Replaced with plain Note-On/CC messages bound through
-`ButtonElement` + `add_value_listener()` -- the same mechanism this
-project's own transport-remote CCs (`OP_TRANSPORT_PLAY_CC` etc.)
-already use, with actual confirmed real-hardware delivery, and the
-same mechanism real Launchpad-family Remote Scripts use for their own
-hardware buttons (confirmed against Ableton's bundled
-`Launchpad/MainSelectorComponent.py`). The Ableton -> TILES direction
-(clip/scene color feedback) is unchanged, still plain SysEx -- that
-direction was never reported broken, and a full RGB color feed has no
-equivalent in a single CC/Note value anyway.
+real hardware.
+
+First rewrite replaced it with plain Note-On, matching how a real
+Launchpad sends its own grid (confirmed against Ableton's bundled
+`Launchpad.py`). Real feedback caught the real flaw: "you fully broke
+how clip lounching works now its just sending regular midi notes for
+me to map. thats not how this feature operates ever in any device." A
+real Launchpad is a dedicated grid controller that never sends musical
+note content at all, so nobody ever enables that port's "Track" MIDI
+input in Ableton. TILES is not that -- this exact same USB-MIDI port
+also carries real musical Note-On for melodic/chord/guitar/sequencer
+play, so the user's own instrument track almost certainly already has
+this port's Track input enabled (typically "All Channels," required
+for real MPE playback), meaning a Scene Launch "button" Note-On is
+ALSO delivered to that track as ordinary playable/recordable content
+on top of whatever the Remote Script's own `ButtonElement` does with
+it -- being claimed by the Control Surface's Remote path and reaching
+a Track's input are not mutually exclusive in Ableton. A CC never has
+this problem: Ableton never treats a CC as note/audio content for an
+instrument regardless of Track/Remote routing, exactly why the
+transport CCs have always been safe on this same port. Second rewrite
+moved grid-touch/stop-touch off Note-On entirely, onto CC, matching
+everything else in this protocol.
+
+Both rewrites bind real `ButtonElement`s via `add_value_listener()` --
+the same mechanism this project's own transport-remote CCs
+(`OP_TRANSPORT_PLAY_CC` etc.) already use, with actual confirmed
+real-hardware delivery.
 
 | Direction | Transport | Meaning |
 |---|---|---|
-| TILES -> Ableton | Note-On, note = `NOTE_GRID_BASE` (60) + pad | Grid touch: fire that pad's clip (track columns 1-5) or launch that pad's whole scene (column 6) |
-| TILES -> Ableton | Note-On, note = `NOTE_STOP_BASE` (100) + pad | Deep-press stop of that one clip (track columns 1-5 only) |
+| TILES -> Ableton | CC, controller = `CC_GRID_BASE` (10) + pad, 127 then 0 | Grid touch: fire that pad's clip (track columns 1-5) or launch that pad's whole scene (column 6) |
+| TILES -> Ableton | CC, controller = `CC_STOP_BASE` (40) + pad, 127 then 0 | Deep-press stop of that one clip (track columns 1-5 only) |
 | TILES -> Ableton | CC `CC_MASTER_STOP` (105), 127 then 0 | Stop all clips (master stop) -- shift+diamond in Scene Launch mode |
 | TILES -> Ableton | CC `CC_TRACK_OFFSET` (106), value = offset | Visible track window changed -- keeps the session-ring overlay and the pad-to-track mapping in sync |
 | Ableton -> TILES | SysEx `F0 7D 01 10 track scene flags r7 g7 b7 F7` | One clip slot's current state |
 | Ableton -> TILES | SysEx `F0 7D 01 11 scene flags r7 g7 b7 F7` | One scene's current state |
 
-All TILES -> Ableton messages are on `TILES_MIDI_MPE_MASTER_CHANNEL`
-(channel 1) -- the same channel the transport CCs use, and one that
-carries no real MPE note content of its own to collide with (actual
-notes live on the member-channel pool). `pad` is 1-24
-(`TILES_NUM_PADS`); Ableton-side, `scene_launch.py` derives `(column,
-row)` from `pad` exactly like `op_mode.c`'s own
+All TILES -> Ableton messages are plain CC on
+`TILES_MIDI_MPE_MASTER_CHANNEL` (channel 1) -- the same channel the
+transport CCs use, deliberately never Note-On (see above). `pad` is
+1-24 (`TILES_NUM_PADS`); Ableton-side, `scene_launch.py` derives
+`(column, row)` from `pad` exactly like `op_mode.c`'s own
 `handle_scene_launch_taps()` does, and derives the real track index
 from `column` plus whatever `CC_TRACK_OFFSET` last reported (it has to
 track that itself now, mirroring `op_mode.c`'s own
@@ -163,12 +180,13 @@ Ableton pushes state for every tracked cell once on script connect
 then again on every real change via Live API listeners.
 
 **Confidence**: the Ableton -> TILES SysEx wire format is exact and
-firmware-verified. The Note-On/CC reception mechanism for the other
-direction matches this project's own already-confirmed-working
-transport CCs and Ableton's own bundled Launchpad script exactly, so
-confidence there is materially higher than the custom SysEx path it
-replaced -- but real-hardware confirmation of THIS specific version is
-still pending as of this writing. The Live API calls themselves
+firmware-verified. The CC reception mechanism for the other direction
+matches this project's own already-confirmed-working transport CCs
+exactly, and avoids the real, confirmed flaw the Note-On version hit
+(leaking through as playable/recordable note content on any track
+with this port's Track input enabled) -- but real-hardware
+confirmation of THIS specific version is still pending as of this
+writing. The Live API calls themselves
 (`add_playing_status_listener`, `song().stop_all_clips()`,
 `Clip.stop()`, `SessionComponent`/`register_components()`) are each
 individually confirmed against Ableton's own bundled Remote Script

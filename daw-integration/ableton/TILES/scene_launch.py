@@ -9,8 +9,8 @@ ableton live keep it simple for now, push triggers it... can we pull
 the colors of the scenes from ableton? and light behaviour to feel
 intuitive?"
 
-Architecture, rewritten after several real-hardware rounds with no
-confirmed successful delivery of any TILES -> Ableton action (fire,
+Architecture, rewritten twice after several real-hardware rounds with
+no confirmed successful delivery of any TILES -> Ableton action (fire,
 launch scene, stop all, stop one clip): "master stop doesnt work at
 all, individual start and stop doesnt work and hasent for the past few
 pushes. i need you to look at how a lounchapd works or abletoun push
@@ -18,34 +18,57 @@ works to pull the exxact same standardizre behaviour." The TILES ->
 Ableton direction used to be a custom SysEx sub-protocol, handled by a
 `handle_sysex()` override -- despite passing every review against
 Ableton's own real Remote Script source, it never had one single
-confirmed successful round-trip on real hardware. It's been replaced
-with plain Note-On/CC messages bound through `ButtonElement` +
-`add_value_listener()` -- the EXACT mechanism TILES.py's own transport
-buttons (play/stop/record) already use, with actual confirmed delivery
-on this exact hardware/Ableton/script combination, and the same
-mechanism real Launchpad-family Remote Scripts use for their own
-hardware buttons (confirmed against Ableton's bundled
-Launchpad/MainSelectorComponent.py: a `ButtonElement` handed to
-`clip_slot.set_launch_button()`/`scene.set_launch_button()`). This
-file keeps its own fire/stop logic here rather than handing it to
-`SessionComponent`/`ClipSlotComponent` directly -- those components'
-own LED feedback is a small quantized color palette, and keeping this
-file's own logic preserves real per-pad RGB feedback (see below) --
-but the RECEPTION half now matches the standard approach exactly.
+confirmed successful round-trip on real hardware.
+
+First rewrite replaced it with plain Note-On, matching how a REAL
+Launchpad sends its own grid (confirmed against Ableton's bundled
+Launchpad.py: `ConfigurableButtonElement(is_momentary, MIDI_NOTE_TYPE,
+0, ...)`). Real feedback caught the real flaw: "you fully broke how
+clip lounching works now its just sending regular midi notes for me to
+map. thats not how this feature operates ever in any device." A real
+Launchpad is a DEDICATED grid controller that never sends musical note
+content at all, so nobody ever enables that port's "Track" MIDI input
+in Ableton. TILES is not that -- this exact same USB-MIDI port also
+carries real musical Note-On for melodic/chord/guitar/sequencer play,
+so the user's own instrument track almost certainly already has this
+port's Track input enabled (typically listening on "All Channels,"
+required for real MPE playback) -- meaning a Scene Launch "button"
+Note-On, on ANY channel, is ALSO delivered to that track as ordinary
+playable/recordable note content, on top of whatever this script's own
+`ButtonElement` does with it. Being claimed by the Control Surface's
+Remote path and ALSO reaching a Track's input are not mutually
+exclusive in Ableton. A Control Change never has this problem --
+Ableton never treats a CC as note/audio content for an instrument
+regardless of Track/Remote routing, exactly why the transport CCs
+below have always been safe on this same port. Second rewrite moved
+grid-touch/stop-touch off Note-On entirely, onto CC, same as
+everything else here already was -- see NOTE_GRID_BASE's own
+replacement, CC_GRID_BASE, for the current wire format.
+
+Both rewrites bind real `ButtonElement`s via `add_value_listener()` --
+the same mechanism TILES.py's own transport buttons (play/stop/record)
+already use, with actual confirmed delivery on this exact hardware/
+Ableton/script combination. This file keeps its own fire/stop logic
+here rather than handing it to `SessionComponent`/`ClipSlotComponent`
+directly -- those components' own LED feedback is a small quantized
+color palette, and keeping this file's own logic preserves real
+per-pad RGB feedback (see below).
 
 The Ableton -> TILES direction (clip/scene color + state) is
 UNCHANGED, still plain SysEx -- that direction was never reported
-broken, and a real RGB color feed has no equivalent in a single
-CC/Note value anyway.
+broken, and a real RGB color feed has no equivalent in a single CC
+value anyway.
 
 Wire protocol summary:
 
-    TILES -> Ableton (plain Note-On/CC, TILES_MASTER_CHANNEL, no SysEx):
-        Note-On, note = NOTE_GRID_BASE + pad (61-84)   grid touch: fire
-            that pad's clip (columns 1-5) or launch that pad's whole
-            scene (column 6, OP_SCENE_LAUNCH_COL in op_mode.c)
-        Note-On, note = NOTE_STOP_BASE + pad (101-124)  deep-press stop
-            of that one clip (columns 1-5 only)
+    TILES -> Ableton (plain CC, TILES_MASTER_CHANNEL, no SysEx, no
+    Note-On -- see above for why Note-On specifically doesn't work here):
+        CC, controller = CC_GRID_BASE + pad (11-34), 127 then 0
+            grid touch: fire that pad's clip (columns 1-5) or launch
+            that pad's whole scene (column 6, OP_SCENE_LAUNCH_COL in
+            op_mode.c)
+        CC, controller = CC_STOP_BASE + pad (41-64), 127 then 0
+            deep-press stop of that one clip (columns 1-5 only)
         CC CC_MASTER_STOP (105), value 127 then 0        stop all clips
         CC CC_TRACK_OFFSET (106), value = offset         visible track
             window changed (session ring + grid-touch track mapping)
@@ -62,9 +85,9 @@ Wire protocol summary:
     toward 8-bit on receipt (see op_mode.c's own scene_on_sysex()),
     losing the bottom bit, not the top.
 
-A grid-touch/stop Note-On's pad number maps to (column, row) exactly
-like op_mode.c's own handle_scene_launch_taps() does (column = (pad-1)
-% 6 + 1, row/scene = (pad-1) // 6); the real track index is column-1
+A grid-touch/stop CC's pad number maps to (column, row) exactly like
+op_mode.c's own handle_scene_launch_taps() does (column = (pad-1) % 6
++ 1, row/scene = (pad-1) // 6); the real track index is column-1
 offset by whatever CC_TRACK_OFFSET last reported (see
 _pad_to_col_track_scene() below) -- this script has to track that
 itself now, the same thing op_mode.c's own s_scene_track_offset already
@@ -91,7 +114,7 @@ version).
 """
 
 from _Framework.ButtonElement import ButtonElement
-from _Framework.InputControlElement import MIDI_CC_TYPE, MIDI_NOTE_TYPE
+from _Framework.InputControlElement import MIDI_CC_TYPE
 from _Framework.SessionComponent import SessionComponent
 
 # Must match op_mode.c's own TILES_MIDI_MPE_MASTER_CHANNEL (0 = MIDI
@@ -100,18 +123,20 @@ from _Framework.SessionComponent import SessionComponent
 # imports this module).
 TILES_MASTER_CHANNEL = 0
 
-# Must match op_mode.c's own OP_SCENE_NOTE_GRID_BASE/_STOP_BASE and
-# OP_SCENE_CC_MASTER_STOP/_TRACK_OFFSET -- keep all four in sync with
-# that file if they ever change there.
-NOTE_GRID_BASE = 60
-NOTE_STOP_BASE = 100
+# Must match op_mode.c's own OP_SCENE_CC_GRID_BASE/_STOP_BASE/
+# _MASTER_STOP/_TRACK_OFFSET -- keep all four in sync with that file
+# if they ever change there. All CC, not Note-On -- see this module's
+# own docstring for why Note-On specifically doesn't work on this
+# port.
+CC_GRID_BASE = 10
+CC_STOP_BASE = 40
 CC_MASTER_STOP = 105
 CC_TRACK_OFFSET = 106
 
 # Must match TILES_NUM_PADS (board_layout.h) -- every pad on the grid,
 # used to build one grid-touch and one stop-touch ButtonElement per
 # pad (the stop ones for column-6 pads are simply never triggered,
-# op_mode.c only ever sends that note for track columns 1-5).
+# op_mode.c only ever sends that CC for track columns 1-5).
 NUM_GRID_PADS = 24
 
 SYSEX_MFR_ID = 0x7D
@@ -325,19 +350,22 @@ class SceneLaunch(object):
         # wire ITS OWN child ClipSlotComponents into the same cycle.
         self._control_surface.register_components(self._session)
 
-        # ---- TILES -> Ableton: plain Note-On/CC, see this module's own
-        # docstring for why this replaced a custom SysEx sub-protocol
-        # that never had one confirmed successful delivery. Mirrors
-        # TILES.py's own transport-button setup exactly (ButtonElement
-        # + add_value_listener), the one reception mechanism with
-        # actual confirmed real-hardware delivery on this project. ----
+        # ---- TILES -> Ableton: plain CC, see this module's own docstring
+        # for why this replaced a custom SysEx sub-protocol (never had
+        # one confirmed successful delivery) and then a Note-On version
+        # of this same migration (leaked through as playable/recordable
+        # note content on any track with this port's Track input
+        # enabled). Mirrors TILES.py's own transport-button setup
+        # exactly (ButtonElement + add_value_listener), the one
+        # reception mechanism with actual confirmed real-hardware
+        # delivery on this project. ----
         for pad in range(1, NUM_GRID_PADS + 1):
-            grid_button = ButtonElement(True, MIDI_NOTE_TYPE, TILES_MASTER_CHANNEL, NOTE_GRID_BASE + pad)
+            grid_button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, CC_GRID_BASE + pad)
             grid_cb = self._make_grid_touch_callback(pad)
             grid_button.add_value_listener(grid_cb)
             self._grid_button_listeners.append((grid_button, grid_cb))
 
-            stop_button = ButtonElement(True, MIDI_NOTE_TYPE, TILES_MASTER_CHANNEL, NOTE_STOP_BASE + pad)
+            stop_button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, CC_STOP_BASE + pad)
             stop_cb = self._make_stop_touch_callback(pad)
             stop_button.add_value_listener(stop_cb)
             self._stop_button_listeners.append((stop_button, stop_cb))
@@ -402,10 +430,10 @@ class SceneLaunch(object):
         return lambda value: self._on_stop_touch(pad, value)
 
     def _on_grid_touch(self, pad, value):
-        # Note-On then immediately Note-Off, same on/off pair
-        # convention the transport CCs already use -- only the press
-        # (value > 0) is a real action, the release that follows is
-        # just that trigger's own tail end.
+        # CC value 127 then immediately 0, same on/off pair convention
+        # the transport CCs already use -- only the press (value > 0)
+        # is a real action, the release that follows is just that
+        # trigger's own tail end.
         if value <= 0:
             return
         col, track_index, scene_index = self._pad_to_col_track_scene(pad)

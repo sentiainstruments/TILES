@@ -108,12 +108,20 @@ work and hasent for the past few pushes. i need you to look at how a
 lounchapd works or abletoun push works to pull the exxact same
 standardizre behaviour" -- every TILES -> Ableton message (fire clip,
 launch scene, stop all, stop one clip, track-offset sync) moved off a
-custom SysEx sub-protocol onto plain Note-On/CC, matching real
-Launchpad-family Remote Scripts (and this project's own already-
-working transport CCs) exactly. Ableton -> TILES color feedback is
-still SysEx, unchanged. See `scene_launch.py`'s own module docstring
-and `shared/protocol/README.md`'s "Scene Launch" section for the full
-wire format.
+custom SysEx sub-protocol onto plain CC. A first attempt used Note-On
+instead (matching how a real Launchpad sends its own grid), but real
+feedback caught the actual problem: "you fully broke how clip
+lounching works now its just sending regular midi notes for me to
+map. thats not how this feature operates ever in any device." A real
+Launchpad never sends musical notes at all, so nobody enables its
+port's Track input in Ableton -- TILES's port ALSO carries real notes
+for melodic play, so the user's own instrument track (listening on
+"All Channels" for MPE) receives those "button" Note-Ons too, as
+ordinary playable content. CC has no such conflict, matching this
+project's own already-working transport CCs exactly. Ableton -> TILES
+color feedback is still SysEx, unchanged. See `scene_launch.py`'s own
+module docstring and `shared/protocol/README.md`'s "Scene Launch"
+section for the full wire format.
 
 **Debugging**: real feedback found colors weren't showing on first
 try -- root cause was `scene_launch.py` monkey-patching an attribute
