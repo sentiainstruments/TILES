@@ -340,6 +340,15 @@ bool tiles_op_mode_owns_pad(uint8_t logical_pad);
  * "static" a thing as a sequencer pattern doing the same). */
 bool tiles_op_mode_is_sequencer_active(void);
 
+/* True only while OP_MODE_MELODIC is the active mode -- deliberately
+ * narrower than tiles_op_mode_owns_pad_grid()/_owns_pad(), which also
+ * let chord/guitar mode's own melody pads through the same real-strike
+ * pipeline. Board-2-only melodic harmonics (services/expression.c,
+ * TILES_MELODIC_HARMONICS_ENABLED) needs exactly this distinction --
+ * real feedback scoped the feature to melodic mode specifically, not
+ * "everywhere a real note can play." */
+bool tiles_op_mode_is_melodic_active(void);
+
 /* True while any of this module's own sub-views is open: the top-level
  * mode picker, the (now-universal, not melodic-only) scale picker,
  * sequencer mode's own pattern bank, a sequencer per-step pitch/

@@ -7787,5 +7787,72 @@ not its code.
       Clip-level color/playing_status listeners (re)subscribed --
       `_on_has_clip_changed()` was only ever called once, at connect.
       It's now what `has_clip` calls.
+- **Melodic harmonics, board 2 only (experiment, off by default).** Real
+  feedback: "i wanna add harmonics into melodic mode. like capacitive
+  touch only plays the respective harmonics of the note being played by
+  a pad with real pressure. this behaviour only happens when a single
+  pad is being pressed not in poliphony, also fine tune palm rejection
+  and actidental touches." No established hardware convention for this
+  exists (researched) -- closest musical analogue is a piano's
+  sympathetic resonance, not guitar harmonics (positional on one
+  string; this is cross-pad). Design confirmed with the player via
+  4 questions rather than guessed, all answered with the recommended
+  option:
+  - **Mapping by touch order, not position**: the 1st other pad touched
+    (while eligible) sounds the octave (2nd harmonic), 2nd sounds
+    octave+fifth (3rd), etc. -- position-relative-to-the-fundamental was
+    rejected since a diatonic scale layout doesn't land pads on true
+    harmonic ratios and a key/scale change would reshuffle "which pad
+    is which harmonic."
+  - **Harmonics 2-5 only**, fixed gentle velocity (`HARMONIC_VELOCITY`
+    40) regardless of the fundamental's own live pressure -- higher
+    partials detune and cluster too close together in 12-TET to read
+    as distinct pitches; live-pressure-following volume was the
+    rejected, more-real-but-more-moving-parts alternative.
+  - **A hard press on a harmonic pad promotes it to a real,
+    independent note** -- this section doesn't special-case that at
+    all, the pad's own unmodified `PAD_STATE_IDLE` -> `AWAITING_STRIKE`
+    -> `NOTE_ON` pipeline just runs as it always has; "not in
+    polyphony" enforces itself the next scan once `find_sole_held_pad()`
+    stops finding exactly one held pad, tearing every harmonic voice
+    down.
+  - **Compile-time flag** (`TILES_MELODIC_HARMONICS_ENABLED`,
+    `services/expression.c`), default 0, no runtime toggle -- flash-
+    persisted settings don't exist yet, so a runtime flag would reset
+    to off on every boot, defeating "just live on this board." Flip to
+    1, build, flash ONLY board 2, flip back to 0 before the next commit
+    -- committed state is always off.
+  - **Channel budget**: harmonics never steal a Member Channel from a
+    real note and can always be stolen back by one -- reuses this
+    file's existing "reserved channel" mechanism (the same one
+    protecting the sequencer's own lanes in `claim_mpe_channel()`)
+    rather than teaching that carefully-tuned stealing logic a second
+    kind of steal. Real cost: the last `HARMONIC_MAX_VOICES` (4) of 15
+    Member Channels are permanently held back from real polyphony on
+    this build, 11 left for genuine notes.
+  - **Palm/accidental-touch rejection**, scoped ONLY to this new path
+    (the real note pipeline, every other pad, every other board, is
+    completely untouched -- `MIN_STRIKE_DEPTH_DELTA` already requires
+    genuine pressure there, so a bare touch was always harmless
+    everywhere except here): a pad must dwell touched for
+    `HARMONIC_TOUCH_DWELL_MS` (25ms) before it's even a candidate, and
+    if more than `HARMONIC_PALM_CLUSTER_MAX` (2) candidates all cleared
+    that dwell gate within `HARMONIC_PALM_CLUSTER_MS` (40ms) of each
+    other, the whole cluster is treated as one incidental contact (a
+    resting palm's own contact patch) and none of them get a voice --
+    genuine multi-finger touches from a spread hand land with real
+    human timing stagger, a flat palm doesn't. Errs toward staying
+    silent, the right side for something meant to be an optional
+    shimmer under the real note, not the note itself. `printf`-traces
+    candidate-cluster size per scan over the USB CDC console
+    specifically so these two constants can actually be tuned against
+    what a real hand does, once felt on real hardware.
+  - **Not built**: CV/gate deliberately does NOT receive harmonic
+    notes (`tiles_cv_gate_note_on/off()` are never called from this
+    section) -- CV/gate is explicitly monophonic, last-note-priority;
+    a harmonic voice competing for that single analog output would let
+    a light touch steal the pitch/gate signal away from the genuine
+    fundamental. Unverified on real hardware -- this whole feature is a
+    first pass, built to spec but never felt.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

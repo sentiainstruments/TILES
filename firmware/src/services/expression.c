@@ -18,6 +18,19 @@
 #include <math.h>
 #include <stdio.h>
 
+/* Real feedback (board 2 only, an experiment -- see this file's own
+ * "Melodic harmonics" section further below): "i wanna add harmonics
+ * into melodic mode. like capacitive touch only plays the respective
+ * harmonics of the note being played by a pad with real pressure. this
+ * behaviour only happens when a single pad is being pressed not in
+ * poliphony." Compile-time, default OFF -- this build ships to every
+ * board, and this is the one thing that must NOT: flip to 1, build,
+ * flash ONLY board 2, then flip back to 0 before committing again. No
+ * runtime toggle -- flash-persisted settings don't exist in this
+ * codebase yet, so a runtime flag would silently reset to off on every
+ * boot, which defeats "just live on this board." */
+#define TILES_MELODIC_HARMONICS_ENABLED 0
+
 /* ============================================================================
  * Strike detection -- gated on real measured depth travel
  * (MIN_STRIKE_DEPTH_DELTA below), not touch alone. Velocity is derived
@@ -1157,6 +1170,332 @@ typedef struct {
 static mpe_channel_slot_t s_mpe_channels[TILES_MIDI_MPE_NUM_MEMBER_CHANNELS];
 static uint32_t s_next_mpe_claim_seq = 1u;
 
+#if TILES_MELODIC_HARMONICS_ENABLED
+/* ============================================================================
+ * Melodic harmonics (board 2 only -- see TILES_MELODIC_HARMONICS_ENABLED's
+ * own comment above). Real feedback: "capacitive touch only plays the
+ * respective harmonics of the note being played by a pad with real
+ * pressure. this behaviour only happens when a single pad is being
+ * pressed not in poliphony." No established hardware convention for
+ * this exists (checked) -- closest musical analogue is a piano's
+ * sympathetic resonance, not guitar harmonics (those are positional on
+ * one string; this is cross-pad). Design confirmed with the player
+ * rather than guessed:
+ *
+ *   - Mapping: by TOUCH ORDER, not pad position. The 1st other pad
+ *     touched (while eligible) sounds the octave (2nd harmonic), the
+ *     2nd sounds the octave+fifth (3rd), and so on through
+ *     HARMONIC_SEMITONES below. Position-relative-to-the-fundamental
+ *     was the rejected alternative -- it reads more "physical," but a
+ *     diatonic scale layout doesn't land pads on true harmonic ratios
+ *     and a key/scale change would silently reshuffle which pad is
+ *     "which harmonic."
+ *   - Harmonics 2-5 only (octave / octave+fifth / 2 octaves / 2
+ *     octaves+major third) -- higher partials detune noticeably and
+ *     cluster too close together in 12-tone equal temperament to read
+ *     as distinct pitches.
+ *   - Fixed, gentle velocity (HARMONIC_VELOCITY) regardless of how hard
+ *     the fundamental is pressed -- the rejected alternative (volume
+ *     follows the fundamental's live pressure) is more true to real
+ *     sympathetic resonance but adds a second continuous-controller
+ *     stream this first version deliberately skips.
+ *   - A harmonic pad that gets pressed hard enough to cross this file's
+ *     own real-strike threshold (MIN_STRIKE_DEPTH_DELTA) is left
+ *     completely alone by this section -- its OWN, unmodified
+ *     PAD_STATE_IDLE -> AWAITING_STRIKE -> NOTE_ON pipeline just runs
+ *     as it always has, the same real-strike code every other pad on
+ *     every other board uses, and promotes it to a genuine independent
+ *     note. This section only has to notice that on the very next
+ *     scan (find_sole_held_pad() below stops returning exactly one
+ *     pad once a second note is genuinely held) and tear down every
+ *     harmonic voice in response -- "not in polyphony" enforces
+ *     itself, no special-casing needed for the promotion itself.
+ *
+ * Channel budget: harmonics never steal a Member Channel from a real
+ * note, and a real note may always steal one back from a harmonic (see
+ * harmonic_channel_is_reserved()'s own comment) -- reuses this file's
+ * existing "reserved channel" mechanism (the same one that already
+ * protects the sequencer's own lanes in claim_mpe_channel() below)
+ * rather than teaching that carefully-tuned stealing logic a second,
+ * different kind of steal. The real cost: HARMONIC_MAX_VOICES of the
+ * 15 Member Channels are permanently held back from real polyphony
+ * while this build is running, 11 left for genuine notes -- a real,
+ * explicit tradeoff of this being scoped to one board's experiment
+ * rather than the default build.
+ */
+
+/* 2nd through 5th harmonic, natural harmonic series in semitones above
+ * the fundamental, rounded to the nearest equal-tempered semitone:
+ * +12 octave, +19 octave+fifth, +24 two octaves, +28 two octaves+major
+ * third. Index 0 = the 1st OTHER pad touched, per this section's own
+ * header comment. */
+#define HARMONIC_MAX_VOICES 4u
+static const uint8_t HARMONIC_SEMITONES[HARMONIC_MAX_VOICES] = {12u, 19u, 24u, 28u};
+
+/* Fixed, deliberately gentle -- roughly a third of full scale, meant to
+ * read as an overtone shimmering under the real note, not as a second
+ * equal voice. Unmeasured, like every first-pass constant in this
+ * file -- not felt on real hardware yet. */
+#define HARMONIC_VELOCITY 40u
+
+/* Real feedback: "also fine tune palm rejection and accidental
+ * touches." No dedicated palm-rejection heuristic exists anywhere else
+ * in this file -- MIN_STRIKE_DEPTH_DELTA already requires genuine
+ * pressure before a note fires, so a bare touch was always harmless
+ * everywhere else. Harmonics change that: on this board, a bare touch
+ * now audibly does something, so an incidental brush or a resting palm
+ * needs its own filtering, scoped ONLY to the harmonic path below --
+ * the real note pipeline (every other pad, every other board) is
+ * completely untouched by either constant here.
+ *
+ *   - HARMONIC_TOUCH_DWELL_MS: a pad must stay continuously touched
+ *     this long before it's even considered for a harmonic voice. A
+ *     deliberate light touch for harmonic playing rests there; a
+ *     fingertip grazing past a pad while reaching for the fundamental
+ *     doesn't.
+ *   - HARMONIC_PALM_CLUSTER_MS / _PALM_CLUSTER_MAX: if more than
+ *     _MAX pads all clear that dwell gate within _CLUSTER_MS of each
+ *     other, the whole cluster is treated as one incidental contact
+ *     (most plausibly a palm or the heel of the hand landing flat) and
+ *     NONE of them get a harmonic voice this cluster -- genuine
+ *     intentional multi-finger touches from a spread hand land with
+ *     real human timing stagger, not within single-digit-to-low-tens
+ *     of milliseconds of each other the way a flat palm's contact
+ *     patch does.
+ * Both unmeasured, like every first-pass constant in this file -- not
+ * tuned against a real palm on real hardware yet; the numbers here are
+ * a starting point to adjust once board 2 is actually being played. */
+#define HARMONIC_TOUCH_DWELL_MS 25u
+#define HARMONIC_PALM_CLUSTER_MS 40u
+#define HARMONIC_PALM_CLUSTER_MAX 2u
+
+typedef struct {
+    bool active;
+    uint8_t pad;          /* 1..TILES_NUM_PADS, valid only while active */
+    uint8_t note;
+    uint8_t midi_channel;
+} harmonic_voice_t;
+
+static harmonic_voice_t s_harmonic_voices[HARMONIC_MAX_VOICES];
+/* 0 = no harmonics session in progress. Set the instant find_sole_held_
+ * pad() below finds exactly one held pad; cleared (and every active
+ * voice torn down) the instant it stops being exactly that same pad. */
+static uint8_t s_harmonic_fundamental_pad;
+
+/* The LAST HARMONIC_MAX_VOICES Member Channels, permanently carved out
+ * for harmonics only -- see this section's own header comment on why a
+ * separate reserved range, not a second stealing policy, is what keeps
+ * a harmonic from ever being able to take a channel a real note needs.
+ * claim_mpe_channel() below skips every channel this covers, exactly
+ * like it already skips the sequencer's own reserved lanes. */
+static bool harmonic_channel_is_reserved(uint8_t channel) {
+    return channel > (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + TILES_MIDI_MPE_NUM_MEMBER_CHANNELS -
+                                1u - HARMONIC_MAX_VOICES);
+}
+
+/* Pad currently in PAD_STATE_NOTE_ON, IF exactly one is -- 0 if none or
+ * more than one are held. O(24), cheap, called once per scan. */
+static uint8_t find_sole_held_pad(void) {
+    uint8_t found = 0u;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        if (s_pads[i].state == PAD_STATE_NOTE_ON) {
+            if (found != 0u) {
+                return 0u; /* a second held pad -- not sole, stop looking */
+            }
+            found = (uint8_t)(i + 1u);
+        }
+    }
+    return found;
+}
+
+static void end_harmonic_voice(uint8_t idx) {
+    harmonic_voice_t *v = &s_harmonic_voices[idx];
+    if (!v->active) {
+        return;
+    }
+    tiles_midi_note_off(v->midi_channel, v->note);
+    /* Deliberately NOT tiles_cv_gate_note_off()/_note_on() below -- CV/
+     * gate is explicitly monophonic, tracking whichever note claimed it
+     * most recently (see cv_gate.h's own last-note-priority arbitration).
+     * A harmonic voice competing for that same single analog output
+     * would let a light touch steal the pitch/gate signal away from the
+     * genuine fundamental note it's supposed to be shimmering under --
+     * exactly the kind of interference a "quiet overtone" feature must
+     * not cause. CV/gate only ever reflects real, pressed notes. */
+    v->active = false;
+}
+
+static void end_all_harmonic_voices(void) {
+    for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
+        end_harmonic_voice(i);
+    }
+    s_harmonic_fundamental_pad = 0u;
+}
+
+/* No stealing in either direction: scans only the reserved range above,
+ * and simply returns 0xFF (no voice starts) if every reserved channel
+ * already holds a harmonic -- see this section's own header comment on
+ * why harmonics are deliberately the lowest-priority thing on this
+ * board's MPE bus. */
+static uint8_t claim_harmonic_channel(void) {
+    for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
+        uint8_t channel = (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i);
+        if (harmonic_channel_is_reserved(channel) && !s_mpe_channels[i].in_use) {
+            s_mpe_channels[i].in_use = true;
+            /* owner_pad = 0 -- a real note's pad is always 1..24 (see
+             * mpe_channel_slot_t's own comment), so this both reads as
+             * "not owned by a real held pad" and can never collide with
+             * a genuine pad number. claim_mpe_channel() below already
+             * skips this whole range for real notes regardless, so
+             * nothing ever inspects this field for a harmonic-held
+             * channel -- set purely so a slot showing in_use=true is
+             * never mistaken for stale/uninitialized data if this file
+             * is debugged later. */
+            s_mpe_channels[i].owner_pad = 0u;
+            s_mpe_channels[i].claim_seq = s_next_mpe_claim_seq++;
+            return channel;
+        }
+    }
+    return 0xFFu;
+}
+
+/* Called once per scan, after the main per-pad loop below (so every
+ * pad's PAD_STATE_NOTE_ON is current for this tick first). Real
+ * feedback's full gesture in one pass:
+ *   1. Exactly one pad held elsewhere in this file -> that's the
+ *      fundamental; anything else (none held, or a second pad just
+ *      promoted to a real note) ends every harmonic voice outright.
+ *   2. For every OTHER pad currently touched and not itself mid-strike
+ *      or already a real note, start a harmonic voice in the first free
+ *      slot if it doesn't have one yet.
+ *   3. For every pad with an active voice that's no longer eligible
+ *      (released, or promoted to a real note itself), end it.
+ */
+static void scan_melodic_harmonics(uint32_t now_ms) {
+    if (!tiles_op_mode_is_melodic_active()) {
+        if (s_harmonic_fundamental_pad != 0u) {
+            end_all_harmonic_voices();
+        }
+        return;
+    }
+
+    uint8_t fundamental = find_sole_held_pad();
+    if (fundamental != s_harmonic_fundamental_pad) {
+        end_all_harmonic_voices();
+        s_harmonic_fundamental_pad = fundamental;
+    }
+    if (fundamental == 0u) {
+        return;
+    }
+    uint8_t fundamental_note = s_pads[fundamental - 1u].active_note;
+
+    /* End any voice whose pad is no longer eligible FIRST, so a pad that
+     * just released frees its slot for a different pad to claim this
+     * same scan rather than waiting a tick. */
+    for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
+        harmonic_voice_t *v = &s_harmonic_voices[i];
+        if (!v->active) {
+            continue;
+        }
+        pad_expr_t *ps = &s_pads[v->pad - 1u];
+        if (ps->state == PAD_STATE_NOTE_ON || !tiles_touch_is_touched(v->pad)) {
+            end_harmonic_voice(i);
+        }
+    }
+
+    /* First pass: which pads are even candidates this scan (touched,
+     * not the fundamental, not already a real note or an existing
+     * harmonic voice, and past HARMONIC_TOUCH_DWELL_MS) -- built before
+     * any of them can claim a channel, so the cluster veto below sees
+     * the WHOLE burst at once rather than reacting to its own partial
+     * progress through the pad loop. */
+    bool candidate[TILES_NUM_PADS + 1u] = {false}; /* 1-indexed, [0] unused */
+    uint8_t candidate_count = 0u;
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        if (pad == fundamental) {
+            continue;
+        }
+        pad_expr_t *ps = &s_pads[pad - 1u];
+        if (ps->state == PAD_STATE_NOTE_ON || !tiles_touch_is_touched(pad)) {
+            continue;
+        }
+        if ((now_ms - ps->touch_start_ms) < HARMONIC_TOUCH_DWELL_MS) {
+            continue; /* hasn't dwelled long enough yet -- try again next scan */
+        }
+        bool already_voiced = false;
+        for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
+            if (s_harmonic_voices[i].active && s_harmonic_voices[i].pad == pad) {
+                already_voiced = true;
+                break;
+            }
+        }
+        if (already_voiced) {
+            continue;
+        }
+        candidate[pad] = true;
+        candidate_count++;
+    }
+
+    if (candidate_count > 0u) {
+        printf("[expression] harmonics: %u candidate pad(s) this scan (fundamental=%u)\n",
+               (unsigned)candidate_count, (unsigned)fundamental);
+    }
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        if (!candidate[pad]) {
+            continue;
+        }
+        pad_expr_t *ps = &s_pads[pad - 1u];
+        /* Palm/accidental-contact veto -- see HARMONIC_PALM_CLUSTER_MS's
+         * own comment. Counts every OTHER candidate whose touch began
+         * within the cluster window of THIS one; a real deliberate touch
+         * can still legitimately be part of a rejected cluster (this
+         * errs toward "when in doubt, stay silent," not toward "when in
+         * doubt, sound a note" -- the right side to err on for something
+         * meant to be a subtle, optional shimmer, not the note itself). */
+        uint8_t nearby = 0u;
+        for (uint8_t other = 1u; other <= TILES_NUM_PADS; other++) {
+            if (other == pad || !candidate[other]) {
+                continue;
+            }
+            uint32_t other_start = s_pads[other - 1u].touch_start_ms;
+            uint32_t delta =
+                (ps->touch_start_ms >= other_start) ? (ps->touch_start_ms - other_start) : (other_start - ps->touch_start_ms);
+            if (delta <= HARMONIC_PALM_CLUSTER_MS) {
+                nearby++;
+            }
+        }
+        if (nearby >= HARMONIC_PALM_CLUSTER_MAX) {
+            continue;
+        }
+        int8_t free_slot = -1;
+        for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
+            if (!s_harmonic_voices[i].active) {
+                free_slot = (int8_t)i;
+                break;
+            }
+        }
+        if (free_slot < 0) {
+            continue;
+        }
+        uint8_t channel = claim_harmonic_channel();
+        if (channel == 0xFFu) {
+            continue; /* every reserved channel already holds a harmonic */
+        }
+        int note = (int)fundamental_note + (int)HARMONIC_SEMITONES[free_slot];
+        if (note > 127) {
+            continue; /* out of MIDI range this high -- silently skip, don't clamp into a wrong pitch */
+        }
+        harmonic_voice_t *v = &s_harmonic_voices[free_slot];
+        v->active = true;
+        v->pad = pad;
+        v->note = (uint8_t)note;
+        v->midi_channel = channel;
+        tiles_midi_note_on(channel, v->note, HARMONIC_VELOCITY);
+    }
+}
+#endif /* TILES_MELODIC_HARMONICS_ENABLED */
+
+
 /* ---- Non-MPE compatibility mode -----------------------------------------
  * Real feedback: "lets make sure the pitch bend works with non mpe
  * layouts meaning pitch bend wheel... look for the max most
@@ -1205,6 +1544,12 @@ void tiles_expression_init(void) {
     s_non_mpe_owner_pad = 0u;
     s_pitch_bend_enabled = false;
     s_expression_muted = false;
+#if TILES_MELODIC_HARMONICS_ENABLED
+    for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
+        s_harmonic_voices[i] = (harmonic_voice_t){0};
+    }
+    s_harmonic_fundamental_pad = 0u;
+#endif
 }
 
 /* Splits a raw Hall sample into its X and Y components and total field
@@ -1929,7 +2274,11 @@ void tiles_expression_force_release_all(void) {
 static uint8_t claim_mpe_channel(uint8_t pad) {
     for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
         uint8_t channel = (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i);
-        if (!s_mpe_channels[i].in_use && !tiles_op_mode_sequencer_channel_is_reserved(channel)) {
+        if (!s_mpe_channels[i].in_use && !tiles_op_mode_sequencer_channel_is_reserved(channel)
+#if TILES_MELODIC_HARMONICS_ENABLED
+            && !harmonic_channel_is_reserved(channel)
+#endif
+        ) {
             s_mpe_channels[i].in_use = true;
             s_mpe_channels[i].owner_pad = pad;
             s_mpe_channels[i].claim_seq = s_next_mpe_claim_seq++;
@@ -1942,6 +2291,11 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
         if (tiles_op_mode_sequencer_channel_is_reserved((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i))) {
             continue;
         }
+#if TILES_MELODIC_HARMONICS_ENABLED
+        if (harmonic_channel_is_reserved((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i))) {
+            continue;
+        }
+#endif
         if (oldest_idx == TILES_MIDI_MPE_NUM_MEMBER_CHANNELS || s_mpe_channels[i].claim_seq < s_mpe_channels[oldest_idx].claim_seq) {
             oldest_idx = i;
         }
@@ -2628,4 +2982,7 @@ void tiles_expression_scan(void) {
             }
         }
     }
+#if TILES_MELODIC_HARMONICS_ENABLED
+    scan_melodic_harmonics(now_ms);
+#endif
 }

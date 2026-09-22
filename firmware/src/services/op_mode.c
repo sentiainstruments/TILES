@@ -5298,6 +5298,10 @@ bool tiles_op_mode_owns_octave_buttons(void) {
     return tiles_op_mode_owns_pad_grid() || s_active_mode == OP_MODE_GUITAR;
 }
 
+bool tiles_op_mode_is_melodic_active(void) {
+    return s_active_mode == OP_MODE_MELODIC;
+}
+
 bool tiles_op_mode_is_sequencer_active(void) {
     /* Real feedback: "is there anything needed to stop stuck niotes?"
      * -- while investigating that, found a related gap: this used to
