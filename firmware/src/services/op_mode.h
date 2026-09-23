@@ -431,8 +431,14 @@ bool tiles_op_mode_song_capture_is_active(void);
  * screen) is what's actually showing. Deferred, not forgotten. */
 bool tiles_op_mode_song_capture_is_note_sounding(uint8_t note);
 
-/* True if `note` is currently held by an incoming MIDI Note-On (any
- * channel) AND melodic mode is the active mode -- real feedback: "in
+/* Incoming-note echo layers: 0 = the primary TILES DISPLAY (any MIDI
+ * channel except 2), 1 = the secondary (MIDI channel 2). Real feedback:
+ * "make the device work on 2 channels at once, if 2 devices are on then
+ * the secondary does color red." */
+#define TILES_OP_MODE_ECHO_LAYERS 2u
+
+/* True if `note` is currently held by an incoming MIDI Note-On on echo
+ * `layer` (see above) AND melodic mode is the active mode -- real feedback: "in
  * midi melodic mode is there any way we could read the playing melody
  * of the armed track and display it back on tiles?" services/lighting.c
  * checks this, per pad, against that pad's own currently-mapped note
@@ -450,14 +456,14 @@ bool tiles_op_mode_song_capture_is_note_sounding(uint8_t note);
  * section for why), and a note outside whatever's currently mapped to a
  * real pad simply has nothing to light -- both real, accepted
  * tradeoffs, not oversights. */
-bool tiles_op_mode_incoming_note_is_sounding(uint8_t note);
+bool tiles_op_mode_incoming_note_is_sounding(uint8_t layer, uint8_t note);
 
-/* Milliseconds since `note`'s most recent incoming Note-On. Only
- * meaningful while tiles_op_mode_incoming_note_is_sounding(note) is true
+/* Milliseconds since `note`'s most recent incoming Note-On on `layer`. Only
+ * meaningful while tiles_op_mode_incoming_note_is_sounding(layer, note) is true
  * (otherwise it's just time since some earlier note, or since boot).
  * services/lighting.c uses it for a brief onset flash on an echoed pad --
  * real feedback: "it needs more brightness tho." */
-uint32_t tiles_op_mode_incoming_note_age_ms(uint8_t note);
+uint32_t tiles_op_mode_incoming_note_age_ms(uint8_t layer, uint8_t note);
 
 /* True while the pattern bank's own save/delete confirmation flash is
  * currently showing, with *out_r/*out_g/*out_b set to the color it

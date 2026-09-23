@@ -4929,8 +4929,16 @@ static void render_scene_launch(uint32_t now_ms);
  * send_midi -- not anything this firmware or the Ableton Remote Script
  * configures (plain track-output routing was the first idea and can't
  * work: a track with an instrument outputs audio after it, not MIDI).
- * The device always sends on channel 1, but nothing here should depend
- * on that. Tracking regardless of mode (not
+ * Two TILES DISPLAY instances can be armed at once -- real feedback:
+ * "make the device work on 2 channels at once, if 2 devices are on then
+ * the secondary does color red." The primary sends on MIDI channel 1, the
+ * secondary on channel 2 (see the device's own header), so this file keeps
+ * TWO independent note layers, keyed by channel: MIDI channel 2 is layer 1
+ * (the secondary, red), every other channel is layer 0 (the primary, the
+ * original green -- so anything that isn't the secondary behaves exactly
+ * as it did before there were two). Layers are independent on purpose: a
+ * Note-Off on one channel must never clear a same-pitch note the other
+ * device is still holding. Tracking regardless of mode (not
  * just while melodic mode is the one on screen) matters for correctness,
  * not convenience: a Note-Off must always be able to clear whatever its
  * matching Note-On set, even if the player switched to another mode and
@@ -4959,26 +4967,32 @@ static void render_scene_launch(uint32_t now_ms);
  * not the other way around; there's no attempt to guess or approximate
  * a "nearest" pad for a note that doesn't land on one. This tradeoff was
  * raised and accepted before building this. */
-static bool s_incoming_note_sounding[128];
+static bool s_incoming_note_sounding[TILES_OP_MODE_ECHO_LAYERS][128];
 /* When each note's most recent Note-On arrived -- only meaningful while
- * s_incoming_note_sounding[note] is true. Feeds tiles_op_mode_incoming_
- * note_age_ms() below (services/lighting.c's onset flash: real feedback,
- * "it needs more brightness"). */
-static uint32_t s_incoming_note_on_ms[128];
+ * s_incoming_note_sounding[layer][note] is true. Feeds tiles_op_mode_
+ * incoming_note_age_ms() below (services/lighting.c's onset flash: real
+ * feedback, "it needs more brightness"). */
+static uint32_t s_incoming_note_on_ms[TILES_OP_MODE_ECHO_LAYERS][128];
+
+/* MIDI channel 2 (raw nibble 1) is the secondary TILES DISPLAY; see this
+ * section's header comment. */
+#define OP_ECHO_SECONDARY_CHANNEL 1u
 
 static void melodic_echo_on_midi_note(uint8_t channel, uint8_t note, uint8_t velocity, bool note_on,
                                        uint32_t now_ms) {
-    (void)channel;
     (void)velocity;
+    uint8_t layer = (channel == OP_ECHO_SECONDARY_CHANNEL) ? 1u : 0u;
     if (note_on) {
-        s_incoming_note_on_ms[note] = now_ms;
+        s_incoming_note_on_ms[layer][note] = now_ms;
     }
-    s_incoming_note_sounding[note] = note_on;
+    s_incoming_note_sounding[layer][note] = note_on;
 }
 
 static void melodic_echo_init(void) {
-    for (uint16_t i = 0; i < 128u; i++) {
-        s_incoming_note_sounding[i] = false;
+    for (uint8_t layer = 0; layer < TILES_OP_MODE_ECHO_LAYERS; layer++) {
+        for (uint16_t i = 0; i < 128u; i++) {
+            s_incoming_note_sounding[layer][i] = false;
+        }
     }
     tiles_midi_in_register_note_callback(melodic_echo_on_midi_note);
 }
@@ -4991,14 +5005,14 @@ static void melodic_echo_init(void) {
  * folding that check in here rather than exposing a second, narrower
  * "is melodic mode active" accessor just for this one caller keeps the
  * public surface smaller without losing anything. */
-bool tiles_op_mode_incoming_note_is_sounding(uint8_t note) {
-    return s_active_mode == OP_MODE_MELODIC && s_incoming_note_sounding[note];
+bool tiles_op_mode_incoming_note_is_sounding(uint8_t layer, uint8_t note) {
+    return s_active_mode == OP_MODE_MELODIC && layer < TILES_OP_MODE_ECHO_LAYERS && s_incoming_note_sounding[layer][note];
 }
 
 /* See this accessor's own declaration in op_mode.h. Unsigned subtraction
  * on purpose -- wraps correctly across the 32-bit millisecond counter. */
-uint32_t tiles_op_mode_incoming_note_age_ms(uint8_t note) {
-    return to_ms_since_boot(get_absolute_time()) - s_incoming_note_on_ms[note];
+uint32_t tiles_op_mode_incoming_note_age_ms(uint8_t layer, uint8_t note) {
+    return to_ms_since_boot(get_absolute_time()) - s_incoming_note_on_ms[layer][note];
 }
 
 void tiles_op_mode_init(bool crash_recovered) {

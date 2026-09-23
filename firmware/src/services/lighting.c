@@ -125,6 +125,15 @@
 #define TILES_LIGHTING_ECHO_SUSTAIN_TINT 0.35f
 #define TILES_LIGHTING_ECHO_FLASH_MS 180u
 
+/* Second TILES DISPLAY (MIDI channel 2, echo layer 1). Real feedback:
+ * "make the device work on 2 channels at once, if 2 devices are on then the
+ * secondary does color red." Same onset flash (white easing down over
+ * TILES_LIGHTING_ECHO_FLASH_MS) so both layers "hit" the same way, but it
+ * settles on RED -- R full, G and B at this tint of full (0 = pure red). Pure
+ * red on purpose: any equal G/B mix reads pink, and pink is the root pad's
+ * (and the device's own VIEW button's) color. Unmeasured, like the rest. */
+#define TILES_LIGHTING_ECHO_SECONDARY_SUSTAIN_TINT 0.0f
+
 /* Underglow's own fixed brightness, out of 255 -- deliberately NOT
  * scaled by the active brightness ceiling/the power state. It used to be
  * a percentage of the active ceiling (65%), which meant it rode down
@@ -302,17 +311,27 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
      * as its own distinct "this is playing right now" signal rather than
      * blending into any of those. */
     uint8_t echo_note = tiles_note_map_get_note(logical_pad);
-    if (tiles_op_mode_incoming_note_is_sounding(echo_note)) {
+    bool echo_primary = tiles_op_mode_incoming_note_is_sounding(0, echo_note);
+    bool echo_secondary = tiles_op_mode_incoming_note_is_sounding(1, echo_note);
+    if (echo_primary || echo_secondary) {
+        /* Both devices holding the same pitch at once is rare but real
+         * (two tracks doubling a line): show whichever hit most recently,
+         * so its onset flash isn't hidden behind the other layer's color. */
+        bool secondary = echo_secondary && (!echo_primary || tiles_op_mode_incoming_note_age_ms(1, echo_note) <
+                                                              tiles_op_mode_incoming_note_age_ms(0, echo_note));
         /* See TILES_LIGHTING_ECHO_SUSTAIN_TINT's own comment: white at
-         * onset easing to a lighter green. red/blue move together (both
-         * just "how much white is mixed in"); green stays full throughout. */
-        uint32_t age_ms = tiles_op_mode_incoming_note_age_ms(echo_note);
-        float mix = TILES_LIGHTING_ECHO_SUSTAIN_TINT;
+         * onset easing to a lighter green (primary) or red (secondary,
+         * TILES_LIGHTING_ECHO_SECONDARY_SUSTAIN_TINT). The two channels
+         * that aren't the layer's own hue move together (both just "how
+         * much white is mixed in"); the layer's own channel stays full. */
+        float tint = secondary ? TILES_LIGHTING_ECHO_SECONDARY_SUSTAIN_TINT : TILES_LIGHTING_ECHO_SUSTAIN_TINT;
+        uint32_t age_ms = tiles_op_mode_incoming_note_age_ms(secondary ? 1 : 0, echo_note);
+        float mix = tint;
         if (age_ms < TILES_LIGHTING_ECHO_FLASH_MS) {
             float t = (float)age_ms / (float)TILES_LIGHTING_ECHO_FLASH_MS; /* 0 = just hit, 1 = settled */
-            mix = 1.0f + t * (TILES_LIGHTING_ECHO_SUSTAIN_TINT - 1.0f);
+            mix = 1.0f + t * (tint - 1.0f);
         }
-        return (tiles_rgb01_t){mix, 1.0f, mix};
+        return secondary ? (tiles_rgb01_t){1.0f, mix, mix} : (tiles_rgb01_t){mix, 1.0f, mix};
     }
 
     /* Guitar/bass fret mode: a completely different idle-coloring scheme,

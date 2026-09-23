@@ -250,11 +250,23 @@ clears it on the Note-Off.
 ### Use
 
 - **VIEW** -- the arm toggle. Sentia pink when armed: that track's notes
-  show on TILES. Only one TILES DISPLAY is armed at a time -- turning
-  VIEW on in one instance turns it off in every other instance in the
-  set (they share Max's global name space, so no configuration is
-  needed). Turning it off clears any pad still lit. VIEW is a normal
-  Live parameter, so it's saved with the set and can be MIDI/key mapped.
+  show on TILES (green pads). **Two TILES DISPLAYs can be armed at once**
+  (real feedback: "make the device work on 2 channels at once, if 2
+  devices are on then the secondary does color red"): the first one armed
+  is the primary -- pink button, green pads, MIDI channel 1 -- and the
+  second is the secondary -- **red** button, **red** pads, MIDI channel 2.
+  Arming a third replaces the secondary (the primary is never bumped).
+  Turning the primary off promotes the secondary to primary (its button
+  goes pink, its pads green) so a lone armed device is never left red.
+  The instances coordinate through Max's global name space, so no
+  configuration is needed. Turning VIEW off clears any pad still lit.
+  VIEW is a normal Live parameter, so it's saved with the set and can be
+  MIDI/key mapped (it always loads off).
+  **Needs the matching firmware** -- an older board would show the
+  secondary's notes in green too (it doesn't know channel 2 is special).
+  **Replace any device already in a set** with this version (delete it and
+  drag the updated one in): a saved instance keeps its old patcher, and an
+  old and a new instance don't talk to each other.
 - **SURFACE** -- which control surface TILES is, 1-7. Set once, saved
   with the set. This exists because the Live Object Model gives a device
   no way to ask a control surface what script it is. **It is NOT the
@@ -325,9 +337,14 @@ to drive Live's UI from where this was written). First-run checklist:
    flash green on TILES, then click **VIEW** -- button turns Sentia
    pink (pads flash once more); play a note on that track and the
    matching pad should light green, then go dark on release.
-3. Add a second instance on another track and arm it -- the first
-   instance's VIEW should switch itself off and its pad clear.
-4. Stop transport / disarm mid-note -- no pad should stay lit.
+3. Add a second instance on another track and arm it -- both VIEW
+   buttons stay on: the first pink, the second **red**, and the second
+   track's notes light **red** pads while the first's stay green (pads
+   also flash red when the second one arms).
+4. Arm a third instance -- the red one switches itself off and its pads
+   clear; the pink one is untouched. Then turn the pink one off -- the
+   remaining device turns pink and its notes go green.
+5. Stop transport / disarm mid-note -- no pad should stay lit.
 
 If step 2 fails but 1 loads clean, the likely culprits, in order:
 SURFACE number (above), the TILES script not selected in a Control

@@ -48,11 +48,31 @@ the thru could not do by itself is declare MPE support: the patcher's
 is_mpe property (see build_patcher()) must be 1 or Live doesn't route the
 per-note MPE stream through the device at all.
 
-Exclusive arming across instances: every instance shares Max's global
-name space (a [send]/[receive] name WITHOUT the "---" prefix is global
-across every Max for Live device in the set), so turning VIEW on
-broadcasts this instance's device id on one global name; every OTHER
-instance hears a different id and turns its own VIEW off.
+Two instances at once. Real feedback: "make the device work on 2 channels
+at once, if 2 devices are on then the secondary does color red." (It began
+life as exclusive -- arming one disarmed the rest -- and this replaces
+that.) Up to two instances are armed together. The first armed is the
+PRIMARY: its notes go out on MIDI channel 1 and light TILES' pads green
+(the firmware's original echo color) and its VIEW button is Sentia pink.
+The second armed is the SECONDARY: channel 2, red pads, red VIEW button
+(firmware: services/op_mode.c echo layers, services/lighting.c). Arming a
+third replaces the secondary (the primary is never bumped); disarming the
+primary promotes the secondary to primary, so a lone armed device is never
+left red.
+
+How the instances agree on who is primary without any shared variable:
+every instance shares Max's global name space (a [send]/[receive] name
+WITHOUT the "---" prefix is global across every Max for Live device in the
+set) and each keeps its own slot (0 = not armed, 1 = primary, 2 =
+secondary). Arming asks the others "who holds slot 1?" on
+tiles_display_who -- a message send is synchronous, so the answer
+(tiles_display_taken) is in before the send returns -- and takes slot 1 if
+nobody answers, else slot 2 (announcing that on tiles_display_bump so a
+previous secondary steps down). Disarming slot 1 announces
+tiles_display_freed so a secondary promotes itself. No stored ids: the
+live instances ARE the state, so a device that was deleted while armed
+(no delete notification exists) can never wedge a slot -- the next arm
+just finds nobody answering.
 
 This file is the source of truth for the device -- the .amxd is generated
 from it, so a change to the device is a change here, then re-run:
@@ -84,7 +104,12 @@ TEXT_DIM = [0.55, 0.55, 0.60, 1.0]
 TEXT_ON_PINK = [0.04, 0.04, 0.05, 1.0]
 
 DEVICE_WIDTH = 160.0
-GLOBAL_ARM_NAME = "tiles_display_view"  # NO "---" prefix: must be global across instances
+# NO "---" prefix on any of these: they must be global across instances.
+BUS_WHO = "tiles_display_who"  # "does anyone hold slot 1?"
+BUS_TAKEN = "tiles_display_taken"  # ...yes (sent by the slot-1 holder)
+BUS_BUMP = "tiles_display_bump"  # "I just took slot 2" (previous slot 2 steps down)
+BUS_FREED = "tiles_display_freed"  # "slot 1 just opened up" (slot 2 promotes)
+RED = [1.0, 0.09, 0.09, 1.0]
 
 FONT = "Ableton Sans Medium Regular"
 
@@ -196,7 +221,7 @@ def build_patcher():
             "activebgoncolor": PINK,
             "activetextcolor": TEXT_DIM,
             "activetextoncolor": TEXT_ON_PINK,
-            "annotation": "Arm this track's notes to show on TILES' pads. Only one TILES DISPLAY is armed at a time.",
+            "annotation": "Arm this track's notes to show on TILES' pads. Two can be armed at once: the first is pink (green pads), the second red.",
             "bgcolor": [0.10, 0.10, 0.11, 1.0],
             "bgoncolor": PINK_DIM,
             "bordercolor": PINK_DIM,
@@ -276,7 +301,7 @@ def build_patcher():
     )
     comment(
         "hint",
-        "Pads flash green on TILES when SURFACE is right. Step it (1-7) until they do.",
+        "Pads flash on TILES when SURFACE is right. Step it (1-7) until they do. 2nd armed = red.",
         [600.0, 150.0, 200.0, 30.0],
         [12.0, 128.0, 136.0, 34.0],
         9.0,
@@ -297,13 +322,27 @@ def build_patcher():
     newobj("notein", "notein", [232.0, 16.0, 50.0, 20.0], 1, 3, ["int", "int", "int"])
     newobj("pack_live", "pack 0 0", [232.0, 96.0, 52.0, 20.0], 2, 1)
     newobj("gate", "gate 1", [232.0, 168.0, 45.0, 20.0], 2, 1)
-    newobj("prep_send", "prepend call send_midi 144", [232.0, 232.0, 170.0, 20.0], 1, 1)
+    # Everything that sends to TILES -- the note tap, the disarm flush, the
+    # route flash -- lands on status_gate's data inlet as a (pitch velocity)
+    # list; its control inlet picks which Note-On status the send_midi gets:
+    # 1 -> 144 (channel 1, the primary), 2 -> 145 (channel 2, the secondary).
+    # Two fixed prepends and a gate rather than one prepend re-pointed with
+    # "set": a gate is what this patch already trusts, and there's nothing
+    # to get subtly wrong about which status a queued message picked up.
+    # Opens on 1 -- an unarmed instance (whose route flash still fires)
+    # behaves as the primary.
+    newobj("status_gate", "gate 2 1", [232.0, 200.0, 45.0, 20.0], 2, 2, ["", ""])
+    newobj("prep_send_a", "prepend call send_midi 144", [232.0, 232.0, 170.0, 20.0], 1, 1)
+    newobj("prep_send_b", "prepend call send_midi 145", [420.0, 232.0, 170.0, 20.0], 1, 1)
     newobj("lobj", "live.object", [232.0, 296.0, 68.0, 20.0], 2, 1)
     conn("notein", 0, "pack_live", 0)  # pitch  -> hot
     conn("notein", 1, "pack_live", 1)  # velocity -> cold
     conn("pack_live", 0, "gate", 1)
-    conn("gate", 0, "prep_send", 0)
-    conn("prep_send", 0, "lobj", 0)
+    conn("gate", 0, "status_gate", 1)
+    conn("status_gate", 0, "prep_send_a", 0)
+    conn("status_gate", 1, "prep_send_b", 0)
+    conn("prep_send_a", 0, "lobj", 0)
+    conn("prep_send_b", 0, "lobj", 0)
 
     # ---- Which control_surfaces slot is TILES: SURFACE (1-6) -> 0-based
     # LOM path -> live.path resolves it to an id -> live.object's right
@@ -329,45 +368,126 @@ def build_patcher():
     conn("view", 0, "view_change", 0)
     conn("view_change", 0, "gate", 0)
 
-    # ---- Exclusive arming across instances via Max's global name space ----
+    # ---- Two instances at once: slots, see the module docstring ------------
+    # thisdev is still needed further down (the route flash's load guard).
     newobj("thisdev", "live.thisdevice", [32.0, 328.0, 83.0, 20.0], 1, 3, ["bang", "int", "int"])
-    message("msg_this", "path this_device", [32.0, 360.0, 92.0, 20.0])
-    newobj("lpath_id", "live.path", [32.0, 392.0, 62.0, 20.0], 1, 3, ["", "", ""])
-    newobj("route_id", "route id", [32.0, 424.0, 48.0, 20.0], 1, 2)
-    newobj("myid", "int", [32.0, 456.0, 32.0, 20.0], 2, 1, ["int"])
-    newobj("ne", "!= 0", [120.0, 456.0, 38.0, 20.0], 2, 1, ["int"])
-    conn("thisdev", 0, "msg_this", 0)
-    conn("msg_this", 0, "lpath_id", 0)
-    conn("lpath_id", 0, "route_id", 0)
-    conn("route_id", 0, "myid", 1)  # store, don't fire
-    conn("route_id", 0, "ne", 1)  # right inlet stores the compare value
 
-    # Turning VIEW on: broadcast this instance's id. Turning it off:
-    # flush every pitch so no pad is left lit on TILES.
+    # This instance's slot (0 = not armed, 1 = primary, 2 = secondary), kept
+    # in FOUR [int] copies -- one per question this instance can be asked
+    # (an [int]'s outlet fans out to every connection on each bang, so the
+    # questions can't share one). slot_store is the single write point: it
+    # feeds every copy's cold (right) inlet.
+    newobj("slot_store", "t i", [760.0, 16.0, 30.0, 20.0], 1, 1, ["int"])
+    for name, y in (("slot_who", 60.0), ("slot_free", 92.0), ("slot_bump", 124.0), ("slot_prom", 156.0)):
+        newobj(name, "int 0", [760.0, y, 32.0, 20.0], 2, 1, ["int"])
+        conn("slot_store", 0, name, 1)
+
+    # Only real transitions matter (a redundant 0, e.g. from an unarmed
+    # instance being told to step down, must not flush).
+    newobj("view_change", "change", [32.0, 296.0, 46.0, 20.0], 1, 3, ["int", "int", "int"])
+    conn("view", 0, "view_change", 0)
+    conn("view_change", 0, "gate", 0)
     newobj("sel_view", "select 1 0", [32.0, 344.0, 62.0, 20.0], 2, 3, ["bang", "bang", ""])
-    newobj("send_arm", "s " + GLOBAL_ARM_NAME, [32.0, 488.0, 120.0, 20.0], 1, 0)
     conn("view_change", 0, "sel_view", 0)
-    conn("sel_view", 0, "myid", 0)  # bang -> outputs the stored id
-    conn("myid", 0, "send_arm", 0)
 
-    # Hearing a DIFFERENT instance arm: turn this one's VIEW off.
-    newobj("recv_arm", "r " + GLOBAL_ARM_NAME, [120.0, 392.0, 120.0, 20.0], 1, 1)
-    newobj("sel_other", "select 1", [120.0, 488.0, 52.0, 20.0], 2, 2, ["bang", ""])
-    message("msg_zero", "0", [120.0, 520.0, 24.0, 20.0])
-    conn("recv_arm", 0, "ne", 0)
-    conn("ne", 0, "sel_other", 0)
-    conn("sel_other", 0, "msg_zero", 0)
+    # ARM (VIEW just turned on). [t b b b b] fires right to left:
+    #   1. clear taken_flag        2. ask "who holds slot 1?" (synchronous)
+    #   3. slot = taken_flag + 1   4. the route-confirmation flash, last, so
+    #      it goes out on the NEW slot's channel (a secondary flashes red).
+    newobj("arm_t", "t b b b b", [32.0, 392.0, 66.0, 20.0], 1, 4, ["bang", "bang", "bang", "bang"])
+    message("msg_t1_reset", "0", [120.0, 392.0, 24.0, 20.0])
+    newobj("taken_flag", "int 0", [120.0, 424.0, 32.0, 20.0], 2, 1, ["int"])
+    newobj("send_who", "s " + BUS_WHO, [160.0, 392.0, 120.0, 20.0], 1, 0)
+    newobj("plus1", "+ 1", [120.0, 456.0, 32.0, 20.0], 2, 1, ["int"])
+    conn("sel_view", 0, "arm_t", 0)
+    conn("arm_t", 3, "msg_t1_reset", 0)
+    conn("msg_t1_reset", 0, "taken_flag", 1)
+    conn("arm_t", 2, "send_who", 0)
+    conn("arm_t", 1, "taken_flag", 0)
+    conn("taken_flag", 0, "plus1", 0)
+
+    # Slot 1's holder answers the question; everyone's receiver sets their
+    # taken_flag, but only the asker (who just cleared it) reads it.
+    newobj("recv_who", "r " + BUS_WHO, [800.0, 60.0, 110.0, 20.0], 1, 1)
+    newobj("sel_who", "select 1", [800.0, 92.0, 52.0, 20.0], 2, 2, ["bang", ""])
+    newobj("send_taken", "s " + BUS_TAKEN, [800.0, 124.0, 120.0, 20.0], 1, 0)
+    newobj("recv_taken", "r " + BUS_TAKEN, [800.0, 156.0, 120.0, 20.0], 1, 1)
+    message("msg_t1_set", "1", [800.0, 188.0, 24.0, 20.0])
+    conn("recv_who", 0, "slot_who", 0)
+    conn("slot_who", 0, "sel_who", 0)
+    conn("sel_who", 0, "send_taken", 0)
+    conn("recv_taken", 0, "msg_t1_set", 0)
+    conn("msg_t1_set", 0, "taken_flag", 1)
+
+    # Take the slot. [t i i i i] right to left: announce (BEFORE storing --
+    # our own slot copies are still 0, so we don't hear our own bump and
+    # step ourselves down), store, pick the channel, recolor VIEW.
+    newobj("slot_t", "t i i i i", [120.0, 488.0, 76.0, 20.0], 1, 4, ["int", "int", "int", "int"])
+    newobj("sel_bump_send", "select 2", [232.0, 520.0, 52.0, 20.0], 2, 2, ["bang", ""])
+    newobj("send_bump", "s " + BUS_BUMP, [232.0, 552.0, 120.0, 20.0], 1, 0)
+    newobj("sel_color", "select 2", [120.0, 520.0, 52.0, 20.0], 2, 2, ["bang", ""])
+    message("msg_red", "activebgoncolor 1. 0.09 0.09 1.", [120.0, 552.0, 190.0, 20.0])
+    message("msg_pink", "activebgoncolor 1. 0. 1. 1.", [120.0, 584.0, 170.0, 20.0])
+    conn("plus1", 0, "slot_t", 0)
+    conn("slot_t", 3, "sel_bump_send", 0)
+    conn("sel_bump_send", 0, "send_bump", 0)
+    conn("slot_t", 2, "slot_store", 0)
+    conn("slot_t", 1, "status_gate", 0)
+    conn("slot_t", 0, "sel_color", 0)
+    conn("sel_color", 0, "msg_red", 0)
+    conn("sel_color", 1, "msg_pink", 0)
+    conn("msg_red", 0, "view", 0)
+    conn("msg_pink", 0, "view", 0)
+
+    # Hearing "someone took slot 2": if that was us before, turn VIEW off
+    # (msg_zero -> view -> change -> the disarm chain below flushes).
+    newobj("recv_bump", "r " + BUS_BUMP, [800.0, 232.0, 120.0, 20.0], 1, 1)
+    newobj("sel_bump_me", "select 2", [800.0, 264.0, 52.0, 20.0], 2, 2, ["bang", ""])
+    message("msg_zero", "0", [800.0, 296.0, 24.0, 20.0])
+    conn("recv_bump", 0, "slot_bump", 0)
+    conn("slot_bump", 0, "sel_bump_me", 0)
+    conn("sel_bump_me", 0, "msg_zero", 0)
     conn("msg_zero", 0, "view", 0)
 
+    # DISARM (VIEW just turned off). [t b b b] right to left: flush every
+    # pitch (still on our own channel), tell the others if we held slot 1,
+    # then clear our slot.
+    newobj("disarm_t", "t b b b", [32.0, 620.0, 52.0, 20.0], 1, 3, ["bang", "bang", "bang"])
+    newobj("sel_was1", "select 1", [120.0, 620.0, 52.0, 20.0], 2, 2, ["bang", ""])
+    newobj("send_freed", "s " + BUS_FREED, [120.0, 652.0, 120.0, 20.0], 1, 0)
+    message("msg_slot0", "0", [232.0, 620.0, 24.0, 20.0])
+    conn("sel_view", 1, "disarm_t", 0)
+    conn("disarm_t", 1, "slot_free", 0)
+    conn("slot_free", 0, "sel_was1", 0)
+    conn("sel_was1", 0, "send_freed", 0)
+    conn("disarm_t", 0, "msg_slot0", 0)
+    conn("msg_slot0", 0, "slot_store", 0)
+
+    # PROMOTE (slot 1 just freed, and we hold slot 2). [t b b b]: flush our
+    # notes on the old channel, switch to channel 1 + slot 1, recolor pink.
+    newobj("recv_freed", "r " + BUS_FREED, [800.0, 340.0, 120.0, 20.0], 1, 1)
+    newobj("sel_prom", "select 2", [800.0, 372.0, 52.0, 20.0], 2, 2, ["bang", ""])
+    newobj("prom_t", "t b b b", [800.0, 404.0, 52.0, 20.0], 1, 3, ["bang", "bang", "bang"])
+    message("msg_p1", "1", [860.0, 436.0, 24.0, 20.0])
+    conn("recv_freed", 0, "slot_prom", 0)
+    conn("slot_prom", 0, "sel_prom", 0)
+    conn("sel_prom", 0, "prom_t", 0)
+    conn("prom_t", 1, "msg_p1", 0)
+    conn("msg_p1", 0, "status_gate", 0)
+    conn("msg_p1", 0, "slot_store", 0)
+    conn("prom_t", 0, "msg_pink", 0)
+
     # Flush: 128 Note-Offs (pitch 0-127, velocity 0), bypassing the gate
-    # (which is closing) straight into the same send_midi prepend.
+    # (which is closing) straight into the status gate -- still set to this
+    # instance's own channel, so a secondary clears only its own notes.
     newobj("uzi", "uzi 128", [232.0, 360.0, 52.0, 20.0], 2, 3, ["bang", "bang", "int"])
     newobj("uzi_zero", "- 1", [300.0, 392.0, 32.0, 20.0], 2, 1, ["int"])
     newobj("pack_flush", "pack 0 0", [300.0, 424.0, 52.0, 20.0], 2, 1)
-    conn("sel_view", 1, "uzi", 0)
+    conn("disarm_t", 2, "uzi", 0)
+    conn("prom_t", 2, "uzi", 0)
     conn("uzi", 2, "uzi_zero", 0)
     conn("uzi_zero", 0, "pack_flush", 0)
-    conn("pack_flush", 0, "prep_send", 0)
+    conn("pack_flush", 0, "status_gate", 1)
 
     # ---- Route confirmation: a brief flash of pads on TILES whenever the
     # route could have just changed (SURFACE edited, or VIEW turned on), so
@@ -397,23 +517,23 @@ def build_patcher():
     conn("msg_one", 0, "flash_gate", 0)  # gate opens 1.5 s after load
     conn("surface", 0, "surf_delay", 0)  # let the new id land first
     conn("surf_delay", 0, "flash_gate", 1)
-    conn("sel_view", 0, "flash_gate", 1)  # VIEW just turned on
+    conn("arm_t", 0, "flash_gate", 1)  # VIEW just turned on (after the slot is taken)
     conn("flash_gate", 0, "flash_go", 0)
     conn("flash_go", 1, "delay_off", 0)  # right first: schedule the Note-Offs
     conn("flash_go", 0, "uzi_on", 0)  # then fire the Note-Ons
     conn("uzi_on", 2, "add_on", 0)
     conn("add_on", 0, "pack_on", 0)
-    conn("pack_on", 0, "prep_send", 0)
+    conn("pack_on", 0, "status_gate", 1)
     conn("delay_off", 0, "uzi_off", 0)
     conn("uzi_off", 2, "add_off", 0)
     conn("add_off", 0, "pack_off", 0)
-    conn("pack_off", 0, "prep_send", 0)
+    conn("pack_off", 0, "status_gate", 1)
 
     patcher = {
         "fileversion": 1,
         "appversion": {"major": 8, "minor": 1, "revision": 2, "architecture": "x64", "modernui": 1},
         "classnamespace": "box",
-        "rect": [65.0, 399.0, 760.0, 640.0],
+        "rect": [65.0, 399.0, 960.0, 700.0],
         "openrect": [0.0, 0.0, 0.0, 169.0],
         "bglocked": 0,
         "openinpresentation": 1,
