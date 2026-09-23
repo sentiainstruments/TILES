@@ -84,6 +84,19 @@
  * this file. */
 #define TILES_LIGHTING_THIRD_BASELINE_PERCENT 40u
 
+/* Real feedback: "make 5th another color as well within a complementary
+ * matching hue but different enough to the 3rd." Completes a triadic
+ * set with root's magenta (R+B) and third's teal (G+B): amber/gold
+ * (R+G, no B) -- each of the three landmark colors uses a different
+ * pair of the three LED channels, evenly spaced around the color wheel
+ * (the textbook definition of a "triadic," mutually complementary
+ * scheme) rather than two similar colors with a third picked
+ * arbitrarily, so root/third/fifth all read apart from each other and
+ * from a natural key's plain white at a glance. Same baseline percent
+ * as the other two landmarks, same "unmeasured against real hardware"
+ * caveat. */
+#define TILES_LIGHTING_FIFTH_BASELINE_PERCENT 40u
+
 /* Underglow's own fixed brightness, out of 255 -- deliberately NOT
  * scaled by the active brightness ceiling/the power state. It used to be
  * a percentage of the active ceiling (65%), which meant it rode down
@@ -303,6 +316,14 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
          * though that never actually happens for any real scale here). */
         float level = (float)TILES_LIGHTING_THIRD_BASELINE_PERCENT / 100.0f;
         return (tiles_rgb01_t){0.0f, level, level};
+    }
+    if (tiles_note_map_is_fifth_pad(logical_pad)) {
+        /* Amber/gold -- R and G channels only, B stays 0 -- see
+         * TILES_LIGHTING_FIFTH_BASELINE_PERCENT's own comment. Checked
+         * after root and third for the same "never actually overlaps,
+         * but root/third would win if it somehow did" reasoning. */
+        float level = (float)TILES_LIGHTING_FIFTH_BASELINE_PERCENT / 100.0f;
+        return (tiles_rgb01_t){level, level, 0.0f};
     }
     if (tiles_note_map_is_natural_pad(logical_pad)) {
         float level = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;

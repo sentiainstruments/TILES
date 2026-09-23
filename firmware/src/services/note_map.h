@@ -255,6 +255,17 @@ bool tiles_note_map_is_root_pad(uint8_t logical_pad);
  * false for an out-of-range pad. */
 bool tiles_note_map_is_third_pad(uint8_t logical_pad);
 
+/* True if this pad sits on the scale's 5th degree (index 4, 0-based) --
+ * real feedback: "make 5th another color as well within a complementary
+ * matching hue but different enough to the 3rd." Identical shape to
+ * tiles_note_map_is_third_pad() just above, degree 4 instead of degree
+ * 2 -- same positional/chord-mode-aware math, same "every real scale
+ * here has at least 5 notes/octave so root/third/fifth can never land
+ * on the same pad" guarantee (see that function's own comment). Driven
+ * by services/lighting.c's idle pad coloring. Returns false for an
+ * out-of-range pad. */
+bool tiles_note_map_is_fifth_pad(uint8_t logical_pad);
+
 /* True if this pad's CURRENTLY MAPPED note (tiles_note_map_get_note())
  * is a natural (white key) rather than sharp/flat (black key) --
  * likewise driven by services/lighting.c's idle pad coloring. Unlike

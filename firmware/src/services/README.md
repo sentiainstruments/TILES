@@ -8149,5 +8149,14 @@ not its code.
   sub-grid now plays through this exact same scale-following logic (see
   the earlier "mini melodic mode" entry above), it gets this same
   landmark too, not just plain melodic mode.
+  **A 3rd landmark added right after**: real feedback: "make 5th another
+  color as well within a complementary matching hue but different
+  enough to the 3rd." `tiles_note_map_is_fifth_pad()` mirrors the same
+  shape again (degree 4 instead of degree 2), colored amber/gold (R+G,
+  no B) in `lighting.c`. Root (R+B), third (G+B), and fifth (R+G) each
+  use a different pair of the three LED channels -- a triadic scheme,
+  evenly spaced around the color wheel rather than two similar hues plus
+  an arbitrary third, so all three landmarks (and a natural key's plain
+  white) stay visually distinct from each other at a glance.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.
