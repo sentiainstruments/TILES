@@ -130,4 +130,28 @@ deterministic voice-steal policy) are done — see Status below.
   the next actual crash, so the auto-dumped last-known trace character
   says definitively where it hung rather than continuing to reason
   about it from code alone.
+- **The truncation above turned out to be a real, separately confirmed
+  bug of its own, not just a hypothesis.** Real feedback, precisely
+  reproduced: "pedal only sticks when you release the note but hold
+  pedal and then release it." `tiles_midi_send_cc_broadcast()`
+  (`services/pedal.c`'s own sustain-off send) fires 17 back-to-back
+  3-byte CC messages (51 bytes) in one call -- comfortably enough on
+  its own to overflow the 64-byte TX FIFO if a note-off from releasing
+  a pad moments earlier is still sitting in it, exactly the gesture
+  that reproduces the stick: whichever Member Channel's CC64=0 landed
+  on the truncated tail of that burst never reached the synth, so that
+  one note stayed sustained even after the pedal genuinely released,
+  while every other channel that fit released fine. Fixed with a
+  bounded retry (`send_with_retry()`, `MIDI_SEND_RETRY_TIMEOUT_MS` =
+  5ms) instead of the plain log-and-drop above -- still not an
+  unconditional retry-until-room loop (the exact shape the original
+  fix above was deliberately avoiding): it pumps `tud_task()` (the only
+  thing that actually drains the TX FIFO to the host at all, see
+  `main.c`'s own main-loop comment) and retries the remaining bytes,
+  bounded by a real wall-clock deadline -- long enough to ride out an
+  ordinary multi-message burst like the broadcast above, short enough
+  that a genuinely absent/stalled host still returns promptly instead
+  of hanging the main loop. `warn_if_truncated()` still logs anything
+  that couldn't be recovered even after the retry window, so a
+  genuinely stalled host stays visible rather than silently eaten.
 - DIN MIDI IN/OUT -- not built yet.

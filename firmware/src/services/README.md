@@ -7960,7 +7960,17 @@ not its code.
   past `SUSTAIN_RELEASE_THRESHOLD` points to an electrical/connector
   issue (jack contact, cable), not software; raw correctly climbing but
   the debounced value or the final send never following points to a
-  real software bug, now with the evidence needed to find it. Root
-  cause still open pending real hardware data.
+  real software bug, now with the evidence needed to find it.
+  **Root cause found from real-hardware feedback, precisely
+  reproduced**: "pedal only sticks when you release the note but hold
+  pedal and then release it." Not a bug in `pedal.c` itself -- the
+  hysteresis/debounce trace above was correct all along. Root cause was
+  in `midi/midi_out.c`'s `tud_midi_stream_write()` usage: sustain-off
+  is a 17-message CC broadcast (`tiles_midi_send_cc_broadcast()`),
+  enough on its own to overflow the 64-byte USB MIDI TX FIFO if a
+  note-off from releasing the pad moments earlier is still sitting in
+  it -- exactly the gesture that reproduces the stick. See
+  `midi/README.md` for the full fix (a bounded retry instead of the
+  previous silent log-and-drop).
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

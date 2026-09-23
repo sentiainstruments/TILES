@@ -2,6 +2,8 @@
 
 #include "tusb.h"
 
+#include "pico/time.h"
+
 #include <stdio.h>
 
 #define TILES_MIDI_CABLE_NUM 0u
@@ -17,20 +19,55 @@
  * enough, or several messages queued back-to-back in one scan) a
  * message could go out MISSING ITS TAIL BYTES -- a Note-On with no
  * velocity, silently corrupting the stream a receiver has to parse,
- * with nothing here ever aware it happened. Doesn't retry or pump
- * tud_task() to make room -- that risks turning a dropped message into
- * a NEW blocking wait if the host genuinely isn't draining, the exact
- * failure class this whole session's other fixes (I2C, CDC) have been
- * about closing, not reopening here. Logs instead: makes a real,
- * previously-silent failure visible without adding any new way to
- * hang. Confirmed independent of this: not itself a proven cause of
- * the reported crash/reboot (a dropped byte corrupts output, it
- * doesn't freeze this device), so left in as its own real, separate
- * fix rather than a claimed answer to that. */
+ * with nothing here ever aware it happened.
+ *
+ * Real feedback, later, root-caused to exactly this: "pedal only
+ * sticks when you release the note but hold pedal and then release
+ * it." tiles_midi_send_cc_broadcast() (services/pedal.c's own sustain-
+ * off send) fires 17 back-to-back 3-byte CC messages (51 bytes) in one
+ * call -- comfortably enough on its own to overflow the 64-byte TX
+ * FIFO if a note-off from releasing a pad moments earlier is still
+ * sitting in it, exactly the gesture that reproduces the stick:
+ * whichever Member Channel's CC64=0 landed on the truncated tail of
+ * that burst never reached the synth, so that one note stayed
+ * sustained even after the pedal genuinely released, while every other
+ * channel that fit released fine.
+ *
+ * This used to deliberately NOT retry or pump tud_task() to make room,
+ * out of a real concern: turning a dropped message into a NEW blocking
+ * wait if the host genuinely isn't draining would reopen the exact
+ * failure class this whole session's other fixes (I2C, CDC) were about
+ * closing. send_with_retry() below still doesn't retry unconditionally
+ * -- it's bounded by a real wall-clock deadline
+ * (MIDI_SEND_RETRY_TIMEOUT_MS), long enough to ride out an ordinary
+ * multi-message burst like the broadcast above, short enough that a
+ * genuinely absent/stalled host still returns promptly instead of
+ * hanging the main loop. Pumping tud_task() inside the wait is required,
+ * not optional -- it's the only thing that actually drains the TX FIFO
+ * to the host at all (see main.c's own loop, which normally does this
+ * once per iteration); without calling it again here, waiting alone
+ * would never free any room. warn_if_truncated() below still logs
+ * anything that couldn't be recovered even after retrying, so a
+ * genuinely stalled host remains visible rather than silently eaten. */
+#define MIDI_SEND_RETRY_TIMEOUT_MS 5u
+
+static uint32_t send_with_retry(const uint8_t *msg, uint32_t len) {
+    uint32_t sent = tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, len);
+    if (sent >= len) {
+        return sent;
+    }
+    uint32_t deadline_ms = to_ms_since_boot(get_absolute_time()) + MIDI_SEND_RETRY_TIMEOUT_MS;
+    while (sent < len && to_ms_since_boot(get_absolute_time()) < deadline_ms) {
+        tud_task();
+        sent += tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg + sent, len - sent);
+    }
+    return sent;
+}
+
 static void warn_if_truncated(const char *what, uint32_t sent, uint32_t expected) {
     if (sent != expected) {
-        printf("[midi_out] %s truncated: wrote %u/%u bytes (host not draining fast enough?)\n", what, (unsigned)sent,
-               (unsigned)expected);
+        printf("[midi_out] %s truncated: wrote %u/%u bytes (host still not draining after %ums retry)\n", what,
+               (unsigned)sent, (unsigned)expected, (unsigned)MIDI_SEND_RETRY_TIMEOUT_MS);
     }
 }
 
@@ -39,7 +76,7 @@ static void send1(uint8_t status) {
         return;
     }
     uint8_t msg[1] = {status};
-    warn_if_truncated("send1", tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg)), sizeof(msg));
+    warn_if_truncated("send1", send_with_retry(msg, sizeof(msg)), sizeof(msg));
 }
 
 static void send2(uint8_t status, uint8_t data1) {
@@ -47,7 +84,7 @@ static void send2(uint8_t status, uint8_t data1) {
         return;
     }
     uint8_t msg[2] = {status, data1};
-    warn_if_truncated("send2", tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg)), sizeof(msg));
+    warn_if_truncated("send2", send_with_retry(msg, sizeof(msg)), sizeof(msg));
 }
 
 static void send3(uint8_t status, uint8_t data1, uint8_t data2) {
@@ -55,7 +92,7 @@ static void send3(uint8_t status, uint8_t data1, uint8_t data2) {
         return;
     }
     uint8_t msg[3] = {status, data1, data2};
-    warn_if_truncated("send3", tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, sizeof(msg)), sizeof(msg));
+    warn_if_truncated("send3", send_with_retry(msg, sizeof(msg)), sizeof(msg));
 }
 
 void tiles_midi_note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
@@ -156,5 +193,5 @@ void tiles_midi_send_sysex(const uint8_t *data, uint32_t len) {
     }
     msg[1u + len] = 0xF7u;
     uint32_t total = len + 2u;
-    warn_if_truncated("send_sysex", tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, total), total);
+    warn_if_truncated("send_sysex", send_with_retry(msg, total), total);
 }
