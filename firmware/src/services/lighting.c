@@ -50,8 +50,12 @@
  * above ran into; a white pad drives all three dies, so it still reads
  * brighter per percent than the single/dual-die reference colors do.
  * Unmeasured against real hardware; this is the knob. The power ceiling
- * (static_ceiling_level()) is untouched. */
-#define TILES_LIGHTING_NATURAL_BASELINE_PERCENT 30u
+ * (static_ceiling_level()) is untouched.
+ * Then, after seeing 30 on the hardware: "the white pads should be even
+ * more dim, dim 30% the white." Read as "take 30% off the white" (30 * 0.7
+ * = 21), since 30 was already the current value so "even more dim"
+ * can't mean "to 30". */
+#define TILES_LIGHTING_NATURAL_BASELINE_PERCENT 21u
 
 /* Idle (untouched) chromatic-play pad coloring by note role -- real
  * feedback: "root should be blue and black keys shouldnt have led this
@@ -108,8 +112,19 @@
  * Later: "the color should be a bit more striking like sentia pink?" ->
  * "actually just make it slighly more green so its more distinct" was built
  * as an azure fifth (a little green mixed into the blue), then withdrawn:
- * "ignore the green suggestion." The fifth is pure blue again. */
+ * "ignore the green suggestion." After seeing pure blue on the hardware:
+ * "make the blue closer to the sentia pink since its a refernece point but
+ * still distinct enough." So the fifth is now a violet -- the same blue
+ * with some red mixed in (TILES_LIGHTING_FIFTH_RED_TINT, a fraction of the
+ * blue level), moving it along the hue wheel toward the root's magenta
+ * (equal red and blue) without reaching it. At 0.35 the hue is ~261 degrees
+ * against the root's 300 and pure blue's 240: clearly nearer the root than
+ * before, still ~40 degrees away from it. That gap is the "distinct enough"
+ * half of the request, and the knob: raise the tint to pull it closer, lower
+ * it to push it back toward blue. Unmeasured -- LED diffusion and the red
+ * die's efficiency can shift how it reads. */
 #define TILES_LIGHTING_FIFTH_BASELINE_PERCENT 40u
+#define TILES_LIGHTING_FIFTH_RED_TINT 0.35f
 
 /* Real feedback on the melodic-echo indicator (services/op_mode.c's
  * "Melodic mode: live echo of an incoming melody"): "it needs more
@@ -408,12 +423,12 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         return (tiles_rgb01_t){level, 0.0f, level};
     }
     if (tiles_note_map_is_fifth_pad(logical_pad)) {
-        /* Pure blue -- B channel only, R and G stay 0 -- see
-         * TILES_LIGHTING_FIFTH_BASELINE_PERCENT's own comment. Checked
-         * after root for the same "never actually overlaps, but root
-         * would win if it somehow did" reasoning. */
+        /* Violet -- blue with some red mixed in, G stays 0 -- see
+         * TILES_LIGHTING_FIFTH_RED_TINT's own comment. Checked after
+         * root for the same "never actually overlaps, but root would
+         * win if it somehow did" reasoning. */
         float level = (float)TILES_LIGHTING_FIFTH_BASELINE_PERCENT / 100.0f;
-        return (tiles_rgb01_t){0.0f, 0.0f, level};
+        return (tiles_rgb01_t){level * TILES_LIGHTING_FIFTH_RED_TINT, 0.0f, level};
     }
     if (tiles_note_map_is_natural_pad(logical_pad)) {
         float level = (float)TILES_LIGHTING_NATURAL_BASELINE_PERCENT / 100.0f;

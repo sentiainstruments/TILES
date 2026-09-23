@@ -8229,6 +8229,24 @@ not its code.
   low it revisits that "too dim" complaint); it's the knob if it wants
   another step either way. Sharp keys stay dark; the power ceiling is
   untouched.
+  **Both moved again after seeing them on the board.** Real feedback:
+  "make the blue closer to the sentia pink since its a refernece point but
+  still distinct enough. and the white pads should be even more dim, dim
+  30% the white."
+  - *Fifth is a violet now.* Pure blue -> `{level * TILES_LIGHTING_FIFTH_
+    RED_TINT (0.35), 0, level}`: the same blue with red mixed in, which
+    slides it along the hue wheel toward the root's magenta (equal red and
+    blue). Hue is ~261 degrees against the root's 300 and the old pure
+    blue's 240 -- clearly closer to the root, still ~40 degrees from it,
+    which is the "distinct enough" half. Red mixed in (not green: the
+    azure attempt was withdrawn on "ignore the green suggestion") is the
+    direction that goes toward pink. The tint is the knob: higher pulls it
+    toward the root, lower back toward blue. Unmeasured; LED diffusion can
+    change how close two colors read.
+  - *White pads: 30 -> 21.* Read as "take 30% off the white" (30 x 0.7),
+    since 30 was already the value, so "even more dim" can't mean "to
+    30." `TILES_LIGHTING_NATURAL_BASELINE_PERCENT` is now 21. If that
+    reading was wrong -- e.g. they meant a bigger step -- it's one number.
 - **Melodic mode: live echo of an incoming melody.** Real feedback: "in
   midi melodic mode is there any way we could read the playing melody
   of the armed track and display it back on tiles?" Needed a genuinely
