@@ -6,6 +6,7 @@
 #include "haptics.h"
 #include "hall.h"
 #include "lighting.h"
+#include "midi_in.h"
 #include "op_mode.h"
 #include "pedal.h"
 #include "pixel_font.h"
@@ -1978,6 +1979,20 @@ static uint32_t s_circle_hold_start_ms;
 static bool s_circle_screensaver_fired;
 static bool s_circle_deep_sleep_fired;
 
+/* Real feedback: "can it override screensavers? like no screensaver can
+ * activate if ableton is playing or midi is being recieved?" -- see
+ * tiles_standby_scan()'s own comment on the policy. s_seen_midi_activity
+ * is the last tiles_midi_in_activity_count() value this file compared
+ * against (only inequality matters, it wraps harmlessly);
+ * s_deep_sleep_manual is true only for a deep sleep the PLAYER asked for
+ * (circle held ~8s) -- an automatic idle-timeout deep sleep is false.
+ * The manual screensaver's own flag (s_manual_screensaver, above) already
+ * covers the 4s-hold case. Both exist so incoming MIDI can wake/hold off
+ * an AUTOMATIC screensaver without ever overriding one the player
+ * deliberately started. */
+static uint32_t s_seen_midi_activity;
+static bool s_deep_sleep_manual;
+
 /* Edge-tracking for handle_manual_scroll_input() below -- separate from
  * octave_control.c's own SW1/SW2 edge state, since that module skips
  * its own processing entirely while this mode owns the buttons (see
@@ -2144,6 +2159,7 @@ static void enter_standby(uint32_t now_ms) {
 static void exit_standby(void) {
     s_state = TILES_STANDBY_STATE_AWAKE;
     s_manual_screensaver = false;
+    s_deep_sleep_manual = false;
     s_circle_was_held = false;
     tiles_lighting_set_standby_active(false);
     tiles_buttons_set_standby_active(false);
@@ -2175,6 +2191,7 @@ static void exit_standby(void) {
 static void enter_deep_sleep(void) {
     s_state = TILES_STANDBY_STATE_DEEP_SLEEP;
     s_manual_screensaver = false;
+    s_deep_sleep_manual = false; /* the circle-hold caller sets this true itself, right after */
     tiles_lighting_set_standby_active(true);
     tiles_buttons_set_standby_active(true);
     s_last_frame_ms = 0u; /* forces an immediate first frame */
@@ -2210,6 +2227,7 @@ static void handle_circle_hold(uint32_t now_ms) {
             s_circle_deep_sleep_fired = true;
             s_last_activity_ms = now_ms;
             enter_deep_sleep();
+            s_deep_sleep_manual = true; /* the player asked for this one -- see s_deep_sleep_manual's comment */
         } else if (held_ms >= TILES_CIRCLE_SCREENSAVER_HOLD_MS && !s_circle_screensaver_fired) {
             s_circle_screensaver_fired = true;
             s_last_activity_ms = now_ms;
@@ -2326,6 +2344,8 @@ void tiles_standby_init(void) {
     s_circle_was_held = false;
     s_circle_screensaver_fired = false;
     s_circle_deep_sleep_fired = false;
+    s_seen_midi_activity = tiles_midi_in_activity_count();
+    s_deep_sleep_manual = false;
     s_scroll_prev_minus = false;
     s_scroll_prev_plus = false;
     /* Seeds the ONE global rand()/srand() stream every rand()-consuming
@@ -2366,6 +2386,50 @@ void tiles_standby_scan(void) {
             exit_standby();
         }
         return;
+    }
+
+    /* Real feedback: "can it override screensavers? like no screensaver
+     * can activate if ableton is playing or midi is being recieved?"
+     * tiles_midi_in_activity_count() only moves for Note-On/Off and the
+     * four Real-Time bytes (Clock/Start/Continue/Stop) -- i.e. a DAW
+     * actually playing, or a melody being echoed by the TILES DISPLAY
+     * device -- so this is "the board is being used," not "Ableton is
+     * open." Sampled on every scan that gets this far (even when nothing
+     * below acts on it) so a long stretch of ignored activity never
+     * leaves a stale value behind that would read as a fresh burst the
+     * instant it starts mattering.
+     *   - AWAKE: refreshes the idle timer exactly like a touch, so the
+     *     screensaver simply never gets its turn while MIDI keeps
+     *     arriving (external clock is ~48 events/s, so a playing DAW
+     *     holds it off continuously; a stray note holds it off for one
+     *     more idle-timeout, not forever). Includes sequencer mode's own
+     *     longer 20-minute timeout -- a pattern running off Ableton's
+     *     clock is precisely the "unattended" case this now covers.
+     *   - AUTOMATIC STANDBY/DEEP_SLEEP: wakes, same reasoning -- a
+     *     screensaver covering the pads would hide the very melody or
+     *     clock-synced pattern the MIDI is driving.
+     *   - MANUAL screensaver/deep sleep (circle held ~4s/~8s): left
+     *     alone. The player asked for those explicitly, so a DAW that
+     *     happens to be playing must not undo them -- and MIDI isn't
+     *     allowed to keep pushing THEIR inactivity timeout back either.
+     * No printf on the wake path (print_wake_source() only knows about
+     * touch/button/pedal, and this runs at clock rate) -- see this
+     * project's own history with USB-CDC stdio blocking the main loop. */
+    uint32_t midi_activity = tiles_midi_in_activity_count();
+    bool midi_active = (midi_activity != s_seen_midi_activity);
+    s_seen_midi_activity = midi_activity;
+    if (midi_active) {
+        if (s_state == TILES_STANDBY_STATE_AWAKE) {
+            s_last_activity_ms = now_ms;
+        } else {
+            bool manual = (s_state == TILES_STANDBY_STATE_STANDBY && s_manual_screensaver) ||
+                          (s_state == TILES_STANDBY_STATE_DEEP_SLEEP && s_deep_sleep_manual);
+            if (!manual) {
+                s_last_activity_ms = now_ms;
+                exit_standby();
+                return;
+            }
+        }
     }
 
     if (s_state == TILES_STANDBY_STATE_AWAKE) {

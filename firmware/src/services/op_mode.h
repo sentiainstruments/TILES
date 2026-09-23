@@ -452,6 +452,13 @@ bool tiles_op_mode_song_capture_is_note_sounding(uint8_t note);
  * tradeoffs, not oversights. */
 bool tiles_op_mode_incoming_note_is_sounding(uint8_t note);
 
+/* Milliseconds since `note`'s most recent incoming Note-On. Only
+ * meaningful while tiles_op_mode_incoming_note_is_sounding(note) is true
+ * (otherwise it's just time since some earlier note, or since boot).
+ * services/lighting.c uses it for a brief onset flash on an echoed pad --
+ * real feedback: "it needs more brightness tho." */
+uint32_t tiles_op_mode_incoming_note_age_ms(uint8_t note);
+
 /* True while the pattern bank's own save/delete confirmation flash is
  * currently showing, with *out_r/*out_g/*out_b set to the color it
  * wants underglow to show RIGHT NOW (already resolved through its own

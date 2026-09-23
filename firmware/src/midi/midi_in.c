@@ -41,6 +41,9 @@ static uint8_t s_sysex_callback_count;
 static tiles_midi_in_note_callback_t s_note_callbacks[TILES_MIDI_IN_MAX_CALLBACKS];
 static uint8_t s_note_callback_count;
 
+/* See tiles_midi_in_activity_count()'s own comment in midi_in.h. */
+static uint32_t s_activity_count;
+
 static bool s_in_sysex;
 static uint8_t s_sysex_buf[MIDI_IN_SYSEX_MAX];
 static size_t s_sysex_len;
@@ -100,7 +103,12 @@ bool tiles_midi_in_register_note_callback(tiles_midi_in_note_callback_t callback
     return true;
 }
 
+uint32_t tiles_midi_in_activity_count(void) {
+    return s_activity_count;
+}
+
 static void fire_realtime(uint8_t byte, uint32_t now_ms) {
+    s_activity_count++;
     for (uint8_t i = 0; i < s_realtime_callback_count; i++) {
         s_realtime_callbacks[i](byte, now_ms);
     }
@@ -113,6 +121,7 @@ static void fire_sysex(const uint8_t *data, size_t len) {
 }
 
 static void fire_note(uint8_t channel, uint8_t note, uint8_t velocity, bool note_on, uint32_t now_ms) {
+    s_activity_count++;
     for (uint8_t i = 0; i < s_note_callback_count; i++) {
         s_note_callbacks[i](channel, note, velocity, note_on, now_ms);
     }

@@ -88,3 +88,18 @@ typedef void (*tiles_midi_in_note_callback_t)(uint8_t channel, uint8_t note, uin
 bool tiles_midi_in_register_realtime_callback(tiles_midi_in_realtime_callback_t callback);
 bool tiles_midi_in_register_sysex_callback(tiles_midi_in_sysex_callback_t callback);
 bool tiles_midi_in_register_note_callback(tiles_midi_in_note_callback_t callback);
+
+/* Monotonic count of MEANINGFUL MIDI events received -- every Note-On/Off
+ * and every Real-Time Clock/Start/Continue/Stop, i.e. exactly what a DAW
+ * produces while it's actually playing or a melody is being echoed (see
+ * services/op_mode.c's melodic-echo section). Deliberately NOT bumped by
+ * SysEx (Scene Launch's own feedback fires on any clip change, playing or
+ * not), stray data bytes, or Active Sensing -- "MIDI is being received"
+ * for the purpose that asked for this (services/standby.c: real feedback,
+ * "no screensaver can activate if ableton is playing or midi is being
+ * received") means the board is actually being used, not that Ableton
+ * happens to be open. Callers detect activity by comparing against a
+ * previously seen value (wraps harmlessly; only inequality matters), same
+ * "poll a counter, don't register another callback" shape that keeps this
+ * off the 4-listener registration tables above. */
+uint32_t tiles_midi_in_activity_count(void);

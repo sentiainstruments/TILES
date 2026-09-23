@@ -106,6 +106,30 @@
  * "unmeasured against real hardware" caveat. */
 #define TILES_LIGHTING_FIFTH_BASELINE_PERCENT 40u
 
+/* Real feedback on the melodic-echo indicator (services/op_mode.c's
+ * "Melodic mode: live echo of an incoming melody"): "it needs more
+ * brightness tho." The echo color was already full-scale (0, 1, 0) in this
+ * file's own 0-1 space, so there was no headroom left to raise it there --
+ * the limit is write_pad()'s power-derived ceiling below (37% on USB-only,
+ * 90% on external power, see static_ceiling_level()), which exists for a
+ * documented safety reason (unmeasured haptics current on a 500mA USB
+ * budget) and is deliberately NOT touched here. What CAN change within that
+ * same per-pad ceiling is how much light a pad emits at it:
+ *   - a pure-green pad drives only the green die; mixing in a little red
+ *     and blue (TILES_LIGHTING_ECHO_SUSTAIN_TINT) uses the other two dies
+ *     too, reading as a brighter, paler green -- still clearly green, and
+ *     nowhere near a pressed pad's plain white;
+ *   - an onset flash: the pad starts at full white and eases down to that
+ *     sustained green over TILES_LIGHTING_ECHO_FLASH_MS, so every note
+ *     lands with a bright hit the eye catches even when the sustained
+ *     color is capped. White at the ceiling is what a pressed pad already
+ *     shows, so this is within the budget the ceiling was built around
+ *     (24 pads all-white at the ceiling), not new headroom.
+ * Both unmeasured against real hardware, like every first-pass constant
+ * here. */
+#define TILES_LIGHTING_ECHO_SUSTAIN_TINT 0.35f
+#define TILES_LIGHTING_ECHO_FLASH_MS 180u
+
 /* Underglow's own fixed brightness, out of 255 -- deliberately NOT
  * scaled by the active brightness ceiling/the power state. It used to be
  * a percentage of the active ceiling (65%), which meant it rode down
@@ -275,13 +299,25 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
      * capture indicator just above -- see tiles_op_mode_incoming_note_
      * is_sounding()'s own comment for the full design (any MIDI channel,
      * melodic mode only, fed by the TILES DISPLAY Max for Live device --
-     * see daw-integration/README.md -- nothing arrives without it). Bright green, not used anywhere else in this
-     * function's own palette (root magenta, third teal/greenish-teal,
-     * fifth blue, Song-capture orange, natural white), so it reads as
-     * its own distinct "this is playing right now" signal rather than
+     * see daw-integration/README.md -- nothing arrives without it).
+     * Green (with an onset flash to white and a little white mixed into
+     * the sustain -- see TILES_LIGHTING_ECHO_*), not used anywhere else
+     * in this function's own palette (root magenta, third teal/greenish-
+     * teal, fifth blue, Song-capture orange, natural white), so it reads
+     * as its own distinct "this is playing right now" signal rather than
      * blending into any of those. */
-    if (tiles_op_mode_incoming_note_is_sounding(tiles_note_map_get_note(logical_pad))) {
-        return (tiles_rgb01_t){0.0f, 1.0f, 0.0f};
+    uint8_t echo_note = tiles_note_map_get_note(logical_pad);
+    if (tiles_op_mode_incoming_note_is_sounding(echo_note)) {
+        /* See TILES_LIGHTING_ECHO_SUSTAIN_TINT's own comment: white at
+         * onset easing to a lighter green. red/blue move together (both
+         * just "how much white is mixed in"); green stays full throughout. */
+        uint32_t age_ms = tiles_op_mode_incoming_note_age_ms(echo_note);
+        float mix = TILES_LIGHTING_ECHO_SUSTAIN_TINT;
+        if (age_ms < TILES_LIGHTING_ECHO_FLASH_MS) {
+            float t = (float)age_ms / (float)TILES_LIGHTING_ECHO_FLASH_MS; /* 0 = just hit, 1 = settled */
+            mix = 1.0f + t * (TILES_LIGHTING_ECHO_SUSTAIN_TINT - 1.0f);
+        }
+        return (tiles_rgb01_t){mix, 1.0f, mix};
     }
 
     /* Guitar/bass fret mode: a completely different idle-coloring scheme,

@@ -221,4 +221,12 @@ deterministic voice-steal policy) are done — see Status below.
     abort of an in-progress SysEx frame. Fixed by widening the skip to
     the full 0xF8-0xFF range while still only firing a callback for the
     original four.
+- **`tiles_midi_in_activity_count()`** -- monotonic count of meaningful
+  MIDI events (Note-On/Off and the four Real-Time Clock/Start/Continue/
+  Stop bytes; not SysEx, stray data bytes, or Active Sensing), polled by
+  `services/standby.c` so incoming MIDI holds off / wakes an automatic
+  screensaver. Real feedback: "no screensaver can activate if ableton is
+  playing or midi is being recieved." Polled counter rather than a
+  fourth registered callback -- the callback tables are a fixed 4 each
+  and this needs no per-event payload.
 - DIN MIDI IN/OUT -- not built yet.

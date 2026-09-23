@@ -4960,12 +4960,19 @@ static void render_scene_launch(uint32_t now_ms);
  * a "nearest" pad for a note that doesn't land on one. This tradeoff was
  * raised and accepted before building this. */
 static bool s_incoming_note_sounding[128];
+/* When each note's most recent Note-On arrived -- only meaningful while
+ * s_incoming_note_sounding[note] is true. Feeds tiles_op_mode_incoming_
+ * note_age_ms() below (services/lighting.c's onset flash: real feedback,
+ * "it needs more brightness"). */
+static uint32_t s_incoming_note_on_ms[128];
 
 static void melodic_echo_on_midi_note(uint8_t channel, uint8_t note, uint8_t velocity, bool note_on,
                                        uint32_t now_ms) {
     (void)channel;
     (void)velocity;
-    (void)now_ms;
+    if (note_on) {
+        s_incoming_note_on_ms[note] = now_ms;
+    }
     s_incoming_note_sounding[note] = note_on;
 }
 
@@ -4986,6 +4993,12 @@ static void melodic_echo_init(void) {
  * public surface smaller without losing anything. */
 bool tiles_op_mode_incoming_note_is_sounding(uint8_t note) {
     return s_active_mode == OP_MODE_MELODIC && s_incoming_note_sounding[note];
+}
+
+/* See this accessor's own declaration in op_mode.h. Unsigned subtraction
+ * on purpose -- wraps correctly across the 32-bit millisecond counter. */
+uint32_t tiles_op_mode_incoming_note_age_ms(uint8_t note) {
+    return to_ms_since_boot(get_absolute_time()) - s_incoming_note_on_ms[note];
 }
 
 void tiles_op_mode_init(bool crash_recovered) {
