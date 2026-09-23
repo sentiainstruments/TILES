@@ -8138,29 +8138,48 @@ not its code.
   reading (and misreading) whatever that pad's CURRENT, unrelated state
   happens to be. **Confirmed fixed on real hardware**: "pedal working
   now."
-- **Melodic mode: 3rd scale degree highlighted teal.** Real feedback: "i
-  need more references on melodic mode, highlight the 3rd scale degree
-  with the color teal." `tiles_note_map_is_third_pad()` (`note_map.c`/
-  `.h`) mirrors `tiles_note_map_is_root_pad()` exactly (same positional,
-  chord-mode-aware degree math, just checking degree 2 instead of degree
-  0), and `services/lighting.c`'s idle pad-color resolver checks it right
-  after root -- teal (G+B, no R) at the same baseline brightness root
-  uses, so it reads as a second landmark distinct from both root's
-  magenta and a natural key's white. Since chord mode's own melody
-  sub-grid now plays through this exact same scale-following logic (see
-  the earlier "mini melodic mode" entry above), it gets this same
-  landmark too, not just plain melodic mode.
-  **A 3rd landmark added right after**: real feedback: "make 5th another
-  color as well within a complementary matching hue but different
-  enough to the 3rd." `tiles_note_map_is_fifth_pad()` mirrors the same
-  shape again (degree 4 instead of degree 2). First colored amber/gold
-  (R+G, no B) in `lighting.c` for a triadic (root/third/fifth each a
-  different channel-pair) scheme -- real feedback on that: "color is
-  gross tho, do a blue not yellow hues." Changed to pure blue (B only,
-  no R or G) instead: root's magenta (R+B) and third's teal (G+B)
-  already both lean on blue, so plain blue reads as the family's own
-  shared "core" hue -- still clearly distinct from both (magenta leans
-  red, teal leans green), staying in the blue family the feedback asked
-  for rather than introducing yellow into the palette at all.
+- **Melodic mode: interval-quality landmarks (root/third/fifth), not
+  scale-degree position.** Real feedback, three rounds:
+  1. "i need more references on melodic mode, highlight the 3rd scale
+     degree with the color teal" -- first built as `tiles_note_map_is_
+     third_pad()`, checking scale-degree POSITION (index 2, 0-based),
+     mirroring `tiles_note_map_is_root_pad()`'s own shape exactly.
+  2. "make 5th another color as well within a complementary matching
+     hue but different enough to the 3rd" -- `tiles_note_map_is_fifth_
+     pad()` added the same way (degree index 4), first colored amber/
+     gold, then real feedback on that color specifically: "color is
+     gross tho, do a blue not yellow hues."
+  3. **The position-based approach itself was wrong**, corrected once
+     real feedback specified actual interval quality instead: "perfect
+     fifth is the blue, and major third is teal unless a scale has a
+     minor 3rd then its that one and not teal but teal more towards
+     greenish." Scale-degree POSITION doesn't reliably mean the same
+     musical interval across every scale in this file -- pentatonic
+     minor's degree-index 2 is a fourth (5 semitones), not a third at
+     all; its real minor third sits at degree-index 1. The old position
+     check would have highlighted the wrong pad entirely for that scale
+     (and several others), and Locrian's degree-index 4 is a diminished
+     fifth (6 semitones), not a perfect one.
+  Fixed by checking the scale's own INTERVAL TABLE (semitones from the
+  tonic) instead of degree position: `interval_from_root_for_pad()`
+  (`note_map.c`, shared helper) resolves a pad's degree to
+  `table.intervals[degree % table.count]`, and `tiles_note_map_is_
+  major_third_pad()`/`_is_minor_third_pad()`/`_is_fifth_pad()` check
+  that value against 4, 3, and 7 semitones respectively -- musically
+  correct regardless of which scale is selected, and correctly absent
+  (no highlight at all) for a scale that genuinely lacks that interval
+  (Locrian has no perfect fifth; Egyptian pentatonic has neither a
+  major nor minor third), rather than mislabeling the nearest degree.
+  `services/lighting.c` colors major third teal (G+B), minor third the
+  same teal shifted greener (G, B pulled down by `TILES_LIGHTING_MINOR_
+  THIRD_GREEN_BIAS`) so the two read as related but distinguishable per
+  real feedback's own "not teal but teal more towards greenish," and
+  fifth pure blue (B only) -- root's magenta (R+B) and third's teal
+  (G+B) already both lean on blue, so plain blue reads as the family's
+  shared "core" hue, distinct from both, staying in the blue family
+  rather than the earlier amber/gold. All chord-mode-aware via
+  `chord_mode_degree()` same as root, so chord mode's own melody
+  sub-grid (which plays through this exact same scale now, see the
+  earlier "mini melodic mode" entry above) gets these landmarks too.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

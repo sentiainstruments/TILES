@@ -238,32 +238,49 @@ uint8_t tiles_note_map_quantize_to_scale(uint8_t note);
  * (8) has 3. Returns false for an out-of-range pad. */
 bool tiles_note_map_is_root_pad(uint8_t logical_pad);
 
-/* True if this pad sits on the scale's 3rd degree (index 2, 0-based --
- * the same "root, second, THIRD..." counting tiles_note_map_is_root_pad()
- * above uses for degree 0) -- real feedback: "i need more references on
- * melodic mode, highlight the 3rd scale degree with the color teal."
- * Same positional/chord-mode-aware shape as tiles_note_map_is_root_pad()
- * (purely positional, independent of key offset; chord-mode-aware via
- * chord_mode_degree() so chord mode's own melody sub-grid -- which plays
- * through this exact same scale now, see tiles_note_map_get_note()'s own
- * comment -- gets this reference landmark too, not just plain melodic
- * mode). Driven by services/lighting.c's idle pad coloring, checked
- * after root (root wins if a pad is somehow both, which never actually
- * happens for any real scale here -- root is always degree 0, third is
- * always degree 2, and every scale table in this file has at least 5
- * notes/octave, so the two can never land on the same pad). Returns
- * false for an out-of-range pad. */
-bool tiles_note_map_is_third_pad(uint8_t logical_pad);
+/* True if this pad's scale degree is a MAJOR THIRD (4 semitones) above
+ * the tonic -- real feedback, corrected from an earlier position-based
+ * version: "perfect fifth is the blue, and major third is teal unless a
+ * scale has a minor 3rd then its that one and not teal but teal more
+ * towards greenish." This checks the scale's own INTERVAL TABLE
+ * (semitones from the tonic), not scale-degree POSITION -- an earlier
+ * version checked "degree index 2," which isn't always a third at all:
+ * pentatonic minor's degree 2 is a fourth (5 semitones), its actual
+ * minor third sits at degree 1; the position-based check would have
+ * highlighted the wrong pad entirely for that scale (and several
+ * others). Chord-mode-aware via chord_mode_degree() same as
+ * tiles_note_map_is_root_pad(), so chord mode's own melody sub-grid
+ * gets this too. Driven by services/lighting.c's idle pad coloring.
+ * Mutually exclusive with tiles_note_map_is_minor_third_pad() below for
+ * any one pad (a pad's degree resolves to exactly one interval value),
+ * though a scale can genuinely contain both AT DIFFERENT pads (e.g. the
+ * combination-diminished scale has both a minor and major third) --
+ * each pad's own color is decided independently by its own interval,
+ * not by a single scale-wide choice. Returns false for an out-of-range
+ * pad, or for a scale with no major third at all (e.g. any scale built
+ * entirely from minor thirds/diminished intervals). */
+bool tiles_note_map_is_major_third_pad(uint8_t logical_pad);
 
-/* True if this pad sits on the scale's 5th degree (index 4, 0-based) --
- * real feedback: "make 5th another color as well within a complementary
- * matching hue but different enough to the 3rd." Identical shape to
- * tiles_note_map_is_third_pad() just above, degree 4 instead of degree
- * 2 -- same positional/chord-mode-aware math, same "every real scale
- * here has at least 5 notes/octave so root/third/fifth can never land
- * on the same pad" guarantee (see that function's own comment). Driven
- * by services/lighting.c's idle pad coloring. Returns false for an
- * out-of-range pad. */
+/* Same as tiles_note_map_is_major_third_pad() just above, but the MINOR
+ * third (3 semitones) instead of major (4) -- see that function's own
+ * comment for the real feedback and reasoning this mirrors exactly.
+ * services/lighting.c colors this a greenish variant of the major
+ * third's teal, not the identical color, so the two read as related but
+ * distinguishable at a glance. Returns false for a scale with no minor
+ * third at all (most of the scales in this file's own table -- major-
+ * quality modes/scales only have the major third, not both). */
+bool tiles_note_map_is_minor_third_pad(uint8_t logical_pad);
+
+/* True if this pad's scale degree is a PERFECT FIFTH (7 semitones)
+ * above the tonic -- real feedback: "perfect fifth is the blue." Same
+ * interval-table check as the third accessors above, not scale-degree
+ * POSITION -- degree-index 4 isn't a fifth at all for every scale
+ * either (Locrian's degree 4 is a diminished fifth, 6 semitones, not
+ * 7 -- Locrian has no perfect fifth at all, its own defining
+ * characteristic, so correctly no pad gets this highlight for that
+ * scale rather than mislabeling the diminished fifth as if it were
+ * perfect). Driven by services/lighting.c's idle pad coloring. Returns
+ * false for an out-of-range pad, or for a scale with no perfect fifth. */
 bool tiles_note_map_is_fifth_pad(uint8_t logical_pad);
 
 /* True if this pad's CURRENTLY MAPPED note (tiles_note_map_get_note())
