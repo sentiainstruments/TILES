@@ -274,8 +274,8 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
      * coloring, but a real touch already won above" shape as the Song-
      * capture indicator just above -- see tiles_op_mode_incoming_note_
      * is_sounding()'s own comment for the full design (any MIDI channel,
-     * melodic mode only, needs the player's own DAW-side routing to ever
-     * receive anything). Bright green, not used anywhere else in this
+     * melodic mode only, fed by the TILES DISPLAY Max for Live device --
+     * see daw-integration/README.md -- nothing arrives without it). Bright green, not used anywhere else in this
      * function's own palette (root magenta, third teal/greenish-teal,
      * fifth blue, Song-capture orange, natural white), so it reads as
      * its own distinct "this is playing right now" signal rather than

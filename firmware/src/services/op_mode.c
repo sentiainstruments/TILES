@@ -4921,12 +4921,16 @@ static void render_scene_launch(uint32_t now_ms);
  * history) -- this is that callback's one registered listener.
  *
  * Deliberately tracks EVERY incoming Note-On/Off regardless of channel
- * (any channel, not just one) and regardless of s_active_mode: the DAW-
- * side routing that makes an armed track's output actually reach this
- * board's MIDI IN at all is entirely the player's own setup (a plain
- * MIDI-thru/monitor connection in their DAW, not anything this firmware
- * or the Ableton Remote Script configures) -- nothing here can know or
- * assume which channel that lands on. Tracking regardless of mode (not
+ * (any channel, not just one) and regardless of s_active_mode: what
+ * feeds this board's MIDI IN is the TILES DISPLAY Max for Live device
+ * (daw-integration/ableton/TILES_DISPLAY/), which taps the notes
+ * reaching a track's instrument and sends them out through the TILES
+ * control surface's own MIDI output via the Live Object Model's
+ * send_midi -- not anything this firmware or the Ableton Remote Script
+ * configures (plain track-output routing was the first idea and can't
+ * work: a track with an instrument outputs audio after it, not MIDI).
+ * The device always sends on channel 1, but nothing here should depend
+ * on that. Tracking regardless of mode (not
  * just while melodic mode is the one on screen) matters for correctness,
  * not convenience: a Note-Off must always be able to clear whatever its
  * matching Note-On set, even if the player switched to another mode and

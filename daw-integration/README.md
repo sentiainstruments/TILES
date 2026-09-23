@@ -105,8 +105,9 @@ Sentia purple whenever anything in that scene has a clip, on any track.
 **Record a new clip**: a pressure click on an EMPTY slot arms that track
 and starts recording into the slot; if the track takes MIDI, TILES then
 opens melodic mode (once your fingers are off the pads) so you can play
-straight into it. Relies on Live's own Exclusive Arm preference to
-disarm other tracks -- the script doesn't disarm anything itself. Shift+diamond
+straight into it. The script itself disarms every other track first (it
+used to rely on Live's own Exclusive Arm preference, which it can't
+see or guarantee is on -- see "Exclusive arm fixed" below). Shift+diamond
 while in that melodic capture ends the recording (the clip starts
 looping) and returns to Scene Launch mode -- it never enters Song mode
 capture from this flow.
@@ -205,38 +206,94 @@ tracks change -- the connect-time setup loop was extracted into
 `_connect_track_clip_listeners()`/`_disconnect_track_clip_listeners()`
 so both the initial connect and this resync share the exact same code.
 
-## Melodic mode: echoing an armed track's melody
+## Melodic mode: echoing a track's melody (TILES DISPLAY)
 
 Real feedback: "in midi melodic mode is there any way we could read the
-playing melody of the armed track and display it back on tiles?" TILES's
-firmware side is built (see `firmware/src/services/README.md`'s own
-"Melodic mode: live echo of an incoming melody" entry) -- while melodic
-mode is active, any Note-On TILES receives on its USB MIDI IN lights the
-pad that note currently maps to (if any) bright green, and the pad goes
-dark again on the matching Note-Off.
+playing melody of the armed track and display it back on tiles?" -- then,
+once the first version's instructions met a real Ableton setup: "ableton
+instruments send either midi or audio after the vst... we need to build
+a max for live device that slots in between... we can call it VIEW...
+the plugin is called TILES DISPLAY."
 
-This is NOT part of the `scene_launch.py`/`TILES.py` Remote Script above
--- it needs no Python at all, just standard MIDI routing in Live itself,
-since it's really just "make the armed track's own output also reach
-TILES's MIDI input," the same way you'd route any track to any device:
+**Why a device, not just routing.** The first version of this section
+told you to point the armed track's MIDI *output* at TILES. That only
+works for a track with NO instrument on it -- the moment a track has a
+VST/instrument, everything after that instrument is AUDIO, so there's no
+MIDI output left to route. And a Remote Script (`TILES.py`/
+`scene_launch.py`) can't fill the gap: it only ever sees its own MIDI
+port, not a track's MIDI. A Max for Live **MIDI Effect placed before the
+instrument** sees every note that actually reaches it -- clip playback,
+live input, anything an earlier arp/chord/scale device produced -- and
+passes all of it through untouched, so it changes nothing about how the
+track sounds.
 
-1. Select the armed track.
-2. In its MIDI **track output** chooser (the bottom of the track's I/O
-   section in Session or Arrangement view -- NOT the Control Surface
-   slot from the one-time install above, and NOT the track's *input*),
-   pick TILES as the destination instead of (or in addition to) its
-   usual instrument.
-3. Leave "Monitor" set to whatever it already is for normal playback/
-   recording -- this output routing works the same regardless.
+**How it reaches TILES.** The device calls the Live Object Model's
+`ControlSurface.send_midi` on the TILES control surface, which writes
+straight to that script's MIDI *output* port -- the same port
+`scene_launch.py` already uses for its SysEx feedback (confirmed against
+Cycling '74's LOM docs and forum reports of the same technique lighting
+Push pads). No network layer, no extra Remote Script code, negligible
+latency. Firmware side is unchanged from before: TILES lights the pad
+that note maps to (bright green) while melodic mode is active, and
+clears it on the Note-Off.
 
-A note the track plays that doesn't fall on TILES's own currently
-selected scale/octave/key has no pad to light and is simply not shown --
-expected, not a bug (see the firmware README entry's own "two accepted
-tradeoffs" note). This also means TILES is now receiving that track's
-notes on whatever MIDI channel Ableton sends them on, same port as
-everything else -- harmless (TILES only reads them for this display
-feature, never re-sends or acts on them otherwise), but worth knowing if
-something else on that same port ever seems to receive extra traffic.
+### Install (one time)
+
+1. Copy `ableton/TILES_DISPLAY/TILES DISPLAY.amxd` into your User
+   Library, e.g. `~/Music/Ableton/User Library/Presets/MIDI Effects/Max
+   MIDI Effect/` (Live's browser: *Max for Live > Max MIDI Effect >
+   User Library*), or just drag it from Finder onto a track. Needs Max
+   for Live (included in Live Suite).
+2. Put it on the MIDI track **before the instrument** (MIDI effects sit
+   to the left of the instrument in the device chain).
+
+### Use
+
+- **VIEW** -- the arm toggle. Sentia pink when armed: that track's notes
+  show on TILES. Only one TILES DISPLAY is armed at a time -- turning
+  VIEW on in one instance turns it off in every other instance in the
+  set (they share Max's global name space, so no configuration is
+  needed). Turning it off clears any pad still lit. VIEW is a normal
+  Live parameter, so it's saved with the set and can be MIDI/key mapped.
+- **SURFACE** -- which Control Surface slot TILES is in (Preferences >
+  Link, Tempo & MIDI, rows 1-6). Set once, saved with the set. This
+  exists because the Live Object Model gives a device no way to ask a
+  control surface what script it is, and sending notes to the wrong one
+  would land them on someone else's hardware. **If nothing lights when
+  you arm VIEW, try the neighboring number** -- it isn't documented
+  whether the LOM's index skips empty slots, so the slot number and the
+  LOM index may differ by however many empty rows sit above TILES.
+
+TILES must be in melodic mode, and a note outside the currently selected
+scale/octave/key has no pad to light (same accepted tradeoffs as the
+firmware entry in `firmware/src/services/README.md`).
+
+### The device's source
+
+`ableton/TILES_DISPLAY/build_tiles_display.py` generates the `.amxd`
+(same container format Ableton's own factory "Max MIDI Effect" template
+uses) -- edit the device there and re-run `python3 build_tiles_display.py`
+rather than hand-editing the binary-wrapped file. The generator checks
+every connection points at a real inlet/outlet before writing.
+
+### Verification status -- read this first time
+
+**Written and structurally validated, never opened in Live yet** (no way
+to drive Live's UI from where this was written). First-run checklist:
+
+1. Drop the device on a MIDI track before an instrument; it should load
+   with no red/errors in Max's console and show the dark panel, a pink
+   underline, the **VIEW** button, and **SURFACE**.
+2. TILES in melodic mode, SURFACE set, click VIEW -- button turns Sentia
+   pink; play a note on that track and the matching pad should light
+   green, then go dark on release.
+3. Add a second instance on another track and arm it -- the first
+   instance's VIEW should switch itself off and its pad clear.
+4. Stop transport / disarm mid-note -- no pad should stay lit.
+
+If step 2 fails but 1 loads clean, the likely culprits, in order:
+SURFACE number (above), the TILES script not selected in a Control
+Surface slot with its **Output** port set, or TILES not in melodic mode.
 
 ## Other DAWs
 

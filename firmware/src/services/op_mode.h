@@ -440,9 +440,11 @@ bool tiles_op_mode_song_capture_is_note_sounding(uint8_t note);
  * coloring, don't replace or block a real touch" shape tiles_op_mode_
  * song_capture_is_note_sounding() above already established, just fed
  * by USB MIDI IN instead of this board's own captured pattern data.
- * Getting a note from the DAW's armed track onto this board's MIDI IN
- * at all needs the player's own DAW-side routing (a plain MIDI-thru/
- * monitor connection) -- nothing here configures or assumes that.
+ * Getting a track's notes onto this board's MIDI IN at all is the job of
+ * the TILES DISPLAY Max for Live device (daw-integration/ableton/
+ * TILES_DISPLAY/) -- a track with an instrument outputs AUDIO after it,
+ * so plain track-output routing can't carry them; nothing in this
+ * firmware configures or assumes any of that.
  * Chord mode's own melody sub-grid is deliberately NOT covered (see
  * op_mode.c's own "Melodic mode: live echo of an incoming melody"
  * section for why), and a note outside whatever's currently mapped to a
