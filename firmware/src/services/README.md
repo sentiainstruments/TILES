@@ -7787,6 +7787,24 @@ not its code.
       Clip-level color/playing_status listeners (re)subscribed --
       `_on_has_clip_changed()` was only ever called once, at connect.
       It's now what `has_clip` calls.
+  - **Mode color changed from green to teal.** Both the mode-selector
+    menu-slot color (`OP_MENU_SCENE_LAUNCH_R/G/B`, `render_menu_col_
+    color()`) and Scene Launch's own idle underglow (previously plain
+    white in `render_scene_launch_underglow()`) now share the same teal
+    (0.0, 0.5, 0.5) so the mode reads consistently by its own color both
+    while picking it from the menu and while it's the active mode.
+  - **Automation arm made exclusive (daw-integration side).** Real
+    feedback: "automation arm is not switching exclusively to the track
+    thats going to get the new clip." `_record_new_clip()`
+    (`daw-integration/ableton/TILES/scene_launch.py`) used to arm only
+    the target track and rely on Live's own Exclusive Arm preference to
+    disarm every other track -- a per-user Live setting this script
+    can't see or guarantee is on. With it off, previously-armed tracks
+    stayed armed alongside the new one. Fixed by explicitly disarming
+    every other currently-armed track before arming the target, so the
+    track about to receive the new clip is always the sole armed track
+    regardless of that Live preference. See `daw-integration/README.md`
+    for the full note.
 - **Melodic harmonics, board 2 only (experiment, off by default).** Real
   feedback: "i wanna add harmonics into melodic mode. like capacitive
   touch only plays the respective harmonics of the note being played by

@@ -588,13 +588,25 @@ class SceneLaunch(object):
         if the track takes MIDI, tells the firmware to open melodic mode
         so the player can immediately play into the recording. Audio
         tracks still arm and record, they just don't get a melodic mode
-        to play into. Relies on Live's own Exclusive Arm preference to
-        disarm other tracks -- deliberately doesn't disarm anything
-        itself, so a deliberately multi-armed setup isn't undone.
-        (Track.can_be_armed/arm/has_midi_input confirmed against
-        AbletonOSC's own track.py property lists.)"""
+        to play into.
+
+        Real feedback, later: "automation arm is not switching exclusively
+        to the track thats going to get the new clip." This used to rely
+        on Live's own Exclusive Arm preference to disarm every other track
+        automatically -- but that's a per-user Live setting this control
+        surface has no way to see or guarantee is even on, and when it's
+        off, arming this track left every previously-armed track armed
+        too, so the new recording wasn't landing exclusively on the track
+        the player just picked. Now this disarms every OTHER currently-
+        armed track itself before arming this one, so the track about to
+        receive the new clip is always the sole armed track regardless of
+        that Live preference. (Track.can_be_armed/arm/has_midi_input
+        confirmed against AbletonOSC's own track.py property lists.)"""
         armed = False
         if track.can_be_armed:
+            for other in self._song.tracks:
+                if other is not track and other.can_be_armed and other.arm:
+                    other.arm = False
             track.arm = True
             armed = True
         self._log(

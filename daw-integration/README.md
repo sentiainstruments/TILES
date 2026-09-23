@@ -169,6 +169,19 @@ first:
   firing (a genuinely open question against a real session, see
   `scene_launch.py`'s own module docstring).
 
+**Exclusive arm fixed.** Real feedback: "automation arm is not
+switching exclusively to the track thats going to get the new clip."
+`_record_new_clip()` (fired on a pressure click into an empty slot,
+per "if were recording a new clip make it open melodic mode
+automatically and arm that channel") used to arm only the target
+track and rely on Live's own Exclusive Arm preference to disarm every
+other track -- a per-user Live setting this script has no way to see
+or guarantee is on. With it off, every previously-armed track stayed
+armed too, so the new recording wasn't landing on just the one track
+the player picked. Fixed by having `_record_new_clip()` explicitly
+disarm every other currently-armed track itself before arming the
+target, independent of that Live preference.
+
 ## Other DAWs
 
 This specific script is Ableton-only -- Logic, Cubase, Reaper, Bitwig,

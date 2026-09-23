@@ -127,13 +127,13 @@ typedef enum {
 #define OP_MENU_SONG_R 1.0f
 #define OP_MENU_SONG_G 1.0f
 #define OP_MENU_SONG_B 0.0f
-/* Scene Launch = green -- Ableton's own Session View already uses green
- * for "this clip is playing," so this mode's own menu-slot color leans
- * into that existing association rather than picking an arbitrary new
- * one. */
+/* Scene Launch = teal. Was green (Ableton's own Session View uses green
+ * for "this clip is playing") -- real feedback moved the mode-selector
+ * color to teal instead, matching this mode's own idle underglow color
+ * (see render_scene_launch_underglow()'s own comment). */
 #define OP_MENU_SCENE_LAUNCH_R 0.0f
-#define OP_MENU_SCENE_LAUNCH_G 1.0f
-#define OP_MENU_SCENE_LAUNCH_B 0.0f
+#define OP_MENU_SCENE_LAUNCH_G 0.5f
+#define OP_MENU_SCENE_LAUNCH_B 0.5f
 
 /* Triangle LED glow while the top-level mode picker is actually open --
  * the button itself is monochrome PWM (not addressable RGB like the
@@ -7494,7 +7494,11 @@ static void render_scene_launch_underglow(uint32_t now_ms) {
         } else if (flashing) {
             tiles_lighting_set_standby_underglow_rgb(i, s_scene_flash_r, s_scene_flash_g, s_scene_flash_b);
         } else {
-            tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 1.0f, 1.0f);
+            /* Idle Scene Launch underglow -- was white, real feedback
+             * moved it to teal, matching this mode's own menu-selector
+             * color (OP_MENU_SCENE_LAUNCH_R/G/B above). */
+            tiles_lighting_set_standby_underglow_rgb(i, OP_MENU_SCENE_LAUNCH_R, OP_MENU_SCENE_LAUNCH_G,
+                                                      OP_MENU_SCENE_LAUNCH_B);
         }
     }
 }
