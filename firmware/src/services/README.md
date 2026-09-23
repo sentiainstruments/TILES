@@ -8193,6 +8193,18 @@ not its code.
   (Locrian has no perfect fifth, so no pad is highlighted there) is kept;
   `tiles_note_map_is_fifth_pad()` now does it inline instead of through
   the shared helper the two third accessors used.
+  **Fifth made azure.** Real feedback, with only root and fifth left:
+  "the color should be a bit more striking like sentia pink ?" -- asked
+  which color, answered "actually just make it slighly more green so its
+  more distinct." Read as the fifth (the only one of the two that can go
+  greener; the root is Sentia magenta and stays that). Pure blue is dim
+  on these LEDs (the blue die adds little apparent luminance) and sits
+  right next to the root's own blue channel, so the fifth is now
+  `{0, level * TILES_LIGHTING_FIFTH_GREEN_TINT, level}` -- azure, with
+  the tint (0.35, of the blue level) in `lighting.c`. The green die is
+  the most luminous of the three, so this reads brighter as well as
+  different, at the same baseline percent and inside the same power
+  ceiling. Unmeasured on hardware, like every color constant here.
 - **Melodic mode: live echo of an incoming melody.** Real feedback: "in
   midi melodic mode is there any way we could read the playing melody
   of the armed track and display it back on tiles?" Needed a genuinely

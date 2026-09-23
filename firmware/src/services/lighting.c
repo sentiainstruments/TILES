@@ -83,10 +83,23 @@
  * color for 3rds just keep root and 5th for references. no thirds from
  * a different color." The third-degree landmark (teal / greenish-teal) is
  * gone entirely; melodic idle coloring is root (magenta), perfect fifth
- * (pure blue, B only), natural key (white), sharp (dark). Same baseline
+ * (blue, see below), natural key (white), sharp (dark). Same baseline
  * percent as root, "unmeasured against real hardware" like every first-
- * pass brightness constant in this file. */
+ * pass brightness constant in this file.
+ * Then, once root and fifth were the only two landmarks left: "the color
+ * should be a bit more striking like sentia pink?" -- asked which color,
+ * answered "actually just make it slighly more green so its more
+ * distinct." Read as the fifth (the only one of the options that can go
+ * greener): pure blue is a dim, easily-muddied color on these LEDs (the
+ * blue die contributes very little apparent luminance, and its hue sits
+ * right next to the pink root's own blue channel), so it's now an azure --
+ * a little green mixed in (TILES_LIGHTING_FIFTH_GREEN_TINT, fraction of
+ * the blue level). The green die is by far the most luminous of the
+ * three, so this also makes the fifth read brighter and more striking,
+ * not just more different, at the same baseline percent and inside the
+ * same ceiling. Unmeasured, like everything here. */
 #define TILES_LIGHTING_FIFTH_BASELINE_PERCENT 40u
+#define TILES_LIGHTING_FIFTH_GREEN_TINT 0.35f
 
 /* Real feedback on the melodic-echo indicator (services/op_mode.c's
  * "Melodic mode: live echo of an incoming melody"): "it needs more
@@ -353,12 +366,12 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         return (tiles_rgb01_t){level, 0.0f, level};
     }
     if (tiles_note_map_is_fifth_pad(logical_pad)) {
-        /* Pure blue -- B channel only, R and G stay 0 -- see
-         * TILES_LIGHTING_FIFTH_BASELINE_PERCENT's own comment. Checked
-         * after root for the same "never actually overlaps, but root
-         * would win if it somehow did" reasoning. */
+        /* Azure -- blue with a little green, R stays 0 -- see
+         * TILES_LIGHTING_FIFTH_GREEN_TINT's own comment. Checked after
+         * root for the same "never actually overlaps, but root would win
+         * if it somehow did" reasoning. */
         float level = (float)TILES_LIGHTING_FIFTH_BASELINE_PERCENT / 100.0f;
-        return (tiles_rgb01_t){0.0f, 0.0f, level};
+        return (tiles_rgb01_t){0.0f, level * TILES_LIGHTING_FIFTH_GREEN_TINT, level};
     }
     if (tiles_note_map_is_natural_pad(logical_pad)) {
         float level = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;
