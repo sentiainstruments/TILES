@@ -1239,35 +1239,42 @@ static const uint8_t HARMONIC_SEMITONES[HARMONIC_MAX_VOICES] = {12u, 19u, 24u, 2
 #define HARMONIC_VELOCITY 40u
 
 /* Real feedback: "also fine tune palm rejection and accidental
- * touches." No dedicated palm-rejection heuristic exists anywhere else
- * in this file -- MIN_STRIKE_DEPTH_DELTA already requires genuine
- * pressure before a note fires, so a bare touch was always harmless
- * everywhere else. Harmonics change that: on this board, a bare touch
- * now audibly does something, so an incidental brush or a resting palm
- * needs its own filtering, scoped ONLY to the harmonic path below --
- * the real note pipeline (every other pad, every other board) is
- * completely untouched by either constant here.
+ * touches" -- then, correcting this section's first attempt: "palm
+ * rejection is more of a multiple harmonics detected at once like
+ * resting hand by accident. faster brushing or struming withing
+ * reasonable human capability should be detected as intentional."
  *
- *   - HARMONIC_TOUCH_DWELL_MS: a pad must stay continuously touched
- *     this long before it's even considered for a harmonic voice. A
- *     deliberate light touch for harmonic playing rests there; a
- *     fingertip grazing past a pad while reaching for the fundamental
- *     doesn't.
- *   - HARMONIC_PALM_CLUSTER_MS / _PALM_CLUSTER_MAX: if more than
- *     _MAX pads all clear that dwell gate within _CLUSTER_MS of each
- *     other, the whole cluster is treated as one incidental contact
- *     (most plausibly a palm or the heel of the hand landing flat) and
- *     NONE of them get a harmonic voice this cluster -- genuine
- *     intentional multi-finger touches from a spread hand land with
- *     real human timing stagger, not within single-digit-to-low-tens
- *     of milliseconds of each other the way a flat palm's contact
- *     patch does.
- * Both unmeasured, like every first-pass constant in this file -- not
- * tuned against a real palm on real hardware yet; the numbers here are
- * a starting point to adjust once board 2 is actually being played. */
+ * HARMONIC_TOUCH_DWELL_MS is unaffected by that correction -- a pad
+ * must stay continuously touched this long before it's even a
+ * candidate, filtering a brief single-pad graze. Still scoped only to
+ * this new path; MIN_STRIKE_DEPTH_DELTA already requires genuine
+ * pressure for the real note pipeline everywhere else, so a bare touch
+ * was always harmless there.
+ *
+ * The multi-pad veto below is a full redesign, not a tuning pass. The
+ * first version vetoed on how close together several pads' touches
+ * BEGAN (onset timing) -- exactly what a fast, deliberate strum/brush
+ * also does, so it rejected genuine playing along with real accidents.
+ * Onset timing was never the right signal. Real trackpads don't use it
+ * either: the actual palm signal is contact SIZE and PERSISTENCE -- a
+ * palm is one large, mostly-stationary contact that arrives and STAYS;
+ * a finger, or several fingers/a pick sweeping through a strum, is
+ * small and keeps moving, so even a fast gesture that briefly touches
+ * several pads at once doesn't keep them all down together. This
+ * hardware has no true contact-area sensing (each pad is a discrete
+ * touched/not-touched switch, not a continuous surface), so the closest
+ * available analog is COUNT sustained over TIME: how many candidate
+ * pads are touched at the same instant, and whether that count keeps
+ * being true rather than passing through. HARMONIC_PALM_MIN_SIMULTANEOUS
+ * candidates all touched at once, continuously for HARMONIC_PALM_
+ * SUSTAIN_MS, reads as a resting palm; anything shorter -- however tight
+ * the individual touches land in time -- doesn't, regardless of how
+ * fast the gesture was. Both unmeasured, like every first-pass constant
+ * in this file -- not tuned against a real palm or a real strum on real
+ * hardware yet. */
 #define HARMONIC_TOUCH_DWELL_MS 25u
-#define HARMONIC_PALM_CLUSTER_MS 40u
-#define HARMONIC_PALM_CLUSTER_MAX 2u
+#define HARMONIC_PALM_MIN_SIMULTANEOUS 3u
+#define HARMONIC_PALM_SUSTAIN_MS 150u
 
 typedef struct {
     bool active;
@@ -1281,6 +1288,11 @@ static harmonic_voice_t s_harmonic_voices[HARMONIC_MAX_VOICES];
  * pad() below finds exactly one held pad; cleared (and every active
  * voice torn down) the instant it stops being exactly that same pad. */
 static uint8_t s_harmonic_fundamental_pad;
+/* 0 = not currently in a high-simultaneous-touch episode -- see
+ * HARMONIC_PALM_SUSTAIN_MS's own comment. Set to the scan timestamp
+ * the instant the candidate count first reaches HARMONIC_PALM_MIN_
+ * SIMULTANEOUS; reset to 0 the instant it drops back below. */
+static uint32_t s_harmonic_high_count_since_ms;
 
 /* The LAST HARMONIC_MAX_VOICES Member Channels, permanently carved out
  * for harmonics only -- see this section's own header comment on why a
@@ -1330,6 +1342,7 @@ static void end_all_harmonic_voices(void) {
         end_harmonic_voice(i);
     }
     s_harmonic_fundamental_pad = 0u;
+    s_harmonic_high_count_since_ms = 0u;
 }
 
 /* No stealing in either direction: scans only the reserved range above,
@@ -1406,9 +1419,9 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
     /* First pass: which pads are even candidates this scan (touched,
      * not the fundamental, not already a real note or an existing
      * harmonic voice, and past HARMONIC_TOUCH_DWELL_MS) -- built before
-     * any of them can claim a channel, so the cluster veto below sees
-     * the WHOLE burst at once rather than reacting to its own partial
-     * progress through the pad loop. */
+     * any of them can claim a channel, so the sustained-count palm check
+     * just below sees this whole scan's real candidate count at once,
+     * not a partial one still being accumulated mid-loop. */
     bool candidate[TILES_NUM_PADS + 1u] = {false}; /* 1-indexed, [0] unused */
     uint8_t candidate_count = 0u;
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
@@ -1436,35 +1449,48 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
         candidate_count++;
     }
 
-    if (candidate_count > 0u) {
-        printf("[expression] harmonics: %u candidate pad(s) this scan (fundamental=%u)\n",
-               (unsigned)candidate_count, (unsigned)fundamental);
+    /* Count EVERY currently-touched other pad here, not just fresh
+     * dwell-cleared candidates -- an already-sounding harmonic voice's
+     * pad is still genuinely touched right now, and a palm landing
+     * partway through an existing legitimate session must still be
+     * recognized (it doesn't only count pads that are brand new this
+     * scan). */
+    uint8_t simultaneous = candidate_count;
+    for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
+        if (s_harmonic_voices[i].active && !candidate[s_harmonic_voices[i].pad]) {
+            simultaneous++;
+        }
     }
+    bool palm_rejected = false;
+    if (simultaneous >= HARMONIC_PALM_MIN_SIMULTANEOUS) {
+        if (s_harmonic_high_count_since_ms == 0u) {
+            s_harmonic_high_count_since_ms = now_ms;
+        } else if ((now_ms - s_harmonic_high_count_since_ms) >= HARMONIC_PALM_SUSTAIN_MS) {
+            palm_rejected = true;
+        }
+    } else {
+        s_harmonic_high_count_since_ms = 0u;
+    }
+
+    if (palm_rejected) {
+        /* Confirmed: several pads have been touched together long
+         * enough to be a resting palm, not a fast strum passing
+         * through. Can't reliably tell which currently-touched pads
+         * are "the palm" and which might be a genuine touch caught in
+         * the same episode with only binary touch data -- errs toward
+         * silence (see this section's own header) and drops all of
+         * them, new and already-sounding alike, for as long as the
+         * high count persists. */
+        printf("[expression] harmonics: %u pads touched together >= %ums -- palm rejected\n", (unsigned)simultaneous,
+               (unsigned)HARMONIC_PALM_SUSTAIN_MS);
+        for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
+            end_harmonic_voice(i);
+        }
+        return;
+    }
+
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         if (!candidate[pad]) {
-            continue;
-        }
-        pad_expr_t *ps = &s_pads[pad - 1u];
-        /* Palm/accidental-contact veto -- see HARMONIC_PALM_CLUSTER_MS's
-         * own comment. Counts every OTHER candidate whose touch began
-         * within the cluster window of THIS one; a real deliberate touch
-         * can still legitimately be part of a rejected cluster (this
-         * errs toward "when in doubt, stay silent," not toward "when in
-         * doubt, sound a note" -- the right side to err on for something
-         * meant to be a subtle, optional shimmer, not the note itself). */
-        uint8_t nearby = 0u;
-        for (uint8_t other = 1u; other <= TILES_NUM_PADS; other++) {
-            if (other == pad || !candidate[other]) {
-                continue;
-            }
-            uint32_t other_start = s_pads[other - 1u].touch_start_ms;
-            uint32_t delta =
-                (ps->touch_start_ms >= other_start) ? (ps->touch_start_ms - other_start) : (other_start - ps->touch_start_ms);
-            if (delta <= HARMONIC_PALM_CLUSTER_MS) {
-                nearby++;
-            }
-        }
-        if (nearby >= HARMONIC_PALM_CLUSTER_MAX) {
             continue;
         }
         int8_t free_slot = -1;
@@ -1549,6 +1575,7 @@ void tiles_expression_init(void) {
         s_harmonic_voices[i] = (harmonic_voice_t){0};
     }
     s_harmonic_fundamental_pad = 0u;
+    s_harmonic_high_count_since_ms = 0u;
 #endif
 }
 

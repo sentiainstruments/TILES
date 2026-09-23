@@ -7834,19 +7834,39 @@ not its code.
     (the real note pipeline, every other pad, every other board, is
     completely untouched -- `MIN_STRIKE_DEPTH_DELTA` already requires
     genuine pressure there, so a bare touch was always harmless
-    everywhere except here): a pad must dwell touched for
-    `HARMONIC_TOUCH_DWELL_MS` (25ms) before it's even a candidate, and
-    if more than `HARMONIC_PALM_CLUSTER_MAX` (2) candidates all cleared
-    that dwell gate within `HARMONIC_PALM_CLUSTER_MS` (40ms) of each
-    other, the whole cluster is treated as one incidental contact (a
-    resting palm's own contact patch) and none of them get a voice --
-    genuine multi-finger touches from a spread hand land with real
-    human timing stagger, a flat palm doesn't. Errs toward staying
-    silent, the right side for something meant to be an optional
-    shimmer under the real note, not the note itself. `printf`-traces
-    candidate-cluster size per scan over the USB CDC console
-    specifically so these two constants can actually be tuned against
-    what a real hand does, once felt on real hardware.
+    everywhere except here). First version vetoed on how close together
+    several pads' touches BEGAN -- real feedback caught the real flaw:
+    "palm rejection is more of a multiple harmonics detected at once
+    like resting hand by accident. faster brushing or struming withing
+    reasonable human capability should be detected as intentional." A
+    fast, deliberate strum touches several pads within a tight window
+    too, so onset timing alone punished exactly the gesture it should
+    have allowed. Redesigned around what real trackpads actually use
+    for this: contact SIZE and PERSISTENCE, not onset timing -- a palm
+    is one large, mostly-stationary contact that arrives and stays; a
+    strum is small contacts that keep moving, so even a fast one only
+    briefly overlaps several sensors rather than holding them all down
+    together. This hardware has no true contact-area sensing (each pad
+    is a discrete switch, not a continuous surface), so the closest
+    analog is COUNT sustained over TIME: `HARMONIC_TOUCH_DWELL_MS`
+    (25ms, unchanged) still gates a single pad's own brief graze;
+    separately, if `HARMONIC_PALM_MIN_SIMULTANEOUS` (3) pads are ALL
+    touched at once continuously for `HARMONIC_PALM_SUSTAIN_MS` (150ms)
+    -- counting already-sounding harmonic voices too, so a palm landing
+    partway through a legitimate session is still caught -- every one
+    of them is dropped, new and already-sounding alike, for as long as
+    that holds. A burst shorter than the sustain window isn't rejected
+    regardless of how tight the individual touches land in time -- the
+    distinction real feedback drew. Errs toward staying silent, the
+    right side for something meant to be an optional shimmer under the
+    real note. `printf`-traces every rejection over the USB CDC console
+    so both constants can be tuned against what a real hand (and a real
+    strum) does, once felt on real hardware. Verified this redesign
+    doesn't touch anything outside its own `#if` guards and the two
+    already-guarded spots in `claim_mpe_channel()` -- both build
+    configurations (flag on, flag off) still compile clean with zero
+    warnings, and the flag-off build is byte-identical in scope to what
+    ships on every other board.
   - **Not built**: CV/gate deliberately does NOT receive harmonic
     notes (`tiles_cv_gate_note_on/off()` are never called from this
     section) -- CV/gate is explicitly monophonic, last-note-priority;
