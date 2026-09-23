@@ -7830,43 +7830,45 @@ not its code.
     kind of steal. Real cost: the last `HARMONIC_MAX_VOICES` (4) of 15
     Member Channels are permanently held back from real polyphony on
     this build, 11 left for genuine notes.
-  - **Palm/accidental-touch rejection**, scoped ONLY to this new path
-    (the real note pipeline, every other pad, every other board, is
-    completely untouched -- `MIN_STRIKE_DEPTH_DELTA` already requires
-    genuine pressure there, so a bare touch was always harmless
-    everywhere except here). First version vetoed on how close together
-    several pads' touches BEGAN -- real feedback caught the real flaw:
+  - **Sustain/palm-rejection model replaced with a one-shot "pluck"
+    after it simply never fired on real hardware.** Real feedback: "its
+    not triggering maybe instead of palm rejection we could have it
+    always be plucked for harmonics." (This followed an earlier
+    correction of the first design's onset-timing palm veto --
     "palm rejection is more of a multiple harmonics detected at once
     like resting hand by accident. faster brushing or struming withing
-    reasonable human capability should be detected as intentional." A
-    fast, deliberate strum touches several pads within a tight window
-    too, so onset timing alone punished exactly the gesture it should
-    have allowed. Redesigned around what real trackpads actually use
-    for this: contact SIZE and PERSISTENCE, not onset timing -- a palm
-    is one large, mostly-stationary contact that arrives and stays; a
-    strum is small contacts that keep moving, so even a fast one only
-    briefly overlaps several sensors rather than holding them all down
-    together. This hardware has no true contact-area sensing (each pad
-    is a discrete switch, not a continuous surface), so the closest
-    analog is COUNT sustained over TIME: `HARMONIC_TOUCH_DWELL_MS`
-    (25ms, unchanged) still gates a single pad's own brief graze;
-    separately, if `HARMONIC_PALM_MIN_SIMULTANEOUS` (3) pads are ALL
-    touched at once continuously for `HARMONIC_PALM_SUSTAIN_MS` (150ms)
-    -- counting already-sounding harmonic voices too, so a palm landing
-    partway through a legitimate session is still caught -- every one
-    of them is dropped, new and already-sounding alike, for as long as
-    that holds. A burst shorter than the sustain window isn't rejected
-    regardless of how tight the individual touches land in time -- the
-    distinction real feedback drew. Errs toward staying silent, the
-    right side for something meant to be an optional shimmer under the
-    real note. `printf`-traces every rejection over the USB CDC console
-    so both constants can be tuned against what a real hand (and a real
-    strum) does, once felt on real hardware. Verified this redesign
-    doesn't touch anything outside its own `#if` guards and the two
-    already-guarded spots in `claim_mpe_channel()` -- both build
-    configurations (flag on, flag off) still compile clean with zero
-    warnings, and the flag-off build is byte-identical in scope to what
-    ships on every other board.
+    reasonable human capability should be detected as intentional" --
+    that redesign, around trackpad-style sustained-contact detection,
+    is what got replaced here in turn, not tuned further.) A harmonic
+    is now a one-shot pluck: it fires the instant an eligible OTHER
+    pad's touch BEGINS (an edge, checked against this section's own
+    `s_harmonic_prev_touched[]`, not pad_expr_t's own state machine)
+    and auto-decays on a fixed timer (`HARMONIC_PLUCK_DURATION_MS`,
+    300ms) regardless of whether the pad stays touched -- a real
+    plucked string keeps ringing after the finger lifts. This removes
+    the whole "which currently-touched pads count, for how long"
+    question the sustain model needed a dedicated palm heuristic to
+    answer at all: a resting palm now produces one brief flurry of
+    plucks when it lands, then goes silent, since there's nothing left
+    to sustain or reject. `HARMONIC_TOUCH_DWELL_MS` and the sustained-
+    simultaneous-count palm check are gone entirely, not disabled --
+    removing the dwell gate specifically closes off "never triggers" as
+    a side effect of the gate rather than a tuning problem with it.
+    Touching the SAME pad again while its previous pluck is still
+    ringing re-plucks it in place (same slot, same channel, a clean
+    note-off then note-on to restart the envelope) rather than trying
+    to claim a second slot for it. `printf`-traces every pluck (pad,
+    slot, note, fundamental) over the USB CDC console, specifically so
+    the next real-hardware round has hard evidence either way: if the
+    trace never appears, the gating conditions (melodic mode, exactly
+    one pad genuinely held) aren't being met and that's the next thing
+    to chase; if it does appear but nothing is heard, the bug is
+    downstream of this section. Verified this redesign doesn't touch
+    anything outside its own `#if` guards and the two already-guarded
+    spots in `claim_mpe_channel()` -- both build configurations (flag
+    on, flag off) still compile clean with zero warnings, and the
+    flag-off build is byte-identical in scope to what ships on every
+    other board.
   - **Not built**: CV/gate deliberately does NOT receive harmonic
     notes (`tiles_cv_gate_note_on/off()` are never called from this
     section) -- CV/gate is explicitly monophonic, last-note-priority;

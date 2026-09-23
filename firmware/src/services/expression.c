@@ -1211,6 +1211,31 @@ static uint32_t s_next_mpe_claim_seq = 1u;
  *     harmonic voice in response -- "not in polyphony" enforces
  *     itself, no special-casing needed for the promotion itself.
  *
+ * Real feedback, second round, after the first version's sustain/
+ * palm-rejection design simply never fired on real hardware: "its not
+ * triggering maybe instead of palm rejection we could have it always
+ * be plucked for harmonics." Rebuilt around a genuinely simpler
+ * lifecycle: a harmonic is now a one-shot PLUCK -- it fires the instant
+ * an eligible OTHER pad's touch begins (an edge, not a held state) and
+ * auto-decays on its own fixed timer (HARMONIC_PLUCK_DURATION_MS)
+ * regardless of whether the pad stays touched, same as a real plucked
+ * string rings on after the finger lifts. This removes the whole
+ * "which currently-touched pads count, for how long" question the
+ * sustain model needed a dedicated palm heuristic to answer at all --
+ * a resting palm now just produces one brief flurry of plucks when it
+ * lands, then goes silent (nothing to sustain, nothing to reject), and
+ * a touch that never even reaches the old dwell gate still gets its
+ * pluck, closing off "not triggering" as a side effect of removing the
+ * gate rather than tuning it. Touching the SAME pad again while its
+ * previous pluck is still ringing re-plucks it in place (same slot,
+ * same channel, fresh decay) -- the "same string plucked twice" case a
+ * real instrument allows for. HARMONIC_TOUCH_DWELL_MS and the whole
+ * sustained-simultaneous-count palm check from the previous round are
+ * gone, not just disabled -- if a bare touch ever does turn out to
+ * need its own accidental-contact filtering, that's a fresh design
+ * question against a "pluck," not a patch onto the "sustain" heuristic
+ * this replaced.
+ *
  * Channel budget: harmonics never steal a Member Channel from a real
  * note, and a real note may always steal one back from a harmonic (see
  * harmonic_channel_is_reserved()'s own comment) -- reuses this file's
@@ -1238,49 +1263,21 @@ static const uint8_t HARMONIC_SEMITONES[HARMONIC_MAX_VOICES] = {12u, 19u, 24u, 2
  * file -- not felt on real hardware yet. */
 #define HARMONIC_VELOCITY 40u
 
-/* Real feedback: "also fine tune palm rejection and accidental
- * touches" -- then, correcting this section's first attempt: "palm
- * rejection is more of a multiple harmonics detected at once like
- * resting hand by accident. faster brushing or struming withing
- * reasonable human capability should be detected as intentional."
- *
- * HARMONIC_TOUCH_DWELL_MS is unaffected by that correction -- a pad
- * must stay continuously touched this long before it's even a
- * candidate, filtering a brief single-pad graze. Still scoped only to
- * this new path; MIN_STRIKE_DEPTH_DELTA already requires genuine
- * pressure for the real note pipeline everywhere else, so a bare touch
- * was always harmless there.
- *
- * The multi-pad veto below is a full redesign, not a tuning pass. The
- * first version vetoed on how close together several pads' touches
- * BEGAN (onset timing) -- exactly what a fast, deliberate strum/brush
- * also does, so it rejected genuine playing along with real accidents.
- * Onset timing was never the right signal. Real trackpads don't use it
- * either: the actual palm signal is contact SIZE and PERSISTENCE -- a
- * palm is one large, mostly-stationary contact that arrives and STAYS;
- * a finger, or several fingers/a pick sweeping through a strum, is
- * small and keeps moving, so even a fast gesture that briefly touches
- * several pads at once doesn't keep them all down together. This
- * hardware has no true contact-area sensing (each pad is a discrete
- * touched/not-touched switch, not a continuous surface), so the closest
- * available analog is COUNT sustained over TIME: how many candidate
- * pads are touched at the same instant, and whether that count keeps
- * being true rather than passing through. HARMONIC_PALM_MIN_SIMULTANEOUS
- * candidates all touched at once, continuously for HARMONIC_PALM_
- * SUSTAIN_MS, reads as a resting palm; anything shorter -- however tight
- * the individual touches land in time -- doesn't, regardless of how
- * fast the gesture was. Both unmeasured, like every first-pass constant
- * in this file -- not tuned against a real palm or a real strum on real
- * hardware yet. */
-#define HARMONIC_TOUCH_DWELL_MS 25u
-#define HARMONIC_PALM_MIN_SIMULTANEOUS 3u
-#define HARMONIC_PALM_SUSTAIN_MS 150u
+/* How long a pluck rings before auto-decaying to silence on its own,
+ * regardless of continued touch -- see this section's own header
+ * comment. Long enough to read as a real, felt overtone rather than a
+ * click; short enough that a quick flurry of accidental touches (a
+ * resting palm landing, a brushed pass over several pads) doesn't
+ * leave several voices ringing together for long. Unmeasured -- a
+ * first guess, not felt on real hardware yet. */
+#define HARMONIC_PLUCK_DURATION_MS 300u
 
 typedef struct {
     bool active;
     uint8_t pad;          /* 1..TILES_NUM_PADS, valid only while active */
     uint8_t note;
     uint8_t midi_channel;
+    uint32_t ends_at_ms;  /* auto-decay deadline -- valid only while active */
 } harmonic_voice_t;
 
 static harmonic_voice_t s_harmonic_voices[HARMONIC_MAX_VOICES];
@@ -1288,11 +1285,12 @@ static harmonic_voice_t s_harmonic_voices[HARMONIC_MAX_VOICES];
  * pad() below finds exactly one held pad; cleared (and every active
  * voice torn down) the instant it stops being exactly that same pad. */
 static uint8_t s_harmonic_fundamental_pad;
-/* 0 = not currently in a high-simultaneous-touch episode -- see
- * HARMONIC_PALM_SUSTAIN_MS's own comment. Set to the scan timestamp
- * the instant the candidate count first reaches HARMONIC_PALM_MIN_
- * SIMULTANEOUS; reset to 0 the instant it drops back below. */
-static uint32_t s_harmonic_high_count_since_ms;
+/* This section's own touch-edge memory -- deliberately separate from
+ * pad_expr_t's own state machine (that one only says "touched or not,"
+ * not "was this ALREADY true last scan," and reusing its transition
+ * timing would tie a pluck to the real-strike pipeline's own state
+ * machine in ways this section has no reason to depend on). */
+static bool s_harmonic_prev_touched[TILES_NUM_PADS];
 
 /* The LAST HARMONIC_MAX_VOICES Member Channels, permanently carved out
  * for harmonics only -- see this section's own header comment on why a
@@ -1342,7 +1340,6 @@ static void end_all_harmonic_voices(void) {
         end_harmonic_voice(i);
     }
     s_harmonic_fundamental_pad = 0u;
-    s_harmonic_high_count_since_ms = 0u;
 }
 
 /* No stealing in either direction: scans only the reserved range above,
@@ -1372,22 +1369,46 @@ static uint8_t claim_harmonic_channel(void) {
     return 0xFFu;
 }
 
+/* Fires a fresh pluck for `pad` into harmonic slot `slot` -- shared by
+ * both the "brand-new pad, first free slot" path and the "same pad
+ * plucked again while still ringing, same slot" path below, so a
+ * re-pluck sends a clean note-off before its new note-on rather than
+ * layering a second Note-On for the same (channel, note) on top of the
+ * one already sounding. */
+static void fire_harmonic_pluck(uint8_t slot, uint8_t pad, uint8_t note, uint8_t channel, uint32_t now_ms) {
+    harmonic_voice_t *v = &s_harmonic_voices[slot];
+    if (v->active) {
+        tiles_midi_note_off(v->midi_channel, v->note);
+    }
+    v->active = true;
+    v->pad = pad;
+    v->note = note;
+    v->midi_channel = channel;
+    v->ends_at_ms = now_ms + HARMONIC_PLUCK_DURATION_MS;
+    tiles_midi_note_on(channel, note, HARMONIC_VELOCITY);
+}
+
 /* Called once per scan, after the main per-pad loop below (so every
  * pad's PAD_STATE_NOTE_ON is current for this tick first). Real
  * feedback's full gesture in one pass:
  *   1. Exactly one pad held elsewhere in this file -> that's the
  *      fundamental; anything else (none held, or a second pad just
  *      promoted to a real note) ends every harmonic voice outright.
- *   2. For every OTHER pad currently touched and not itself mid-strike
- *      or already a real note, start a harmonic voice in the first free
- *      slot if it doesn't have one yet.
- *   3. For every pad with an active voice that's no longer eligible
- *      (released, or promoted to a real note itself), end it.
+ *   2. Any voice whose HARMONIC_PLUCK_DURATION_MS has elapsed decays
+ *      to silence, touched or not.
+ *   3. Every OTHER pad whose touch just began (this scan, not already
+ *      touched last scan) plucks a harmonic: a brand-new pad claims
+ *      the first free slot (touch order, see this section's own
+ *      header); a pad already mid-ring re-plucks its own existing
+ *      slot instead of trying to claim a second one.
  */
 static void scan_melodic_harmonics(uint32_t now_ms) {
     if (!tiles_op_mode_is_melodic_active()) {
         if (s_harmonic_fundamental_pad != 0u) {
             end_all_harmonic_voices();
+        }
+        for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+            s_harmonic_prev_touched[i] = false;
         }
         return;
     }
@@ -1397,126 +1418,71 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
         end_all_harmonic_voices();
         s_harmonic_fundamental_pad = fundamental;
     }
+
+    for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
+        harmonic_voice_t *v = &s_harmonic_voices[i];
+        if (v->active && now_ms >= v->ends_at_ms) {
+            end_harmonic_voice(i);
+        }
+    }
+
     if (fundamental == 0u) {
+        /* No sole-held fundamental right now -- still track touch edges
+         * below (so a pad that's touched THROUGH a gap with no
+         * fundamental doesn't read as "just touched" the instant one
+         * appears), just never pluck anything. */
+        for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+            s_harmonic_prev_touched[pad - 1u] = tiles_touch_is_touched(pad);
+        }
         return;
     }
     uint8_t fundamental_note = s_pads[fundamental - 1u].active_note;
 
-    /* End any voice whose pad is no longer eligible FIRST, so a pad that
-     * just released frees its slot for a different pad to claim this
-     * same scan rather than waiting a tick. */
-    for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
-        harmonic_voice_t *v = &s_harmonic_voices[i];
-        if (!v->active) {
-            continue;
-        }
-        pad_expr_t *ps = &s_pads[v->pad - 1u];
-        if (ps->state == PAD_STATE_NOTE_ON || !tiles_touch_is_touched(v->pad)) {
-            end_harmonic_voice(i);
-        }
-    }
-
-    /* First pass: which pads are even candidates this scan (touched,
-     * not the fundamental, not already a real note or an existing
-     * harmonic voice, and past HARMONIC_TOUCH_DWELL_MS) -- built before
-     * any of them can claim a channel, so the sustained-count palm check
-     * just below sees this whole scan's real candidate count at once,
-     * not a partial one still being accumulated mid-loop. */
-    bool candidate[TILES_NUM_PADS + 1u] = {false}; /* 1-indexed, [0] unused */
-    uint8_t candidate_count = 0u;
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-        if (pad == fundamental) {
-            continue;
+        bool touched = tiles_touch_is_touched(pad);
+        bool was_touched = s_harmonic_prev_touched[pad - 1u];
+        s_harmonic_prev_touched[pad - 1u] = touched;
+
+        if (pad == fundamental || !touched || was_touched) {
+            continue; /* not an edge, or not eligible at all */
         }
         pad_expr_t *ps = &s_pads[pad - 1u];
-        if (ps->state == PAD_STATE_NOTE_ON || !tiles_touch_is_touched(pad)) {
-            continue;
+        if (ps->state == PAD_STATE_NOTE_ON) {
+            continue; /* already a real note -- never pluck under one */
         }
-        if ((now_ms - ps->touch_start_ms) < HARMONIC_TOUCH_DWELL_MS) {
-            continue; /* hasn't dwelled long enough yet -- try again next scan */
-        }
-        bool already_voiced = false;
+
+        int8_t slot = -1;
         for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
             if (s_harmonic_voices[i].active && s_harmonic_voices[i].pad == pad) {
-                already_voiced = true;
+                slot = (int8_t)i; /* already ringing on this pad -- re-pluck in place */
                 break;
             }
         }
-        if (already_voiced) {
-            continue;
-        }
-        candidate[pad] = true;
-        candidate_count++;
-    }
-
-    /* Count EVERY currently-touched other pad here, not just fresh
-     * dwell-cleared candidates -- an already-sounding harmonic voice's
-     * pad is still genuinely touched right now, and a palm landing
-     * partway through an existing legitimate session must still be
-     * recognized (it doesn't only count pads that are brand new this
-     * scan). */
-    uint8_t simultaneous = candidate_count;
-    for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
-        if (s_harmonic_voices[i].active && !candidate[s_harmonic_voices[i].pad]) {
-            simultaneous++;
-        }
-    }
-    bool palm_rejected = false;
-    if (simultaneous >= HARMONIC_PALM_MIN_SIMULTANEOUS) {
-        if (s_harmonic_high_count_since_ms == 0u) {
-            s_harmonic_high_count_since_ms = now_ms;
-        } else if ((now_ms - s_harmonic_high_count_since_ms) >= HARMONIC_PALM_SUSTAIN_MS) {
-            palm_rejected = true;
-        }
-    } else {
-        s_harmonic_high_count_since_ms = 0u;
-    }
-
-    if (palm_rejected) {
-        /* Confirmed: several pads have been touched together long
-         * enough to be a resting palm, not a fast strum passing
-         * through. Can't reliably tell which currently-touched pads
-         * are "the palm" and which might be a genuine touch caught in
-         * the same episode with only binary touch data -- errs toward
-         * silence (see this section's own header) and drops all of
-         * them, new and already-sounding alike, for as long as the
-         * high count persists. */
-        printf("[expression] harmonics: %u pads touched together >= %ums -- palm rejected\n", (unsigned)simultaneous,
-               (unsigned)HARMONIC_PALM_SUSTAIN_MS);
-        for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
-            end_harmonic_voice(i);
-        }
-        return;
-    }
-
-    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-        if (!candidate[pad]) {
-            continue;
-        }
-        int8_t free_slot = -1;
-        for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
-            if (!s_harmonic_voices[i].active) {
-                free_slot = (int8_t)i;
-                break;
+        uint8_t channel;
+        if (slot >= 0) {
+            channel = s_harmonic_voices[slot].midi_channel; /* reuse -- still held from the ring in progress */
+        } else {
+            for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
+                if (!s_harmonic_voices[i].active) {
+                    slot = (int8_t)i;
+                    break;
+                }
+            }
+            if (slot < 0) {
+                continue; /* every slot already ringing on some other pad */
+            }
+            channel = claim_harmonic_channel();
+            if (channel == 0xFFu) {
+                continue; /* every reserved channel already holds a harmonic */
             }
         }
-        if (free_slot < 0) {
-            continue;
-        }
-        uint8_t channel = claim_harmonic_channel();
-        if (channel == 0xFFu) {
-            continue; /* every reserved channel already holds a harmonic */
-        }
-        int note = (int)fundamental_note + (int)HARMONIC_SEMITONES[free_slot];
+        int note = (int)fundamental_note + (int)HARMONIC_SEMITONES[slot];
         if (note > 127) {
             continue; /* out of MIDI range this high -- silently skip, don't clamp into a wrong pitch */
         }
-        harmonic_voice_t *v = &s_harmonic_voices[free_slot];
-        v->active = true;
-        v->pad = pad;
-        v->note = (uint8_t)note;
-        v->midi_channel = channel;
-        tiles_midi_note_on(channel, v->note, HARMONIC_VELOCITY);
+        printf("[expression] harmonics: pluck pad=%u slot=%u note=%d (fundamental pad=%u note=%u)\n", (unsigned)pad,
+               (unsigned)slot, note, (unsigned)fundamental, (unsigned)fundamental_note);
+        fire_harmonic_pluck((uint8_t)slot, pad, (uint8_t)note, channel, now_ms);
     }
 }
 #endif /* TILES_MELODIC_HARMONICS_ENABLED */
@@ -1575,7 +1541,9 @@ void tiles_expression_init(void) {
         s_harmonic_voices[i] = (harmonic_voice_t){0};
     }
     s_harmonic_fundamental_pad = 0u;
-    s_harmonic_high_count_since_ms = 0u;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_harmonic_prev_touched[i] = false;
+    }
 #endif
 }
 
