@@ -8136,7 +8136,8 @@ not its code.
   may have already moved on to something else entirely -- so stealing it
   now sends note-off from the SLOT's own remembered note rather than
   reading (and misreading) whatever that pad's CURRENT, unrelated state
-  happens to be.
+  happens to be. **Confirmed fixed on real hardware**: "pedal working
+  now."
 - **Melodic mode: 3rd scale degree highlighted teal.** Real feedback: "i
   need more references on melodic mode, highlight the 3rd scale degree
   with the color teal." `tiles_note_map_is_third_pad()` (`note_map.c`/
@@ -8152,11 +8153,14 @@ not its code.
   **A 3rd landmark added right after**: real feedback: "make 5th another
   color as well within a complementary matching hue but different
   enough to the 3rd." `tiles_note_map_is_fifth_pad()` mirrors the same
-  shape again (degree 4 instead of degree 2), colored amber/gold (R+G,
-  no B) in `lighting.c`. Root (R+B), third (G+B), and fifth (R+G) each
-  use a different pair of the three LED channels -- a triadic scheme,
-  evenly spaced around the color wheel rather than two similar hues plus
-  an arbitrary third, so all three landmarks (and a natural key's plain
-  white) stay visually distinct from each other at a glance.
+  shape again (degree 4 instead of degree 2). First colored amber/gold
+  (R+G, no B) in `lighting.c` for a triadic (root/third/fifth each a
+  different channel-pair) scheme -- real feedback on that: "color is
+  gross tho, do a blue not yellow hues." Changed to pure blue (B only,
+  no R or G) instead: root's magenta (R+B) and third's teal (G+B)
+  already both lean on blue, so plain blue reads as the family's own
+  shared "core" hue -- still clearly distinct from both (magenta leans
+  red, teal leans green), staying in the blue family the feedback asked
+  for rather than introducing yellow into the palette at all.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

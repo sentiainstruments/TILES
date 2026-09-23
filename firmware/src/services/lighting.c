@@ -85,15 +85,15 @@
 #define TILES_LIGHTING_THIRD_BASELINE_PERCENT 40u
 
 /* Real feedback: "make 5th another color as well within a complementary
- * matching hue but different enough to the 3rd." Completes a triadic
- * set with root's magenta (R+B) and third's teal (G+B): amber/gold
- * (R+G, no B) -- each of the three landmark colors uses a different
- * pair of the three LED channels, evenly spaced around the color wheel
- * (the textbook definition of a "triadic," mutually complementary
- * scheme) rather than two similar colors with a third picked
- * arbitrarily, so root/third/fifth all read apart from each other and
- * from a natural key's plain white at a glance. Same baseline percent
- * as the other two landmarks, same "unmeasured against real hardware"
+ * matching hue but different enough to the 3rd" -- first tried amber/
+ * gold (R+G), then real feedback on that: "color is gross tho, do a
+ * blue not yellow hues." Pure blue (B only, no R or G) instead: root's
+ * magenta (R+B) and third's teal (G+B) already both lean on blue, so
+ * plain blue reads as the family's own shared "core" hue -- distinct
+ * from both (magenta leans red, teal leans green, fifth is neither) --
+ * while staying in the blue family the feedback asked for, rather than
+ * introducing yellow into the palette at all. Same baseline percent as
+ * the other two landmarks, same "unmeasured against real hardware"
  * caveat. */
 #define TILES_LIGHTING_FIFTH_BASELINE_PERCENT 40u
 
@@ -318,12 +318,12 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         return (tiles_rgb01_t){0.0f, level, level};
     }
     if (tiles_note_map_is_fifth_pad(logical_pad)) {
-        /* Amber/gold -- R and G channels only, B stays 0 -- see
+        /* Pure blue -- B channel only, R and G stay 0 -- see
          * TILES_LIGHTING_FIFTH_BASELINE_PERCENT's own comment. Checked
          * after root and third for the same "never actually overlaps,
          * but root/third would win if it somehow did" reasoning. */
         float level = (float)TILES_LIGHTING_FIFTH_BASELINE_PERCENT / 100.0f;
-        return (tiles_rgb01_t){level, level, 0.0f};
+        return (tiles_rgb01_t){0.0f, 0.0f, level};
     }
     if (tiles_note_map_is_natural_pad(logical_pad)) {
         float level = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;
