@@ -71,39 +71,21 @@
  * absolute terms. */
 #define TILES_LIGHTING_ROOT_BASELINE_PERCENT 40u
 
-/* Real feedback: "i need more references on melodic mode, highlight the
- * 3rd scale degree with the color teal," corrected once the accessor
- * itself moved from scale-degree POSITION to actual interval quality
- * (see tiles_note_map_is_major_third_pad()'s own comment): "perfect
- * fifth is the blue, and major third is teal unless a scale has a minor
- * 3rd then its that one and not teal but teal more towards greenish."
- * Major third: teal (0, level, level -- green+blue equal, no red).
- * Minor third: a greenish variant of that same teal (0, level, level*
- * TILES_LIGHTING_MINOR_THIRD_GREEN_BIAS -- blue pulled down, green
- * unchanged, shifting the hue toward green) -- related to major third's
- * teal (same "no red" family) but clearly distinguishable side by side,
- * per real feedback's own "not teal but teal more towards greenish."
- * Root's magenta, third's teal/greenish-teal, and a natural key's white
- * all read apart from each other at a glance. Same baseline percent as
- * root rather than inventing a separate number -- all landmark pads are
- * "dimmer than a natural key" by the same reasoning TILES_LIGHTING_
- * ROOT_BASELINE_PERCENT's own comment already established; unmeasured
- * against real hardware, like every first-pass brightness/color
- * constant in this file. */
-#define TILES_LIGHTING_THIRD_BASELINE_PERCENT 40u
-#define TILES_LIGHTING_MINOR_THIRD_GREEN_BIAS 0.5f
-
-/* Real feedback: "make 5th another color as well within a complementary
- * matching hue but different enough to the 3rd" -- first tried amber/
- * gold (R+G), then real feedback on that: "color is gross tho, do a
- * blue not yellow hues," then confirmed explicitly: "perfect fifth is
- * the blue." Pure blue (B only, no R or G): root's magenta (R+B) and
- * third's teal (G+B) already both lean on blue, so plain blue reads as
- * the family's own shared "core" hue -- distinct from both (magenta
- * leans red, teal leans green) -- while staying in the blue family the
- * feedback asked for, rather than introducing yellow into the palette
- * at all. Same baseline percent as the other landmarks, same
- * "unmeasured against real hardware" caveat. */
+/* Real feedback, in order: "i need more references on melodic mode,
+ * highlight the 3rd scale degree with the color teal" and "make 5th
+ * another color as well within a complementary matching hue but different
+ * enough to the 3rd" -- 5th first tried amber/gold, then: "color is
+ * gross tho, do a blue not yellow hues," then "perfect fifth is the blue,
+ * and major third is teal unless a scale has a minor 3rd then its that
+ * one and not teal but teal more towards greenish" (which moved both
+ * landmarks from scale-degree position to real interval quality -- see
+ * tiles_note_map_is_fifth_pad()'s own comment). Finally: "remove the led
+ * color for 3rds just keep root and 5th for references. no thirds from
+ * a different color." The third-degree landmark (teal / greenish-teal) is
+ * gone entirely; melodic idle coloring is root (magenta), perfect fifth
+ * (pure blue, B only), natural key (white), sharp (dark). Same baseline
+ * percent as root, "unmeasured against real hardware" like every first-
+ * pass brightness constant in this file. */
 #define TILES_LIGHTING_FIFTH_BASELINE_PERCENT 40u
 
 /* Real feedback on the melodic-echo indicator (services/op_mode.c's
@@ -302,8 +284,8 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
      * see daw-integration/README.md -- nothing arrives without it).
      * Green (with an onset flash to white and a little white mixed into
      * the sustain -- see TILES_LIGHTING_ECHO_*), not used anywhere else
-     * in this function's own palette (root magenta, third teal/greenish-
-     * teal, fifth blue, Song-capture orange, natural white), so it reads
+     * in this function's own palette (root magenta, fifth blue,
+     * Song-capture orange, natural white), so it reads
      * as its own distinct "this is playing right now" signal rather than
      * blending into any of those. */
     uint8_t echo_note = tiles_note_map_get_note(logical_pad);
@@ -370,28 +352,11 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         float level = (float)TILES_LIGHTING_ROOT_BASELINE_PERCENT / 100.0f;
         return (tiles_rgb01_t){level, 0.0f, level};
     }
-    if (tiles_note_map_is_major_third_pad(logical_pad)) {
-        /* Teal -- G and B channels only, R stays 0 -- see
-         * TILES_LIGHTING_THIRD_BASELINE_PERCENT's own comment. Checked
-         * after root (root always wins if a pad were somehow both,
-         * though that never actually happens for any real scale here). */
-        float level = (float)TILES_LIGHTING_THIRD_BASELINE_PERCENT / 100.0f;
-        return (tiles_rgb01_t){0.0f, level, level};
-    }
-    if (tiles_note_map_is_minor_third_pad(logical_pad)) {
-        /* Teal shifted greener -- same G, B pulled down by
-         * TILES_LIGHTING_MINOR_THIRD_GREEN_BIAS -- see TILES_LIGHTING_
-         * THIRD_BASELINE_PERCENT's own comment for the real feedback
-         * ("not teal but teal more towards greenish") this distinguishes
-         * from major third's plain teal just above. */
-        float level = (float)TILES_LIGHTING_THIRD_BASELINE_PERCENT / 100.0f;
-        return (tiles_rgb01_t){0.0f, level, level * TILES_LIGHTING_MINOR_THIRD_GREEN_BIAS};
-    }
     if (tiles_note_map_is_fifth_pad(logical_pad)) {
         /* Pure blue -- B channel only, R and G stay 0 -- see
          * TILES_LIGHTING_FIFTH_BASELINE_PERCENT's own comment. Checked
-         * after root/third for the same "never actually overlaps, but
-         * an earlier check would win if it somehow did" reasoning. */
+         * after root for the same "never actually overlaps, but root
+         * would win if it somehow did" reasoning. */
         float level = (float)TILES_LIGHTING_FIFTH_BASELINE_PERCENT / 100.0f;
         return (tiles_rgb01_t){0.0f, 0.0f, level};
     }

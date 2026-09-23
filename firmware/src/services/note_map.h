@@ -238,49 +238,22 @@ uint8_t tiles_note_map_quantize_to_scale(uint8_t note);
  * (8) has 3. Returns false for an out-of-range pad. */
 bool tiles_note_map_is_root_pad(uint8_t logical_pad);
 
-/* True if this pad's scale degree is a MAJOR THIRD (4 semitones) above
- * the tonic -- real feedback, corrected from an earlier position-based
- * version: "perfect fifth is the blue, and major third is teal unless a
- * scale has a minor 3rd then its that one and not teal but teal more
- * towards greenish." This checks the scale's own INTERVAL TABLE
- * (semitones from the tonic), not scale-degree POSITION -- an earlier
- * version checked "degree index 2," which isn't always a third at all:
- * pentatonic minor's degree 2 is a fourth (5 semitones), its actual
- * minor third sits at degree 1; the position-based check would have
- * highlighted the wrong pad entirely for that scale (and several
- * others). Chord-mode-aware via chord_mode_degree() same as
- * tiles_note_map_is_root_pad(), so chord mode's own melody sub-grid
- * gets this too. Driven by services/lighting.c's idle pad coloring.
- * Mutually exclusive with tiles_note_map_is_minor_third_pad() below for
- * any one pad (a pad's degree resolves to exactly one interval value),
- * though a scale can genuinely contain both AT DIFFERENT pads (e.g. the
- * combination-diminished scale has both a minor and major third) --
- * each pad's own color is decided independently by its own interval,
- * not by a single scale-wide choice. Returns false for an out-of-range
- * pad, or for a scale with no major third at all (e.g. any scale built
- * entirely from minor thirds/diminished intervals). */
-bool tiles_note_map_is_major_third_pad(uint8_t logical_pad);
-
-/* Same as tiles_note_map_is_major_third_pad() just above, but the MINOR
- * third (3 semitones) instead of major (4) -- see that function's own
- * comment for the real feedback and reasoning this mirrors exactly.
- * services/lighting.c colors this a greenish variant of the major
- * third's teal, not the identical color, so the two read as related but
- * distinguishable at a glance. Returns false for a scale with no minor
- * third at all (most of the scales in this file's own table -- major-
- * quality modes/scales only have the major third, not both). */
-bool tiles_note_map_is_minor_third_pad(uint8_t logical_pad);
-
 /* True if this pad's scale degree is a PERFECT FIFTH (7 semitones)
- * above the tonic -- real feedback: "perfect fifth is the blue." Same
- * interval-table check as the third accessors above, not scale-degree
- * POSITION -- degree-index 4 isn't a fifth at all for every scale
- * either (Locrian's degree 4 is a diminished fifth, 6 semitones, not
- * 7 -- Locrian has no perfect fifth at all, its own defining
- * characteristic, so correctly no pad gets this highlight for that
- * scale rather than mislabeling the diminished fifth as if it were
- * perfect). Driven by services/lighting.c's idle pad coloring. Returns
- * false for an out-of-range pad, or for a scale with no perfect fifth. */
+ * above the tonic -- real feedback: "perfect fifth is the blue." Checks
+ * the scale's own INTERVAL TABLE (semitones from the tonic), not
+ * scale-degree POSITION: an earlier position-based version (degree
+ * index 4) isn't a fifth at all for every scale -- Locrian's degree 4
+ * is a diminished fifth, 6 semitones, not 7; Locrian has no perfect
+ * fifth at all, its own defining characteristic, so correctly no pad
+ * gets this highlight for that scale rather than mislabeling the
+ * diminished fifth as if it were perfect. (A third-degree landmark used
+ * to sit alongside this one, colored by major/minor quality the same
+ * way; real feedback removed it: "remove the led color for 3rds just
+ * keep root and 5th for references.") Chord-mode-aware via
+ * chord_mode_degree() same as tiles_note_map_is_root_pad(), so chord
+ * mode's own melody sub-grid gets this too. Driven by services/
+ * lighting.c's idle pad coloring. Returns false for an out-of-range
+ * pad, or for a scale with no perfect fifth. */
 bool tiles_note_map_is_fifth_pad(uint8_t logical_pad);
 
 /* True if this pad's CURRENTLY MAPPED note (tiles_note_map_get_note())

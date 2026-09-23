@@ -8138,8 +8138,9 @@ not its code.
   reading (and misreading) whatever that pad's CURRENT, unrelated state
   happens to be. **Confirmed fixed on real hardware**: "pedal working
   now."
-- **Melodic mode: interval-quality landmarks (root/third/fifth), not
-  scale-degree position.** Real feedback, three rounds:
+- **Melodic mode: interval-quality landmarks, not scale-degree position
+  (root and perfect fifth only now -- the third-degree colors were
+  removed, see the last paragraph).** Real feedback, three rounds:
   1. "i need more references on melodic mode, highlight the 3rd scale
      degree with the color teal" -- first built as `tiles_note_map_is_
      third_pad()`, checking scale-degree POSITION (index 2, 0-based),
@@ -8181,6 +8182,17 @@ not its code.
   `chord_mode_degree()` same as root, so chord mode's own melody
   sub-grid (which plays through this exact same scale now, see the
   earlier "mini melodic mode" entry above) gets these landmarks too.
+  **Thirds removed.** Real feedback, after living with it: "remove the
+  led color for 3rds just keep root and 5th for references. no thirds
+  from a different color." `tiles_note_map_is_major_third_pad()`/
+  `_is_minor_third_pad()` and their lighting branches and constants
+  (`TILES_LIGHTING_THIRD_BASELINE_PERCENT`, `..._MINOR_THIRD_GREEN_BIAS`)
+  are deleted outright, not disabled -- nothing else called them. Melodic
+  idle coloring is root (magenta), perfect fifth (pure blue), natural key
+  (white), sharp (dark). The interval-table check that fixed the fifth
+  (Locrian has no perfect fifth, so no pad is highlighted there) is kept;
+  `tiles_note_map_is_fifth_pad()` now does it inline instead of through
+  the shared helper the two third accessors used.
 - **Melodic mode: live echo of an incoming melody.** Real feedback: "in
   midi melodic mode is there any way we could read the playing melody
   of the armed track and display it back on tiles?" Needed a genuinely

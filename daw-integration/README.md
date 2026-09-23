@@ -276,6 +276,35 @@ TILES must be in melodic mode, and a note outside the currently selected
 scale/octave/key has no pad to light (same accepted tradeoffs as the
 firmware entry in `firmware/src/services/README.md`).
 
+### MPE / expression pass-through
+
+Real feedback: "the plugin is killing mpe behaviour can we make it even
+more pass through so theres no mpe or expression loss." The device's MIDI
+thru was already a single direct `midiin` -> `midiout` patchline with
+nothing parsed or filtered on it, so the wiring wasn't the problem. The
+cause was that a Max for Live device has to **declare** MPE support -- the
+patcher's `is_mpe` property ("Patch Supports MPE" in Max's patcher
+inspector) -- or Live doesn't hand it the per-note MPE stream (per-note
+pitch bend, slide, channel pressure on member channels 2-16) at all; the
+generator simply never set it, so it defaulted to 0. Max's own help text
+says so ("To receive MPE, make sure the 'Patch Supports MPE' (is_mpe)
+attribute is set to 1 for the device"), as does a Cycling '74 forum
+thread on passing MPE through a MIDI effect, and real devices serialize
+it next to `"latency"`. The generator now sets `is_mpe: 1`. Nothing else
+about the thru changed -- deliberately no `midiparse`/`midiformat`/
+`mpeparse` on it (the first two are documented to truncate per-note pitch
+bend to semitones), and everything the device does beyond passing MIDI
+through (the note tap, the route flash, the disarm flush) runs off to the
+side and never writes back into the chain.
+
+**Replace any device already in a set:** a saved instance keeps the old
+patcher, so delete it and drag the updated one in (or re-drag from the
+browser). Then check MPE end to end: play with pitch bend/pressure on a
+track whose MIDI input has MPE enabled, with the device armed and
+disarmed -- expression should be identical either way. Not tested in Live
+from here; if it still flattens, tell me exactly what's lost (bend, slide,
+pressure) and whether the instrument after it has MPE turned on.
+
 ### The device's source
 
 `ableton/TILES_DISPLAY/build_tiles_display.py` generates the `.amxd`

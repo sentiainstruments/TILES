@@ -673,46 +673,20 @@ bool tiles_note_map_is_root_pad(uint8_t logical_pad) {
     return (degree % scale_note_count) == 0u;
 }
 
-/* Interval (semitones from the tonic, 0-11) for `cfg`'s own scale
- * degree under the currently selected scale -- shared by the major/
- * minor-third and fifth accessors below so all three agree on exactly
- * the same degree-to-interval math note_for_scale_degree_using() itself
- * uses. Chord-mode-aware via chord_mode_degree(), same as
- * tiles_note_map_is_root_pad(). */
-static int8_t interval_from_root_for_pad(const tiles_pad_config_t *cfg) {
-    uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : pad_degree(cfg);
-    tiles_scale_table_t table = current_scale_table();
-    return table.intervals[degree % table.count];
-}
-
-/* See note_map.h's own comment on this function for the real feedback
- * and the position-based bug this corrected. */
-bool tiles_note_map_is_major_third_pad(uint8_t logical_pad) {
-    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
-    if (cfg == NULL) {
-        return false;
-    }
-    return interval_from_root_for_pad(cfg) == 4;
-}
-
-/* See note_map.h's own comment on this function. */
-bool tiles_note_map_is_minor_third_pad(uint8_t logical_pad) {
-    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
-    if (cfg == NULL) {
-        return false;
-    }
-    return interval_from_root_for_pad(cfg) == 3;
-}
-
-/* See note_map.h's own comment on this function and the position-based
- * bug this corrected (e.g. Locrian's degree 4 used to be mislabeled a
- * perfect fifth when it's actually a diminished one). */
+/* See note_map.h's own comment on this function for the real feedback and
+ * the position-based bug this corrected (e.g. Locrian's degree 4 used to
+ * be mislabeled a perfect fifth when it's actually a diminished one).
+ * table.intervals[degree % table.count] is the pad's semitone offset
+ * from the tonic -- the same degree-to-interval math note_for_scale_
+ * degree_using() itself uses. */
 bool tiles_note_map_is_fifth_pad(uint8_t logical_pad) {
     const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
     if (cfg == NULL) {
         return false;
     }
-    return interval_from_root_for_pad(cfg) == 7;
+    uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : pad_degree(cfg);
+    tiles_scale_table_t table = current_scale_table();
+    return table.intervals[degree % table.count] == 7;
 }
 
 bool tiles_note_map_is_natural_pad(uint8_t logical_pad) {

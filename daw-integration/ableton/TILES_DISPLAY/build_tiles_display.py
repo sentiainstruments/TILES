@@ -37,6 +37,17 @@ has 7 slots. To make finding the right number a matter of stepping it
 rather than guessing, the device flashes pads on TILES whenever the
 route could have just changed (SURFACE edited, VIEW turned on).
 
+MPE / expression pass-through: the device is a pure tap. The MIDI thru
+is ONE direct patchline, midiin -> midiout, with nothing parsed,
+reformatted, filtered or delayed on it (midiparse/midiformat are known to
+truncate per-note pitch bend to semitones -- deliberately nothing like
+them is on the thru). Everything the tap does (notein -> gate ->
+send_midi to TILES, the route-confirmation flash, the disarm flush) runs
+off to the side and never writes back into the MIDI chain. The one thing
+the thru could not do by itself is declare MPE support: the patcher's
+is_mpe property (see build_patcher()) must be 1 or Live doesn't route the
+per-note MPE stream through the device at all.
+
 Exclusive arming across instances: every instance shares Max's global
 name space (a [send]/[receive] name WITHOUT the "---" prefix is global
 across every Max for Live device in the set), so turning VIEW on
@@ -435,6 +446,22 @@ def build_patcher():
         "lines": _lines,
         "dependency_cache": [],
         "latency": 0,
+        # "Patch Supports MPE" (is_mpe) -- a top-level patcher property, and
+        # the reason this device used to strip MPE even though its thru is
+        # a single direct midiin -> midiout patchline: a Max for Live device
+        # has to DECLARE MPE support, or Live doesn't hand it the per-note
+        # MPE stream (per-note pitch bend, slide/CC74, channel pressure, on
+        # member channels 2-16) in the first place. Max's own help text
+        # (help/m4l/live.push.maxhelp): "To receive MPE, make sure the
+        # 'Patch Supports MPE' (is_mpe) attribute is set to 1 for the
+        # device"; the Cycling '74 forum thread on passing MPE through a
+        # MIDI effect says the same; real devices serialize it right next
+        # to "latency" (checked in an unencrypted Ableton pack device). The
+        # generator left it out, so it defaulted to 0.
+        "is_mpe": 1,
+        "minimum_live_version": "",
+        "minimum_max_version": "",
+        "platform_compatibility": 0,
         "project": {
             "version": 1,
             "creationdate": 3590052786,
