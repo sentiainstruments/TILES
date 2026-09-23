@@ -8247,6 +8247,28 @@ not its code.
     since 30 was already the value, so "even more dim" can't mean "to
     30." `TILES_LIGHTING_NATURAL_BASELINE_PERCENT` is now 21. If that
     reading was wrong -- e.g. they meant a bigger step -- it's one number.
+  - *Scope of the dimming, in the user's words:* "but dont dim the
+    reference root and 5th. those stay the same. also pressed pads
+    shouldnt be dimmed more, and midi activated shoudlnt be dimmed. midi
+    activated and pressed should be at 100% of range." Audited against
+    the code rather than assumed: the only brightness-affecting lines
+    changed since the last flash-before-these-rounds are the regular-pad
+    branch (50 -> 21, own constant), the fifth gaining a red channel (its
+    blue level is still 40, so it's no dimmer), and the new secondary echo
+    layer. Root is still 40. A pressed pad is `baseline + (1 - baseline) *
+    press` with `touch.c` driving press to exactly 1.0 (it's binary:
+    touched -> 1.0), i.e. 100% white -- independent of any idle constant,
+    and that branch is checked before every idle/echo state. An echoing
+    pad has its lit die(s) at 100% of the ceiling with a full-white onset
+    flash. So the hierarchy is: pressed 100% > echo 100% of its color >
+    root/fifth 40 > regular 21, and nothing above the regular pad was
+    touched. Worth knowing: an echo pad keeps some red/blue in its
+    sustain (so it stays green rather than going white), which lights
+    fewer dies than a pressed pad's all-three white; the soft-red
+    secondary drives fewer still, and the red die is the least luminous,
+    so it can read dimmer than the green one at the same "100%".
+    `TILES_LIGHTING_ECHO_SUSTAIN_TINT` / `TILES_LIGHTING_ECHO_SECONDARY_G/
+    _B` are the knobs if that ever needs closing.
 - **Melodic mode: live echo of an incoming melody.** Real feedback: "in
   midi melodic mode is there any way we could read the playing melody
   of the armed track and display it back on tiles?" Needed a genuinely

@@ -54,7 +54,17 @@
  * Then, after seeing 30 on the hardware: "the white pads should be even
  * more dim, dim 30% the white." Read as "take 30% off the white" (30 * 0.7
  * = 21), since 30 was already the current value so "even more dim"
- * can't mean "to 30". */
+ * can't mean "to 30".
+ * Scope, stated by real feedback so it isn't loosened by a later tweak: "but
+ * dont dim the reference root and 5th. those stay the same. also pressed
+ * pads shouldnt be dimmed more, and midi activated shoudlnt be dimmed. midi
+ * activated and pressed should be at 100% of range." This constant is used
+ * ONLY by the regular-pad branch of pad_desired_rgb(). The resulting
+ * hierarchy, brightest first: a pressed pad (touch.c drives press 1.0, so
+ * baseline + (1 - baseline) * 1.0 = 100% white, and that branch is checked
+ * before every idle/echo state), then an echoing pad (its lit die(s) at
+ * 100% of the ceiling, onset flash to full white), then root and fifth (40),
+ * then a regular pad (this constant). */
 #define TILES_LIGHTING_NATURAL_BASELINE_PERCENT 21u
 
 /* Idle (untouched) chromatic-play pad coloring by note role -- real
