@@ -6,6 +6,8 @@
 #include "hardware/adc.h"
 #include "pico/time.h"
 
+#include <stdio.h>
+
 #define ADC_MAX 4095u
 
 /* Hysteresis band around midscale for the binary sustain decision. A
@@ -52,7 +54,31 @@ static bool low_side_means_pressed(void) {
 /* Sustain-only: hysteresis + debounce + broadcast. Factored out of
  * tiles_pedal_scan() so tiles_pedal_set_mode() can't accidentally drift
  * out of sync with it -- both now read/write the exact same s_raw_low/
- * s_debounced_low/s_last_change_ms state through this one function. */
+ * s_debounced_low/s_last_change_ms state through this one function.
+ *
+ * Real feedback: "theres a bug on the sustain pedal that makes it
+ * stick even when released sometimes." Re-read this whole function
+ * against the real hysteresis/debounce math and found nothing wrong on
+ * paper -- s_raw_low tracks the current threshold-crossing state
+ * immediately (with hysteresis), s_debounced_low only ever catches up
+ * to it after SUSTAIN_DEBOUNCE_MS of s_raw_low staying put, a standard
+ * pattern. Also confirmed tiles_pedal_scan() runs unconditionally every
+ * single main-loop iteration (main.c), never skipped by any other
+ * feature owning control the way some other scans can be -- and pedal.c
+ * is the ONLY caller of the ADC in this entire firmware (grepped), so
+ * there's no other module's adc_select_input() that could occasionally
+ * leave this reading from the wrong channel either. Nothing here
+ * explains an intermittent stick from code alone -- rather than guess
+ * a fix for a bug I can't actually see, this traces every real state
+ * transition (raw threshold crossing, debounce settling, what actually
+ * gets sent) so the NEXT time it sticks, the console shows exactly
+ * what the raw ADC was doing at the time: if it shows the raw reading
+ * genuinely never climbing back past SUSTAIN_RELEASE_THRESHOLD, that's
+ * a real electrical/connector issue (jack contact, cable), not
+ * software; if it shows the raw reading correctly climbing but
+ * s_debounced_low or the final send never following, that's the real
+ * software bug still to find, now with the exact data needed to find
+ * it instead of guessing a second time. */
 static void scan_sustain(void) {
     bool raw_low = s_raw_low;
     if (s_raw_low && s_raw > SUSTAIN_RELEASE_THRESHOLD) {
@@ -63,15 +89,19 @@ static void scan_sustain(void) {
 
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
     if (raw_low != s_raw_low) {
+        printf("[pedal] raw_low %d->%d (raw=%u)\n", (int)s_raw_low, (int)raw_low, (unsigned)s_raw);
         s_raw_low = raw_low;
         s_last_change_ms = now_ms;
     } else if (raw_low != s_debounced_low && (now_ms - s_last_change_ms) >= SUSTAIN_DEBOUNCE_MS) {
+        printf("[pedal] debounced_low %d->%d (raw=%u, %ums stable)\n", (int)s_debounced_low, (int)raw_low,
+               (unsigned)s_raw, (unsigned)(now_ms - s_last_change_ms));
         s_debounced_low = raw_low;
     }
 
     bool pressed = low_side_means_pressed() ? s_debounced_low : !s_debounced_low;
     if (pressed != s_last_sent_sustained) {
         s_last_sent_sustained = pressed;
+        printf("[pedal] sustain -> %s (raw=%u)\n", pressed ? "PRESSED" : "released", (unsigned)s_raw);
         /* Broadcast, not a single channel -- under MPE (see
          * midi/midi_out.h) every currently-held note lives on its own
          * Member Channel, and sustain needs to hold ALL of them, not

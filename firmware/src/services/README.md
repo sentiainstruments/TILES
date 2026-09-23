@@ -7876,5 +7876,62 @@ not its code.
     a light touch steal the pitch/gate signal away from the genuine
     fundamental. Unverified on real hardware -- this whole feature is a
     first pass, built to spec but never felt.
+  - **Channel-leak bug fixed.** Real feedback: "it triggered once but
+    its not sending midi anymore." Root cause: `end_harmonic_voice()`
+    sent the MIDI note-off and cleared its own `harmonic_voice_t.active`
+    flag, but never cleared the matching slot in `s_mpe_channels[]` --
+    the array `claim_harmonic_channel()` actually checks. With only 4
+    channels ever reserved for harmonics, every voice that ended (auto-
+    decay or re-pluck) permanently marked its channel busy, so after
+    roughly 4 total plucks across a session the whole reserved pool
+    read exhausted forever and `claim_harmonic_channel()` silently
+    returned `0xFF` on every future touch -- exactly the reported
+    symptom. Fixed by releasing `s_mpe_channels[...].in_use` in the
+    same place, computed directly from the ending voice's own
+    `midi_channel` rather than re-searching for it.
+  - **Palm rejection removed entirely; gated on the sustain pedal
+    instead.** Real feedback: "...how about we remove all palm
+    rejection and we make it so that harmonics only work when a
+    sustrain pedal is engaged." By this point there was no palm-
+    rejection heuristic left to remove (the pluck-model rewrite above
+    had already deleted the last one), so this is a pure addition:
+    `scan_melodic_harmonics()` now also requires
+    `tiles_pedal_is_sustained()` (`services/pedal.h`) before doing
+    anything, same "not active" teardown path it already used for
+    leaving melodic mode -- releasing the pedal (or losing melodic
+    mode, or losing the sole fundamental) tears down every ringing
+    voice immediately, same as a piano's dampers falling back onto the
+    strings. No touch-shape/contact-size/contact-count heuristic is
+    needed once a resting palm landing on the pads can't do anything at
+    all unless the player's foot is also holding the pedal -- a stray
+    palm never does that. Reuses the section's own existing forced-
+    false touch-tracking while gated off as the "just re-engaged"
+    mechanism too: because `s_harmonic_prev_touched[]` is pinned false
+    for every pad the whole time the gate is shut, a pad already
+    resting on the surface at the instant the pedal comes down reads as
+    a fresh touch edge and plucks immediately -- no separate transition
+    flag needed, the existing reset already produces exactly that
+    behavior for free.
+- **`pedal.c` sustain-pedal diagnostic tracing.** Real feedback:
+  "theres a bug on the sustain pedal that makes it stick even when
+  released sometimes." Traced the reported bug against the real code
+  before touching anything: `scan_sustain()`'s hysteresis/debounce math
+  checks out on paper (no inverted condition, no missing reset);
+  `tiles_pedal_scan()` runs unconditionally every main-loop iteration
+  per `main.c`, never skipped by another feature the way some other
+  scans can be; `pedal.c` is the only module in the firmware that
+  touches the ADC at all (`grep -rn "adc_select_input|adc_read|adc_init
+  |adc_gpio_init" firmware/src/`), ruling out another module's channel
+  selection bleeding into this one's readings. No bug is visible from
+  static analysis alone, so rather than guess a fix a second time, added
+  real `printf` tracing at all three state transitions inside
+  `scan_sustain()` (raw threshold crossing, debounce settling, the
+  final sustain CC actually sent) so the next real occurrence shows
+  exactly what the raw ADC was doing: raw genuinely never climbing back
+  past `SUSTAIN_RELEASE_THRESHOLD` points to an electrical/connector
+  issue (jack contact, cable), not software; raw correctly climbing but
+  the debounced value or the final send never following points to a
+  real software bug, now with the evidence needed to find it. Root
+  cause still open pending real hardware data.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

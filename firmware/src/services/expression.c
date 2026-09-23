@@ -12,6 +12,7 @@
 #include "game_mode.h"
 #include "octave_control.h"
 #include "op_mode.h"
+#include "pedal.h"
 
 #include "pico/time.h"
 
@@ -1247,6 +1248,30 @@ static uint32_t s_next_mpe_claim_seq = 1u;
  * while this build is running, 11 left for genuine notes -- a real,
  * explicit tradeoff of this being scoped to one board's experiment
  * rather than the default build.
+ *
+ * Real feedback, third round: "it triggered once but its not sending
+ * midi anymore, look into why its not detecting how about we remove
+ * all palm rejection and we make it so that harmonics only work when a
+ * sustrain pedal is engaged." Two separate changes:
+ *   - The "not sending midi anymore" half was a real bug, not a design
+ *     problem -- see end_harmonic_voice()'s own comment on the channel
+ *     leak that silently exhausted the 4-channel reserved pool after
+ *     ~4 plucks. Fixed there.
+ *   - Palm rejection is now GONE, not just simplified -- there was
+ *     already none left to remove by this point (the pluck-model
+ *     rewrite above had already deleted the last sustained-touch-count
+ *     heuristic), but gating the whole section on
+ *     tiles_pedal_is_sustained() (services/pedal.h) makes that
+ *     permanent: a resting palm landing on the pads does nothing at
+ *     all unless the player's foot is also holding the pedal down,
+ *     which a stray palm never does. No touch-shape or contact-size
+ *     heuristic is needed once accidental activation requires a second,
+ *     deliberate, physically separate input. This mirrors a real
+ *     piano's damper pedal -- notes only ring sympathetically while the
+ *     dampers are lifted -- and reuses scan_melodic_harmonics()'s own
+ *     existing "not active" teardown path (see its own comment below)
+ *     for pedal-release the exact same way it already covered leaving
+ *     melodic mode: same code, one more condition.
  */
 
 /* 2nd through 5th harmonic, natural harmonic series in semitones above
@@ -1332,6 +1357,24 @@ static void end_harmonic_voice(uint8_t idx) {
      * genuine fundamental note it's supposed to be shimmering under --
      * exactly the kind of interference a "quiet overtone" feature must
      * not cause. CV/gate only ever reflects real, pressed notes. */
+    /* Real bug found from live testing ("it triggered once but its not
+     * sending midi anymore"): this used to stop here, at v->active =
+     * false below, WITHOUT ever clearing s_mpe_channels[]'s own in_use
+     * flag for this voice's channel. claim_harmonic_channel() only
+     * looks at s_mpe_channels[].in_use, never at any harmonic_voice_t --
+     * so every ended voice left its channel permanently marked busy.
+     * With only HARMONIC_MAX_VOICES (4) channels reserved at all, that's
+     * a real, fast leak: after roughly 4 total plucks across a session
+     * (not 4 simultaneous -- 4 total, ever, since the last reboot), every
+     * reserved channel reads in_use forever, claim_harmonic_channel()
+     * returns 0xFF for good, and every future pluck silently no-ops --
+     * exactly the reported symptom. Fixed by releasing the SAME slot
+     * claim_harmonic_channel() set, computed directly from the channel
+     * number rather than re-searching for it. */
+    uint8_t mpe_index = (uint8_t)(v->midi_channel - TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL);
+    if (mpe_index < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS) {
+        s_mpe_channels[mpe_index].in_use = false;
+    }
     v->active = false;
 }
 
@@ -1391,6 +1434,18 @@ static void fire_harmonic_pluck(uint8_t slot, uint8_t pad, uint8_t note, uint8_t
 /* Called once per scan, after the main per-pad loop below (so every
  * pad's PAD_STATE_NOTE_ON is current for this tick first). Real
  * feedback's full gesture in one pass:
+ *   0. Gated on tiles_pedal_is_sustained() (services/pedal.h) -- see
+ *      this section's own header comment, third round. Pedal not held
+ *      (or not in sustain mode), or melodic mode not active, is treated
+ *      as one and the same "not active" state below: every voice is
+ *      torn down and every pad's touch memory is forced to false every
+ *      scan while gated off. That forced-false is deliberate, not just
+ *      a reset -- it's also what makes ENGAGING the pedal while a pad
+ *      is already resting on the surface pluck it immediately, the
+ *      instant this function goes active again, with no separate "just
+ *      became gated" tracking needed: touched-but-was_touched-false
+ *      below is already exactly what a fresh edge looks like, because
+ *      was_touched was pinned to false for as long as the gate was shut.
  *   1. Exactly one pad held elsewhere in this file -> that's the
  *      fundamental; anything else (none held, or a second pad just
  *      promoted to a real note) ends every harmonic voice outright.
@@ -1403,7 +1458,7 @@ static void fire_harmonic_pluck(uint8_t slot, uint8_t pad, uint8_t note, uint8_t
  *      slot instead of trying to claim a second one.
  */
 static void scan_melodic_harmonics(uint32_t now_ms) {
-    if (!tiles_op_mode_is_melodic_active()) {
+    if (!tiles_op_mode_is_melodic_active() || !tiles_pedal_is_sustained()) {
         if (s_harmonic_fundamental_pad != 0u) {
             end_all_harmonic_voices();
         }
