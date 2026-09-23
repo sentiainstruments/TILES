@@ -312,6 +312,17 @@ static float background_pattern_pulse_level(uint32_t now_ms) {
  * note_map.c's own crash-survived statics don't either. */
 static tiles_op_mode_t __uninitialized_ram(s_active_mode);
 static bool s_menu_visible;
+/* True once a mode has been picked (Hall depth crossed the select
+ * threshold) but the picking pad hasn't been released yet -- see
+ * handle_menu_taps()'s own comment. Real feedback: "there is no midi
+ * after menu selection is done, there should not be midi until
+ * selection pad is lifted." menu_exit()/set_active_mode() are now BOTH
+ * deferred until every pad releases, same pattern Scene Launch's own
+ * s_scene_pending_melodic already established, so the still-touched
+ * selecting pad can never fall through into the new mode's real-strike
+ * pipeline the instant it activates. */
+static bool s_menu_pending;
+static tiles_op_mode_t s_menu_pending_mode;
 
 /* Real feedback: "its powering on with the mode light on" -- triangle's
  * permanent override gets explicitly claimed and set to 0.0f (off) once,
@@ -367,6 +378,14 @@ static bool s_menu_prev_pad_touched[TILES_NUM_PADS];
  * handle_triangle_click()'s shift branch is the extension point once
  * they do. */
 static bool s_scale_menu_visible;
+/* Same "don't hand the pad back to real play while it's still down"
+ * reasoning as s_menu_pending above -- see handle_scale_menu_taps()'s
+ * own comment. Unlike the mode picker, tiles_note_map_set_scale() has
+ * no MIDI side effect of its own (just s_scale = scale in note_map.c),
+ * so that call itself stays immediate for correct live pulsing in
+ * render_scale_menu(); only closing the menu (scale_menu_exit(), which
+ * hands grid ownership back to real melodic/chord play) is deferred. */
+static bool s_scale_menu_pending_exit;
 static bool s_diamond_was_held;
 static bool s_diamond_press_had_conflict; /* see s_triangle_press_had_conflict's own comment -- same reasoning, watches diamond instead of triangle, guards against game_mode.h's 4-button combo */
 static bool s_scale_menu_prev_pad_touched[TILES_NUM_PADS];
@@ -882,7 +901,33 @@ static bool s_chord_pad_sounding[TILES_NUM_PADS];
  * the dedicated bass voice, on top of note_map.c's own CHORD_OCTAVE_
  * DOWN_SEMITONES -- real feedback: "octave lower bass note." */
 #define OP_CHORD_BASS_EXTRA_OCTAVE_SEMITONES 12
-#define OP_CHORD_NUM_VOICES 4u /* bass + root + fifth + open_third, always */
+/* Real feedback: "i want chord mode to be slightly more exotic in the
+ * chord types." tiles_note_map_get_chord_notes() (note_map.c) already
+ * computed a full diatonic stack up through the 13th for every chord
+ * pad -- root/third/fifth/seventh/ninth/eleventh/thirteenth -- but
+ * build_chord_voicing() below only ever used the first three (root,
+ * third, fifth), throwing the rest away. Adding the seventh as a genuine
+ * fifth voice is the smallest real step past a plain triad: major7/
+ * dominant7/minor7/half-diminished7 chords, automatically the correct
+ * quality for the current scale degree exactly the way the triad
+ * already was (see tiles_note_map_get_chord_notes()'s own comment) --
+ * not a new adaptive/tiered voicing, which real feedback already
+ * rejected once ("the tap and then complex chord is not working nice
+ * so lets simplify... not dual type of chord"). Still always the same
+ * ONE fixed shape per held pad, just one voice richer.
+ * Deliberately NOT also bumping OP_SEQ_MAX_NOTES_PER_STEP/OP_SONG_
+ * MAX_NOTES_PER_STEP (both still 4u) to match -- those size the
+ * flash-persisted pattern/song step format, and growing them is its own
+ * real migration (see OP_SEQ_MAX_NOTES_PER_STEP's own comment on the
+ * last such bump, 2->4, needing to fit "within the same one-sector"
+ * constraint) well beyond what a chord-voicing change needs. A LIVE
+ * chord strike now plays all 5 voices; a chord CAPTURED into a
+ * sequencer/song step still keeps only 4 (the existing note_count =
+ * min(OP_SEQ_MAX_NOTES_PER_STEP, OP_CHORD_NUM_VOICES) clamp below
+ * already handles this gracefully, dropping the seventh specifically
+ * rather than overflowing) until that storage format is deliberately
+ * migrated in its own change. */
+#define OP_CHORD_NUM_VOICES 5u /* bass + root + fifth + open_third + seventh */
 
 static uint8_t s_chord_pad_notes[TILES_NUM_PADS][OP_CHORD_NUM_VOICES];
 /* The velocity actually used for this pad's last real strike -- read by
@@ -911,13 +956,15 @@ static uint8_t clamp_midi_note(int note) {
     return (uint8_t)note;
 }
 
-/* Always the same 4-voice shape now -- see this section's own header
- * comment. */
+/* Always the same 5-voice shape now -- see this section's own header
+ * comment on why the seventh (raw[3], already computed by
+ * tiles_note_map_get_chord_notes(), previously discarded) was added. */
 static void build_chord_voicing(const uint8_t raw[TILES_NOTE_MAP_CHORD_NUM_NOTES],
                                  uint8_t out_notes[OP_CHORD_NUM_VOICES]) {
     uint8_t root = raw[0];
     uint8_t third = raw[1];
     uint8_t fifth = raw[2];
+    uint8_t seventh = raw[3];
 
     uint8_t bass = clamp_midi_note((int)root - OP_CHORD_BASS_EXTRA_OCTAVE_SEMITONES);
     uint8_t open_third = clamp_midi_note((int)third + 12);
@@ -926,6 +973,7 @@ static void build_chord_voicing(const uint8_t raw[TILES_NOTE_MAP_CHORD_NUM_NOTES
     out_notes[1] = root;
     out_notes[2] = fifth;
     out_notes[3] = open_third;
+    out_notes[4] = seventh;
 }
 
 static void chord_pad_note_off(uint8_t pad) {
@@ -2069,9 +2117,16 @@ static bool mode_owns_standby_grid(tiles_op_mode_t mode) {
 
 static void menu_enter(void) {
     s_menu_visible = true;
+    /* Defensive: a fresh open should never inherit a stale pending
+     * selection from some earlier session (e.g. set_active_mode()'s own
+     * force-close of the scale menu bypasses scale_menu_exit() and
+     * could otherwise leave s_menu_pending/s_scale_menu_pending_exit
+     * stuck true, permanently blocking every future selection). */
+    s_menu_pending = false;
     /* The mode-picker takes priority over a still-open per-mode
      * sub-menu -- can't sensibly show both at once. */
     s_scale_menu_visible = false;
+    s_scale_menu_pending_exit = false;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_menu_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
     }
@@ -2171,21 +2226,30 @@ static void render_menu_col_color(uint8_t col, float *r, float *g, float *b) {
  * unlike render_menu_col_color() above, this is called for EVERY column
  * including the ones outside the menu's 4 slots, so a careless default
  * here would misreport some other column as "chord," pulsing a pad that
- * isn't a mode slot at all. */
+ * isn't a mode slot at all.
+ *
+ * Also true for the PENDING selection (s_menu_pending), not just the
+ * already-committed s_active_mode -- see handle_menu_taps()'s own
+ * comment on why the actual mode switch is now deferred until the
+ * selecting pad releases. Without this, the picked slot would go dark
+ * for however long the player's finger stays down instead of showing
+ * an immediate "got it" pulse, since s_active_mode itself doesn't
+ * change until release. */
 static bool col_is_current_mode(uint8_t col) {
+    tiles_op_mode_t mode = s_menu_pending ? s_menu_pending_mode : s_active_mode;
     switch (col) {
     case OP_MENU_COL_MELODIC:
-        return s_active_mode == OP_MODE_MELODIC;
+        return mode == OP_MODE_MELODIC;
     case OP_MENU_COL_SEQUENCER:
-        return s_active_mode == OP_MODE_SEQUENCER;
+        return mode == OP_MODE_SEQUENCER;
     case OP_MENU_COL_GUITAR:
-        return s_active_mode == OP_MODE_GUITAR;
+        return mode == OP_MODE_GUITAR;
     case OP_MENU_COL_CHORD:
-        return s_active_mode == OP_MODE_CHORD;
+        return mode == OP_MODE_CHORD;
     case OP_MENU_COL_SONG:
-        return s_active_mode == OP_MODE_SONG;
+        return mode == OP_MODE_SONG;
     case OP_MENU_COL_SCENE_LAUNCH:
-        return s_active_mode == OP_MODE_SCENE_LAUNCH;
+        return mode == OP_MODE_SCENE_LAUNCH;
     default:
         return false;
     }
@@ -2289,35 +2353,53 @@ static void scale_menu_exit(void);
  * acknowledgment, "you're touching this") -- selection itself only
  * commits once Hall depth crosses OP_MENU_SELECT_DEPTH_THRESHOLD while
  * still touched.
- * Selecting now closes the menu immediately -- real feedback: "when we
- * select a menu item the menu should close not it doesnt stick around
- * until disabeled." An earlier version deliberately left it open (so
- * different scales could be tried while watching/hearing the
- * difference); real feedback reversed that call -- matches the
- * mode-picker's own close-on-select behavior now, one consistent rule
- * for both menus in this file. Re-opening (a fresh diamond click) shows
- * whatever's now selected pulsing, same as before. */
+ * Selecting still closes the menu (real feedback: "when we select a
+ * menu item the menu should close not it doesnt stick around until
+ * disabeled") -- but not INSTANTLY anymore. Real feedback, later: "when
+ * changing modes or selecting scales there is midi info being read and
+ * thats bad... there should not be midi until selection pad is
+ * lifted." Closing the menu the instant depth crossed the threshold
+ * (the old behavior) handed grid ownership to melodic/chord's own real
+ * strike pipeline on the VERY NEXT scan, while the selecting pad was
+ * still physically down -- that stale touch fell straight into
+ * services/expression.c and fired a genuine Note-On for whatever pitch
+ * it mapped to. tiles_note_map_set_scale() itself has no MIDI side
+ * effect (see note_map.c: it's just an assignment), so that part stays
+ * immediate -- render_scale_menu() picks it up and pulses the newly
+ * selected slot right away, exactly like before. Only scale_menu_exit()
+ * (the call that actually hands the grid back to real play) is now
+ * deferred, via s_scale_menu_pending_exit, until every pad on the grid
+ * reads released -- same "wait for release" pattern handle_menu_taps()
+ * above now uses for the mode picker. */
 static void handle_scale_menu_taps(void) {
+    bool any_touched = false;
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         bool touched = tiles_touch_is_touched(pad);
+        if (touched) {
+            any_touched = true;
+        }
         if (touched && !s_scale_menu_prev_pad_touched[pad - 1u]) {
             tiles_haptics_trigger_touch_pulse(pad);
         }
-        if (touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD) {
+        if (!s_scale_menu_pending_exit && touched &&
+            (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD) {
             tiles_scale_mode_t slot_scale = tiles_note_map_scale_for_grid_slot(pad);
             if (tiles_note_map_scale_is_defined(slot_scale)) {
                 if (slot_scale != tiles_note_map_get_scale()) {
                     printf("[op_mode] scale -> %d\n", (int)slot_scale);
                 }
                 tiles_note_map_set_scale(slot_scale);
-                scale_menu_exit();
-                return; /* grid ownership just changed under this loop -- stop iterating it */
+                s_scale_menu_pending_exit = true;
             }
             /* An undefined (reserved custom) slot is simply not
              * selectable -- "unavailable" per the standardized menu
              * language, not a smaller version of a real choice. */
         }
         s_scale_menu_prev_pad_touched[pad - 1u] = touched;
+    }
+    if (s_scale_menu_pending_exit && !any_touched) {
+        s_scale_menu_pending_exit = false;
+        scale_menu_exit();
     }
 }
 
@@ -2335,6 +2417,7 @@ static void handle_scale_menu_taps(void) {
  * whatever's currently selected, live, at the moment they actually play. */
 static void scale_menu_enter(void) {
     s_scale_menu_visible = true;
+    s_scale_menu_pending_exit = false; /* defensive -- see menu_enter()'s own comment */
     s_scale_menu_haptic_pulse_ms = to_ms_since_boot(get_absolute_time());
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_scale_menu_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
@@ -3841,25 +3924,48 @@ static void render_seq_capture(uint32_t now_ms) {
 
 /* Same touch-clicks/press-past-50%-selects shape as
  * handle_scale_menu_taps() above -- see that function's own comment and
- * OP_MENU_SELECT_DEPTH_THRESHOLD's. Picking a mode still closes the menu
- * immediately (no persistent "selected, still browsing" state here the
- * way the scale picker has -- a mode activates and takes over the grid
- * the instant it's confirmed), so there's no pulsing-haptic step for
- * this menu specifically. Touch-click haptic acknowledgment still fires
- * for ANY pad on the grid (matching the old row-based version's own
- * behavior), even though selection itself now only ever fires on
- * OP_MENU_ROW's 4 slots -- see render_menu()'s own comment for why the
- * rest of the grid is otherwise unlit and unused while this menu is up. */
+ * OP_MENU_SELECT_DEPTH_THRESHOLD's. Touch-click haptic acknowledgment
+ * still fires for ANY pad on the grid (matching the old row-based
+ * version's own behavior), even though selection itself now only ever
+ * fires on OP_MENU_ROW's 4 slots -- see render_menu()'s own comment for
+ * why the rest of the grid is otherwise unlit and unused while this
+ * menu is up.
+ *
+ * Real feedback: "when changing modes or selecting scales there is midi
+ * info being read and thats bad... there should not be midi until
+ * selection pad is lifted." Used to call menu_exit()/set_active_mode()
+ * the instant Hall depth crossed the select threshold, WHILE that same
+ * pad was still physically touched -- the very next scan,
+ * tiles_op_mode_owns_pad_grid() no longer covers it (the menu closed,
+ * and the freshly-activated mode doesn't claim the grid the way the
+ * menu did), so that still-down touch fell straight into services/
+ * expression.c's real strike pipeline and fired a genuine Note-On for
+ * whatever pitch that pad happened to map to in the new mode -- the
+ * exact leak reported. Fixed the same way Scene Launch's own
+ * s_scene_pending_melodic already handles an identical "don't switch
+ * while a finger's still down" case: crossing the threshold now only
+ * records WHICH mode was picked (s_menu_pending/s_menu_pending_mode,
+ * also read by col_is_current_mode() above so the pulsing highlight
+ * updates immediately even though the switch itself hasn't happened
+ * yet) and leaves s_menu_visible -- and so tiles_op_mode_owns_pad_
+ * grid()'s real-strike block -- untouched. The actual menu_exit()/
+ * set_active_mode() only fire once every pad on the grid reads
+ * released, by which point there's no stale touch left for the new
+ * mode to misinterpret. */
 static void handle_menu_taps(void) {
+    bool any_touched = false;
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             uint8_t pad = board_pad_for_row_col(row, col);
             bool touched = tiles_touch_is_touched(pad);
+            if (touched) {
+                any_touched = true;
+            }
             if (touched && !s_menu_prev_pad_touched[pad - 1u]) {
                 tiles_haptics_trigger_touch_pulse(pad);
             }
-            if (row == OP_MENU_ROW && touched && (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD &&
-                col_is_available(col)) {
+            if (!s_menu_pending && row == OP_MENU_ROW && touched &&
+                (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD && col_is_available(col)) {
                 tiles_op_mode_t mode = OP_MODE_MELODIC;
                 if (col == OP_MENU_COL_CHORD) {
                     mode = OP_MODE_CHORD;
@@ -3872,12 +3978,17 @@ static void handle_menu_taps(void) {
                 } else if (col == OP_MENU_COL_SCENE_LAUNCH) {
                     mode = OP_MODE_SCENE_LAUNCH;
                 }
-                menu_exit();
-                set_active_mode(mode);
-                return; /* grid ownership/state just changed under this loop -- stop iterating it */
+                s_menu_pending_mode = mode;
+                s_menu_pending = true;
             }
             s_menu_prev_pad_touched[pad - 1u] = touched;
         }
+    }
+    if (s_menu_pending && !any_touched) {
+        tiles_op_mode_t mode = s_menu_pending_mode;
+        s_menu_pending = false;
+        menu_exit();
+        set_active_mode(mode);
     }
 }
 
@@ -4807,10 +4918,12 @@ void tiles_op_mode_init(bool crash_recovered) {
         s_active_mode = OP_MODE_MELODIC;
     }
     s_menu_visible = false;
+    s_menu_pending = false;
     s_triangle_was_held = false;
     s_triangle_press_had_conflict = false;
     s_triangle_press_was_shift = false;
     s_scale_menu_visible = false;
+    s_scale_menu_pending_exit = false;
     s_pattern_bank_visible = false;
     s_diamond_was_held = false;
     s_diamond_press_had_conflict = false;
@@ -5298,8 +5411,8 @@ bool tiles_op_mode_owns_octave_buttons(void) {
     return tiles_op_mode_owns_pad_grid() || s_active_mode == OP_MODE_GUITAR;
 }
 
-bool tiles_op_mode_is_melodic_active(void) {
-    return s_active_mode == OP_MODE_MELODIC;
+bool tiles_op_mode_melodic_harmonics_may_play(void) {
+    return s_active_mode == OP_MODE_MELODIC || s_active_mode == OP_MODE_CHORD;
 }
 
 bool tiles_op_mode_is_sequencer_active(void) {

@@ -340,14 +340,28 @@ bool tiles_op_mode_owns_pad(uint8_t logical_pad);
  * "static" a thing as a sequencer pattern doing the same). */
 bool tiles_op_mode_is_sequencer_active(void);
 
-/* True only while OP_MODE_MELODIC is the active mode -- deliberately
- * narrower than tiles_op_mode_owns_pad_grid()/_owns_pad(), which also
- * let chord/guitar mode's own melody pads through the same real-strike
- * pipeline. Board-2-only melodic harmonics (services/expression.c,
- * TILES_MELODIC_HARMONICS_ENABLED) needs exactly this distinction --
- * real feedback scoped the feature to melodic mode specifically, not
- * "everywhere a real note can play." */
-bool tiles_op_mode_is_melodic_active(void);
+/* True while OP_MODE_MELODIC is active, OR while OP_MODE_CHORD is
+ * active -- deliberately still narrower than tiles_op_mode_owns_pad_
+ * grid()/_owns_pad(), which also let GUITAR mode's own melody pads
+ * through the same real-strike pipeline. Board-2-only melodic
+ * harmonics (services/expression.c, TILES_MELODIC_HARMONICS_ENABLED)
+ * is this function's one caller and needs exactly this distinction.
+ * Originally melodic-only ("real feedback scoped the feature to
+ * melodic mode specifically, not 'everywhere a real note can play'");
+ * widened to also cover chord mode once real feedback had chord mode's
+ * own melody sub-grid follow the globally selected scale "like a mini
+ * melodic mode" (see note_map.c's tiles_note_map_get_note(), the chord-
+ * mode branch): "harmonics also apply to that mode." Chord mode's own
+ * chord-STRIP pads (columns 1-2) can never actually trigger harmonics
+ * regardless of this function's answer -- they never enter services/
+ * expression.c's real-strike state machine at all (op_mode.c's own
+ * chord_pad_strike() drives them directly), so scan_melodic_harmonics()'s
+ * find_sole_held_pad() can only ever find a melody-grid pad while chord
+ * mode is active, never a chord-strip one. Guitar mode is deliberately
+ * still excluded -- its note mapping is a wholly different fretboard
+ * system (guitar_note_for_pad()), not scale-degree play, and nothing
+ * asked for harmonics there. */
+bool tiles_op_mode_melodic_harmonics_may_play(void);
 
 /* True while any of this module's own sub-views is open: the top-level
  * mode picker, the (now-universal, not melodic-only) scale picker,

@@ -550,14 +550,32 @@ uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
          * region's own root, at melodic pitch, no octave-down) purely so
          * a stray call here can't return garbage; nothing that actually
          * plays a sound is expected to use it for a chord-region pad.
+         *
          * Melody-region pads (col 3-6) DO really play through here (this
-         * is services/expression.c's own real note lookup for them) --
-         * chord_mode_scale_table(), not current_scale_table(), so the
-         * melody grid is always a real "in key" diatonic scale even when
-         * the globally selected scale is chromatic or otherwise
-         * non-diatonic -- see that function's own comment. */
+         * is services/expression.c's own real note lookup for them).
+         * Real feedback: "melodic mode in chord mode should follow the
+         * selected scale not regular defoult scale. do the selected
+         * scale like a mini melodic mode." Used to always go through
+         * chord_mode_scale_table() -- the SAME forced-diatonic table
+         * the chord-strip pads need for their own triad math (skip-two
+         * scale-degree stacking only produces a real third/fifth against
+         * a genuine 7-note scale) -- so picking a non-7-note scale (any
+         * pentatonic, blues, whole-tone, chromatic, diminished, etc.)
+         * from the picker silently played the melody grid in Ionian
+         * instead of the scale actually selected, even though the
+         * player deliberately picked something else. The chord-strip
+         * pads still need that constraint and keep using chord_mode_
+         * scale_table() (tiles_note_map_get_chord_notes() above,
+         * unchanged) -- but the melody grid has no chord-stacking to
+         * protect, so there's no real reason to force it too. Now uses
+         * current_scale_table() (via note_for_scale_degree_using()),
+         * the exact same table plain melodic mode's own note_for_scale_
+         * degree() reads -- this region plays literally like a mini
+         * melodic mode dropped into chord mode's own 4-column sub-grid,
+         * chord_mode_degree()'s geometry unchanged (that part is about
+         * this region's physical layout, not which scale it plays). */
         uint8_t degree = chord_mode_degree(cfg);
-        int note = note_for_scale_degree_using(chord_mode_scale_table(), degree);
+        int note = note_for_scale_degree_using(current_scale_table(), degree);
         if (note < 0) {
             note = 0;
         }
@@ -642,14 +660,16 @@ bool tiles_note_map_is_root_pad(uint8_t logical_pad) {
      * see tiles_note_map_is_chord_region_pad()), so which specific
      * formula runs for them doesn't matter in practice; using the same
      * one keeps this function total and simple rather than adding a
-     * third branch for a case nothing ever looks at. Chord mode divides
-     * by chord_mode_scale_table()'s count, not current_scale_table()'s
-     * -- must agree with tiles_note_map_get_note()'s own melody-region
-     * branch above on which table is actually in play, or this would
-     * mislabel root pads whenever the globally selected scale isn't
-     * diatonic. */
+     * third branch for a case nothing ever looks at. Chord mode now
+     * divides by current_scale_table()'s count, not chord_mode_scale_
+     * table()'s -- tiles_note_map_get_note()'s own melody-region branch
+     * above moved off the forced-diatonic table (real feedback: "melodic
+     * mode in chord mode should follow the selected scale... like a mini
+     * melodic mode"), so this has to agree on the SAME table or it would
+     * mislabel root pads against whatever the melody grid is actually
+     * playing now. */
     uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : pad_degree(cfg);
-    uint8_t scale_note_count = s_chord_mode_active ? chord_mode_scale_table().count : current_scale_table().count;
+    uint8_t scale_note_count = current_scale_table().count;
     return (degree % scale_note_count) == 0u;
 }
 

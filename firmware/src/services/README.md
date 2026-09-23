@@ -7972,5 +7972,92 @@ not its code.
   it -- exactly the gesture that reproduces the stick. See
   `midi/README.md` for the full fix (a bounded retry instead of the
   previous silent log-and-drop).
+- **Menu/scale-picker MIDI leak fixed.** Real feedback: "when changing
+  modes or selecting scales there is midi info being read and thats
+  bad... there should not be midi until selection pad is lifted. this
+  shouldnt affect playing sequences in the background." Root cause:
+  `handle_menu_taps()`/`handle_scale_menu_taps()` (`op_mode.c`) both
+  used to call `menu_exit()`/`scale_menu_exit()` (and, for the mode
+  picker, `set_active_mode()`) the INSTANT Hall depth crossed the
+  select threshold, while the selecting pad was still physically
+  touched. `tiles_op_mode_owns_pad_grid()` no longer covered that pad
+  on the very next scan (the menu had just closed), so the still-down
+  touch fell straight into `services/expression.c`'s real strike
+  pipeline and fired a genuine Note-On for whatever pitch it happened
+  to map to in the newly active mode/scale -- the leak. Fixed by
+  deferring the actual commit (`menu_exit()`+`set_active_mode()`, or
+  `scale_menu_exit()`) until every pad on the grid reads released, the
+  same "wait for release" pattern Scene Launch's own
+  `s_scene_pending_melodic` already established for an identical class
+  of problem. `col_is_current_mode()` (mode picker's pulsing highlight)
+  and `tiles_note_map_set_scale()` (which has no MIDI side effect of
+  its own) both stay immediate, so the picked slot still pulses/updates
+  right away even though the pad hasn't lifted yet -- only the actual
+  grid-ownership handoff is delayed. Background sequencer/Song playback
+  was already unaffected either way (confirmed: `seq_advance_clock()`/
+  `song_advance_clock()` run unconditionally every scan, before either
+  menu's own dispatch branch in `tiles_op_mode_scan()`) -- this fix
+  doesn't touch that.
+- **Chord mode: 7th voice added.** Real feedback: "i want chord mode to
+  be slightly more exotic in the chord types." `tiles_note_map_get_
+  chord_notes()` (`note_map.c`) already computed a full diatonic stack
+  through the 13th for every chord pad, but `build_chord_voicing()`
+  only ever used the first three (root/third/fifth) -- the rest was
+  thrown away. Added the seventh as a genuine 5th voice
+  (`OP_CHORD_NUM_VOICES` 4 -> 5): major7/dominant7/minor7/half-
+  diminished7 chords now, automatically the correct quality for the
+  current scale degree exactly the way the triad already was, not a new
+  adaptive/tiered voicing (real feedback already rejected that once:
+  "the tap and then complex chord is not working nice so lets
+  simplify... not dual type of chord"). Still always the one fixed
+  shape per held pad, just one voice richer. A chord CAPTURED into a
+  sequencer/Song step still only keeps 4 of the 5 voices (the existing
+  `note_count = min(OP_SEQ_MAX_NOTES_PER_STEP, OP_CHORD_NUM_VOICES)`
+  clamp already handles this gracefully by dropping the seventh
+  specifically) -- deliberately NOT also bumping `OP_SEQ_MAX_NOTES_PER_
+  STEP`/`OP_SONG_MAX_NOTES_PER_STEP` to match, since those size the
+  flash-persisted pattern/song step format and growing them is its own
+  real migration, well beyond what a chord-voicing change needs.
+- **Chord mode's melody grid now follows the actually selected scale.**
+  Real feedback: "melodic mode in chord mode should follow the selected
+  scale not regular defoult scale. do the selecte dscale like a mini
+  melodic mode." `tiles_note_map_get_note()`'s chord-mode branch
+  (`note_map.c`) used to run the melody sub-grid (columns 3-6) through
+  `chord_mode_scale_table()` -- the SAME forced-diatonic table the
+  chord-STRIP pads genuinely need for their own triad math (skip-two
+  scale-degree stacking only produces a real third/fifth against a
+  genuine 7-note scale) -- so picking a non-7-note scale (any
+  pentatonic, blues, whole-tone, chromatic, diminished, etc.) from the
+  picker silently played the melody grid in Ionian instead, even though
+  the player deliberately picked something else. The chord-strip pads
+  still need and keep that constraint; the melody grid has no chord-
+  stacking to protect, so it now reads `current_scale_table()` instead
+  -- the exact same table plain melodic mode's own note lookup uses.
+  This region now plays literally like a mini melodic mode dropped into
+  chord mode's own 4-column sub-grid; `tiles_note_map_is_root_pad()`
+  was updated to match (same table for root-pad highlighting) so the
+  lighting stays consistent with what's actually played.
+- **Melodic harmonics: 6th harmonic added, and now also applies to
+  chord mode's melody grid.** Real feedback: "add one more harmonic to
+  the harmonic capacitive touch feature" -- `HARMONIC_SEMITONES`
+  (`expression.c`) gained a 5th entry, +31 semitones (two octaves +
+  fifth, the 3rd harmonic's own +19 doubled up another octave), so
+  `HARMONIC_MAX_VOICES` is 5 now (was 4); the reserved-channel cost
+  grows to match (10 Member Channels left for real polyphony on this
+  build, was 11). Also: "do the selected scale like a mini melodic
+  mode, harmonics also aply to that mode" -- since chord mode's melody
+  grid now plays through the same real strike pipeline AND the same
+  scale-following logic plain melodic mode uses (see the entry just
+  above), extending harmonics there was a small, natural follow-on.
+  `tiles_op_mode_is_melodic_active()` (`op_mode.c`/`.h`) was renamed to
+  `tiles_op_mode_melodic_harmonics_may_play()` and now returns true for
+  melodic OR chord mode (still false for guitar mode -- a wholly
+  different fretboard mapping, not scale-degree play); it has exactly
+  one caller, `scan_melodic_harmonics()`'s own gate. Chord mode's own
+  chord-STRIP pads (columns 1-2) still can't ever trigger a harmonic
+  regardless of this -- they never enter `services/expression.c`'s
+  real-strike state machine at all (`chord_pad_strike()` drives them
+  directly), so `find_sole_held_pad()` can only ever find a melody-grid
+  pad while chord mode is active, never a chord-strip one.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

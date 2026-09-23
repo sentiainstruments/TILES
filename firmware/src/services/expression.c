@@ -1245,9 +1245,10 @@ static uint32_t s_next_mpe_claim_seq = 1u;
  * rather than teaching that carefully-tuned stealing logic a second,
  * different kind of steal. The real cost: HARMONIC_MAX_VOICES of the
  * 15 Member Channels are permanently held back from real polyphony
- * while this build is running, 11 left for genuine notes -- a real,
- * explicit tradeoff of this being scoped to one board's experiment
- * rather than the default build.
+ * while this build is running, 10 left for genuine notes (was 11
+ * before the 6th harmonic added a 5th voice) -- a real, explicit
+ * tradeoff of this being scoped to one board's experiment rather than
+ * the default build.
  *
  * Real feedback, third round: "it triggered once but its not sending
  * midi anymore, look into why its not detecting how about we remove
@@ -1272,15 +1273,36 @@ static uint32_t s_next_mpe_claim_seq = 1u;
  *     existing "not active" teardown path (see its own comment below)
  *     for pedal-release the exact same way it already covered leaving
  *     melodic mode: same code, one more condition.
+ *
+ * Real feedback, fourth round, two more small changes: "add one more
+ * harmonic to the harmonic capacitive touch feature" (see HARMONIC_
+ * SEMITONES' own comment for the 6th harmonic's +31 semitones), and
+ * "do the selected scale like a mini melodic mode, harmonics also aply
+ * to that mode" -- chord mode's own melody sub-grid (note_map.c's
+ * tiles_note_map_get_note(), the chord-mode branch) now plays through
+ * the globally selected scale exactly like plain melodic mode does,
+ * rather than always being forced diatonic, and this section now fires
+ * there too: tiles_op_mode_is_melodic_active() became tiles_op_mode_
+ * melodic_harmonics_may_play() (op_mode.c/.h), true for melodic OR
+ * chord mode, still false for guitar mode (a wholly different fretboard
+ * mapping, not scale-degree play). Chord mode's own chord-STRIP pads
+ * (columns 1-2) still can't trigger this regardless -- they never enter
+ * this file's real-strike state machine at all, chord_pad_strike()
+ * (op_mode.c) drives them directly, so find_sole_held_pad() below can
+ * only ever find a melody-grid pad while chord mode is active.
  */
 
-/* 2nd through 5th harmonic, natural harmonic series in semitones above
+/* 2nd through 6th harmonic, natural harmonic series in semitones above
  * the fundamental, rounded to the nearest equal-tempered semitone:
  * +12 octave, +19 octave+fifth, +24 two octaves, +28 two octaves+major
- * third. Index 0 = the 1st OTHER pad touched, per this section's own
- * header comment. */
-#define HARMONIC_MAX_VOICES 4u
-static const uint8_t HARMONIC_SEMITONES[HARMONIC_MAX_VOICES] = {12u, 19u, 24u, 28u};
+ * third, +31 two octaves+fifth (real feedback: "add one more harmonic
+ * to the harmonic capacitive touch feature" -- the 6th harmonic is the
+ * 3rd harmonic's own +19 interval doubled up another octave, 19+12=31,
+ * same computation this table's own other entries already follow).
+ * Index 0 = the 1st OTHER pad touched, per this section's own header
+ * comment. */
+#define HARMONIC_MAX_VOICES 5u
+static const uint8_t HARMONIC_SEMITONES[HARMONIC_MAX_VOICES] = {12u, 19u, 24u, 28u, 31u};
 
 /* Fixed, deliberately gentle -- roughly a third of full scale, meant to
  * read as an overtone shimmering under the real note, not as a second
@@ -1363,9 +1385,11 @@ static void end_harmonic_voice(uint8_t idx) {
      * flag for this voice's channel. claim_harmonic_channel() only
      * looks at s_mpe_channels[].in_use, never at any harmonic_voice_t --
      * so every ended voice left its channel permanently marked busy.
-     * With only HARMONIC_MAX_VOICES (4) channels reserved at all, that's
-     * a real, fast leak: after roughly 4 total plucks across a session
-     * (not 4 simultaneous -- 4 total, ever, since the last reboot), every
+     * With only HARMONIC_MAX_VOICES (4 at the time this was found; 5
+     * now) channels reserved at all, that's a real, fast leak: after
+     * roughly one HARMONIC_MAX_VOICES' worth of total plucks across a
+     * session (not simultaneous -- that many, ever, since the last
+     * reboot), every
      * reserved channel reads in_use forever, claim_harmonic_channel()
      * returns 0xFF for good, and every future pluck silently no-ops --
      * exactly the reported symptom. Fixed by releasing the SAME slot
@@ -1436,16 +1460,18 @@ static void fire_harmonic_pluck(uint8_t slot, uint8_t pad, uint8_t note, uint8_t
  * feedback's full gesture in one pass:
  *   0. Gated on tiles_pedal_is_sustained() (services/pedal.h) -- see
  *      this section's own header comment, third round. Pedal not held
- *      (or not in sustain mode), or melodic mode not active, is treated
- *      as one and the same "not active" state below: every voice is
- *      torn down and every pad's touch memory is forced to false every
- *      scan while gated off. That forced-false is deliberate, not just
- *      a reset -- it's also what makes ENGAGING the pedal while a pad
- *      is already resting on the surface pluck it immediately, the
- *      instant this function goes active again, with no separate "just
- *      became gated" tracking needed: touched-but-was_touched-false
- *      below is already exactly what a fresh edge looks like, because
- *      was_touched was pinned to false for as long as the gate was shut.
+ *      (or not in sustain mode), or tiles_op_mode_melodic_harmonics_
+ *      may_play() false (neither melodic nor chord mode active -- see
+ *      that function's own comment), is treated as one and the same
+ *      "not active" state below: every voice is torn down and every
+ *      pad's touch memory is forced to false every scan while gated
+ *      off. That forced-false is deliberate, not just a reset -- it's
+ *      also what makes ENGAGING the pedal while a pad is already
+ *      resting on the surface pluck it immediately, the instant this
+ *      function goes active again, with no separate "just became
+ *      gated" tracking needed: touched-but-was_touched-false below is
+ *      already exactly what a fresh edge looks like, because was_
+ *      touched was pinned to false for as long as the gate was shut.
  *   1. Exactly one pad held elsewhere in this file -> that's the
  *      fundamental; anything else (none held, or a second pad just
  *      promoted to a real note) ends every harmonic voice outright.
@@ -1458,7 +1484,7 @@ static void fire_harmonic_pluck(uint8_t slot, uint8_t pad, uint8_t note, uint8_t
  *      slot instead of trying to claim a second one.
  */
 static void scan_melodic_harmonics(uint32_t now_ms) {
-    if (!tiles_op_mode_is_melodic_active() || !tiles_pedal_is_sustained()) {
+    if (!tiles_op_mode_melodic_harmonics_may_play() || !tiles_pedal_is_sustained()) {
         if (s_harmonic_fundamental_pad != 0u) {
             end_all_harmonic_voices();
         }
