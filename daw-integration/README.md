@@ -255,14 +255,22 @@ clears it on the Note-Off.
   set (they share Max's global name space, so no configuration is
   needed). Turning it off clears any pad still lit. VIEW is a normal
   Live parameter, so it's saved with the set and can be MIDI/key mapped.
-- **SURFACE** -- which Control Surface slot TILES is in (Preferences >
-  Link, Tempo & MIDI, rows 1-6). Set once, saved with the set. This
-  exists because the Live Object Model gives a device no way to ask a
-  control surface what script it is, and sending notes to the wrong one
-  would land them on someone else's hardware. **If nothing lights when
-  you arm VIEW, try the neighboring number** -- it isn't documented
-  whether the LOM's index skips empty slots, so the slot number and the
-  LOM index may differ by however many empty rows sit above TILES.
+- **SURFACE** -- which control surface TILES is, 1-7. Set once, saved
+  with the set. This exists because the Live Object Model gives a device
+  no way to ask a control surface what script it is. **It is NOT the
+  Preferences slot number**: Live's own device bridge (`_MxDCore/
+  LomTypes.py`, `get_control_surfaces()`) is `tuple(filter(lambda c: c is
+  not None, application.control_surfaces))` -- empty slots are skipped,
+  so this counts *loaded* scripts in slot order. (The first version of
+  this doc told you to enter the slot number; that was wrong, and Live's
+  own Log.txt showed why: every send was rejected with "no valid object
+  set".) To find the right number, **just step SURFACE from 1 upward:
+  whenever it changes, and whenever VIEW is armed, the device flashes a
+  run of pads on TILES for about a third of a second** -- the number that
+  makes pads flash green (TILES in melodic mode) is TILES. A wrong number
+  is harmless if the script at that position has no MIDI output port, but
+  would send notes to another controller's hardware if it does, which is
+  why this isn't guessed automatically.
 
 TILES must be in melodic mode, and a note outside the currently selected
 scale/octave/key has no pad to light (same accepted tradeoffs as the
@@ -284,9 +292,10 @@ to drive Live's UI from where this was written). First-run checklist:
 1. Drop the device on a MIDI track before an instrument; it should load
    with no red/errors in Max's console and show the dark panel, a pink
    underline, the **VIEW** button, and **SURFACE**.
-2. TILES in melodic mode, SURFACE set, click VIEW -- button turns Sentia
-   pink; play a note on that track and the matching pad should light
-   green, then go dark on release.
+2. TILES in melodic mode: step **SURFACE** from 1 upward until pads
+   flash green on TILES, then click **VIEW** -- button turns Sentia
+   pink (pads flash once more); play a note on that track and the
+   matching pad should light green, then go dark on release.
 3. Add a second instance on another track and arm it -- the first
    instance's VIEW should switch itself off and its pad clear.
 4. Stop transport / disarm mid-note -- no pad should stay lit.
@@ -294,6 +303,12 @@ to drive Live's UI from where this was written). First-run checklist:
 If step 2 fails but 1 loads clean, the likely culprits, in order:
 SURFACE number (above), the TILES script not selected in a Control
 Surface slot with its **Output** port set, or TILES not in melodic mode.
+Live's own log is the fastest way to see which:
+`~/Library/Preferences/Ableton/Live <version>/Log.txt`. A line like
+`call send_midi 144 60 100: no valid object set` means the device is
+tapping notes fine but SURFACE points at nothing; no such lines while
+nothing lights means the send is reaching a control surface and the
+problem is that surface's output port or TILES's own mode.
 
 ## Other DAWs
 

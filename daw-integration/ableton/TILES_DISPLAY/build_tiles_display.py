@@ -25,9 +25,17 @@ scene_launch.py already uses for its SysEx feedback) -- confirmed
 against Cycling '74's LOM docs and forum reports of exactly this use
 (e.g. lighting Push pads from a device). No network layer, no extra
 Remote Script code. The one thing a device can't know is WHICH
-control_surfaces slot TILES is in (the LOM exposes no name for a control
-surface), so the device has a small SURFACE number, saved with the Live
-set, that the player sets once.
+control surface TILES is (the LOM exposes no name for one), so the
+device has a small SURFACE number, saved with the Live set, that the
+player sets once. It is the position among LOADED control surfaces, NOT
+the Preferences slot number -- Live's own device bridge skips empty slots
+(_MxDCore/LomTypes.py: get_control_surfaces() is tuple(filter(lambda c:
+c is not None, application.control_surfaces))). The first version got
+this wrong and every send_midi was rejected with "no valid object set"
+(seen in Live's Log.txt); it also capped the range at 6 when Live 12.4
+has 7 slots. To make finding the right number a matter of stepping it
+rather than guessing, the device flashes pads on TILES whenever the
+route could have just changed (SURFACE edited, VIEW turned on).
 
 Exclusive arming across instances: every instance shares Max's global
 name space (a [send]/[receive] name WITHOUT the "---" prefix is global
@@ -214,8 +222,15 @@ def build_patcher():
     )
 
     comment("surface_label", "SURFACE", [600.0, 120.0, 60.0, 16.0], [12.0, 106.0, 70.0, 16.0], 10.0, TEXT_DIM)
-    # SURFACE: which control_surfaces slot TILES is in (1-based here,
-    # 0-based to the LOM -- see the "- 1" below). Saved with the set.
+    # SURFACE: which LOADED control surface TILES is (1-based here, 0-based
+    # to the LOM -- see the "- 1" below). NOT the Preferences slot number:
+    # Live's own device bridge (_MxDCore/LomTypes.py get_control_surfaces)
+    # is tuple(filter(lambda c: c is not None, app.control_surfaces)) --
+    # empty slots are skipped, so N counts loaded scripts only. Found from
+    # a real failed first run: the log showed every send_midi rejected with
+    # "no valid object set" because the first version told the player to
+    # enter their slot number (3) when the index among loaded scripts
+    # could be as low as 1. Saved with the set.
     _add(
         "surface",
         {
@@ -239,7 +254,7 @@ def build_patcher():
                     "parameter_shortname": "SURFACE",
                     "parameter_type": 1,
                     "parameter_mmin": 1.0,
-                    "parameter_mmax": 6.0,
+                    "parameter_mmax": 7.0,
                     "parameter_initial_enable": 1,
                     "parameter_initial": [1],
                     "parameter_unitstyle": 0,
@@ -250,7 +265,7 @@ def build_patcher():
     )
     comment(
         "hint",
-        "Slot TILES is in under Preferences > Link, Tempo & MIDI (1-6). Change it if nothing lights.",
+        "Pads flash green on TILES when SURFACE is right. Step it (1-7) until they do.",
         [600.0, 150.0, 200.0, 30.0],
         [12.0, 128.0, 136.0, 34.0],
         9.0,
@@ -342,6 +357,46 @@ def build_patcher():
     conn("uzi", 2, "uzi_zero", 0)
     conn("uzi_zero", 0, "pack_flush", 0)
     conn("pack_flush", 0, "prep_send", 0)
+
+    # ---- Route confirmation: a brief flash of pads on TILES whenever the
+    # route could have just changed (SURFACE edited, or VIEW turned on), so
+    # finding the right SURFACE number is "step it until pads flash" rather
+    # than guesswork -- the LOM gives a device no way to ask a control
+    # surface what script it is. Notes 36-96 all at once (a scale/octave
+    # setting maps only some of them to pads, so a wide run guarantees some
+    # pads light in any scale), held 300 ms, then Note-Off. Bypasses the VIEW
+    # gate on purpose (straight into the same send_midi prepend as the
+    # flush), so it works before VIEW is armed. A load guard swallows the
+    # numbox's own restore-on-load output so a Live set full of instances
+    # doesn't flash TILES on every open. ------------------------------------
+    newobj("load_delay", "delay 1500", [560.0, 40.0, 62.0, 20.0], 2, 1, ["bang"])
+    message("msg_one", "1", [560.0, 72.0, 24.0, 20.0])
+    newobj("flash_gate", "gate 1", [560.0, 168.0, 45.0, 20.0], 2, 1)
+    newobj("surf_delay", "delay 250", [640.0, 100.0, 62.0, 20.0], 2, 1, ["bang"])
+    newobj("flash_go", "t b b", [560.0, 200.0, 40.0, 20.0], 1, 2, ["bang", "bang"])
+    newobj("uzi_on", "uzi 61", [560.0, 232.0, 46.0, 20.0], 2, 3, ["bang", "bang", "int"])
+    newobj("add_on", "+ 35", [560.0, 264.0, 32.0, 20.0], 2, 1, ["int"])
+    newobj("pack_on", "pack 0 100", [560.0, 296.0, 62.0, 20.0], 2, 1)
+    newobj("delay_off", "delay 300", [640.0, 232.0, 62.0, 20.0], 2, 1, ["bang"])
+    newobj("uzi_off", "uzi 61", [640.0, 264.0, 46.0, 20.0], 2, 3, ["bang", "bang", "int"])
+    newobj("add_off", "+ 35", [640.0, 296.0, 32.0, 20.0], 2, 1, ["int"])
+    newobj("pack_off", "pack 0 0", [640.0, 328.0, 52.0, 20.0], 2, 1)
+    conn("thisdev", 0, "load_delay", 0)
+    conn("load_delay", 0, "msg_one", 0)
+    conn("msg_one", 0, "flash_gate", 0)  # gate opens 1.5 s after load
+    conn("surface", 0, "surf_delay", 0)  # let the new id land first
+    conn("surf_delay", 0, "flash_gate", 1)
+    conn("sel_view", 0, "flash_gate", 1)  # VIEW just turned on
+    conn("flash_gate", 0, "flash_go", 0)
+    conn("flash_go", 1, "delay_off", 0)  # right first: schedule the Note-Offs
+    conn("flash_go", 0, "uzi_on", 0)  # then fire the Note-Ons
+    conn("uzi_on", 2, "add_on", 0)
+    conn("add_on", 0, "pack_on", 0)
+    conn("pack_on", 0, "prep_send", 0)
+    conn("delay_off", 0, "uzi_off", 0)
+    conn("uzi_off", 2, "add_off", 0)
+    conn("add_off", 0, "pack_off", 0)
+    conn("pack_off", 0, "prep_send", 0)
 
     patcher = {
         "fileversion": 1,
