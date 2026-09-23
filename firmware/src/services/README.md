@@ -8094,5 +8094,60 @@ not its code.
   real-strike state machine at all (`chord_pad_strike()` drives them
   directly), so `find_sole_held_pad()` can only ever find a melody-grid
   pad while chord mode is active, never a chord-strip one.
+- **Real fix for the sustain-pedal stick: the controller now defers the
+  note-off itself, instead of trusting the receiving synth.** Real
+  feedback, after the two earlier fixes above both looked plausible but
+  didn't actually resolve it: "you literally killed all pedal
+  functionality" -- turned out to mean the exact same stuck-on-release
+  behavior as before, unchanged. Asked to research how this is properly
+  implemented rather than keep guessing from this codebase's own reading
+  alone. That research (see `midi/README.md`'s own reference notes)
+  turned up the real architectural gap: this file always sent a genuine
+  MIDI note-off the instant a pad was physically released, and relied
+  ENTIRELY on the receiving synth to notice CC64 was still held and keep
+  the note ringing itself -- a real, common, and NOT universally
+  reliable synth/plugin behavior (well-documented "hanging note"/
+  "sticking midi notes" reports exist across many DAWs and synths for
+  exactly this reason). The documented correct pattern instead: "a
+  proper sustain implementation should prevent Note Off messages from
+  being sent while Sustain is held, but keep track of them so that when
+  the pedal is released, all the pending Note Off messages get sent" --
+  i.e. the CONTROLLER defers, not the synth.
+  Implemented via `mpe_channel_slot_t`'s two new fields, `sustain_
+  pending`/`sustained_note`: `end_held_note()` (the one shared teardown
+  every note-off/retrigger/steal call site already used) gained an
+  `allow_sustain_defer` parameter -- true ONLY at the genuine "the player
+  let go" call site. When that's true and `tiles_pedal_is_sustained()`
+  reads true, the channel is marked `sustain_pending` and remembers its
+  own note instead of sending note-off or freeing the channel; retrigger,
+  channel-stealing, and `tiles_expression_force_release_all()` all pass
+  false, since none of those are a genuine release and none should ever
+  defer (a retrigger needs the old voice gone immediately; a stolen/
+  force-released channel is needed right now). `flush_sustained_notes()`
+  sends the real, deferred note-off for every such channel: called from
+  `tiles_expression_scan()` itself the instant `tiles_pedal_is_sustained()`
+  edges from true to false (an ordinary release, tracked via `s_pedal_
+  prev_sustained` so it fires exactly once per release), and
+  unconditionally from `tiles_expression_force_release_all()` so a hard
+  reset (entering a minigame, etc.) can never strand a ghost note ringing
+  for however long that override lasts. `claim_mpe_channel()`'s own
+  channel-stealing fallback needed one more real fix: a channel it's
+  about to steal might be `sustain_pending` -- a ghost whose owning pad
+  may have already moved on to something else entirely -- so stealing it
+  now sends note-off from the SLOT's own remembered note rather than
+  reading (and misreading) whatever that pad's CURRENT, unrelated state
+  happens to be.
+- **Melodic mode: 3rd scale degree highlighted teal.** Real feedback: "i
+  need more references on melodic mode, highlight the 3rd scale degree
+  with the color teal." `tiles_note_map_is_third_pad()` (`note_map.c`/
+  `.h`) mirrors `tiles_note_map_is_root_pad()` exactly (same positional,
+  chord-mode-aware degree math, just checking degree 2 instead of degree
+  0), and `services/lighting.c`'s idle pad-color resolver checks it right
+  after root -- teal (G+B, no R) at the same baseline brightness root
+  uses, so it reads as a second landmark distinct from both root's
+  magenta and a natural key's white. Since chord mode's own melody
+  sub-grid now plays through this exact same scale-following logic (see
+  the earlier "mini melodic mode" entry above), it gets this same
+  landmark too, not just plain melodic mode.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

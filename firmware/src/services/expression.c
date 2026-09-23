@@ -1167,8 +1167,25 @@ typedef struct {
     bool in_use;
     uint8_t owner_pad; /* 1..TILES_NUM_PADS, valid only while in_use */
     uint32_t claim_seq;
+    /* True while this channel's note has been physically released but
+     * is being held open by the sustain pedal instead of getting a real
+     * MIDI note-off right away -- see end_held_note()'s own comment for
+     * why (real feedback + industry research on the correct way to
+     * implement this). owner_pad/claim_seq above are NOT a reliable
+     * read of "what's currently on this channel" once this is true --
+     * the pad that originally struck this note may have already moved
+     * on to something else entirely by the time the pedal releases.
+     * sustained_note is this slot's own record of exactly what to send
+     * note-off for, so nothing downstream has to trust any pad's
+     * current state. */
+    bool sustain_pending;
+    uint8_t sustained_note; /* valid only while sustain_pending */
 } mpe_channel_slot_t;
 static mpe_channel_slot_t s_mpe_channels[TILES_MIDI_MPE_NUM_MEMBER_CHANNELS];
+/* Edge-tracks tiles_pedal_is_sustained() across scans so flush_sustained_
+ * notes()'s own release-triggered flush fires exactly once per genuine
+ * pedal release, not every scan it happens to read false. */
+static bool s_pedal_prev_sustained;
 static uint32_t s_next_mpe_claim_seq = 1u;
 
 #if TILES_MELODIC_HARMONICS_ENABLED
@@ -1626,6 +1643,7 @@ void tiles_expression_init(void) {
     s_next_mpe_claim_seq = 1u;
     s_mpe_enabled = true;
     s_non_mpe_owner_pad = 0u;
+    s_pedal_prev_sustained = false;
     s_pitch_bend_enabled = false;
     s_expression_muted = false;
 #if TILES_MELODIC_HARMONICS_ENABLED
@@ -2265,28 +2283,64 @@ static uint8_t find_most_recent_held_pad(uint8_t exclude_pad) {
     return best_pad;
 }
 
-/* Ends `pad`'s currently-held note completely and cleanly: MIDI note-off,
- * haptic stop, pitch bend reset to center, and frees its MPE channel
- * slot -- the single place this whole sequence happens, used by every
- * normal note-off/retrigger call site below AND by claim_mpe_channel()'s
- * channel-stealing further below (running out of the 15 MPE member
- * channels is rare on a 24-pad board, but must still leave everything --
- * the synth's note state, this pad's own state machine -- consistent
- * when it happens). Always centers the freed channel's pitch bend,
- * whether or not this specific pad was actively bending, so the NEXT
- * note assigned to this channel (by claim_mpe_channel() below) can never
- * inherit a stale bend -- the per-note equivalent of the old
- * single-owner design's "reset to center when ownership changes" rule,
- * now enforced once per channel release instead of scattered across
- * every caller. Does NOT set state = PAD_STATE_IDLE; callers do that
- * themselves since the two normal call sites (note-off, retrigger)
- * transition to different next states. */
-static void end_held_note(pad_expr_t *s, uint8_t pad) {
-    tiles_midi_note_off(s->midi_channel, s->active_note);
+/* Ends `pad`'s currently-held note completely and cleanly: MIDI note-off
+ * (or deferred, see allow_sustain_defer below), haptic stop, pitch bend
+ * reset to center, and frees its MPE channel slot -- the single place
+ * this whole sequence happens, used by every normal note-off/retrigger
+ * call site below AND by claim_mpe_channel()'s channel-stealing further
+ * below (running out of the 15 MPE member channels is rare on a 24-pad
+ * board, but must still leave everything -- the synth's note state,
+ * this pad's own state machine -- consistent when it happens). Always
+ * centers the freed channel's pitch bend, whether or not this specific
+ * pad was actively bending, so the NEXT note assigned to this channel
+ * (by claim_mpe_channel() below) can never inherit a stale bend -- the
+ * per-note equivalent of the old single-owner design's "reset to center
+ * when ownership changes" rule, now enforced once per channel release
+ * instead of scattered across every caller. Does NOT set state =
+ * PAD_STATE_IDLE; callers do that themselves since the two normal call
+ * sites (note-off, retrigger) transition to different next states.
+ *
+ * allow_sustain_defer: real feedback, precisely reproduced through
+ * several rounds -- "if i lift pedal before note it's fine, if i lift
+ * pedal after note it sticks, but if i play a new note it does register
+ * as sustain released." Two earlier fixes this session (a bounded retry
+ * on truncated USB MIDI writes, then removing diagnostic printf()s that
+ * were blocking the main loop) both looked like plausible causes and
+ * neither actually fixed it -- because the real issue was architectural,
+ * not a transmission bug: this file used to always send a real note-off
+ * on physical release and rely ENTIRELY on the receiving synth to notice
+ * CC64 is still held and keep the note ringing itself, releasing it only
+ * once CC64 goes low. That's a real, common, and NOT universally
+ * reliable synth-side behavior -- confirmed by research into how MIDI
+ * controllers are conventionally built: "a proper sustain implementation
+ * should prevent Note Off messages from being sent while Sustain (CC64)
+ * is held, but keep track of them so that when the pedal is released,
+ * all the pending Note Off messages get sent" -- i.e. the CONTROLLER
+ * should defer the note-off itself, not trust the synth to. When true
+ * AND tiles_pedal_is_sustained() AND this is a real Member Channel note
+ * (not the shared master channel, which has no per-channel slot to defer
+ * against), this marks the channel sustain_pending instead of sending
+ * note-off or freeing it -- flush_sustained_notes() below sends the real,
+ * deferred note-off for every such channel the instant the pedal
+ * actually releases, independent of whatever the receiving synth does
+ * or doesn't do with CC64 on its own. Callers pass false for the
+ * retrigger, channel-steal, and force-release-all paths -- none of
+ * those are a genuine "the player let go" event, so none of them should
+ * ever defer (retrigger needs the old voice gone immediately so the new
+ * strike starts clean; a stolen/force-released channel is needed right
+ * now, not "eventually"). */
+static void end_held_note(pad_expr_t *s, uint8_t pad, bool allow_sustain_defer) {
     tiles_cv_gate_note_off(s->active_note);
     tiles_haptics_stop(pad);
     tiles_midi_send_pitch_bend(s->midi_channel, PITCH_BEND_CENTER);
     s->pitch_bend_active = false;
+    if (allow_sustain_defer && s->midi_channel != TILES_MIDI_MPE_MASTER_CHANNEL && tiles_pedal_is_sustained()) {
+        uint8_t idx = (uint8_t)(s->midi_channel - TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL);
+        s_mpe_channels[idx].sustain_pending = true;
+        s_mpe_channels[idx].sustained_note = s->active_note;
+        return;
+    }
+    tiles_midi_note_off(s->midi_channel, s->active_note);
     if (s->midi_channel == TILES_MIDI_MPE_MASTER_CHANNEL) {
         /* Real bug this addition itself would otherwise introduce: the
          * MPE-only cleanup below computes idx as midi_channel minus
@@ -2315,6 +2369,28 @@ static void end_held_note(pad_expr_t *s, uint8_t pad) {
     } else {
         uint8_t idx = (uint8_t)(s->midi_channel - TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL);
         s_mpe_channels[idx].in_use = false;
+        s_mpe_channels[idx].sustain_pending = false; /* defensive -- see this function's own comment */
+    }
+}
+
+/* Sends the real, deferred note-off for every Member Channel end_held_
+ * note() above marked sustain_pending, and frees them -- the other half
+ * of the sustain-defer design (see end_held_note()'s own comment).
+ * Two callers: tiles_expression_scan() below, once per scan, the moment
+ * tiles_pedal_is_sustained() edges from true to false (an ordinary
+ * pedal release); and tiles_expression_force_release_all(), unconditionally,
+ * so a hard reset (entering a minigame, etc.) can never leave a ghost
+ * note ringing on a channel this file has otherwise stopped scanning --
+ * game_mode.h owns the board once that runs, and this file's own per-
+ * scan release-edge flush above never gets another chance to fire until
+ * control comes back. */
+static void flush_sustained_notes(void) {
+    for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
+        if (s_mpe_channels[i].sustain_pending) {
+            tiles_midi_note_off((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i), s_mpe_channels[i].sustained_note);
+            s_mpe_channels[i].in_use = false;
+            s_mpe_channels[i].sustain_pending = false;
+        }
     }
 }
 
@@ -2325,16 +2401,24 @@ static void end_held_note(pad_expr_t *s, uint8_t pad) {
  * MPE channel release); a pad merely at PAD_STATE_AWAITING_STRIKE never
  * claimed a channel or sent a note-on in the first place, so it just
  * needs its state reset -- calling end_held_note() on one of those would
- * send a bogus note-off and free an MPE channel that was never claimed. */
+ * send a bogus note-off and free an MPE channel that was never claimed.
+ * Passes false for allow_sustain_defer -- a hard reset must actually end
+ * every note now, not queue it for later. Also flushes any note ALREADY
+ * sustain_pending from an earlier pedal-held release: game_mode.h owns
+ * the board once this returns, and tiles_expression_scan()'s own per-
+ * scan release-edge flush won't get another chance to run until control
+ * comes back, which would otherwise strand that note ringing for the
+ * mini game's entire duration. */
 void tiles_expression_force_release_all(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         uint8_t pad = (uint8_t)(i + 1u);
         pad_expr_t *s = &s_pads[i];
         if (s->state == PAD_STATE_NOTE_ON) {
-            end_held_note(s, pad);
+            end_held_note(s, pad, false);
         }
         s->state = PAD_STATE_IDLE;
     }
+    flush_sustained_notes();
 }
 
 /* MPE Member Channel allocator -- see s_mpe_channels' own comment for
@@ -2396,11 +2480,31 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
         return TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL;
     }
     uint8_t stolen_pad = s_mpe_channels[oldest_idx].owner_pad;
-    printf("[expression] pad %u stealing pad %u's MPE channel %u (all %u member channels in use)\n", pad, stolen_pad,
-           (unsigned)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx), (unsigned)TILES_MIDI_MPE_NUM_MEMBER_CHANNELS);
-    pad_expr_t *stolen = &s_pads[stolen_pad - 1u];
-    end_held_note(stolen, stolen_pad);
-    stolen->state = PAD_STATE_IDLE;
+    if (s_mpe_channels[oldest_idx].sustain_pending) {
+        /* This slot is a sustain-held ghost (see end_held_note()'s own
+         * comment), not a live pad -- stolen_pad/owner_pad only records
+         * who struck it originally, and that pad may have moved on to
+         * something else entirely (a whole different note, a different
+         * channel, or gone back to idle) by now, so its CURRENT pad_
+         * expr_t state is NOT a reliable source of truth for what's
+         * actually still sounding on this channel. Send the real,
+         * deferred note-off directly from this slot's own record
+         * instead of calling end_held_note() (which would read the
+         * WRONG note/channel off stolen_pad's current, unrelated
+         * state) or touching stolen_pad's state machine at all. */
+        printf("[expression] pad %u stealing a sustain-held ghost on MPE channel %u (all %u member channels in use)\n",
+               pad, (unsigned)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx),
+               (unsigned)TILES_MIDI_MPE_NUM_MEMBER_CHANNELS);
+        tiles_midi_note_off((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx),
+                             s_mpe_channels[oldest_idx].sustained_note);
+        s_mpe_channels[oldest_idx].sustain_pending = false;
+    } else {
+        printf("[expression] pad %u stealing pad %u's MPE channel %u (all %u member channels in use)\n", pad, stolen_pad,
+               (unsigned)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx), (unsigned)TILES_MIDI_MPE_NUM_MEMBER_CHANNELS);
+        pad_expr_t *stolen = &s_pads[stolen_pad - 1u];
+        end_held_note(stolen, stolen_pad, false);
+        stolen->state = PAD_STATE_IDLE;
+    }
     /* Real bug found reviewing this function, not from real feedback:
      * end_held_note() above sets in_use=false for the stolen channel
      * (freeing its OLD owner), and this steal path hands that same
@@ -2420,6 +2524,20 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
 
 void tiles_expression_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+
+    /* The other half of end_held_note()'s sustain-defer design (see its
+     * own comment): the instant the pedal genuinely releases (a true ->
+     * false edge, not just "reads false this scan" -- s_pedal_prev_
+     * sustained makes this fire exactly once per release), send the
+     * real, deferred note-off for every channel that was waiting on it.
+     * Runs before the per-pad loop below so a channel freed by this
+     * exact release is already available if that same scan also needs
+     * to claim one for a brand-new strike. */
+    bool sustained_now = tiles_pedal_is_sustained();
+    if (s_pedal_prev_sustained && !sustained_now) {
+        flush_sustained_notes();
+    }
+    s_pedal_prev_sustained = sustained_now;
 
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         uint8_t pad = (uint8_t)(i + 1u);
@@ -2594,7 +2712,10 @@ void tiles_expression_scan(void) {
 
         /* PAD_STATE_NOTE_ON */
         if (!touched) {
-            end_held_note(s, pad);
+            /* The one real "player let go" event -- see end_held_note()'s
+             * own comment on why this is the only call site that ever
+             * passes true here. */
+            end_held_note(s, pad, true);
             s->state = PAD_STATE_IDLE;
             continue;
         }
@@ -2612,7 +2733,7 @@ void tiles_expression_scan(void) {
          * brand-new note-on with its own freshly computed velocity
          * through the exact same path as any other strike. */
         if ((now_ms - s->note_on_ms) >= RETRIGGER_GRACE_MS && raw_depth <= RETRIGGER_ARM_DEPTH_DELTA) {
-            end_held_note(s, pad);
+            end_held_note(s, pad, false); /* never defer a retrigger -- the new strike needs a clean start now */
             begin_awaiting_strike(s, pad, now_ms);
             continue;
         }

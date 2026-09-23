@@ -71,6 +71,19 @@
  * absolute terms. */
 #define TILES_LIGHTING_ROOT_BASELINE_PERCENT 40u
 
+/* Real feedback: "i need more references on melodic mode, highlight the
+ * 3rd scale degree with the color teal." A second landmark alongside
+ * root (see tiles_note_map_is_third_pad()'s own comment) -- teal
+ * (0, level, level: green+blue equal, no red) is visually distinct from
+ * both root's magenta and a natural key's white, so all three read
+ * apart from each other at a glance. Same baseline percent as root
+ * rather than inventing a separate number -- both are "landmark, dimmer
+ * than a natural key" pads by the same reasoning TILES_LIGHTING_ROOT_
+ * BASELINE_PERCENT's own comment already established; unmeasured
+ * against real hardware, like every first-pass brightness constant in
+ * this file. */
+#define TILES_LIGHTING_THIRD_BASELINE_PERCENT 40u
+
 /* Underglow's own fixed brightness, out of 255 -- deliberately NOT
  * scaled by the active brightness ceiling/the power state. It used to be
  * a percentage of the active ceiling (65%), which meant it rode down
@@ -282,6 +295,14 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
          * comment for the color and brightness reasoning. */
         float level = (float)TILES_LIGHTING_ROOT_BASELINE_PERCENT / 100.0f;
         return (tiles_rgb01_t){level, 0.0f, level};
+    }
+    if (tiles_note_map_is_third_pad(logical_pad)) {
+        /* Teal -- G and B channels only, R stays 0 -- see
+         * TILES_LIGHTING_THIRD_BASELINE_PERCENT's own comment. Checked
+         * after root (root always wins if a pad were somehow both,
+         * though that never actually happens for any real scale here). */
+        float level = (float)TILES_LIGHTING_THIRD_BASELINE_PERCENT / 100.0f;
+        return (tiles_rgb01_t){0.0f, level, level};
     }
     if (tiles_note_map_is_natural_pad(logical_pad)) {
         float level = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;

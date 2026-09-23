@@ -238,6 +238,23 @@ uint8_t tiles_note_map_quantize_to_scale(uint8_t note);
  * (8) has 3. Returns false for an out-of-range pad. */
 bool tiles_note_map_is_root_pad(uint8_t logical_pad);
 
+/* True if this pad sits on the scale's 3rd degree (index 2, 0-based --
+ * the same "root, second, THIRD..." counting tiles_note_map_is_root_pad()
+ * above uses for degree 0) -- real feedback: "i need more references on
+ * melodic mode, highlight the 3rd scale degree with the color teal."
+ * Same positional/chord-mode-aware shape as tiles_note_map_is_root_pad()
+ * (purely positional, independent of key offset; chord-mode-aware via
+ * chord_mode_degree() so chord mode's own melody sub-grid -- which plays
+ * through this exact same scale now, see tiles_note_map_get_note()'s own
+ * comment -- gets this reference landmark too, not just plain melodic
+ * mode). Driven by services/lighting.c's idle pad coloring, checked
+ * after root (root wins if a pad is somehow both, which never actually
+ * happens for any real scale here -- root is always degree 0, third is
+ * always degree 2, and every scale table in this file has at least 5
+ * notes/octave, so the two can never land on the same pad). Returns
+ * false for an out-of-range pad. */
+bool tiles_note_map_is_third_pad(uint8_t logical_pad);
+
 /* True if this pad's CURRENTLY MAPPED note (tiles_note_map_get_note())
  * is a natural (white key) rather than sharp/flat (black key) --
  * likewise driven by services/lighting.c's idle pad coloring. Unlike

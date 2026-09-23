@@ -673,6 +673,20 @@ bool tiles_note_map_is_root_pad(uint8_t logical_pad) {
     return (degree % scale_note_count) == 0u;
 }
 
+/* Same shape as tiles_note_map_is_root_pad() just above, degree 2 (the
+ * 3rd scale step, 0-based) instead of degree 0 -- see that function's
+ * own comment for the reasoning this mirrors exactly, and note_map.h's
+ * own comment on this function for the real feedback that asked for it. */
+bool tiles_note_map_is_third_pad(uint8_t logical_pad) {
+    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
+    if (cfg == NULL) {
+        return false;
+    }
+    uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : pad_degree(cfg);
+    uint8_t scale_note_count = current_scale_table().count;
+    return (degree % scale_note_count) == 2u;
+}
+
 bool tiles_note_map_is_natural_pad(uint8_t logical_pad) {
     /* tiles_note_map_get_note() already returns 0 (pitch class C,
      * natural) for an out-of-range pad, matching this function's own

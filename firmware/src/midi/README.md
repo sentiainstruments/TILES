@@ -154,4 +154,40 @@ deterministic voice-steal policy) are done — see Status below.
   of hanging the main loop. `warn_if_truncated()` still logs anything
   that couldn't be recovered even after the retry window, so a
   genuinely stalled host stays visible rather than silently eaten.
+- **Sustain pedal: the retry fix above still didn't resolve the real
+  stuck-note reports** ("you literally killed all pedal functionality,"
+  turned out to mean the same stuck-on-release behavior, unchanged).
+  Asked to research how sustain is properly implemented rather than
+  keep guessing from this codebase's own reading alone. Two real
+  findings from that research, both against primary/authoritative
+  sources, not forum speculation:
+  - The MPE specification (`mpespec.pdf`, MIDI Association/ROLI, and
+    corroborated by JUCE's own MPE documentation) says messages meant
+    to affect every sounding note -- Damper Pedal/CC64 explicitly named
+    -- "should be sent only on a Zone's Master Channel (not on Member
+    Channels)," and a compliant MPE synth "must ignore" CC64 received
+    on a Member Channel. `tiles_midi_send_cc_broadcast()`'s existing
+    "broadcast to every channel, Master included" behavior (this
+    file's own header comment) already covers a non-MPE-aware receiver
+    too, so this wasn't itself changed -- an MPE-compliant receiver
+    already gets the correct Master-Channel message and is spec-
+    required to ignore the redundant Member-Channel copies.
+  - The real, actionable finding: "a proper sustain implementation
+    should prevent Note Off messages from being sent while Sustain
+    (CC64) is held, but keep track of them so that when the Sustain
+    pedal is released, all the pending Note Off messages get sent" --
+    i.e. the CONTROLLER should defer the note-off itself, not send it
+    immediately and trust the receiving synth to notice CC64 is still
+    held and keep the note ringing on its own. This codebase's
+    `services/expression.c` did the latter -- and "sticking midi
+    notes"/hanging-note reports across many real DAWs and synths for
+    this exact scenario (note-off arriving while sustain is held) are a
+    well-documented, common failure mode, not something unique to
+    whatever synth this board happened to be tested against. See
+    `services/README.md`'s own "Real fix for the sustain-pedal stick"
+    entry for the actual implementation (deferred note-off, flushed on
+    pedal release) -- this file's own `tiles_midi_send_cc_broadcast()`
+    and `tiles_midi_note_off()` needed no changes themselves; the fix
+    is entirely in when `services/expression.c` chooses to call the
+    latter.
 - DIN MIDI IN/OUT -- not built yet.
