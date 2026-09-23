@@ -431,6 +431,25 @@ bool tiles_op_mode_song_capture_is_active(void);
  * screen) is what's actually showing. Deferred, not forgotten. */
 bool tiles_op_mode_song_capture_is_note_sounding(uint8_t note);
 
+/* True if `note` is currently held by an incoming MIDI Note-On (any
+ * channel) AND melodic mode is the active mode -- real feedback: "in
+ * midi melodic mode is there any way we could read the playing melody
+ * of the armed track and display it back on tiles?" services/lighting.c
+ * checks this, per pad, against that pad's own currently-mapped note
+ * (tiles_note_map_get_note()), the exact same "layer on top of idle
+ * coloring, don't replace or block a real touch" shape tiles_op_mode_
+ * song_capture_is_note_sounding() above already established, just fed
+ * by USB MIDI IN instead of this board's own captured pattern data.
+ * Getting a note from the DAW's armed track onto this board's MIDI IN
+ * at all needs the player's own DAW-side routing (a plain MIDI-thru/
+ * monitor connection) -- nothing here configures or assumes that.
+ * Chord mode's own melody sub-grid is deliberately NOT covered (see
+ * op_mode.c's own "Melodic mode: live echo of an incoming melody"
+ * section for why), and a note outside whatever's currently mapped to a
+ * real pad simply has nothing to light -- both real, accepted
+ * tradeoffs, not oversights. */
+bool tiles_op_mode_incoming_note_is_sounding(uint8_t note);
+
 /* True while the pattern bank's own save/delete confirmation flash is
  * currently showing, with *out_r/*out_g/*out_b set to the color it
  * wants underglow to show RIGHT NOW (already resolved through its own

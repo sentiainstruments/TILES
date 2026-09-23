@@ -268,6 +268,22 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         return (tiles_rgb01_t){1.0f, 0.6f, 0.0f};
     }
 
+    /* Real feedback: "in midi melodic mode is there any way we could
+     * read the playing melody of the armed track and display it back on
+     * tiles?" Same "time-sensitive external signal beats static idle
+     * coloring, but a real touch already won above" shape as the Song-
+     * capture indicator just above -- see tiles_op_mode_incoming_note_
+     * is_sounding()'s own comment for the full design (any MIDI channel,
+     * melodic mode only, needs the player's own DAW-side routing to ever
+     * receive anything). Bright green, not used anywhere else in this
+     * function's own palette (root magenta, third teal/greenish-teal,
+     * fifth blue, Song-capture orange, natural white), so it reads as
+     * its own distinct "this is playing right now" signal rather than
+     * blending into any of those. */
+    if (tiles_op_mode_incoming_note_is_sounding(tiles_note_map_get_note(logical_pad))) {
+        return (tiles_rgb01_t){0.0f, 1.0f, 0.0f};
+    }
+
     /* Guitar/bass fret mode: a completely different idle-coloring scheme,
      * checked before the melodic root/natural logic below (mutually
      * exclusive -- see services/note_map.h's own header). Real feedback:

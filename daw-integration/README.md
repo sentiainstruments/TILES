@@ -205,6 +205,39 @@ tracks change -- the connect-time setup loop was extracted into
 `_connect_track_clip_listeners()`/`_disconnect_track_clip_listeners()`
 so both the initial connect and this resync share the exact same code.
 
+## Melodic mode: echoing an armed track's melody
+
+Real feedback: "in midi melodic mode is there any way we could read the
+playing melody of the armed track and display it back on tiles?" TILES's
+firmware side is built (see `firmware/src/services/README.md`'s own
+"Melodic mode: live echo of an incoming melody" entry) -- while melodic
+mode is active, any Note-On TILES receives on its USB MIDI IN lights the
+pad that note currently maps to (if any) bright green, and the pad goes
+dark again on the matching Note-Off.
+
+This is NOT part of the `scene_launch.py`/`TILES.py` Remote Script above
+-- it needs no Python at all, just standard MIDI routing in Live itself,
+since it's really just "make the armed track's own output also reach
+TILES's MIDI input," the same way you'd route any track to any device:
+
+1. Select the armed track.
+2. In its MIDI **track output** chooser (the bottom of the track's I/O
+   section in Session or Arrangement view -- NOT the Control Surface
+   slot from the one-time install above, and NOT the track's *input*),
+   pick TILES as the destination instead of (or in addition to) its
+   usual instrument.
+3. Leave "Monitor" set to whatever it already is for normal playback/
+   recording -- this output routing works the same regardless.
+
+A note the track plays that doesn't fall on TILES's own currently
+selected scale/octave/key has no pad to light and is simply not shown --
+expected, not a bug (see the firmware README entry's own "two accepted
+tradeoffs" note). This also means TILES is now receiving that track's
+notes on whatever MIDI channel Ableton sends them on, same port as
+everything else -- harmless (TILES only reads them for this display
+feature, never re-sends or acts on them otherwise), but worth knowing if
+something else on that same port ever seems to receive extra traffic.
+
 ## Other DAWs
 
 This specific script is Ableton-only -- Logic, Cubase, Reaper, Bitwig,

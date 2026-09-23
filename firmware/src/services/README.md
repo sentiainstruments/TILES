@@ -8181,5 +8181,42 @@ not its code.
   `chord_mode_degree()` same as root, so chord mode's own melody
   sub-grid (which plays through this exact same scale now, see the
   earlier "mini melodic mode" entry above) gets these landmarks too.
+- **Melodic mode: live echo of an incoming melody.** Real feedback: "in
+  midi melodic mode is there any way we could read the playing melody
+  of the armed track and display it back on tiles?" Needed a genuinely
+  new capability first -- `midi/midi_in.c` never parsed Note-On/Off at
+  all before this (see `midi/README.md`'s own entry for the running-
+  status-aware channel-voice parser that added). `op_mode.c`'s new
+  "Melodic mode: live echo of an incoming melody" section registers one
+  `tiles_midi_in_register_note_callback()` listener at boot
+  (`melodic_echo_init()`), tracking every incoming Note-On/Off in a
+  flat 128-entry `s_incoming_note_sounding[]` -- any MIDI channel (the
+  DAW-side routing that gets an armed track's output onto this board's
+  MIDI IN at all is the player's own setup, a plain MIDI-thru/monitor
+  connection; nothing here configures or assumes a channel), and
+  regardless of `s_active_mode` (a Note-Off must always be able to
+  clear what its Note-On set, even across a mode switch, or a note
+  still held during that switch would read as permanently stuck
+  "playing" the next time melodic mode is re-entered). `tiles_op_mode_
+  incoming_note_is_sounding(note)` is the one public accessor, gating
+  to melodic mode internally (unlike `tiles_op_mode_song_capture_is_
+  note_sounding()`, which the caller gates separately -- folding it in
+  here avoided a second, narrower "is melodic mode active" accessor
+  that would have had exactly one caller). `services/lighting.c`'s
+  `pad_desired_rgb()` checks it per pad against that pad's own mapped
+  note (`tiles_note_map_get_note()`), mirroring the Song-capture
+  indicator's exact "layer on top of idle coloring, real touch already
+  won above" shape -- bright green, distinct from every other color
+  already in that function's palette.
+  Two real, accepted tradeoffs, not oversights: chord mode's own melody
+  sub-grid is NOT covered (real feedback said "in midi melodic mode"
+  specifically -- unlike the scale-following/harmonics work earlier in
+  this section, this is a new feature scoped to exactly what was asked,
+  not an established "mini melodic mode" precedent extended by
+  default); and a note outside whatever this board's currently selected
+  scale/octave/key maps to a real pad simply has nothing to light --
+  `tiles_note_map_get_note()` has no inverse search, so this checks
+  each pad's own note against the incoming state rather than trying to
+  guess a "nearest" pad for one that doesn't land on any.
 - Everything else (per-pad Hall calibration, DIN MIDI) is not built
   yet.

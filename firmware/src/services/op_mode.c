@@ -4913,6 +4913,77 @@ static void scene_launch_init(void);
 static bool handle_scene_launch_taps(uint32_t now_ms);
 static void render_scene_launch(uint32_t now_ms);
 
+/* ---- Melodic mode: live echo of an incoming melody ----------------------
+ * Real feedback: "in midi melodic mode is there any way we could read the
+ * playing melody of the armed track and display it back on tiles?" Needs
+ * midi/midi_in.h's new tiles_midi_in_register_note_callback() (see that
+ * file's own header comment for the full "why this didn't exist before"
+ * history) -- this is that callback's one registered listener.
+ *
+ * Deliberately tracks EVERY incoming Note-On/Off regardless of channel
+ * (any channel, not just one) and regardless of s_active_mode: the DAW-
+ * side routing that makes an armed track's output actually reach this
+ * board's MIDI IN at all is entirely the player's own setup (a plain
+ * MIDI-thru/monitor connection in their DAW, not anything this firmware
+ * or the Ableton Remote Script configures) -- nothing here can know or
+ * assume which channel that lands on. Tracking regardless of mode (not
+ * just while melodic mode is the one on screen) matters for correctness,
+ * not convenience: a Note-Off must always be able to clear whatever its
+ * matching Note-On set, even if the player switched to another mode and
+ * back in between, or a note that happened to still be held during that
+ * switch would read as permanently, incorrectly "still playing" the next
+ * time melodic mode is re-entered. tiles_op_mode_incoming_note_is_
+ * sounding() below is what actually gates this to melodic mode only --
+ * services/lighting.c's own pad_desired_rgb() calls it, mirroring
+ * tiles_op_mode_song_capture_is_note_sounding()'s own existing "read-only
+ * external indicator layered on top of idle coloring" shape exactly,
+ * same reasoning, a different source (an incoming note here, a captured
+ * pattern's own currently-sounding note there).
+ *
+ * Chord mode's own melody sub-grid is deliberately NOT covered (real
+ * feedback said "in midi melodic mode" specifically) -- unlike the
+ * scale-following/harmonics work earlier in this file, this is a new
+ * feature being scoped to exactly what was asked, not an established
+ * "mini melodic mode" precedent being extended by default. Worth
+ * revisiting if real feedback asks for it there too.
+ *
+ * A note outside whatever this board's currently selected scale/octave/
+ * key maps to a real pad simply has no pad to light -- tiles_note_map_
+ * get_note() has no inverse search structure, so lighting.c's own
+ * pad_desired_rgb() (already iterating every pad once per its own
+ * render pass) checks each pad's OWN mapped note against this state,
+ * not the other way around; there's no attempt to guess or approximate
+ * a "nearest" pad for a note that doesn't land on one. This tradeoff was
+ * raised and accepted before building this. */
+static bool s_incoming_note_sounding[128];
+
+static void melodic_echo_on_midi_note(uint8_t channel, uint8_t note, uint8_t velocity, bool note_on,
+                                       uint32_t now_ms) {
+    (void)channel;
+    (void)velocity;
+    (void)now_ms;
+    s_incoming_note_sounding[note] = note_on;
+}
+
+static void melodic_echo_init(void) {
+    for (uint16_t i = 0; i < 128u; i++) {
+        s_incoming_note_sounding[i] = false;
+    }
+    tiles_midi_in_register_note_callback(melodic_echo_on_midi_note);
+}
+
+/* See this file's own "Melodic mode: live echo of an incoming melody"
+ * section above for the full design. Deliberately does NOT also check
+ * s_active_mode here (unlike tiles_op_mode_song_capture_is_note_
+ * sounding(), which the caller already gates with its own is_active()
+ * check) -- melodic mode is the ONE thing this accessor exists for, so
+ * folding that check in here rather than exposing a second, narrower
+ * "is melodic mode active" accessor just for this one caller keeps the
+ * public surface smaller without losing anything. */
+bool tiles_op_mode_incoming_note_is_sounding(uint8_t note) {
+    return s_active_mode == OP_MODE_MELODIC && s_incoming_note_sounding[note];
+}
+
 void tiles_op_mode_init(bool crash_recovered) {
     if (!crash_recovered) {
         s_active_mode = OP_MODE_MELODIC;
@@ -5009,6 +5080,11 @@ void tiles_op_mode_init(bool crash_recovered) {
      * this boot; midi_in.c's own dispatch is a no-op for anyone who
      * never sends a matching message. */
     scene_launch_init();
+    /* Same reasoning, this file's own "Melodic mode: live echo of an
+     * incoming melody" section's Note-On/Off callback -- registered
+     * unconditionally at boot regardless of which mode is active first,
+     * same "harmless if never used" logic. */
+    melodic_echo_init();
 
     if (crash_recovered) {
         /* s_active_mode/s_seq_active_alt[]/s_seq_lane_running[] were all

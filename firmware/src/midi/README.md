@@ -190,4 +190,35 @@ deterministic voice-steal policy) are done — see Status below.
     and `tiles_midi_note_off()` needed no changes themselves; the fix
     is entirely in when `services/expression.c` chooses to call the
     latter.
+- **`midi_in.c` gained a real, running-status-aware channel-voice
+  parser** (Note-On/Off specifically dispatched; every other channel-
+  voice type consumed correctly for byte alignment but not dispatched
+  anywhere). Real feedback: "in midi melodic mode is there any way we
+  could read the playing melody of the armed track and display it back
+  on tiles?" -- exactly the "not-yet-built feature" this file's own
+  header used to flag. `tiles_midi_in_register_note_callback()` mirrors
+  the realtime/SysEx registration functions exactly; see
+  `services/README.md`'s own entry for the one registered listener
+  (`op_mode.c`'s melodic-mode "live echo" feature).
+  Two real correctness pieces needed for this to actually work, not
+  just the Note-On/Off dispatch itself:
+  - Running status: a sender (Ableton's own MIDI output included) can
+    legally omit a repeated status byte between consecutive messages of
+    the same type/channel (e.g. a stream of Note-Ons) -- the parser
+    tracks the current status byte and how many data bytes its message
+    needs, dispatching a complete message each time enough data bytes
+    arrive, with no repeated status byte required.
+  - The System Real-Time check at the top of the scan loop only ever
+    fired callbacks for the four bytes this file already cared about
+    (Clock/Start/Continue/Stop), but silently let the other four
+    (Undefined 0xF9/0xFD, Active Sensing 0xFE, Reset 0xFF) fall through
+    into whatever state machine was active below -- harmless before
+    (nothing was tracking state byte-by-byte outside SysEx), but wrong
+    now: those four are still System Real-Time bytes, legally injected
+    ANYWHERE in the stream without disturbing anything around them per
+    the MIDI spec, and would otherwise have been misread as either a
+    channel-voice status byte (silently canceling running status) or an
+    abort of an in-progress SysEx frame. Fixed by widening the skip to
+    the full 0xF8-0xFF range while still only firing a callback for the
+    original four.
 - DIN MIDI IN/OUT -- not built yet.
