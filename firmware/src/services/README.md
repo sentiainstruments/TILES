@@ -7972,6 +7972,41 @@ not its code.
   it -- exactly the gesture that reproduces the stick. See
   `midi/README.md` for the full fix (a bounded retry instead of the
   previous silent log-and-drop).
+  **The real, full root cause, found after that fix alone didn't
+  resolve it**: real feedback narrowed the repro further -- "if i lift
+  pedal before note [it's fine], then if i lift pedal after note it
+  sticks but if i play a new note it does register as sustain released
+  and it releases the sustain succesfully." Release-order-dependence,
+  "cured" by unrelated later MIDI traffic, is the exact signature this
+  file's own "Full device freeze during real Ableton MIDI clock
+  playback" and "A second real-hardware freeze" entries already
+  root-caused TWICE before (`services/haptics.c`'s per-kick `printf()`,
+  then `main.c`'s periodic I2C scan dump): the Pico SDK's USB-CDC stdio
+  driver busy-waits the WHOLE calling thread for up to
+  `PICO_STDIO_USB_STDOUT_TIMEOUT_US` (500ms, confirmed reading
+  `pico-sdk/src/rp2_common/pico_stdio_usb/stdio_usb.c` directly) every
+  time its output buffer fills faster than the host drains it -- the
+  diagnostic tracing THIS section added above sat directly before
+  `tiles_midi_send_cc_broadcast()`, so a blocked print there delays the
+  actual release message by up to half a second: easily read as
+  "stuck" by anyone not waiting that long, and exactly explains "a new
+  note releases it" -- the earlier, delayed send had usually already
+  gone out by the time a next note got played, making the new note
+  look like the cause rather than a coincidence of timing. The board
+  under test also had a second, independent contributor at the exact
+  same time: two ORPHANED `screen` sessions from an unrelated, already-
+  ended session were still holding `/dev/tty.usbmodem*` open (kept
+  alive by their own forgotten `watch_*.sh` respawn scripts, still
+  running with `PPID=1`), which is exactly the "connected but nobody's
+  actually draining it" condition that makes `stdio_usb`'s blocking
+  behavior bite in the first place -- killed those too. Fixed the same
+  way both prior rounds were: deleted every diagnostic `printf()` this
+  section (and the melodic-harmonics pluck trace in `expression.c`,
+  same class, same session, same real per-touch hot path) had added,
+  once each had served its purpose, rather than throttle or reorder
+  them -- the LOGIC comments explaining the hysteresis/debounce math
+  were kept, only the print statements (and the prose that existed
+  solely to justify keeping them) came out.
 - **Menu/scale-picker MIDI leak fixed.** Real feedback: "when changing
   modes or selecting scales there is midi info being read and thats
   bad... there should not be midi until selection pad is lifted. this

@@ -1561,8 +1561,19 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
         if (note > 127) {
             continue; /* out of MIDI range this high -- silently skip, don't clamp into a wrong pitch */
         }
-        printf("[expression] harmonics: pluck pad=%u slot=%u note=%d (fundamental pad=%u note=%u)\n", (unsigned)pad,
-               (unsigned)slot, note, (unsigned)fundamental, (unsigned)fundamental_note);
+        /* Real feedback found on the sustain pedal ("if i lift pedal
+         * after note it sticks... if i play a new note it does register
+         * as sustain released") root-caused to a printf() sitting right
+         * before a real-time MIDI send blocking the main loop for up to
+         * 500ms whenever no serial terminal drains the USB-CDC console
+         * -- see services/pedal.c's own scan_sustain() comment for the
+         * full history (this exact codebase's third confirmed case of
+         * this bug class). This pluck trace used to sit here, in the
+         * same position relative to fire_harmonic_pluck()'s own MIDI
+         * send, and fires on every OTHER pad touched while a fundamental
+         * is held -- a real per-touch hot path during active play, not
+         * a rare one-off. Removed pre-emptively rather than wait for a
+         * third real-hardware report of the same symptom. */
         fire_harmonic_pluck((uint8_t)slot, pad, (uint8_t)note, channel, now_ms);
     }
 }

@@ -6,8 +6,6 @@
 #include "hardware/adc.h"
 #include "pico/time.h"
 
-#include <stdio.h>
-
 #define ADC_MAX 4095u
 
 /* Hysteresis band around midscale for the binary sustain decision. A
@@ -67,18 +65,36 @@ static bool low_side_means_pressed(void) {
  * feature owning control the way some other scans can be -- and pedal.c
  * is the ONLY caller of the ADC in this entire firmware (grepped), so
  * there's no other module's adc_select_input() that could occasionally
- * leave this reading from the wrong channel either. Nothing here
- * explains an intermittent stick from code alone -- rather than guess
- * a fix for a bug I can't actually see, this traces every real state
- * transition (raw threshold crossing, debounce settling, what actually
- * gets sent) so the NEXT time it sticks, the console shows exactly
- * what the raw ADC was doing at the time: if it shows the raw reading
- * genuinely never climbing back past SUSTAIN_RELEASE_THRESHOLD, that's
- * a real electrical/connector issue (jack contact, cable), not
- * software; if it shows the raw reading correctly climbing but
- * s_debounced_low or the final send never following, that's the real
- * software bug still to find, now with the exact data needed to find
- * it instead of guessing a second time. */
+ * leave this reading from the wrong channel either.
+ *
+ * A first round added printf() tracing at all three transitions here
+ * (raw threshold crossing, debounce settling, the final CC send) to
+ * gather real evidence instead of guessing. Real feedback narrowed the
+ * repro precisely: "if i lift pedal before note [it's fine], then if i
+ * lift pedal after note it sticks but if i play a new note it does
+ * register as sustain released" -- release order-dependence, "fixed" by
+ * unrelated later MIDI traffic, is the SAME signature this file's own
+ * "Full device freeze during real Ableton MIDI clock playback" and "A
+ * second real-hardware freeze" README entries already root-caused
+ * TWICE before (services/haptics.c's per-kick printf(), then main.c's
+ * periodic I2C scan dump): the Pico SDK's USB-CDC stdio driver
+ * busy-waits the ENTIRE calling thread for up to
+ * PICO_STDIO_USB_STDOUT_TIMEOUT_US (500ms, confirmed reading pico-sdk/
+ * src/rp2_common/pico_stdio_usb/stdio_usb.c directly) every time its
+ * output buffer fills faster than the host drains it -- the ordinary
+ * case once TILES is plugged into a DAW/synth rig instead of a dev
+ * machine with a serial terminal open. The "sustain -> %s" print sat
+ * directly BEFORE tiles_midi_send_cc_broadcast() below: a blocked print
+ * there delays the ACTUAL release message by up to half a second,
+ * easily read as "stuck" by anyone not waiting that long, and exactly
+ * explains "playing a new note releases it" -- the earlier, delayed
+ * send had usually already gone out by the time a next note got played,
+ * making the new note look like the cause rather than a coincidence of
+ * timing. Fixed the same way both prior rounds were: deleted the
+ * tracing outright now that it's served its purpose, rather than
+ * throttle or reorder it -- the LOGIC comments explaining the hysteresis/
+ * debounce math above are kept, only the print statements (and the
+ * prose that existed solely to justify keeping them) came out. */
 static void scan_sustain(void) {
     bool raw_low = s_raw_low;
     if (s_raw_low && s_raw > SUSTAIN_RELEASE_THRESHOLD) {
@@ -89,19 +105,15 @@ static void scan_sustain(void) {
 
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
     if (raw_low != s_raw_low) {
-        printf("[pedal] raw_low %d->%d (raw=%u)\n", (int)s_raw_low, (int)raw_low, (unsigned)s_raw);
         s_raw_low = raw_low;
         s_last_change_ms = now_ms;
     } else if (raw_low != s_debounced_low && (now_ms - s_last_change_ms) >= SUSTAIN_DEBOUNCE_MS) {
-        printf("[pedal] debounced_low %d->%d (raw=%u, %ums stable)\n", (int)s_debounced_low, (int)raw_low,
-               (unsigned)s_raw, (unsigned)(now_ms - s_last_change_ms));
         s_debounced_low = raw_low;
     }
 
     bool pressed = low_side_means_pressed() ? s_debounced_low : !s_debounced_low;
     if (pressed != s_last_sent_sustained) {
         s_last_sent_sustained = pressed;
-        printf("[pedal] sustain -> %s (raw=%u)\n", pressed ? "PRESSED" : "released", (unsigned)s_raw);
         /* Broadcast, not a single channel -- under MPE (see
          * midi/midi_out.h) every currently-held note lives on its own
          * Member Channel, and sustain needs to hold ALL of them, not
