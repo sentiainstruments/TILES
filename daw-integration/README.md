@@ -254,10 +254,14 @@ clears it on the Note-Off.
   (real feedback: "make the device work on 2 channels at once, if 2
   devices are on then the secondary does color red"): the first one armed
   is the primary -- pink button, green pads, MIDI channel 1 -- and the
-  second is the secondary -- **red** button, **red** pads, MIDI channel 2.
+  second is the secondary -- **soft red** button, **soft red** pads, MIDI
+  channel 2 (real feedback: "not pure red but more of a soft red aligned
+  witht he pallet but still separete from thern sentia pink" -- a warm
+  coral-leaning red with little blue in it, so it can't read as pink).
   Arming a third replaces the secondary (the primary is never bumped).
   Turning the primary off promotes the secondary to primary (its button
-  goes pink, its pads green) so a lone armed device is never left red.
+  goes pink, its pads green) so a lone armed device is never left soft
+  red.
   The instances coordinate through Max's global name space, so no
   configuration is needed. Turning VIEW off clears any pad still lit.
   VIEW is a normal Live parameter, so it's saved with the set and can be
@@ -338,10 +342,12 @@ to drive Live's UI from where this was written). First-run checklist:
    pink (pads flash once more); play a note on that track and the
    matching pad should light green, then go dark on release.
 3. Add a second instance on another track and arm it -- both VIEW
-   buttons stay on: the first pink, the second **red**, and the second
-   track's notes light **red** pads while the first's stay green (pads
-   also flash red when the second one arms).
-4. Arm a third instance -- the red one switches itself off and its pads
+   buttons stay on: the first pink, the second **soft red**, and the
+   second track's notes light **soft red** pads while the first's stay
+   green (pads also flash soft red when the second one arms). Check the
+   soft red really reads as red and not pink or orange -- if not, the
+   two knobs are `TILES_LIGHTING_ECHO_SECONDARY_G/_B` in `lighting.c`.
+4. Arm a third instance -- the soft-red one switches itself off and its pads
    clear; the pink one is untouched. Then turn the pink one off -- the
    remaining device turns pink and its notes go green.
 5. Stop transport / disarm mid-note -- no pad should stay lit.

@@ -86,20 +86,11 @@
  * (blue, see below), natural key (white), sharp (dark). Same baseline
  * percent as root, "unmeasured against real hardware" like every first-
  * pass brightness constant in this file.
- * Then, once root and fifth were the only two landmarks left: "the color
- * should be a bit more striking like sentia pink?" -- asked which color,
- * answered "actually just make it slighly more green so its more
- * distinct." Read as the fifth (the only one of the options that can go
- * greener): pure blue is a dim, easily-muddied color on these LEDs (the
- * blue die contributes very little apparent luminance, and its hue sits
- * right next to the pink root's own blue channel), so it's now an azure --
- * a little green mixed in (TILES_LIGHTING_FIFTH_GREEN_TINT, fraction of
- * the blue level). The green die is by far the most luminous of the
- * three, so this also makes the fifth read brighter and more striking,
- * not just more different, at the same baseline percent and inside the
- * same ceiling. Unmeasured, like everything here. */
+ * Later: "the color should be a bit more striking like sentia pink?" ->
+ * "actually just make it slighly more green so its more distinct" was built
+ * as an azure fifth (a little green mixed into the blue), then withdrawn:
+ * "ignore the green suggestion." The fifth is pure blue again. */
 #define TILES_LIGHTING_FIFTH_BASELINE_PERCENT 40u
-#define TILES_LIGHTING_FIFTH_GREEN_TINT 0.35f
 
 /* Real feedback on the melodic-echo indicator (services/op_mode.c's
  * "Melodic mode: live echo of an incoming melody"): "it needs more
@@ -127,12 +118,21 @@
 
 /* Second TILES DISPLAY (MIDI channel 2, echo layer 1). Real feedback:
  * "make the device work on 2 channels at once, if 2 devices are on then the
- * secondary does color red." Same onset flash (white easing down over
+ * secondary does color red," then "make the secodn device not pure red but
+ * more of a soft red aligned witht he pallet but still separete from thern
+ * sentia pink." Same onset flash (white easing down over
  * TILES_LIGHTING_ECHO_FLASH_MS) so both layers "hit" the same way, but it
- * settles on RED -- R full, G and B at this tint of full (0 = pure red). Pure
- * red on purpose: any equal G/B mix reads pink, and pink is the root pad's
- * (and the device's own VIEW button's) color. Unmeasured, like the rest. */
-#define TILES_LIGHTING_ECHO_SECONDARY_SUSTAIN_TINT 0.0f
+ * settles on a soft, slightly warm red: R full, G and B at these fractions
+ * of full. Two separate tints on purpose. Pure red (both 0) was the first
+ * version and read harsh; an EQUAL G/B mix reads pink, and pink is the
+ * root pad's (and the device's own VIEW button's) color -- so blue is kept
+ * well below green, which pulls the hue toward coral, away from the
+ * magenta side. Green is the most luminous die, so it also does most of
+ * the "soft" (paler, brighter) work; keep it low or the red drifts orange
+ * (Song-capture's color). Unmeasured against real hardware, like every
+ * color constant here -- these two numbers are the knobs. */
+#define TILES_LIGHTING_ECHO_SECONDARY_G 0.18f
+#define TILES_LIGHTING_ECHO_SECONDARY_B 0.12f
 
 /* Underglow's own fixed brightness, out of 255 -- deliberately NOT
  * scaled by the active brightness ceiling/the power state. It used to be
@@ -320,18 +320,22 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         bool secondary = echo_secondary && (!echo_primary || tiles_op_mode_incoming_note_age_ms(1, echo_note) <
                                                               tiles_op_mode_incoming_note_age_ms(0, echo_note));
         /* See TILES_LIGHTING_ECHO_SUSTAIN_TINT's own comment: white at
-         * onset easing to a lighter green (primary) or red (secondary,
-         * TILES_LIGHTING_ECHO_SECONDARY_SUSTAIN_TINT). The two channels
-         * that aren't the layer's own hue move together (both just "how
-         * much white is mixed in"); the layer's own channel stays full. */
-        float tint = secondary ? TILES_LIGHTING_ECHO_SECONDARY_SUSTAIN_TINT : TILES_LIGHTING_ECHO_SUSTAIN_TINT;
-        uint32_t age_ms = tiles_op_mode_incoming_note_age_ms(secondary ? 1 : 0, echo_note);
-        float mix = tint;
+         * onset easing to a lighter green (primary) or a soft red
+         * (secondary, TILES_LIGHTING_ECHO_SECONDARY_G/_B). The channels
+         * that aren't the layer's own hue ease from full white down to
+         * their settled tint; the layer's own channel stays full. */
+        uint8_t layer = secondary ? 1u : 0u;
+        uint32_t age_ms = tiles_op_mode_incoming_note_age_ms(layer, echo_note);
+        float settle = 1.0f; /* 0 = just hit, 1 = settled */
         if (age_ms < TILES_LIGHTING_ECHO_FLASH_MS) {
-            float t = (float)age_ms / (float)TILES_LIGHTING_ECHO_FLASH_MS; /* 0 = just hit, 1 = settled */
-            mix = 1.0f + t * (tint - 1.0f);
+            settle = (float)age_ms / (float)TILES_LIGHTING_ECHO_FLASH_MS;
         }
-        return secondary ? (tiles_rgb01_t){1.0f, mix, mix} : (tiles_rgb01_t){mix, 1.0f, mix};
+        if (secondary) {
+            return (tiles_rgb01_t){1.0f, 1.0f + settle * (TILES_LIGHTING_ECHO_SECONDARY_G - 1.0f),
+                                   1.0f + settle * (TILES_LIGHTING_ECHO_SECONDARY_B - 1.0f)};
+        }
+        float mix = 1.0f + settle * (TILES_LIGHTING_ECHO_SUSTAIN_TINT - 1.0f);
+        return (tiles_rgb01_t){mix, 1.0f, mix};
     }
 
     /* Guitar/bass fret mode: a completely different idle-coloring scheme,
@@ -385,12 +389,12 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         return (tiles_rgb01_t){level, 0.0f, level};
     }
     if (tiles_note_map_is_fifth_pad(logical_pad)) {
-        /* Azure -- blue with a little green, R stays 0 -- see
-         * TILES_LIGHTING_FIFTH_GREEN_TINT's own comment. Checked after
-         * root for the same "never actually overlaps, but root would win
-         * if it somehow did" reasoning. */
+        /* Pure blue -- B channel only, R and G stay 0 -- see
+         * TILES_LIGHTING_FIFTH_BASELINE_PERCENT's own comment. Checked
+         * after root for the same "never actually overlaps, but root
+         * would win if it somehow did" reasoning. */
         float level = (float)TILES_LIGHTING_FIFTH_BASELINE_PERCENT / 100.0f;
-        return (tiles_rgb01_t){0.0f, level * TILES_LIGHTING_FIFTH_GREEN_TINT, level};
+        return (tiles_rgb01_t){0.0f, 0.0f, level};
     }
     if (tiles_note_map_is_natural_pad(logical_pad)) {
         float level = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;

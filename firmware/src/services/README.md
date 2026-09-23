@@ -8205,6 +8205,10 @@ not its code.
   the most luminous of the three, so this reads brighter as well as
   different, at the same baseline percent and inside the same power
   ceiling. Unmeasured on hardware, like every color constant here.
+  **Withdrawn.** Real feedback, next message: "ignore the green
+  suggestion." The fifth is pure blue again (`{0, 0, level}`);
+  `TILES_LIGHTING_FIFTH_GREEN_TINT` is gone. (Never flashed -- the azure
+  build only ever existed in commit 1aaad99.)
 - **Melodic mode: live echo of an incoming melody.** Real feedback: "in
   midi melodic mode is there any way we could read the playing melody
   of the armed track and display it back on tiles?" Needed a genuinely
@@ -8343,10 +8347,20 @@ not its code.
     note the other is still holding. `tiles_op_mode_incoming_note_is_
     sounding()`/`_age_ms()` gained a `layer` argument. `lighting.c`
     colors layer 0 the original green and layer 1 red (same white onset
-    flash, settling on `{1, tint, tint}` with `TILES_LIGHTING_ECHO_
-    SECONDARY_SUSTAIN_TINT` 0 = pure red -- any equal G/B mix reads pink,
-    which is the root pad's color); a pitch held on both layers shows
-    whichever hit most recently. Device side (daw-integration README):
+    flash on both). **Soft red, not pure red** -- real feedback on the
+    first version: "make the secodn device not pure red but more of a soft
+    red aligned witht he pallet but still separete from thern sentia
+    pink." Layer 1 settles on `{1, TILES_LIGHTING_ECHO_SECONDARY_G (0.18),
+    TILES_LIGHTING_ECHO_SECONDARY_B (0.12)}`: green and blue tints are
+    separate and blue stays under green, because an EQUAL G/B mix reads
+    pink (the root pad's color, which this has to stay clear of) while
+    pulling blue down and green up gives a warm coral-leaning red; green
+    is also the most luminous die, so it does the "soft" (paler,
+    brighter) work -- pushed much higher it drifts orange, Song-
+    capture's color. The device's VIEW button uses the matching soft red.
+    Both numbers are unmeasured guesses and are the knobs to turn after
+    a look on real hardware. A pitch held on both layers shows whichever
+    hit most recently. Device side (daw-integration README):
     the first armed instance is the primary (channel 1), the second is
     the secondary (channel 2, red VIEW button), a third replaces the
     secondary, and disarming the primary promotes the secondary so a

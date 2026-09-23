@@ -54,7 +54,7 @@ life as exclusive -- arming one disarmed the rest -- and this replaces
 that.) Up to two instances are armed together. The first armed is the
 PRIMARY: its notes go out on MIDI channel 1 and light TILES' pads green
 (the firmware's original echo color) and its VIEW button is Sentia pink.
-The second armed is the SECONDARY: channel 2, red pads, red VIEW button
+The second armed is the SECONDARY: channel 2, soft-red pads, soft-red VIEW button
 (firmware: services/op_mode.c echo layers, services/lighting.c). Arming a
 third replaces the secondary (the primary is never bumped); disarming the
 primary promotes the secondary to primary, so a lone armed device is never
@@ -109,7 +109,13 @@ BUS_WHO = "tiles_display_who"  # "does anyone hold slot 1?"
 BUS_TAKEN = "tiles_display_taken"  # ...yes (sent by the slot-1 holder)
 BUS_BUMP = "tiles_display_bump"  # "I just took slot 2" (previous slot 2 steps down)
 BUS_FREED = "tiles_display_freed"  # "slot 1 just opened up" (slot 2 promotes)
-RED = [1.0, 0.09, 0.09, 1.0]
+# The secondary's VIEW color -- a soft, slightly warm red (coral), matching
+# the soft red its pads show on TILES (firmware: services/lighting.c
+# TILES_LIGHTING_ECHO_SECONDARY_G/_B). Real feedback: "make the secodn device
+# not pure red but more of a soft red aligned witht he pallet but still
+# separete from thern sentia pink." Blue stays well under green so it can't
+# drift toward the magenta of PINK.
+SOFT_RED = [1.0, 0.36, 0.30, 1.0]
 
 FONT = "Ableton Sans Medium Regular"
 
@@ -221,7 +227,7 @@ def build_patcher():
             "activebgoncolor": PINK,
             "activetextcolor": TEXT_DIM,
             "activetextoncolor": TEXT_ON_PINK,
-            "annotation": "Arm this track's notes to show on TILES' pads. Two can be armed at once: the first is pink (green pads), the second red.",
+            "annotation": "Arm this track's notes to show on TILES' pads. Two can be armed at once: the first is pink (green pads), the second soft red.",
             "bgcolor": [0.10, 0.10, 0.11, 1.0],
             "bgoncolor": PINK_DIM,
             "bordercolor": PINK_DIM,
@@ -301,7 +307,7 @@ def build_patcher():
     )
     comment(
         "hint",
-        "Pads flash on TILES when SURFACE is right. Step it (1-7) until they do. 2nd armed = red.",
+        "Pads flash on TILES when SURFACE is right. Step it (1-7) until they do. 2nd armed = soft red.",
         [600.0, 150.0, 200.0, 30.0],
         [12.0, 128.0, 136.0, 34.0],
         9.0,
@@ -426,7 +432,7 @@ def build_patcher():
     newobj("sel_bump_send", "select 2", [232.0, 520.0, 52.0, 20.0], 2, 2, ["bang", ""])
     newobj("send_bump", "s " + BUS_BUMP, [232.0, 552.0, 120.0, 20.0], 1, 0)
     newobj("sel_color", "select 2", [120.0, 520.0, 52.0, 20.0], 2, 2, ["bang", ""])
-    message("msg_red", "activebgoncolor 1. 0.09 0.09 1.", [120.0, 552.0, 190.0, 20.0])
+    message("msg_red", "activebgoncolor %.2f %.2f %.2f 1." % tuple(SOFT_RED[:3]), [120.0, 552.0, 190.0, 20.0])
     message("msg_pink", "activebgoncolor 1. 0. 1. 1.", [120.0, 584.0, 170.0, 20.0])
     conn("plus1", 0, "slot_t", 0)
     conn("slot_t", 3, "sel_bump_send", 0)
