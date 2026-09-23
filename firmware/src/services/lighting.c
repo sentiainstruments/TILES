@@ -34,6 +34,25 @@
  * the underlying power budget. */
 #define TILES_LIGHTING_IDLE_BASELINE_PERCENT 50u
 
+/* Melodic mode's own regular pad -- a natural (white) key that isn't the
+ * root, isn't a reference (perfect fifth), and isn't sounding. Real
+ * feedback: "also i think we should lower the relative brightness for the
+ * regular pads in melodic mode meaning non playing, non root, non
+ * reference." Split off from TILES_LIGHTING_IDLE_BASELINE_PERCENT above on
+ * purpose: that one is the shared "visible but not the active thing" level
+ * (a pressed pad's floor, guitar frets, the chord strip, menu items -- see
+ * its comment) and was raised to 50 by earlier "too dim" feedback; lowering
+ * it would dim all of those, and the request was only about this pad. The
+ * point is relative: with the natural key at 50 it out-shone the root and
+ * fifth landmarks (40) and the echoed melody had less to stand out against,
+ * so this drops below both. 30 is a first guess -- low enough to recede,
+ * not so low it hits the "too dim to see" wall the 10 -> 25 -> 50 history
+ * above ran into; a white pad drives all three dies, so it still reads
+ * brighter per percent than the single/dual-die reference colors do.
+ * Unmeasured against real hardware; this is the knob. The power ceiling
+ * (static_ceiling_level()) is untouched. */
+#define TILES_LIGHTING_NATURAL_BASELINE_PERCENT 30u
+
 /* Idle (untouched) chromatic-play pad coloring by note role -- real
  * feedback: "root should be blue and black keys shouldnt have led this
  * in rest non pressed moment... push should be regular white illumination"
@@ -397,7 +416,7 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         return (tiles_rgb01_t){0.0f, 0.0f, level};
     }
     if (tiles_note_map_is_natural_pad(logical_pad)) {
-        float level = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;
+        float level = (float)TILES_LIGHTING_NATURAL_BASELINE_PERCENT / 100.0f;
         return (tiles_rgb01_t){level, level, level};
     }
     /* Sharp/black key, idle -- true black, deliberately bypassing this

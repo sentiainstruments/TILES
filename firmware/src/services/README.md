@@ -8209,6 +8209,26 @@ not its code.
   suggestion." The fifth is pure blue again (`{0, 0, level}`);
   `TILES_LIGHTING_FIFTH_GREEN_TINT` is gone. (Never flashed -- the azure
   build only ever existed in commit 1aaad99.)
+- **Melodic mode: regular pads dimmed relative to everything that means
+  something.** Real feedback: "also i think we should lower the relative
+  brightness for the regular pads in melodic mode meaning non playing,
+  non root, non reference." The regular pad is the natural (white) key
+  that isn't root, isn't the perfect fifth, and isn't echoing an incoming
+  note. It was at `TILES_LIGHTING_IDLE_BASELINE_PERCENT` (50), which is
+  higher than root and fifth (40), so the landmarks and the echoed melody
+  were competing with the background rather than standing out from it.
+  The natural-key branch in `pad_desired_rgb()` now uses its own
+  `TILES_LIGHTING_NATURAL_BASELINE_PERCENT` = 30. Deliberately a new
+  constant rather than lowering the shared idle baseline: that value is
+  also a pressed pad's floor, guitar frets, the chord strip and menu
+  items (and was raised to 50 by earlier "resting led should be brigher
+  always. en its too dim" feedback), and none of those were asked about.
+  Only melodic idle coloring changes -- in chord mode this also covers
+  the melody sub-grid (same `is_natural_pad()` branch) but not the chord
+  strip. 30 is an unmeasured first guess (low enough to recede, not so
+  low it revisits that "too dim" complaint); it's the knob if it wants
+  another step either way. Sharp keys stay dark; the power ceiling is
+  untouched.
 - **Melodic mode: live echo of an incoming melody.** Real feedback: "in
   midi melodic mode is there any way we could read the playing melody
   of the armed track and display it back on tiles?" Needed a genuinely
