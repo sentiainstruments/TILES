@@ -375,22 +375,20 @@ class SceneLaunch(object):
     def _make_track_refresh_callback(self, track_index):
         return lambda: self._refresh_track(track_index)
 
-    def _connect(self):
+    def _connect_track_clip_listeners(self):
+        """Wires up every (track, scene) clip slot's has_clip/playing_
+        status/is_triggered listeners and every track's playing_slot_
+        index/fired_slot_index listener, up to MAX_TRACKS/NUM_SCENES --
+        the same work _connect() used to do inline, once, at script load.
+        Now also called by _on_tracks_changed() below whenever the track
+        list itself changes, so a track that didn't exist yet at connect
+        time gets covered too. Appends to self._clip_slot_listeners/
+        self._track_listeners rather than assuming they start empty --
+        callers that need a clean slate call _disconnect_track_clip_
+        listeners() first (see that method's own comment)."""
         tracks = self._song.tracks
-        scenes = self._song.scenes
         num_tracks = min(len(tracks), MAX_TRACKS)
-        num_scenes = min(len(scenes), NUM_SCENES)
-        self._log("connecting: %d track(s), %d scene(s) tracked" % (num_tracks, num_scenes))
-
-        for scene_index in range(num_scenes):
-            scene = scenes[scene_index]
-            is_triggered_cb = self._make_scene_callback(scene_index, scene)
-            color_cb = self._make_scene_callback(scene_index, scene)
-            scene.add_is_triggered_listener(is_triggered_cb)
-            scene.add_color_listener(color_cb)
-            self._scene_listeners.append((scene, is_triggered_cb, color_cb))
-            self._send_scene_state(scene_index, scene)
-
+        num_scenes = min(len(self._song.scenes), NUM_SCENES)
         for track_index in range(num_tracks):
             track = tracks[track_index]
             for scene_index in range(num_scenes):
@@ -417,6 +415,96 @@ class SceneLaunch(object):
             track.add_playing_slot_index_listener(refresh_cb)
             track.add_fired_slot_index_listener(refresh_cb)
             self._track_listeners.append((track, refresh_cb))
+
+    def _disconnect_track_clip_listeners(self):
+        """Inverse of _connect_track_clip_listeners() above -- removes
+        every listener it added and empties the three lists/dict that
+        track them, so a following _connect_track_clip_listeners() call
+        starts from a genuinely clean slate rather than double-adding.
+        Shares this exact teardown with disconnect() (below), which
+        calls this instead of repeating it."""
+        for clip_slot, has_clip_cb, playing_status_cb, is_triggered_cb in self._clip_slot_listeners:
+            try:
+                clip_slot.remove_has_clip_listener(has_clip_cb)
+                clip_slot.remove_playing_status_listener(playing_status_cb)
+                clip_slot.remove_is_triggered_listener(is_triggered_cb)
+            except RuntimeError:
+                pass
+        self._clip_slot_listeners = []
+        for track, refresh_cb in self._track_listeners:
+            try:
+                track.remove_playing_slot_index_listener(refresh_cb)
+            except RuntimeError:
+                pass
+            try:
+                track.remove_fired_slot_index_listener(refresh_cb)
+            except RuntimeError:
+                pass
+        self._track_listeners = []
+        for clip, clip_cb in self._clip_color_listeners.values():
+            self._remove_clip_listeners(clip, clip_cb)
+        self._clip_color_listeners = {}
+
+    def _on_tracks_changed(self):
+        """Real feedback: "when a pattern is edited within ableton
+        without the instrument it doesnt register that it happened and
+        acts like its not there. it tryes to recoed but it dosnt because
+        theres soemthing so it shouldnt." Root cause: _connect() used to
+        enumerate self._song.tracks exactly ONCE, at script load -- any
+        track created afterward (a fresh, not-yet-instrumented track is
+        the obvious way to get one) never had its clip slots' has_clip/
+        playing_status/is_triggered listeners wired up at all. A clip
+        added to such a track -- by editing directly in Ableton, same as
+        any other way -- never sent a clip_state SysEx message, so the
+        pad for that slot kept showing empty on the hardware. Touching it
+        then didn't misbehave exactly the way it looked like it did:
+        _on_grid_touch() reads clip_slot.has_clip LIVE off Ableton at
+        touch time, so it correctly fired the existing clip instead of
+        recording a new one -- explaining "it tries to record but it
+        doesn't" -- but that slot's ongoing playing/triggered state kept
+        going stale afterward too, since it was still completely
+        unlistened either way.
+
+        Song.add_tracks_listener() fires on ANY track being added,
+        removed, or reordered -- track indices can all shift at once
+        (confirmed against the same Live Object Model convention every
+        other add_<property>_listener in this file already relies on),
+        so rather than try to diff old vs. new track lists, this just
+        tears down and rebuilds every per-track/per-slot listener
+        against the current one, the same full setup _connect() itself
+        does once at startup."""
+        self._log("tracks changed -- resyncing clip-slot listeners")
+        self._disconnect_track_clip_listeners()
+        self._connect_track_clip_listeners()
+
+    def _connect(self):
+        tracks = self._song.tracks
+        scenes = self._song.scenes
+        num_tracks = min(len(tracks), MAX_TRACKS)
+        num_scenes = min(len(scenes), NUM_SCENES)
+        self._log("connecting: %d track(s), %d scene(s) tracked" % (num_tracks, num_scenes))
+
+        for scene_index in range(num_scenes):
+            scene = scenes[scene_index]
+            is_triggered_cb = self._make_scene_callback(scene_index, scene)
+            color_cb = self._make_scene_callback(scene_index, scene)
+            scene.add_is_triggered_listener(is_triggered_cb)
+            scene.add_color_listener(color_cb)
+            self._scene_listeners.append((scene, is_triggered_cb, color_cb))
+            self._send_scene_state(scene_index, scene)
+
+        self._connect_track_clip_listeners()
+        # Real feedback: "when a pattern is edited within ableton without
+        # the instrument it doesnt register that it happened and acts
+        # like its not there." _connect_track_clip_listeners() above only
+        # ever enumerated self._song.tracks at THIS moment -- a track
+        # created afterward (a fresh, not-yet-instrumented one being the
+        # obvious way to get one) never had its clip slots listened to at
+        # all. Song.add_tracks_listener() (same add_<property>_listener
+        # convention every other listener in this file already uses)
+        # fires on any track added, removed, or reordered -- see
+        # _on_tracks_changed()'s own comment for the rest of this fix.
+        self._song.add_tracks_listener(self._on_tracks_changed)
 
         # Real feedback: "the box was from my novation. i need that
         # outline for tiles as well tho" -- Ableton's own built-in
@@ -717,6 +805,10 @@ class SceneLaunch(object):
         self.set_track_offset(value)
 
     def disconnect(self):
+        try:
+            self._song.remove_tracks_listener(self._on_tracks_changed)
+        except RuntimeError:
+            pass
         if self._session is not None:
             try:
                 self._control_surface.set_highlighting_session_component(None)
@@ -762,21 +854,4 @@ class SceneLaunch(object):
                 scene.remove_color_listener(color_cb)
             except RuntimeError:
                 pass
-        for clip_slot, has_clip_cb, playing_status_cb, is_triggered_cb in self._clip_slot_listeners:
-            try:
-                clip_slot.remove_has_clip_listener(has_clip_cb)
-                clip_slot.remove_playing_status_listener(playing_status_cb)
-                clip_slot.remove_is_triggered_listener(is_triggered_cb)
-            except RuntimeError:
-                pass
-        for track, refresh_cb in self._track_listeners:
-            try:
-                track.remove_playing_slot_index_listener(refresh_cb)
-            except RuntimeError:
-                pass
-            try:
-                track.remove_fired_slot_index_listener(refresh_cb)
-            except RuntimeError:
-                pass
-        for clip, clip_cb in self._clip_color_listeners.values():
-            self._remove_clip_listeners(clip, clip_cb)
+        self._disconnect_track_clip_listeners()

@@ -7805,6 +7805,17 @@ not its code.
     track about to receive the new clip is always the sole armed track
     regardless of that Live preference. See `daw-integration/README.md`
     for the full note.
+  - **New tracks now get tracked too (daw-integration side).** Real
+    feedback: "when a pattern is edited within ableton without the
+    instrument it doesnt register that it happened and acts like its
+    not there." `scene_launch.py`'s `_connect()` used to enumerate
+    Ableton's track list exactly once, at script load -- a track
+    created afterward never had its clip slots listened to, so a clip
+    added there (e.g. by editing directly in Ableton) never reached the
+    hardware and that pad's LED stayed stuck showing empty. Fixed with
+    `Song.add_tracks_listener()`, which now resyncs every per-track
+    listener whenever the track list itself changes. See
+    `daw-integration/README.md` for the full root-cause writeup.
 - **Melodic harmonics, board 2 only (experiment, off by default).** Real
   feedback: "i wanna add harmonics into melodic mode. like capacitive
   touch only plays the respective harmonics of the note being played by

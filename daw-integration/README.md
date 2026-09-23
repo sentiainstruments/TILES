@@ -182,6 +182,29 @@ the player picked. Fixed by having `_record_new_clip()` explicitly
 disarm every other currently-armed track itself before arming the
 target, independent of that Live preference.
 
+**New tracks now get tracked too.** Real feedback: "when a pattern is
+edited within ableton without the instrument it doesnt register that
+it happened and acts like its not there. it tryes to recoed but it
+dosnt because theres soemthing so it shouldnt." Root cause: `_connect()`
+used to enumerate `self._song.tracks` exactly once, at script load --
+a track created afterward (a fresh, not-yet-instrumented one is the
+obvious way to get one) never had its clip slots' `has_clip`/
+`playing_status`/`is_triggered` listeners wired up at all, so a clip
+added there (editing directly in Ableton, same as any other way) never
+sent a `clip_state` SysEx message and the pad for that slot kept
+showing empty on the hardware. Confirmed this wasn't actually a
+record-vs-playback bug: `_on_grid_touch()` checks `clip_slot.has_clip`
+LIVE off Ableton at touch time, so it always correctly fired the
+existing clip rather than trying to record over it -- the reported
+"tries to record but doesn't" was the pad's stale, never-updated LED
+lying about the slot being empty, not a wrong action being taken.
+Fixed with `Song.add_tracks_listener()` (fires on any track added,
+removed, or reordered), which now tears down and rebuilds every
+per-track/per-slot listener against the current track list whenever
+tracks change -- the connect-time setup loop was extracted into
+`_connect_track_clip_listeners()`/`_disconnect_track_clip_listeners()`
+so both the initial connect and this resync share the exact same code.
+
 ## Other DAWs
 
 This specific script is Ableton-only -- Logic, Cubase, Reaper, Bitwig,
