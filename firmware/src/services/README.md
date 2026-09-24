@@ -8271,7 +8271,7 @@ not its code.
     _B` are the knobs if that ever needs closing.
 - **Expression sub-menu's unselected pads: 35% -> 50%.** Real feedback,
   after "it jsut feels more dim than before" was traced to the regular
-  melodic pads (deliberately left as is: "lets lave it as is for now")
+  melodic pads (deliberately left as is: "lets leave it as is for now")
   and "anythign left to standardize on the board" prompted an audit of
   every resting/available brightness constant: the one real leftover was
   `SUBMENU_UNSELECTED_LEVEL` (`expression_control.c`) still at 0.35 while
