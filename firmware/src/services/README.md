@@ -8269,6 +8269,28 @@ not its code.
     so it can read dimmer than the green one at the same "100%".
     `TILES_LIGHTING_ECHO_SUSTAIN_TINT` / `TILES_LIGHTING_ECHO_SECONDARY_G/
     _B` are the knobs if that ever needs closing.
+- **Expression sub-menu's unselected pads: 35% -> 50%.** Real feedback,
+  after "it jsut feels more dim than before" was traced to the regular
+  melodic pads (deliberately left as is: "lets lave it as is for now")
+  and "anythign left to standardize on the board" prompted an audit of
+  every resting/available brightness constant: the one real leftover was
+  `SUBMENU_UNSELECTED_LEVEL` (`expression_control.c`) still at 0.35 while
+  its sibling, the scale picker's `OP_SCALE_AVAILABLE_LEVEL`
+  (`op_mode.c`), had been raised to 0.5 on "more bright not as dim." Both
+  are Sentia magenta at a readable-secondary level and are meant to match
+  (their pulse min/max/period already did). "yes do the sub-menu one if
+  thats best." The blinking off-indicator's dim phase reuses this
+  constant on purpose, so it follows. Audit findings deliberately NOT
+  acted on (raised, not asked for): chord mode's chord strip and
+  guitar's unmarked frets still rest at the shared 50% idle baseline
+  while regular melodic pads are 21%; Sentia magenta and the menu pulse
+  constants are still defined separately in `boot_sequence.c`,
+  `expression_control.c` and `op_mode.c` (no visible effect, drift risk
+  only); and every level is a percent of LED drive, not perceived
+  brightness, so equal percents don't look equal across colors (red/blue
+  dies are dimmer than green) -- fixing that would mean a per-channel
+  correction in `write_pad()` that changes the whole board's look, so it
+  wants doing deliberately, not as a tweak.
 - **Melodic mode: live echo of an incoming melody.** Real feedback: "in
   midi melodic mode is there any way we could read the playing melody
   of the armed track and display it back on tiles?" Needed a genuinely

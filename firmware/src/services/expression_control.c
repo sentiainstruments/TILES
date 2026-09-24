@@ -100,9 +100,20 @@
  * bright but still readable bright for non-selected and available" (see
  * SUBMENU_SELECTED_PULSE_MIN/_MAX below for the other half of that same
  * standardization pass) -- 0.06 was dim enough to undercut "readable."
+ * Raised again 0.35 -> 0.5 to match services/op_mode.c's
+ * OP_SCALE_AVAILABLE_LEVEL, the scale picker's identical "available but
+ * not selected" magenta level: that one was raised 0.35 -> 0.5 on "we
+ * could have idle led in scale mode more bright not as dim" and this one
+ * never got the same bump, so the two menus this standardization pass was
+ * meant to keep matching had drifted apart (found in a "anything left to
+ * standardize on the board" audit; "yes do the sub-menu one"). The
+ * off-indicator's dim phase follows automatically, staying at "the same
+ * baseline every other pad sits at." The selected pad is white pulsing
+ * 0.5-1.0 (SUBMENU_SELECTED_PULSE_*), so selection still reads by color,
+ * exactly as it already does in the scale picker at this same level.
  * Still unmeasured -- a revised first guess, not calibrated against real
  * LED brightness/diffusion. */
-#define SUBMENU_UNSELECTED_LEVEL 0.35f
+#define SUBMENU_UNSELECTED_LEVEL 0.5f
 
 /* Real feedback: "lets standardize the pulsing and brightness and
  * behaviour for menues, meaning select color or active color is always
