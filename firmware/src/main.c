@@ -62,6 +62,7 @@
 #include "board/unit_id.h"
 #include "diagnostics/calibration.h"
 #include "diagnostics/i2c_scan.h"
+#include "midi/din_midi.h"
 #include "midi/midi_in.h"
 #include "midi/midi_out.h"
 #include "midi/usb_device.h"
@@ -344,10 +345,22 @@ int main(void) {
      * above, whose rendering path it shares. See services/game_mode.h. */
     tiles_game_mode_init();
 
-    /* Shared USB MIDI IN parser -- must run before tiles_midi_clock_
-     * init() below, which registers a callback with it; this resets
-     * that registration table, so registering before this ran would
-     * get silently wiped. See midi/midi_in.h. */
+    /* DIN MIDI jacks (IN + OUT) -- real feedback: "are midi plugs
+     * working?" / "yes build DIN MIDI". Independent of USB: works with no
+     * host at all. A failure here disables DIN only (printed, nothing
+     * else blocked). On success, sends the MPE zone configuration once
+     * now, while only DIN is up -- the USB mount below repeats it for USB.
+     * See midi/din_midi.h. */
+    if (tiles_din_midi_init()) {
+        tiles_midi_mpe_init();
+    } else {
+        printf("[main] DIN MIDI unavailable (no free PIO state machine?) -- USB MIDI unaffected\n");
+    }
+
+    /* Shared MIDI IN parser (USB + DIN sources) -- must run before
+     * tiles_midi_clock_init() below, which registers a callback with it;
+     * this resets that registration table, so registering before this
+     * ran would get silently wiped. See midi/midi_in.h. */
     tiles_midi_in_init();
 
     /* MIDI clock RX (USB MIDI IN) -- the timing source op_mode.h's
@@ -419,6 +432,11 @@ int main(void) {
             tiles_midi_mpe_init();
         }
         s_mpe_was_mounted = mpe_mounted_now;
+
+        /* Feeds coalesced pitch bend/pressure/expression into the DIN
+         * transmit queue and keeps the transmitter running. Cheap when
+         * nothing is pending. See midi/din_midi.h. */
+        tiles_din_midi_service();
 
         /* Drains USB MIDI IN (Real-Time bytes AND, since Scene Launch
          * mode, SysEx) -- needs tud_task() above already run this

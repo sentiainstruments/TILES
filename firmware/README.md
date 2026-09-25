@@ -229,7 +229,7 @@ first on-hardware note-on test.
   (`services/expression_control.h`'s circle+square 3-second combo) --
   see `services/README.md` for all three.
   Everything else (a real per-pad Hall calibration
-  curve -- capture-only exists, see `diagnostics/`; DIN MIDI; CV/gate)
+  curve -- capture-only exists, see `diagnostics/`; CV/gate)
   not built.
 - `midi/` — composite USB CDC+MIDI device done (see `midi/README.md`);
   note on/off with real velocity, poly aftertouch, CC (sustain/
@@ -241,7 +241,8 @@ first on-hardware note-on test.
   all key pitch bend. like the roli seaboard." See `services/README.md`'s
   `expression.h` entry for the per-pad channel allocator and
   `midi/README.md` for the zone setup. Not yet verified with a real
-  MIDI-receiving host. DIN MIDI not built.
+  MIDI-receiving host. DIN MIDI IN/OUT built (see `midi/README.md`) but
+  never yet tried against real DIN/TRS gear.
 - `usb_vendor/`, `profiles/`, `storage/` still empty module skeletons.
 
 Builds clean end-to-end against a real pico-sdk checkout (`cmake` +

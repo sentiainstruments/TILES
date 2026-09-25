@@ -12,3 +12,14 @@ by the `diagnostics/` manufacturing test commands instead.
 
 Planned additions as those modules get built: scale/note mapping, voice
 allocation, calibration math, `usb_vendor/` protocol framing.
+- `test_din_midi_queue.c` -- `midi/din_midi_queue.c`, the hardware-free half
+  of DIN MIDI: ordering, coalescing of pitch bend/pressure/expression,
+  Real-Time priority, whole-message overflow drops, ring wraparound.
+- `test_midi_in.c` -- the real `midi/midi_in.c` (tusb/pico-time stubbed in
+  `stubs/`): USB and DIN each parse with their own state, running status
+  per source, one clock owner at a time, loss recovery, SysEx from DIN.
+- `pio_sim_din_tx.py` -- runs the *assembled* DIN OUT PIO program through a
+  tiny instruction-level simulator and decodes its waveform as 8N1 at
+  31,250 baud. Needs a firmware build first (it reads pioasm's header).
+  None of these touch the electrical side (jacks, buffer, opto, TRS
+  polarity) -- that only shows up on real hardware.

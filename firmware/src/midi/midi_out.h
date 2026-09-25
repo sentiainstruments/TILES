@@ -1,7 +1,14 @@
 #pragma once
 
 /*
- * USB MIDI note output -- MPE (MIDI Polyphonic Expression) Lower Zone.
+ * MIDI output -- USB and DIN -- MPE (MIDI Polyphonic Expression) Lower Zone.
+ *
+ * Every function below EXCEPT tiles_midi_send_daw_cc() and
+ * tiles_midi_send_sysex() sends on both USB (when a host has the device
+ * mounted) and the DIN MIDI OUT jack (whenever DIN initialized, host or not)
+ * -- see midi/din_midi.h. Those two are USB-only on purpose: they carry the
+ * DAW remote script's private control protocol, which an instrument on the
+ * DIN jack must never receive.
  *
  * Real feedback: "we need to make sure we have individual per note
  * pitch bend not just regular all key pitch bend. like the roli
@@ -109,8 +116,11 @@
  * for exactly that gap -- redundant on a receiver that already handles
  * the Master-Channel version correctly, but a real fix for one that
  * doesn't. Call once, from main.c after USB MIDI is expected to be
- * reachable -- harmless to call before a host has actually enumerated,
- * every send in this file is already gated on tud_midi_mounted(). */
+ * reachable -- harmless to call before a host has actually enumerated:
+ * the USB half of every send is gated on tud_midi_mounted(). main.c ALSO
+ * calls it once at boot, when only DIN is up, so a receiver on the DIN jack
+ * gets the zone configuration too (~300 bytes, ~100 ms of wire time); the
+ * mount-time call then repeats it to both. */
 void tiles_midi_mpe_init(void);
 
 /* Note on/off, on a specific MPE Member Channel (status-byte nibble --
@@ -132,8 +142,17 @@ void tiles_midi_note_off(uint8_t channel, uint8_t note);
 void tiles_midi_send_channel_pressure(uint8_t channel, uint8_t pressure);
 
 /* Sends a Control Change message (0xB0 | channel, controller, value) on
- * one specific channel. */
+ * one specific channel -- USB and DIN. */
 void tiles_midi_send_cc(uint8_t channel, uint8_t controller, uint8_t value);
+
+/* Same message, USB ONLY -- for CCs that steer the DAW's remote script (the
+ * transport Play/Stop/Record CCs and every Scene Launch grid/stop/offset/
+ * delete/capture CC in services/op_mode.c) rather than an instrument. They
+ * ride channel 1 with controller numbers a hardware synth may well have
+ * mapped to something, so mirroring them to DIN would have made pressing
+ * the transport button or a scene pad twiddle whatever is plugged into the
+ * jack. Added with DIN MIDI OUT for exactly that reason. */
+void tiles_midi_send_daw_cc(uint8_t channel, uint8_t controller, uint8_t value);
 
 /* Same CC on the Zone Master Channel AND every one of the 15 Member
  * Channels -- what services/pedal.c uses for sustain (CC64) and
@@ -172,6 +191,9 @@ void tiles_midi_send_pitch_bend(uint8_t channel, uint16_t bend_14bit);
  * resume. */
 void tiles_midi_send_start(void);
 void tiles_midi_send_stop(void);
+/* (Both also go out the DIN jack -- a hardware sequencer or drum machine
+ * slaved to this controller's transport wants them just as much as a DAW
+ * does. Still skipped by op_mode.c while an external clock is driving us.) */
 
 /* Real feedback: "lets implemebt a new mode that triggers scenes in
  * ableton live... can we pull the colors of the scenes from ableton?"
@@ -184,3 +206,4 @@ void tiles_midi_send_stop(void);
  * this codebase's own message sizes (well under TUD_MIDI's own 64-byte
  * packet), not a general large-SysEx streaming API. */
 void tiles_midi_send_sysex(const uint8_t *data, uint32_t len);
+/* (USB only -- see the header comment.) */

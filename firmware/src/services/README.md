@@ -2149,9 +2149,9 @@ not its code.
   (`tud_midi_stream_read()` -- the composite device's descriptor already
   had a full IN+OUT endpoint pair, `midi/usb_descriptors.c`'s
   `TUD_MIDI_DESCRIPTOR` call, so no descriptor change was needed, just
-  actually calling the read side for the first time); DIN MIDI IN isn't
-  built yet (see `midi/README.md`), but would feed this same byte parser
-  once it exists. Deliberately narrow scope: only the 4 real-time bytes
+  actually calling the read side for the first time); DIN MIDI IN, built
+  later (see `midi/README.md`), feeds this same byte parser through its own
+  per-source state, with one clock source active at a time. Deliberately narrow scope: only the 4 real-time bytes
   above are parsed, everything else read from the stream (notes, CC,
   sysex, etc.) is silently discarded -- real-time bytes are always
   complete single-byte messages that can legally appear anywhere in a
@@ -8459,5 +8459,15 @@ not its code.
   connection checked against a real inlet/outlet before writing) but has
   never been opened in Live -- that first run is the real test, with a
   written checklist in the daw-integration README.
-- Everything else (per-pad Hall calibration, DIN MIDI) is not built
+- **DIN MIDI IN/OUT built.** Real feedback: "are midi plugs working?" (no
+  -- reserved pins only) -> "yes build DIN MIDI." Full write-up, design
+  reasons and what is/isn't verified in `midi/README.md`; the parts that
+  touch this directory: every DAW-control CC in `op_mode.c` (transport
+  Play/Stop/Record, all Scene Launch CCs -- 17 call sites) now goes through
+  the USB-only `tiles_midi_send_daw_cc()` so they never reach a synth on
+  the DIN jack; the melodic echo and the sequencer's clock follow DIN input
+  exactly as USB input (`midi_in.c` per-source parsers, one clock owner at
+  a time); `tiles_midi_send_start()/stop()` and all instrument-facing sends
+  also go out DIN. Never tried on real DIN/TRS gear.
+- Everything else (per-pad Hall calibration) is not built
   yet.

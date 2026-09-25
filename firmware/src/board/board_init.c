@@ -22,7 +22,8 @@ static void init_input(uint gpio, bool pull_up) {
 
 void board_gpio_init(void) {
     /* DIN MIDI OUT: both lines high before the MIDI OUT service ever
-     * enables a stream on either one. */
+     * enables a stream on either one. (midi/din_midi.c later hands ONE of
+     * these to a PIO UART, already high, and keeps the other parked high.) */
     init_output(TILES_GPIO_DIN_MIDI_OUT_A, true);
     init_output(TILES_GPIO_DIN_MIDI_OUT_B, true);
 
@@ -43,8 +44,8 @@ void board_gpio_init(void) {
      * actually configured. */
     init_input(TILES_GPIO_PCA9685_OE, false);
 
-    /* DIN MIDI IN RX: plain input for now. The DIN MIDI IN service
-     * reconfigures this pin's function to UART when it starts. */
+    /* DIN MIDI IN RX: plain input at boot. midi/din_midi.c reconfigures
+     * this pin's function to UART0 RX when it starts. */
     init_input(TILES_GPIO_DIN_MIDI_IN_RX, false);
 
     /* Function buttons: active-low, hardware pullups already present;

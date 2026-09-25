@@ -3,11 +3,10 @@
 Musical output only — never carries config/calibration traffic (that's
 `usb_vendor/`).
 
-Planned contents: DIN MIDI IN (GP1 UART, 31,250 baud), DIN MIDI OUT
-(polarity-selectable via GP0/GP2, PIO or software UART), and DIN-specific
-rate limiting for continuous expression data. USB-MIDI + MPE channel
-allocation (dynamic, 15 lower-zone member channels across 24 pads,
-deterministic voice-steal policy) are done — see Status below.
+Contents: USB-MIDI + MPE channel allocation (dynamic, 15 lower-zone member
+channels across 24 pads, deterministic voice-steal policy), and DIN MIDI IN
+(GP1 UART, 31,250 baud) / DIN MIDI OUT (polarity-selectable via GP0/GP2, PIO
+UART) with rate limiting for continuous expression data — see Status below.
 
 ## Status
 
@@ -229,4 +228,76 @@ deterministic voice-steal policy) are done — see Status below.
   playing or midi is being recieved." Polled counter rather than a
   fourth registered callback -- the callback tables are a fixed 4 each
   and this needs no per-event payload.
-- DIN MIDI IN/OUT -- not built yet.
+- **DIN MIDI IN/OUT** (`din_midi.{h,c}`, `din_midi_queue.{h,c}`,
+  `din_midi_tx.pio`) -- built, **never tried against real DIN/TRS gear**.
+  Real feedback: "are midi plugs working?" -- no, honestly: docs and
+  `board_init.c` had reserved GP0/GP1/GP2 (outputs parked high, RX a plain
+  input) but nothing ever sent or read a byte -- then "yes build DIN MIDI."
+  What it does:
+  - **IN (GP1).** Hardware UART0 RX, 31,250 8N1, drained by an interrupt
+    into a 256-byte ring (`din_midi_queue.c`); the UART FIFO stays on as
+    ~10 ms of slack (interrupt threshold lowered to 4 bytes so short
+    messages aren't left to the ~1 ms receive timeout). Framing/break/
+    overrun errors discard the byte and flag a loss. `midi_in.c` parses it
+    with its OWN per-source parser state (two cables interleaving into one
+    running-status parser would splice half a Note-On onto another's data
+    bytes) and fires the SAME callbacks as USB, so clock/transport, the
+    melodic echo on the pads, and Scene Launch SysEx react to DIN exactly
+    as to USB -- e.g. a hardware drum machine's clock drives the sequencer,
+    and a keyboard on the jack lights the pads. On a reported loss the DIN
+    parser drops any half-assembled message and ignores stray data bytes
+    until the next status byte. **Clock ownership:** Real-Time bytes only
+    reach the callbacks from the source that currently owns the clock (first
+    to send one; kept while it keeps sending; released after 500 ms of
+    silence) -- a DAW on USB and a drum machine on DIN both sending 24 PPQN
+    would otherwise count 48 pulses/beat and double the tempo.
+  - **OUT (GP0/GP2).** `midi_out.c` sends every performance message to DIN
+    as well as USB: notes, pitch bend, channel pressure, CCs (sustain,
+    expression, the MPE zone RPNs), Start/Stop. DIN works **with no USB
+    host at all** (the handoff's external-power-only mode), and `main.c`
+    also sends the MPE zone configuration once at boot for that case.
+    **Not mirrored, USB only:** SysEx (the Ableton remote script's private
+    protocol) and a new `tiles_midi_send_daw_cc()` that all 17 DAW-control
+    CCs in `op_mode.c` (transport Play/Stop/Record, every Scene Launch grid/
+    stop/offset/delete/capture CC) now use -- they ride channel 1 with
+    controller numbers a hardware synth may have mapped, so mirroring them
+    would have made pressing transport or a scene pad twiddle whatever is
+    on the jack.
+  - **Transmitter.** `din_midi_tx.pio`, the reference uart_tx shape (8 PIO
+    cycles/bit, clkdiv = sys_clk / 250,000, exactly 600 at 150 MHz), fed
+    from the PIO TX-FIFO-not-full interrupt so the wire runs at full speed
+    regardless of main-loop timing. One pin carries the data while the other
+    line is parked high through plain GPIO: MIDI's current loop only flows
+    when the two lines differ, so **which line carries the data IS the TRS
+    polarity**. `TILES_DIN_MIDI_OUT_DEFAULT_LINE` (`din_midi.h`) picks it --
+    default line A (GP0). The hardware handoff doesn't say which line is
+    physically Type A vs Type B, so the default is a first guess: **if a
+    receiver hears nothing, flip that constant** (or call
+    `tiles_din_midi_set_out_line()`). Not persisted yet -- `storage/` is
+    unbuilt (its README lists "DIN MIDI OUT polarity" as a future setting).
+  - **Rate limiting** -- the reason for `din_midi_queue.c`. DIN is 3,125
+    bytes/s (~1 ms per 3-byte message); MPE expression and the expression
+    pedal (one CC broadcast to 16 channels = 48 bytes per step) can out-run
+    that easily. So Note On/Off, sustain and every other CC are *reliable*
+    (queued in order, 512-byte ring, never merged); pitch bend, channel
+    pressure and CC 1/11/74 are *coalesced* (latest value per channel/kind
+    wins, sent only while the ring holds <= 24 bytes, so expression never
+    queues in front of a note); pending coalesced values on a channel are
+    flushed before any reliable message on that channel, so "bend to center,
+    then Note-Off" arrives in that order; Start/Stop use a separate
+    Real-Time queue that jumps ahead. A reliable message that doesn't fit is
+    dropped whole (never half a message) and counted.
+  - **Verification.** `din_midi_queue.c` and the two-source parser were
+    compiled natively and tested off-target (ordering, coalescing,
+    overflow, wraparound, Real-Time priority; interleaved partial USB/DIN
+    messages, running status per source, clock ownership, loss recovery,
+    SysEx from DIN). The assembled PIO program was run through a small
+    instruction-level simulation and decoded as 8N1, LSB first, 8 cycles/
+    bit, glitch-free, idling high. **Not verified: the electrical side** --
+    the real jacks, the buffer/opto, TRS polarity, and the interrupt-fed FIFO
+    under real load. A loopback (MIDI OUT cable into MIDI IN) is the
+    quickest first test.
+  - **Not built (raised, not asked for):** MIDI thru/merge (DIN in -> USB
+    out or -> DIN out), a channel-collapse mode for non-MPE hardware (all
+    15 member channels are sent as-is, so a single-channel synth only hears
+    the notes that land on its channel), and running status on output.

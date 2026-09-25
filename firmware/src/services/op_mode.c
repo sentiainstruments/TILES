@@ -4463,8 +4463,8 @@ static void handle_diamond_transport(uint32_t now_ms) {
                     song_edit_exit();
                 }
             } else if (s_diamond_record_armed) {
-                tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 127u);
-                tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 0u);
+                tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 127u);
+                tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 0u);
                 s_transport_playing = true;
                 s_transport_recording = true;
             } else if (s_transport_playing || s_transport_recording) {
@@ -4496,16 +4496,16 @@ static void handle_diamond_transport(uint32_t now_ms) {
                  * whenever no external clock is active -- e.g. using
                  * this button to start Ableton from fully stopped,
                  * where TILES genuinely is the one initiating. */
-                tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_STOP_CC, 127u);
-                tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_STOP_CC, 0u);
+                tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_STOP_CC, 127u);
+                tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_STOP_CC, 0u);
                 if (!tiles_midi_clock_external_active(now_ms)) {
                     tiles_midi_send_stop();
                 }
                 s_transport_playing = false;
                 s_transport_recording = false;
             } else {
-                tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_PLAY_CC, 127u);
-                tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_PLAY_CC, 0u);
+                tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_PLAY_CC, 127u);
+                tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_PLAY_CC, 0u);
                 if (!tiles_midi_clock_external_active(now_ms)) {
                     tiles_midi_send_start();
                 }
@@ -7297,8 +7297,8 @@ static float scene_playing_pulse_level(uint32_t now_ms) {
 
 static void scene_send_grid_touch(uint8_t pad) {
     uint8_t cc = (uint8_t)(OP_SCENE_CC_GRID_BASE + pad);
-    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
-    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
 }
 
 /* Real feedback: "a master stop in this app should be shift diamond."
@@ -7307,15 +7307,15 @@ static void scene_send_grid_touch(uint8_t pad) {
  * shift+diamond was free to claim for this here. */
 static void scene_send_stop_all(void) {
     printf("[op_mode] scene launch: shift+diamond -> stop all clips\n");
-    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_MASTER_STOP, 127u);
-    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_MASTER_STOP, 0u);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_MASTER_STOP, 127u);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_MASTER_STOP, 0u);
 }
 
 static void scene_send_stop_clip_cc(uint8_t pad) {
     printf("[op_mode] scene launch: deep press -> stop clip pad=%u\n", pad);
     uint8_t cc = (uint8_t)(OP_SCENE_CC_STOP_BASE + pad);
-    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
-    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
 }
 
 /* See OP_SCENE_CC_TRACK_OFFSET's own comment -- keeps Ableton's
@@ -7323,7 +7323,7 @@ static void scene_send_stop_clip_cc(uint8_t pad) {
  * touch-to-track translation) in sync with whichever 5-track window
  * s_scene_track_offset currently shows. */
 static void scene_send_track_offset(uint8_t offset) {
-    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_TRACK_OFFSET, offset);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_TRACK_OFFSET, offset);
 }
 
 /* Delete that pad's clip (see OP_SCENE_DELETE_HOLD_MS) -- controller =
@@ -7333,8 +7333,8 @@ static void scene_send_track_offset(uint8_t offset) {
 static void scene_send_delete_clip(uint8_t pad) {
     printf("[op_mode] scene launch: shift+pad hold -> delete clip pad=%u\n", pad);
     uint8_t cc = (uint8_t)(OP_SCENE_CC_DELETE_BASE + pad);
-    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
-    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
 }
 
 /* True if ANY tracked track has a clip in this scene row -- not just the
@@ -7357,8 +7357,8 @@ static bool scene_row_has_clips(uint8_t row) {
  * drift apart. */
 static void scene_end_capture(void) {
     printf("[op_mode] ableton capture: shift+diamond -> end capture, back to scene launch\n");
-    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_END_CAPTURE, 127u);
-    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_END_CAPTURE, 0u);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_END_CAPTURE, 127u);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_END_CAPTURE, 0u);
     set_active_mode(OP_MODE_SCENE_LAUNCH);
 }
 

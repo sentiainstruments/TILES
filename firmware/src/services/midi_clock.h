@@ -51,8 +51,11 @@
  *      the counter at that moment -- see op_mode.c's own file header for
  *      that half.
  *
- * USB MIDI IN only for now: midi/midi_out.h's own header notes DIN MIDI
- * IN isn't built yet. RX bytes come from midi/midi_in.h now, not read
+ * Real-Time bytes arrive from USB MIDI IN AND the DIN MIDI IN jack (real
+ * feedback: "yes build DIN MIDI"), but never both at once -- midi_in.c
+ * forwards them only from whichever source currently owns the clock, so a
+ * DAW and a drum machine can't double the tempo. RX bytes come from
+ * midi/midi_in.h now, not read
  * directly here -- this file registers a callback with that module
  * (tiles_midi_in_register_realtime_callback()) instead of calling
  * tud_midi_stream_read() itself, since services/op_mode.c's Scene

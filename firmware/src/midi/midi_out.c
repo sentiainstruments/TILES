@@ -1,5 +1,7 @@
 #include "midi_out.h"
 
+#include "din_midi.h"
+
 #include "tusb.h"
 
 #include "pico/time.h"
@@ -71,28 +73,40 @@ static void warn_if_truncated(const char *what, uint32_t sent, uint32_t expected
     }
 }
 
-static void send1(uint8_t status) {
+/* Every message the controller performs -- notes, expression, CCs, transport
+ * Start/Stop -- goes out on TWO independent sinks: USB (only while a host has
+ * the device mounted) and the DIN jack (whenever DIN initialized, host or
+ * not -- real feedback: "yes build DIN MIDI"; the hardware handoff's
+ * external-power-only mode has no USB host at all, which is the jack's whole
+ * point). The DIN send comes FIRST and never waits: it only queues bytes
+ * (midi/din_midi_queue.c), while the USB write below can spend up to
+ * MIDI_SEND_RETRY_TIMEOUT_MS pumping tud_task() for room. Messages meant for
+ * the DAW's remote script rather than for an instrument -- see
+ * tiles_midi_send_daw_cc() and tiles_midi_send_sysex() -- use the USB-only
+ * path and never touch DIN. */
+static void usb_write(const char *what, const uint8_t *msg, uint32_t len) {
     if (!tud_midi_mounted()) {
         return;
     }
+    warn_if_truncated(what, send_with_retry(msg, len), len);
+}
+
+static void send1(uint8_t status) {
     uint8_t msg[1] = {status};
-    warn_if_truncated("send1", send_with_retry(msg, sizeof(msg)), sizeof(msg));
+    tiles_din_midi_send(msg, sizeof(msg));
+    usb_write("send1", msg, sizeof(msg));
 }
 
 static void send2(uint8_t status, uint8_t data1) {
-    if (!tud_midi_mounted()) {
-        return;
-    }
     uint8_t msg[2] = {status, data1};
-    warn_if_truncated("send2", send_with_retry(msg, sizeof(msg)), sizeof(msg));
+    tiles_din_midi_send(msg, sizeof(msg));
+    usb_write("send2", msg, sizeof(msg));
 }
 
 static void send3(uint8_t status, uint8_t data1, uint8_t data2) {
-    if (!tud_midi_mounted()) {
-        return;
-    }
     uint8_t msg[3] = {status, data1, data2};
-    warn_if_truncated("send3", send_with_retry(msg, sizeof(msg)), sizeof(msg));
+    tiles_din_midi_send(msg, sizeof(msg));
+    usb_write("send3", msg, sizeof(msg));
 }
 
 void tiles_midi_note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
@@ -109,6 +123,11 @@ void tiles_midi_send_channel_pressure(uint8_t channel, uint8_t pressure) {
 
 void tiles_midi_send_cc(uint8_t channel, uint8_t controller, uint8_t value) {
     send3((uint8_t)(0xB0u | channel), controller, value);
+}
+
+void tiles_midi_send_daw_cc(uint8_t channel, uint8_t controller, uint8_t value) {
+    uint8_t msg[3] = {(uint8_t)(0xB0u | channel), controller, value};
+    usb_write("send_daw_cc", msg, sizeof(msg));
 }
 
 void tiles_midi_send_cc_broadcast(uint8_t controller, uint8_t value) {
@@ -180,6 +199,9 @@ void tiles_midi_send_stop(void) {
 #define SYSEX_SEND_BUF_MAX 32u
 
 void tiles_midi_send_sysex(const uint8_t *data, uint32_t len) {
+    /* USB only, like tiles_midi_send_daw_cc(): this is the Ableton remote
+     * script's private protocol, not something to spray at whatever
+     * hardware is on the DIN jack. */
     if (!tud_midi_mounted()) {
         return;
     }
