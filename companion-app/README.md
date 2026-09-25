@@ -63,6 +63,12 @@ vendor interface defined in `../shared/protocol/`.
 
 ## Status
 
+The app stack (Electron vs. alternatives) and how the app talks to the device -- USB vendor
+interface, settings table with flash saving, layouts as portable files -- are written up in
+`../docs/architecture/control-software.md`. The firmware side of settings (registry, flash store,
+text shell with `SCHEMA` for discovery) exists; the app does not.
+
+
 Not yet scaffolded as a buildable Electron project. `package.json` below
 is a placeholder pending confirming the exact stack (Electron + Vite +
 React + TypeScript is the working assumption).

@@ -19,6 +19,8 @@
 #include "standby.h"
 #include "touch.h"
 
+#include "flash_map.h"
+
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "hardware/watchdog.h"
@@ -2511,7 +2513,7 @@ static void scale_menu_exit(void) {
  * fallback a first-ever boot gets -- existing saved patterns are lost
  * across a version bump, not corrupted. */
 #define TILES_PATTERN_STORE_VERSION 3u
-#define TILES_PATTERN_FLASH_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
+#define TILES_PATTERN_FLASH_OFFSET TILES_FLASH_PATTERN_OFFSET /* storage/flash_map.h: every flash region in one place */
 
 /* On-flash layout for ONE pattern -- deliberately NOT op_seq_pattern_t
  * itself (that struct stays exactly as every other line of this file
@@ -5800,8 +5802,8 @@ static void song_release_channel(uint8_t channel) {
  * times in a row, so the whole save takes longer overall (four
  * sequential tens-of-milliseconds pauses instead of one) but never
  * risks the watchdog the regular save doesn't already risk. */
-#define TILES_SONG_NUM_FLASH_SECTORS 4u
-#define TILES_SONG_FLASH_OFFSET (TILES_PATTERN_FLASH_OFFSET - FLASH_SECTOR_SIZE * TILES_SONG_NUM_FLASH_SECTORS)
+#define TILES_SONG_NUM_FLASH_SECTORS TILES_FLASH_SONG_SECTORS
+#define TILES_SONG_FLASH_OFFSET TILES_FLASH_SONG_OFFSET
 
 typedef struct {
     uint32_t magic;

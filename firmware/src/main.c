@@ -66,6 +66,7 @@
 #include "midi/midi_in.h"
 #include "midi/midi_out.h"
 #include "midi/usb_device.h"
+#include "profiles/settings_table.h"
 #include "services/boot_sequence.h"
 #include "services/buttons.h"
 #include "services/crash_indicator.h"
@@ -391,6 +392,14 @@ int main(void) {
      * full feature (underglow pulse + circle-held-alone-2s dismiss). */
     tiles_crash_indicator_init(crash_recovered);
 
+    /* The settings table (profiles/settings.h): captures every setting's boot
+     * default from its module, then restores whatever was last saved to flash
+     * (pedal/expression/CV calibration, LED look, DIN polarity, harmonics...).
+     * Must run AFTER every module a setting binds to has initialized -- all of
+     * them have by here -- and before the loop. Real feedback: "yes start
+     * with the settings table and flash saving." */
+    tiles_settings_boot();
+
     while (true) {
         /* MUST run every iteration: this is what actually services the
          * USB stack (processes control transfers, moves CDC/MIDI data
@@ -514,6 +523,10 @@ int main(void) {
         tiles_cv_gate_scan();
         tiles_debug_trace('v');
         tiles_usb_vendor_scan();
+        /* Notices changed settings (from the USB shell, or on-device) and
+         * saves them to flash -- debounced, and only with the pads idle. Must
+         * run after tiles_usb_vendor_scan() so a SET is seen the same tick. */
+        tiles_settings_scan();
         /* Must run after tiles_buttons_scan() (fresh circle/square
          * state) and tiles_touch_scan() (fresh touch state for the
          * expression sub-menu's slider taps) above, and before

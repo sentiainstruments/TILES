@@ -343,8 +343,8 @@ bool tiles_op_mode_is_sequencer_active(void);
 /* True while OP_MODE_MELODIC is active, OR while OP_MODE_CHORD is
  * active -- deliberately still narrower than tiles_op_mode_owns_pad_
  * grid()/_owns_pad(), which also let GUITAR mode's own melody pads
- * through the same real-strike pipeline. Board-2-only melodic
- * harmonics (services/expression.c, TILES_MELODIC_HARMONICS_ENABLED)
+ * through the same real-strike pipeline. Melodic
+ * harmonics (services/expression.c, the features.melodic_harmonics setting)
  * is this function's one caller and needs exactly this distinction.
  * Originally melodic-only ("real feedback scoped the feature to
  * melodic mode specifically, not 'everywhere a real note can play'");

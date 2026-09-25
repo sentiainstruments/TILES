@@ -63,6 +63,7 @@ bool tiles_din_midi_is_ready(void);
  * Nothing in the firmware calls this today -- it exists for the future
  * profile setting. Bytes already in the transmitter's FIFO are discarded. */
 void tiles_din_midi_set_trs_type(tiles_din_midi_trs_type_t type);
+tiles_din_midi_trs_type_t tiles_din_midi_get_trs_type(void);
 
 /* Queues one channel-voice message (1-3 bytes) or one System Real-Time byte
  * for DIN OUT. No-op if DIN isn't ready. See din_midi_queue.h for what gets

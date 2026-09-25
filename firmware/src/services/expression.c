@@ -19,18 +19,25 @@
 #include <math.h>
 #include <stdio.h>
 
-/* Real feedback (board 2 only, an experiment -- see this file's own
+/* Real feedback (started as a board-2-only experiment -- see this file's own
  * "Melodic harmonics" section further below): "i wanna add harmonics
  * into melodic mode. like capacitive touch only plays the respective
  * harmonics of the note being played by a pad with real pressure. this
  * behaviour only happens when a single pad is being pressed not in
- * poliphony." Compile-time, default OFF -- this build ships to every
- * board, and this is the one thing that must NOT: flip to 1, build,
- * flash ONLY board 2, then flip back to 0 before committing again. No
- * runtime toggle -- flash-persisted settings don't exist in this
- * codebase yet, so a runtime flag would silently reset to off on every
- * boot, which defeats "just live on this board." */
-#define TILES_MELODIC_HARMONICS_ENABLED 0
+ * poliphony."
+ *
+ * It used to be a compile-time flag, default OFF, flipped to 1 for a build,
+ * flashed to one board, then flipped back before committing -- deliberately
+ * NOT a runtime setting, because settings didn't persist, so a runtime flag
+ * would have reset to off on every boot. Persistence exists now ("yes start
+ * with the settings table and flash saving"), and the player wanted the same
+ * behaviour on both boards ("i want board 1 to have the full code of baord
+ * 2"), so it is the runtime, flash-saved setting features.melodic_harmonics
+ * (profiles/settings_table.c), default ON. One build for every board; turn it
+ * off per board with `SET features.melodic_harmonics 0` (it survives reflashing
+ * and reboots). Flip s_harmonics_enabled's initializer to false if a build is
+ * ever shipped to someone who shouldn't get the experiment by default. */
+static bool s_harmonics_enabled = true;
 
 /* ============================================================================
  * Strike detection -- gated on real measured depth travel
@@ -1188,10 +1195,8 @@ static mpe_channel_slot_t s_mpe_channels[TILES_MIDI_MPE_NUM_MEMBER_CHANNELS];
 static bool s_pedal_prev_sustained;
 static uint32_t s_next_mpe_claim_seq = 1u;
 
-#if TILES_MELODIC_HARMONICS_ENABLED
 /* ============================================================================
- * Melodic harmonics (board 2 only -- see TILES_MELODIC_HARMONICS_ENABLED's
- * own comment above). Real feedback: "capacitive touch only plays the
+ * Melodic harmonics (see s_harmonics_enabled's own comment above). Real feedback: "capacitive touch only plays the
  * respective harmonics of the note being played by a pad with real
  * pressure. this behaviour only happens when a single pad is being
  * pressed not in poliphony." No established hardware convention for
@@ -1363,6 +1368,13 @@ static bool s_harmonic_prev_touched[TILES_NUM_PADS];
  * claim_mpe_channel() below skips every channel this covers, exactly
  * like it already skips the sequencer's own reserved lanes. */
 static bool harmonic_channel_is_reserved(uint8_t channel) {
+    /* Only while the feature is ON. With harmonics switched off at runtime
+     * (features.melodic_harmonics 0) the whole range goes back to real notes --
+     * 15 Member Channels of polyphony, not 10 -- exactly what a build with the
+     * feature compiled out used to have. */
+    if (!s_harmonics_enabled) {
+        return false;
+    }
     return channel > (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + TILES_MIDI_MPE_NUM_MEMBER_CHANNELS -
                                 1u - HARMONIC_MAX_VOICES);
 }
@@ -1594,7 +1606,28 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
         fire_harmonic_pluck((uint8_t)slot, pad, (uint8_t)note, channel, now_ms);
     }
 }
-#endif /* TILES_MELODIC_HARMONICS_ENABLED */
+
+/* Runtime switch for the whole feature (see s_harmonics_enabled). Turning it
+ * OFF ends any harmonic voices that are sounding right now -- a note-off for
+ * each, so flipping the setting mid-phrase can't leave a harmonic stuck --
+ * and clears the touch-edge memory so turning it back on doesn't mistake pads
+ * that are already down for fresh touches. */
+void tiles_expression_set_melodic_harmonics_enabled(bool enabled) {
+    if (enabled == s_harmonics_enabled) {
+        return;
+    }
+    if (!enabled) {
+        end_all_harmonic_voices();
+    }
+    s_harmonics_enabled = enabled;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_harmonic_prev_touched[i] = false;
+    }
+}
+
+bool tiles_expression_is_melodic_harmonics_enabled(void) {
+    return s_harmonics_enabled;
+}
 
 
 /* ---- Non-MPE compatibility mode -----------------------------------------
@@ -1646,7 +1679,6 @@ void tiles_expression_init(void) {
     s_pedal_prev_sustained = false;
     s_pitch_bend_enabled = false;
     s_expression_muted = false;
-#if TILES_MELODIC_HARMONICS_ENABLED
     for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
         s_harmonic_voices[i] = (harmonic_voice_t){0};
     }
@@ -1654,7 +1686,6 @@ void tiles_expression_init(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_harmonic_prev_touched[i] = false;
     }
-#endif
 }
 
 /* Splits a raw Hall sample into its X and Y components and total field
@@ -2445,11 +2476,8 @@ void tiles_expression_force_release_all(void) {
 static uint8_t claim_mpe_channel(uint8_t pad) {
     for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
         uint8_t channel = (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i);
-        if (!s_mpe_channels[i].in_use && !tiles_op_mode_sequencer_channel_is_reserved(channel)
-#if TILES_MELODIC_HARMONICS_ENABLED
-            && !harmonic_channel_is_reserved(channel)
-#endif
-        ) {
+        if (!s_mpe_channels[i].in_use && !tiles_op_mode_sequencer_channel_is_reserved(channel) &&
+            !harmonic_channel_is_reserved(channel)) {
             s_mpe_channels[i].in_use = true;
             s_mpe_channels[i].owner_pad = pad;
             s_mpe_channels[i].claim_seq = s_next_mpe_claim_seq++;
@@ -2462,11 +2490,9 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
         if (tiles_op_mode_sequencer_channel_is_reserved((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i))) {
             continue;
         }
-#if TILES_MELODIC_HARMONICS_ENABLED
         if (harmonic_channel_is_reserved((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i))) {
             continue;
         }
-#endif
         if (oldest_idx == TILES_MIDI_MPE_NUM_MEMBER_CHANNELS || s_mpe_channels[i].claim_seq < s_mpe_channels[oldest_idx].claim_seq) {
             oldest_idx = i;
         }
@@ -3190,7 +3216,7 @@ void tiles_expression_scan(void) {
             }
         }
     }
-#if TILES_MELODIC_HARMONICS_ENABLED
-    scan_melodic_harmonics(now_ms);
-#endif
+    if (s_harmonics_enabled) {
+        scan_melodic_harmonics(now_ms);
+    }
 }

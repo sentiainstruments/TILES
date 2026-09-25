@@ -38,6 +38,11 @@ add_executable(sentia_tiles_firmware
     midi/midi_in.c
     midi/din_midi.c
     midi/din_midi_queue.c
+    storage/kv_store.c
+    storage/storage_flash.c
+    profiles/settings.c
+    profiles/settings_persist.c
+    profiles/settings_table.c
     usb_vendor/usb_vendor.c
 )
 
@@ -52,6 +57,8 @@ target_include_directories(sentia_tiles_firmware PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/services
     ${CMAKE_CURRENT_SOURCE_DIR}/midi
     ${CMAKE_CURRENT_SOURCE_DIR}/usb_vendor
+    ${CMAKE_CURRENT_SOURCE_DIR}/storage
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiles
 )
 
 target_link_libraries(sentia_tiles_firmware

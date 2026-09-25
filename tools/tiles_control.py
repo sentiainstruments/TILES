@@ -16,10 +16,19 @@ Setup:
     # permission for this device/interface -- allow it once.
 
 Usage:
-    python3 tools/tiles_control.py list
-    python3 tools/tiles_control.py get cv_gate.enabled
-    python3 tools/tiles_control.py set cv_gate.enabled 1
+    python3 tools/tiles_control.py list                  # every setting's current value
+    python3 tools/tiles_control.py schema                # id / type / range / default of every setting
+    python3 tools/tiles_control.py get look.natural_pad_percent
+    python3 tools/tiles_control.py set look.natural_pad_percent 30
     python3 tools/tiles_control.py set pedal.mode expression
+    python3 tools/tiles_control.py reset look.natural_pad_percent   # one setting back to its default
+    python3 tools/tiles_control.py reset ALL
+    python3 tools/tiles_control.py save                  # write unsaved changes to flash now
+    python3 tools/tiles_control.py info                  # flash-store status
+
+Changes apply immediately and are saved to flash automatically a couple of
+seconds after the last one (only while no pad is being touched); `save` just
+skips the wait. Settings survive reboots and reflashing.
 """
 
 import sys
@@ -86,25 +95,38 @@ def find_vendor_endpoints():
     sys.exit(1)
 
 
-def send_command(ep_out, ep_in, line):
-    ep_out.write((line + "\n").encode("ascii"), timeout=TIMEOUT_MS)
-    responses = []
-    while True:
-        try:
-            raw = ep_in.read(64, timeout=TIMEOUT_MS)
-        except usb.core.USBError as exc:
-            print(f"USB read timed out/failed waiting for a response to {line!r}: {exc}", file=sys.stderr)
-            sys.exit(1)
-        text = bytes(raw).decode("ascii", errors="replace").strip("\n")
-        responses.append(text)
-        # LIST sends one line per key, then a final OK -- everything
-        # else sends exactly one line. Stop as soon as we see a
-        # terminal-looking line (OK or ERR ...) for anything that isn't
-        # a bare "key=value" LIST row, or once LIST's own trailing OK
-        # arrives.
-        if text == "OK" or text.startswith("ERR ") or "=" not in text:
-            break
-    return responses
+class Session:
+    """A byte stream over the vendor endpoints, split into lines. The device streams a response as
+    fast as the USB FIFO drains, so a line can straddle two 64-byte packets -- read lines, not packets."""
+
+    def __init__(self, ep_out, ep_in):
+        self.ep_out = ep_out
+        self.ep_in = ep_in
+        self.buf = b""
+
+    def read_line(self, what):
+        while b"\n" not in self.buf:
+            try:
+                self.buf += bytes(self.ep_in.read(64, timeout=TIMEOUT_MS))
+            except usb.core.USBError as exc:
+                print(f"USB read timed out/failed waiting for a response to {what!r}: {exc}", file=sys.stderr)
+                sys.exit(1)
+        line, self.buf = self.buf.split(b"\n", 1)
+        return line.decode("ascii", errors="replace").strip("\r")
+
+    def command(self, line, multi_line=False):
+        """Sends one command. multi_line: LIST/SCHEMA/INFO send many lines then a final OK; everything else
+        is answered by exactly one line (a value, OK, or ERR ...)."""
+        self.buf = b""
+        self.ep_out.write((line + "\n").encode("ascii"), timeout=TIMEOUT_MS)
+        lines = []
+        while True:
+            text = self.read_line(line)
+            if multi_line and text == "OK":
+                return lines
+            lines.append(text)
+            if not multi_line or text.startswith("ERR "):
+                return lines
 
 
 def main():
@@ -112,21 +134,26 @@ def main():
         print(__doc__)
         sys.exit(1)
 
-    ep_out, ep_in = find_vendor_endpoints()
-
+    session = Session(*find_vendor_endpoints())
     command = sys.argv[1].lower()
-    if command == "list":
-        for line in send_command(ep_out, ep_in, "LIST"):
-            print(line)
-    elif command == "get" and len(sys.argv) == 3:
-        for line in send_command(ep_out, ep_in, f"GET {sys.argv[2]}"):
-            print(line)
-    elif command == "set" and len(sys.argv) == 4:
-        for line in send_command(ep_out, ep_in, f"SET {sys.argv[2]} {sys.argv[3]}"):
-            print(line)
+    argc = len(sys.argv)
+
+    if command in ("list", "schema", "info") and argc == 2:
+        request, multi = command.upper(), True
+    elif command == "save" and argc == 2:
+        request, multi = "SAVE", False
+    elif command == "get" and argc == 3:
+        request, multi = f"GET {sys.argv[2]}", False
+    elif command == "set" and argc == 4:
+        request, multi = f"SET {sys.argv[2]} {sys.argv[3]}", False
+    elif command == "reset" and argc == 3:
+        request, multi = f"RESET {sys.argv[2]}", False
     else:
         print(__doc__)
         sys.exit(1)
+
+    for line in session.command(request, multi_line=multi):
+        print(line)
 
 
 if __name__ == "__main__":

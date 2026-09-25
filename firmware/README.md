@@ -243,7 +243,9 @@ first on-hardware note-on test.
   `midi/README.md` for the zone setup. Not yet verified with a real
   MIDI-receiving host. DIN MIDI IN/OUT built (see `midi/README.md`) but
   never yet tried against real DIN/TRS gear.
-- `usb_vendor/`, `profiles/`, `storage/` still empty module skeletons.
+- `usb_vendor/`, `profiles/`, `storage/` -- the settings table (`profiles/`), its
+  two-slot flash store (`storage/`) and the USB text shell on top of them are built (see
+  their READMEs); the binary control protocol, profiles/layouts and the companion app are not.
 
 Builds clean end-to-end against a real pico-sdk checkout (`cmake` +
 `arm-none-eabi-gcc`; see `BUILD.md`) with zero warnings, and produces a

@@ -7845,12 +7845,24 @@ not its code.
     polyphony" enforces itself the next scan once `find_sole_held_pad()`
     stops finding exactly one held pad, tearing every harmonic voice
     down.
-  - **Compile-time flag** (`TILES_MELODIC_HARMONICS_ENABLED`,
-    `services/expression.c`), default 0, no runtime toggle -- flash-
-    persisted settings don't exist yet, so a runtime flag would reset
-    to off on every boot, defeating "just live on this board." Flip to
-    1, build, flash ONLY board 2, flip back to 0 before the next commit
-    -- committed state is always off.
+  - **Was a compile-time flag** (`TILES_MELODIC_HARMONICS_ENABLED`,
+    default 0, flipped to 1 for a build, flashed to board 2 only, flipped
+    back before committing) -- deliberately NOT a runtime setting, because
+    flash-persisted settings didn't exist and a runtime flag would have
+    reset to off on every boot. **Now a runtime, flash-saved setting**,
+    `features.melodic_harmonics` (see "Settings table and flash saving"
+    below), default ON, after "yes start with the settings table and flash
+    saving" and "i want board 1 to have the full code of baord 2." One
+    build for every board; `SET features.melodic_harmonics 0` turns it off
+    per board and survives reboots and reflashes. Turning it off ends any
+    harmonic voices already sounding (a note-off each). The harmonics code
+    is now always compiled in (the `#if`s are gone). Found while doing this:
+    `harmonic_channel_is_reserved()` was a bare range check, so with the
+    feature compiled OUT it never ran, but always compiled IN it would have
+    permanently withheld the top 5 Member Channels from real notes even with
+    the setting OFF (10 voices of polyphony instead of 15). It now returns
+    false while disabled, so OFF means exactly what the old "compiled out"
+    build had -- all 15 channels for real notes.
   - **Channel budget**: harmonics never steal a Member Channel from a
     real note and can always be stolen back by one -- reuses this
     file's existing "reserved channel" mechanism (the same one
@@ -8469,5 +8481,37 @@ not its code.
   exactly as USB input (`midi_in.c` per-source parsers, one clock owner at
   a time); `tiles_midi_send_start()/stop()` and all instrument-facing sends
   also go out DIN. Never tried on real DIN/TRS gear.
+- **Settings table and flash saving.** Real feedback: "yes start with the
+  settings table and flash saving. the app should be compatible in mac and
+  windows and linux hopefully..." Before this, `usb_vendor.c` was a
+  hand-written `strcmp()` chain (a read branch, a write branch and a key
+  list per setting), nothing survived a reboot, and the values being tuned
+  by ear all session -- LED levels, DIN polarity, the harmonics switch --
+  were compile-time constants (each tweak = edit, build, commit, flash).
+  Design and rules in `profiles/settings.h`, `storage/kv_store.h` and
+  `profiles/README.md`; what it changes in this directory:
+  - **`lighting.c`'s look constants are now runtime settings** (`look.*`,
+    `s_look[]`, `tiles_lighting_get_look()/set_look()` in `lighting.h`):
+    the resting tiers (idle 50, natural 21, root 40, fifth 40), the fifth's
+    red tint, the echo's sustain tint / soft-red G and B, and the onset
+    flash length. The `#define`s stay as the DEFAULTS (with all their
+    tuning history). Whole percent, clamped; **none can raise the LED
+    ceiling** -- `static_ceiling_level()` (37% USB / 90% external, the power
+    budget) is applied after them and is not settable.
+  - **Melodic harmonics** became `features.melodic_harmonics` (above).
+  - **DIN polarity** is `midi.din_trs_type` (`a`|`b`, default `a`).
+  - **`cv_gate.enabled` is deliberately NOT saved** (volatile): CV/gate is
+    still an explicit per-session switch that boots off ("keep cv gate
+    implemented but off rn"); the CV *calibration* is saved.
+  - **Flash map**: `storage/flash_map.h` now owns every flash region. The
+    pattern bank (last sector) and Song store (4 sectors below) keep their
+    exact offsets -- `op_mode.c` just takes them from the map -- and the
+    settings' two alternating sectors sit directly below. A firmware update
+    (`picotool load`) doesn't touch any of them.
+  - **Cost of a save**: a sector erase stops the whole firmware for tens of
+    milliseconds (same as a pattern save; see that section). Saves are
+    debounced (2 s after the last change) and only happen with every pad
+    untouched, so they land between phrases, not in them. DIN RX bytes
+    arriving during the stall are flagged lost and the parser resyncs.
 - Everything else (per-pad Hall calibration) is not built
   yet.

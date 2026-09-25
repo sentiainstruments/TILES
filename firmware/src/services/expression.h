@@ -111,6 +111,14 @@ float tiles_expression_get_pitch_bend_sensitivity(void);
 void tiles_expression_set_aftertouch_sensitivity(uint16_t depth_full_scale);
 uint16_t tiles_expression_get_aftertouch_sensitivity(void);
 
+/* Melodic harmonics (a sole held pad + capacitive touches on the others sound
+ * that note's harmonics -- see expression.c's "Melodic harmonics" section).
+ * A runtime, flash-saved setting (features.melodic_harmonics), default ON;
+ * disabling it ends any harmonic voices already sounding. Replaces the old
+ * compile-time TILES_MELODIC_HARMONICS_ENABLED flag. */
+void tiles_expression_set_melodic_harmonics_enabled(bool enabled);
+bool tiles_expression_is_melodic_harmonics_enabled(void);
+
 /* Called by services/expression_control.h when "expression mute"
  * toggles on/off. While muted, pitch bend and poly aftertouch both
  * stop being computed/sent -- if a note currently owns pitch bend,

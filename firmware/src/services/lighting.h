@@ -57,6 +57,31 @@ bool tiles_lighting_init(void);
  * the pad's real state. */
 void tiles_lighting_set_pad_press(uint8_t logical_pad, float press_0_to_1);
 
+/* The tunable "look" of the pad LEDs -- the resting brightness tiers and the
+ * echo colors, formerly compile-time constants in lighting.c. Each is a
+ * runtime setting (profiles/settings_table.c: look.*), saved to flash. All
+ * values are whole percent of the active brightness ceiling (tints: percent of
+ * full), except the echo flash duration in milliseconds. NONE of them can raise
+ * the ceiling itself -- that stays fixed by the power state (see lighting.c's
+ * "Pad brightness ceiling" section). Out-of-range values are clamped
+ * (percent <= 100, flash <= 2000 ms). Defaults are the constants at the top of
+ * lighting.c. */
+typedef enum {
+    TILES_LOOK_IDLE_BASELINE_PERCENT = 0, /* shared "visible but not active": pressed floor, guitar frets, chord strip */
+    TILES_LOOK_NATURAL_PERCENT,           /* melodic mode: regular (non-root, non-fifth, non-playing) white pad */
+    TILES_LOOK_ROOT_PERCENT,              /* melodic mode: root pad (Sentia magenta) */
+    TILES_LOOK_FIFTH_PERCENT,             /* melodic mode: perfect-fifth pad (blue + red tint) */
+    TILES_LOOK_FIFTH_RED_TINT_PERCENT,    /* how much red is mixed into the fifth's blue */
+    TILES_LOOK_ECHO_SUSTAIN_TINT_PERCENT, /* echo (primary, green): how much white stays mixed into the sustain */
+    TILES_LOOK_ECHO_SECONDARY_G_PERCENT,  /* second TILES DISPLAY (soft red): settled green amount */
+    TILES_LOOK_ECHO_SECONDARY_B_PERCENT,  /* second TILES DISPLAY (soft red): settled blue amount */
+    TILES_LOOK_ECHO_FLASH_MS,             /* echo onset flash duration; 0 = no flash */
+    TILES_LOOK_COUNT
+} tiles_look_param_t;
+
+uint16_t tiles_lighting_get_look(tiles_look_param_t param);
+void tiles_lighting_set_look(tiles_look_param_t param, uint16_t value);
+
 /* Re-writes one pad LED per call, round-robining through all 24, via
  * the required "disable all muxes -> set select -> enable one bank ->
  * send one pixel -> hold reset interval -> disable" sequence. Cheap to

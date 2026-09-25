@@ -14,4 +14,9 @@ split between device flash and app-side backups.
   trigger. The reference `firmware/src/board/` and `firmware/src/services/`
   get built against.
 
+- [`control-software.md`](control-software.md) -- how the device talks to the
+  mapper / control panel / layout store: USB vendor interface as the control
+  channel, the settings table, layouts as portable files, next steps, and the
+  cross-platform app-stack options.
+
 More notes will be added here as cross-cutting decisions get made.

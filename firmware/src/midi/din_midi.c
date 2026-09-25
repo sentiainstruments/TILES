@@ -162,6 +162,10 @@ void tiles_din_midi_set_trs_type(tiles_din_midi_trs_type_t type) {
     }
 }
 
+tiles_din_midi_trs_type_t tiles_din_midi_get_trs_type(void) {
+    return s_type;
+}
+
 static void tx_kick(void) {
     if (tiles_din_queue_tx_has_data()) {
         tx_irq_source(true);

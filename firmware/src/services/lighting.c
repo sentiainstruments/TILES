@@ -178,6 +178,49 @@
 #define TILES_LIGHTING_ECHO_SECONDARY_G 0.18f
 #define TILES_LIGHTING_ECHO_SECONDARY_B 0.12f
 
+/* Every "look" constant above is now the DEFAULT of a runtime setting, not a
+ * compile-time value. Real feedback, after hours of edit/build/flash rounds
+ * tuning exactly these numbers by eye: "yes start with the settings table and
+ * flash saving." s_look[] is what pad_desired_rgb() actually reads; the
+ * settings table (profiles/settings_table.c) exposes each entry as
+ * look.<name> over USB and saves changes to flash (profiles/settings.h), so a
+ * level can be tried live from a script or the companion app without a
+ * rebuild, and survives a reboot and a reflash. Stored in whole percent (tints
+ * as percent of full: 0.35 -> 35) -- the same resolution the constants were
+ * ever tuned at. The power ceiling (static_ceiling_level()) is applied AFTER
+ * all of this and is NOT settable: every value here is a fraction of it, so
+ * no setting can raise LED current above the documented budget. */
+#define LOOK_PCT(fraction) ((uint16_t)((fraction) * 100.0f + 0.5f))
+static uint16_t s_look[TILES_LOOK_COUNT] = {
+    [TILES_LOOK_IDLE_BASELINE_PERCENT] = TILES_LIGHTING_IDLE_BASELINE_PERCENT,
+    [TILES_LOOK_NATURAL_PERCENT] = TILES_LIGHTING_NATURAL_BASELINE_PERCENT,
+    [TILES_LOOK_ROOT_PERCENT] = TILES_LIGHTING_ROOT_BASELINE_PERCENT,
+    [TILES_LOOK_FIFTH_PERCENT] = TILES_LIGHTING_FIFTH_BASELINE_PERCENT,
+    [TILES_LOOK_FIFTH_RED_TINT_PERCENT] = LOOK_PCT(TILES_LIGHTING_FIFTH_RED_TINT),
+    [TILES_LOOK_ECHO_SUSTAIN_TINT_PERCENT] = LOOK_PCT(TILES_LIGHTING_ECHO_SUSTAIN_TINT),
+    [TILES_LOOK_ECHO_SECONDARY_G_PERCENT] = LOOK_PCT(TILES_LIGHTING_ECHO_SECONDARY_G),
+    [TILES_LOOK_ECHO_SECONDARY_B_PERCENT] = LOOK_PCT(TILES_LIGHTING_ECHO_SECONDARY_B),
+    [TILES_LOOK_ECHO_FLASH_MS] = TILES_LIGHTING_ECHO_FLASH_MS,
+};
+
+#define TILES_LOOK_MAX_FLASH_MS 2000u
+
+static float look_fraction(tiles_look_param_t param) {
+    return (float)s_look[param] / 100.0f;
+}
+
+uint16_t tiles_lighting_get_look(tiles_look_param_t param) {
+    return param < TILES_LOOK_COUNT ? s_look[param] : 0u;
+}
+
+void tiles_lighting_set_look(tiles_look_param_t param, uint16_t value) {
+    if (param >= TILES_LOOK_COUNT) {
+        return;
+    }
+    uint16_t max = (param == TILES_LOOK_ECHO_FLASH_MS) ? TILES_LOOK_MAX_FLASH_MS : 100u;
+    s_look[param] = value > max ? max : value;
+}
+
 /* Underglow's own fixed brightness, out of 255 -- deliberately NOT
  * scaled by the active brightness ceiling/the power state. It used to be
  * a percentage of the active ceiling (65%), which meant it rode down
@@ -305,7 +348,7 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
          * true black -- this is normal (non-standby) touch-driven
          * operation's "pads never go fully dark in V1" requirement (see
          * tiles_lighting_set_pad_press's header). */
-        float baseline = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;
+        float baseline = look_fraction(TILES_LOOK_IDLE_BASELINE_PERCENT);
         float level = baseline + (1.0f - baseline) * clamp01(s_pad_press[pad_index]);
         return (tiles_rgb01_t){level, level, level};
     }
@@ -371,14 +414,15 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         uint8_t layer = secondary ? 1u : 0u;
         uint32_t age_ms = tiles_op_mode_incoming_note_age_ms(layer, echo_note);
         float settle = 1.0f; /* 0 = just hit, 1 = settled */
-        if (age_ms < TILES_LIGHTING_ECHO_FLASH_MS) {
-            settle = (float)age_ms / (float)TILES_LIGHTING_ECHO_FLASH_MS;
+        uint32_t flash_ms = s_look[TILES_LOOK_ECHO_FLASH_MS];
+        if (age_ms < flash_ms) { /* flash_ms == 0 disables the onset flash, so this is also the divide guard */
+            settle = (float)age_ms / (float)flash_ms;
         }
         if (secondary) {
-            return (tiles_rgb01_t){1.0f, 1.0f + settle * (TILES_LIGHTING_ECHO_SECONDARY_G - 1.0f),
-                                   1.0f + settle * (TILES_LIGHTING_ECHO_SECONDARY_B - 1.0f)};
+            return (tiles_rgb01_t){1.0f, 1.0f + settle * (look_fraction(TILES_LOOK_ECHO_SECONDARY_G_PERCENT) - 1.0f),
+                                   1.0f + settle * (look_fraction(TILES_LOOK_ECHO_SECONDARY_B_PERCENT) - 1.0f)};
         }
-        float mix = 1.0f + settle * (TILES_LIGHTING_ECHO_SUSTAIN_TINT - 1.0f);
+        float mix = 1.0f + settle * (look_fraction(TILES_LOOK_ECHO_SUSTAIN_TINT_PERCENT) - 1.0f);
         return (tiles_rgb01_t){mix, 1.0f, mix};
     }
 
@@ -401,7 +445,7 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
             float level = is_octave ? 1.0f : 0.75f;
             return (tiles_rgb01_t){level, level * 0.5f, 0.0f};
         }
-        float level = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;
+        float level = look_fraction(TILES_LOOK_IDLE_BASELINE_PERCENT);
         return (tiles_rgb01_t){level, level * 0.5f, 0.0f};
     }
 
@@ -415,7 +459,7 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
      * note_map.c's own chord_mode_degree()), so no separate branch is
      * needed for that half. */
     if (tiles_note_map_is_chord_region_pad(logical_pad)) {
-        float level = (float)TILES_LIGHTING_IDLE_BASELINE_PERCENT / 100.0f;
+        float level = look_fraction(TILES_LOOK_IDLE_BASELINE_PERCENT);
         return (tiles_rgb01_t){0.0f, 0.0f, level};
     }
 
@@ -429,7 +473,7 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         /* Sentia Instruments Magenta (#FF00FF) -- R and B channels only,
          * G stays 0 -- see TILES_LIGHTING_ROOT_BASELINE_PERCENT's own
          * comment for the color and brightness reasoning. */
-        float level = (float)TILES_LIGHTING_ROOT_BASELINE_PERCENT / 100.0f;
+        float level = look_fraction(TILES_LOOK_ROOT_PERCENT);
         return (tiles_rgb01_t){level, 0.0f, level};
     }
     if (tiles_note_map_is_fifth_pad(logical_pad)) {
@@ -437,11 +481,11 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
          * TILES_LIGHTING_FIFTH_RED_TINT's own comment. Checked after
          * root for the same "never actually overlaps, but root would
          * win if it somehow did" reasoning. */
-        float level = (float)TILES_LIGHTING_FIFTH_BASELINE_PERCENT / 100.0f;
-        return (tiles_rgb01_t){level * TILES_LIGHTING_FIFTH_RED_TINT, 0.0f, level};
+        float level = look_fraction(TILES_LOOK_FIFTH_PERCENT);
+        return (tiles_rgb01_t){level * look_fraction(TILES_LOOK_FIFTH_RED_TINT_PERCENT), 0.0f, level};
     }
     if (tiles_note_map_is_natural_pad(logical_pad)) {
-        float level = (float)TILES_LIGHTING_NATURAL_BASELINE_PERCENT / 100.0f;
+        float level = look_fraction(TILES_LOOK_NATURAL_PERCENT);
         return (tiles_rgb01_t){level, level, level};
     }
     /* Sharp/black key, idle -- true black, deliberately bypassing this

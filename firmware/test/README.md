@@ -18,6 +18,13 @@ allocation, calibration math, `usb_vendor/` protocol framing.
 - `test_midi_in.c` -- the real `midi/midi_in.c` (tusb/pico-time stubbed in
   `stubs/`): USB and DIN each parse with their own state, running status
   per source, one clock owner at a time, loss recovery, SysEx from DIN.
+- `test_kv_store.c` -- `storage/kv_store.c` against a simulated NOR flash, including a
+  power cut after every erase/program step (and partially-applied operations):
+  the store always comes back with the old payload or the new one, never garbage,
+  and keeps working afterwards.
+- `test_settings.c` -- the settings registry (parse/range rules, schema text, sparse
+  blob incl. bad/unknown/volatile entries) and the debounced flash saver over a
+  simulated flash (debounce, idle gating, retry, RESET, changed defaults).
 - `pio_sim_din_tx.py` -- runs the *assembled* DIN OUT PIO program through a
   tiny instruction-level simulator and decodes its waveform as 8N1 at
   31,250 baud. Needs a firmware build first (it reads pioasm's header).
