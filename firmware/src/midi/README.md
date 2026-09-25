@@ -269,12 +269,19 @@ UART) with rate limiting for continuous expression data — see Status below.
     regardless of main-loop timing. One pin carries the data while the other
     line is parked high through plain GPIO: MIDI's current loop only flows
     when the two lines differ, so **which line carries the data IS the TRS
-    polarity**. `TILES_DIN_MIDI_OUT_DEFAULT_LINE` (`din_midi.h`) picks it --
-    default line A (GP0). The hardware handoff doesn't say which line is
-    physically Type A vs Type B, so the default is a first guess: **if a
-    receiver hears nothing, flip that constant** (or call
-    `tiles_din_midi_set_out_line()`). Not persisted yet -- `storage/` is
-    unbuilt (its README lists "DIN MIDI OUT polarity" as a future setting).
+    polarity**. **Fixed at TRS Type A**, never switched automatically --
+    real feedback: "dont auto flip select type A for now"
+    (`TILES_DIN_MIDI_OUT_DEFAULT_TYPE` in `din_midi.h`), which is also what
+    `docs/architecture/defaults-and-safeguards.md` already specifies ("Default:
+    Type A TRS polarity... Selectable via profile (GP0/GP2 role swap), not
+    auto-detected -- there's no way to sense polarity from the jack side").
+    Only an explicit `tiles_din_midi_set_trs_type()` call changes it, and
+    nothing calls that yet (it's for the future profile setting; `storage/`
+    is unbuilt, its README lists "DIN MIDI OUT polarity" as a future
+    setting). **One assumption to confirm on hardware:** the docs never say
+    which of GP0/GP2 is physically Type A; the code follows the handoff's
+    "line A / line B" naming (Type A = GP0). If a Type A receiver hears
+    nothing, that mapping is the thing to check, not the transmitter.
   - **Rate limiting** -- the reason for `din_midi_queue.c`. DIN is 3,125
     bytes/s (~1 ms per 3-byte message); MPE expression and the expression
     pedal (one CC broadcast to 16 channels = 48 bytes per step) can out-run

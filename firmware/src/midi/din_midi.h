@@ -23,11 +23,16 @@
  * OUT (GP0 = line A, GP2 = line B, a dual buffer): a PIO UART on ONE of the two
  * lines while the other is held high -- MIDI's current loop only conducts
  * when the two lines differ, and WHICH line carries the data is the TRS
- * polarity (Type A vs Type B). TILES_DIN_MIDI_OUT_DEFAULT_LINE below is that
- * choice. The hardware handoff doesn't say which physical TRS polarity each
- * line corresponds to, so the default is a first guess: if a receiver hears
- * nothing, flip it. Independent of USB: DIN works with no host at all
- * (external power only), which is the whole point of the jack.
+ * polarity. Fixed at TRS TYPE A (the MIDI Association's standard) by default,
+ * per docs/architecture/defaults-and-safeguards.md: "Default: Type A TRS
+ * polarity... Selectable via profile (GP0/GP2 role swap), not auto-detected --
+ * there's no way to sense polarity from the jack side alone." So it is NEVER
+ * switched automatically; only an explicit tiles_din_midi_set_trs_type() call
+ * (a future profile setting) changes it. Which of GP0/GP2 is Type A follows
+ * the handoff's "line A / line B" naming (Type A = line A = GP0); that mapping
+ * is inferred, not stated in the docs, so it is the first thing to check if a
+ * Type A receiver hears nothing. Independent of USB: DIN works with no host at
+ * all (external power only), which is the whole point of the jack.
  *
  * A failed init disables DIN and nothing else (hardware non-negotiable: "a
  * failed subsystem disables itself; it never blocks USB diagnostics").
@@ -37,12 +42,14 @@
 #include <stdint.h>
 
 typedef enum {
-    TILES_DIN_MIDI_OUT_LINE_A = 0, /* GP0 carries the data, GP2 held high */
-    TILES_DIN_MIDI_OUT_LINE_B = 1, /* GP2 carries the data, GP0 held high */
-} tiles_din_midi_out_line_t;
+    TILES_DIN_MIDI_TRS_TYPE_A = 0, /* GP0 carries the data, GP2 held high */
+    TILES_DIN_MIDI_TRS_TYPE_B = 1, /* GP2 carries the data, GP0 held high */
+} tiles_din_midi_trs_type_t;
 
-/* Which line carries MIDI OUT data at boot. See the header comment. */
-#define TILES_DIN_MIDI_OUT_DEFAULT_LINE TILES_DIN_MIDI_OUT_LINE_A
+/* TRS polarity at boot: Type A, "for now" (real feedback: "dont auto flip
+ * select type A for now"). Never changed automatically. See the header
+ * comment. */
+#define TILES_DIN_MIDI_OUT_DEFAULT_TYPE TILES_DIN_MIDI_TRS_TYPE_A
 
 /* Claims a PIO state machine + UART0, starts both directions. Must run after
  * board_init() (which parks GP0/GP2 high and GP1 as an input). Returns false,
@@ -52,9 +59,10 @@ bool tiles_din_midi_init(void);
 
 bool tiles_din_midi_is_ready(void);
 
-/* Switches which line carries MIDI OUT data (the other is parked high).
- * Bytes already in the transmitter's FIFO are discarded. */
-void tiles_din_midi_set_out_line(tiles_din_midi_out_line_t line);
+/* Explicitly switches the TRS polarity (the other line is parked high).
+ * Nothing in the firmware calls this today -- it exists for the future
+ * profile setting. Bytes already in the transmitter's FIFO are discarded. */
+void tiles_din_midi_set_trs_type(tiles_din_midi_trs_type_t type);
 
 /* Queues one channel-voice message (1-3 bytes) or one System Real-Time byte
  * for DIN OUT. No-op if DIN isn't ready. See din_midi_queue.h for what gets

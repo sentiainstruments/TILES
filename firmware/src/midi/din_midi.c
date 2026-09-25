@@ -20,10 +20,12 @@ static bool s_ready;
 static PIO s_pio;
 static uint s_sm;
 static uint s_offset;
-static tiles_din_midi_out_line_t s_line;
+static tiles_din_midi_trs_type_t s_type;
 
-static uint line_gpio(tiles_din_midi_out_line_t line) {
-    return (line == TILES_DIN_MIDI_OUT_LINE_B) ? TILES_GPIO_DIN_MIDI_OUT_B : TILES_GPIO_DIN_MIDI_OUT_A;
+/* The GPIO that carries the data waveform for a TRS type (see din_midi.h for
+ * why Type A = GP0). */
+static uint signal_gpio(tiles_din_midi_trs_type_t type) {
+    return (type == TILES_DIN_MIDI_TRS_TYPE_B) ? TILES_GPIO_DIN_MIDI_OUT_B : TILES_GPIO_DIN_MIDI_OUT_A;
 }
 
 /* ---- TX: interrupt-fed PIO transmitter ---- */
@@ -51,15 +53,15 @@ static void din_tx_irq_handler(void) {
     }
 }
 
-/* (Re)points the transmitter at `line`'s GPIO and parks the other line high.
+/* (Re)points the transmitter at `type`'s signal GPIO and parks the other high.
  * Order matters for the current loop: MIDI is "no current" while both lines
  * are equal, so the pin being taken over is first driven high through SIO,
  * then handed to PIO already high (pio_sm_set_pins_with_mask), and the
  * released pin ends up SIO-high -- neither transition ever pulls one line
  * low, so the receiver never sees a spurious start bit. */
-static void tx_configure_line(tiles_din_midi_out_line_t line) {
-    uint signal = line_gpio(line);
-    uint idle = line_gpio(line == TILES_DIN_MIDI_OUT_LINE_A ? TILES_DIN_MIDI_OUT_LINE_B : TILES_DIN_MIDI_OUT_LINE_A);
+static void tx_configure_type(tiles_din_midi_trs_type_t type) {
+    uint signal = signal_gpio(type);
+    uint idle = signal_gpio(type == TILES_DIN_MIDI_TRS_TYPE_A ? TILES_DIN_MIDI_TRS_TYPE_B : TILES_DIN_MIDI_TRS_TYPE_A);
 
     pio_sm_set_enabled(s_pio, s_sm, false);
     pio_sm_clear_fifos(s_pio, s_sm);
@@ -84,7 +86,7 @@ static void tx_configure_line(tiles_din_midi_out_line_t line) {
     sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / (float)(DIN_TX_CYCLES_PER_BIT * DIN_MIDI_BAUD));
     pio_sm_init(s_pio, s_sm, s_offset, &c);
     pio_sm_set_enabled(s_pio, s_sm, true);
-    s_line = line;
+    s_type = type;
 }
 
 /* ---- RX: UART0 RX interrupt into a ring ---- */
@@ -115,7 +117,7 @@ bool tiles_din_midi_init(void) {
         return false;
     }
 
-    tx_configure_line(TILES_DIN_MIDI_OUT_DEFAULT_LINE);
+    tx_configure_type(TILES_DIN_MIDI_OUT_DEFAULT_TYPE);
     int irq = pio_get_irq_num(s_pio, 0);
     irq_set_exclusive_handler((uint)irq, din_tx_irq_handler);
     irq_set_enabled((uint)irq, true);
@@ -149,12 +151,12 @@ bool tiles_din_midi_is_ready(void) {
     return s_ready;
 }
 
-void tiles_din_midi_set_out_line(tiles_din_midi_out_line_t line) {
-    if (!s_ready || line == s_line) {
+void tiles_din_midi_set_trs_type(tiles_din_midi_trs_type_t type) {
+    if (!s_ready || type == s_type) {
         return;
     }
     tx_irq_source(false);
-    tx_configure_line(line);
+    tx_configure_type(type);
     if (tiles_din_queue_tx_has_data()) {
         tx_irq_source(true);
     }
