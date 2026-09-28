@@ -960,6 +960,23 @@ typedef enum {
     PAD_STATE_IDLE = 0,
     PAD_STATE_AWAITING_STRIKE,
     PAD_STATE_NOTE_ON,
+    /* A live note that claim_mpe_channel() force-stole this pad's MPE
+     * channel out from under -- see that function's own comment. Distinct
+     * from PAD_STATE_IDLE specifically so a finger that never actually
+     * lifted doesn't immediately re-strike: begin_awaiting_strike() reads
+     * the CURRENT Hall depth as its starting point, and a pad resting at
+     * its already-pressed depth reads as an instant, max-velocity strike
+     * the moment it's told to start awaiting one -- real feedback: "we
+     * need a way to cut that error out even if its unlikely for people to
+     * do it," reproduced once real polyphony was fixed to actually reach
+     * the shared pool's real 8-channel ceiling ("now the issue happens
+     * when i press 8 keys or more"). A pad in this state runs no strike
+     * detection and sends nothing -- it just waits for a genuine release
+     * (see the main scan loop's own handling) before PAD_STATE_IDLE makes
+     * it eligible for a fresh strike again, the same "stolen voices don't
+     * come back on their own, only a new touch wins" policy services/
+     * haptics.c's own voice-stealing already documents. */
+    PAD_STATE_STOLEN,
 } pad_expr_state_t;
 
 typedef struct {
@@ -2763,7 +2780,20 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
                pad, stolen_pad, (unsigned)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx), (unsigned)zone_size);
         pad_expr_t *stolen = &s_pads[stolen_pad - 1u];
         end_held_note(stolen, stolen_pad, false);
-        stolen->state = PAD_STATE_IDLE;
+        /* PAD_STATE_STOLEN, not PAD_STATE_IDLE -- see that state's own
+         * comment. Real feedback: "we need a way to cut that error out
+         * even if its unlikely for people to do it." A pad still
+         * physically held at the instant it's stolen used to go straight
+         * back to PAD_STATE_IDLE, and the main scan loop's PAD_STATE_IDLE
+         * branch has no way to tell "genuinely just touched" from "was
+         * already resting here" -- begin_awaiting_strike() reads whatever
+         * depth the pad is CURRENTLY at as its starting point, so an
+         * already-pressed pad read as an instant, max-velocity strike one
+         * scan later: a spurious Note-On (the reported "glitch") plus the
+         * haptic kick that comes with any real note-on (the reported
+         * "retriggering"). Now stays silent until it's genuinely released
+         * and touched again. */
+        stolen->state = PAD_STATE_STOLEN;
     }
     /* Real bug found reviewing this function, not from real feedback:
      * end_held_note() above sets in_use=false for the stolen channel
@@ -2824,6 +2854,18 @@ void tiles_expression_scan(void) {
          * real capacitive dropout so it doesn't read as a full release. */
         bool touched =
             raw_touched || (s->last_touched_valid && (now_ms - s->last_touched_ms) < TOUCH_DROPOUT_GRACE_MS);
+
+        if (s->state == PAD_STATE_STOLEN) {
+            /* See PAD_STATE_STOLEN's own comment. Deliberately runs no
+             * strike detection and sends nothing while still touched --
+             * only a genuine release (the same dropout-bridged `touched`
+             * every other branch here uses) makes this pad eligible for a
+             * fresh strike again, via PAD_STATE_IDLE below. */
+            if (!touched) {
+                s->state = PAD_STATE_IDLE;
+            }
+            continue;
+        }
 
         if (s->state == PAD_STATE_IDLE) {
             /* services/expression_control.h's sub-menu (circle+square

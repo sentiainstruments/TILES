@@ -8778,5 +8778,46 @@ not its code.
   yet past this reasoning -- next real-hardware pass should confirm a
   4-, 6-, and 8-voice chord all hold cleanly with no stolen/retriggered
   note.
+- **Follow-up real hardware fix, same round: channel stealing itself
+  glitched, not just the harmonics reservation that used to trigger it
+  early.** Real feedback after flashing the fix above: "now the issue
+  happens when i press 8 keys or more. we need a way to cut that error
+  out even if its unlikely for people to do it." The fix above correctly
+  restored the full 8-channel zone to real polyphony, but exposed a
+  second, deeper bug in `claim_mpe_channel()`'s steal-the-oldest fallback
+  itself (only reachable once real polyphony genuinely exhausts the zone
+  -- 8 real notes, the actual hardware ceiling given 6 channels
+  permanently fixed to sequencer/chord/game and one reserved for the Zone
+  Master): stealing a still-physically-held pad's channel reset that
+  pad's own state straight to `PAD_STATE_IDLE`, and the main scan loop's
+  `PAD_STATE_IDLE` branch has no way to distinguish "a genuinely fresh
+  touch" from "a finger that never actually left the pad" -- `begin_
+  awaiting_strike()` reads whatever Hall depth the pad is CURRENTLY at as
+  its own starting point, so a pad still resting at its already-pressed
+  depth read as an instant, max-velocity strike one scan later: a
+  spurious Note-On (the reported "glitch") plus the haptic kick that
+  rides along with any real note-on (the reported "retriggering" on
+  hardware, not a second bug in `services/haptics.c` at all -- that file
+  was correctly reacting to a genuine, if spurious, note-on it had no way
+  to know was spurious). Fixed with a new `PAD_STATE_STOLEN` -- a stolen
+  pad goes there instead of `PAD_STATE_IDLE`, runs no strike detection
+  and sends nothing while still touched, and only becomes eligible for a
+  fresh strike again once it's genuinely released (the same dropout-
+  bridged touch signal every other branch already uses). This is
+  precisely the "additional notes pressed after the limit... steal the
+  first voices pressed so new notes always have priority" policy
+  `services/haptics.c`'s own voice-stealing already documents, now
+  applied symmetrically to MIDI: a stolen voice goes silent and stays
+  silent until its owner deliberately presses again, rather than ghosting
+  back to life on its own. Since the 8-channel ceiling is the real,
+  physical limit of this board's channel layout (not an arbitrary
+  reservation like the harmonics bug above), this doesn't raise how many
+  simultaneous voices the board can sound -- it makes going past that
+  ceiling degrade cleanly (the newest touches always win, the oldest one
+  silently drops until re-pressed) instead of glitching, exactly what was
+  asked for ("cut that error out even if its unlikely for people to do
+  it"). Not hardware-verified yet -- next pass should confirm a 9+-touch
+  press cleanly silences the oldest pad with no stray Note-On/haptic kick,
+  and that pad sounds normally again on its next honest press.
 - Everything else (per-pad Hall calibration) is not built
   yet.
