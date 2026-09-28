@@ -1482,22 +1482,52 @@ static bool s_harmonic_prev_touched[TILES_NUM_PADS];
  * held note's channel can always be found, matching this section's own
  * "Channel budget" promise ("harmonics never steal a Member Channel from a
  * real note") even when Song mode has squeezed the zone down to just a
- * handful. Below HARMONIC_MAX_VOICES the ratio is worse than the old
- * scheme's 5-of-15 (a full-size zone is now only 8, so 5 reserved leaves
- * just 3 for real polyphony) -- an accepted, documented trade for a zone
- * that's spec-correct and doesn't collide with General MIDI's percussion
- * channel; see services/README.md's own entry on this rework if that ratio
- * ever needs revisiting. claim_mpe_channel() below skips every channel this
- * covers, exactly like it already skips a Song-held one -- by construction,
- * since both now only ever scan channels 1..zone_size in the first place,
- * not the full 1..15 range this used to have to actively exclude channels
- * from. */
+ * handful. claim_mpe_channel() below skips every channel this covers,
+ * exactly like it already skips a Song-held one -- by construction, since
+ * both now only ever scan channels 1..zone_size in the first place, not the
+ * full 1..15 range this used to have to actively exclude channels from.
+ * **No longer a standing tax on real polyphony**: harmonic_channel_is_
+ * reserved() below only actually reserves anything while a harmonics
+ * session is genuinely in progress (s_harmonic_fundamental_pad != 0), which
+ * structurally means at most one real note is held at that moment anyway
+ * (see scan_melodic_harmonics()'s own "exactly one held pad" gate) -- see
+ * that function's own comment for the real bug this fixed ("glitching...
+ * on a 4th voice" from a stale full-time reservation) and why gating it
+ * there costs nothing during the one window it's still needed. */
 static bool harmonic_channel_is_reserved(uint8_t channel) {
-    /* Only while the feature is ON. With harmonics switched off at runtime
-     * (features.melodic_harmonics 0) the whole zone goes back to real
-     * notes -- exactly what a build with the feature compiled out used to
-     * have. */
-    if (!s_harmonics_enabled) {
+    /* Only while the feature is ON, AND an actual harmonics session is in
+     * progress right now (s_harmonic_fundamental_pad != 0 -- see scan_
+     * melodic_harmonics()'s own "exactly one held pad" gate). Real bug
+     * found investigating real feedback: "something is glitching for the
+     * mpe when i do a 4th voice, also on the haptics it's like
+     * retriggering." This used to reserve up to HARMONIC_MAX_VOICES
+     * channels the instant the feature TOGGLE was on, regardless of
+     * whether a session could even be active -- but a session structurally
+     * CANNOT be active once a second real note is held (find_sole_held_
+     * pad() then returns 0 and scan_melodic_harmonics() tears every
+     * harmonic voice down that same tick), which is exactly the ordinary
+     * multi-finger MPE case this board exists for. That left real
+     * polyphony permanently capped at zone_size - HARMONIC_MAX_VOICES (3
+     * of a full 8) at ALL times harmonics was merely enabled, not just
+     * while it was actually using any of that range -- so a 4th real touch
+     * always hit claim_mpe_channel()'s steal path, forcibly ending the
+     * oldest real note. Since that pad is usually still physically held,
+     * the very next scan reads it as a brand-new touch and retriggers it --
+     * a fresh Note-On (the MPE "glitch") that also fires a fresh haptic
+     * kick for the same pad (the "retriggering" felt in the motor).
+     * Gating on s_harmonic_fundamental_pad != 0 ties the reservation to the
+     * one window it's actually needed -- a single real note held, pedal
+     * sustained, melodic/chord mode -- which structurally allows at most
+     * one real note anyway, so nothing is lost by still reserving up to
+     * HARMONIC_MAX_VOICES during that window. The instant a second real
+     * note commits, the session already tears itself down that same scan
+     * (see scan_melodic_harmonics()'s own header) and this function goes
+     * back to returning false, handing the full zone back to real
+     * polyphony exactly when real polyphony is what's actually being
+     * played. With harmonics switched off at runtime entirely (features.
+     * melodic_harmonics 0) the zone was already always fully real -- that
+     * part is unchanged. */
+    if (!s_harmonics_enabled || s_harmonic_fundamental_pad == 0u) {
         return false;
     }
     uint8_t zone_size = tiles_midi_channels_lower_zone_size();

@@ -8740,5 +8740,43 @@ not its code.
      checked by hand (monotonic, correctly floored/ceilinged) but the
      scan-loop integration has no host-test harness, same as the rest of
      this file.
+- **Real hardware fix: harmonics were permanently starving real MPE
+  polyphony down to 3 voices.** Real feedback, first real-hardware test
+  of the round above: "something is glitching for the mpe when i do a
+  4th voice also on hte haptics its like retriggering." Root cause found
+  in `harmonic_channel_is_reserved()` (see "Melodic harmonics" above for
+  the feature itself): it reserved up to `HARMONIC_MAX_VOICES` (5) of the
+  live zone's channels the instant the `features.melodic_harmonics`
+  TOGGLE was on -- default ON on every board, not just the one it was
+  originally scoped to -- regardless of whether a harmonics session could
+  actually be using any of them. A session structurally can't exist once
+  a second real note is held (`find_sole_held_pad()` then returns 0 and
+  `scan_melodic_harmonics()` tears every harmonic voice down that same
+  tick) -- exactly the ordinary multi-finger MPE case this board exists
+  for. So with a full 8-channel zone, real polyphony was permanently
+  capped at 3 (8 - 5) any time harmonics was merely enabled, not just
+  while it was genuinely ringing an overtone. A 4th real touch always hit
+  `claim_mpe_channel()`'s steal-the-oldest fallback, forcibly ending the
+  oldest real note with `end_held_note()` and resetting its pad to
+  `PAD_STATE_IDLE` -- and since that pad is normally still physically
+  held down at that instant, the very next scan reads it as a brand-new
+  touch and re-strikes it: a fresh Note-On is exactly the "glitching"
+  reported, and `services/haptics.c`'s own kick trigger fires again right
+  along with it -- the same pad's motor "retriggering," no separate
+  haptics bug involved. Fixed by gating the reservation on
+  `s_harmonic_fundamental_pad != 0` (an actual session in progress) in
+  addition to the feature toggle -- the same "exactly one real note held"
+  window a session already requires, so nothing is lost by still
+  reserving the full `HARMONIC_MAX_VOICES` during that one window, and
+  the reservation now correctly collapses to 0 the instant a second real
+  note is struck, hazard-free by the time a 3rd, 4th, or later voice
+  needs a channel. Restores the full live zone (up to 8, fewer only if
+  Song mode has borrowed channels) for genuine multi-note MPE playing,
+  matching the earlier explicit requirement from this same round ("we
+  need mpe to work well and fully but we also want to be able to control
+  at least 6 channels or devices independently"). Not hardware-verified
+  yet past this reasoning -- next real-hardware pass should confirm a
+  4-, 6-, and 8-voice chord all hold cleanly with no stolen/retriggered
+  note.
 - Everything else (per-pad Hall calibration) is not built
   yet.
