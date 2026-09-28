@@ -321,7 +321,80 @@ UART) with rate limiting for continuous expression data — see Status below.
     the real jacks, the buffer/opto, TRS polarity, and the interrupt-fed FIFO
     under real load. A loopback (MIDI OUT cable into MIDI IN) is the
     quickest first test.
+  - **Running status on output -- built.** Real feedback: "before bnooting
+    look into what actually is standardized or good practice in this
+    industry that we havent implemented yet" -> "4. fix it." Standard MIDI
+    1.0 bandwidth optimization, worth doing here specifically (not on
+    USB -- see below) because 31,250 baud is the one output this firmware
+    actually has a byte-rate to save. `din_midi_queue.c`'s `tx_push()`
+    tracks the status byte of the last message it actually wrote to the
+    ring and omits a repeated one -- correct because everything else this
+    queue can enqueue there either can't cancel running status by spec
+    (Real-Time bytes, routed through the entirely separate RT queue) or is
+    already rejected before reaching it (SysEx, System Common). Applies
+    per STATUS BYTE, not per message content -- two different CCs on the
+    same channel (mod then slide, say) legitimately compress into each
+    other, exactly as a real MIDI receiver expects. Deliberately NOT
+    applied to USB: `tud_midi_stream_write()`'s own USB-MIDI class packets
+    each carry an explicit Code Index Number regardless of the underlying
+    byte stream, so there's no equivalent saving to make there, and a
+    status-less send wouldn't even be a valid USB-MIDI Event Packet.
   - **Not built (raised, not asked for):** MIDI thru/merge (DIN in -> USB
-    out or -> DIN out), a channel-collapse mode for non-MPE hardware (all
-    15 member channels are sent as-is, so a single-channel synth only hears
-    the notes that land on its channel), and running status on output.
+    out or -> DIN out), and a channel-collapse mode for non-MPE hardware
+    (all 15 member channels are sent as-is, so a single-channel synth only
+    hears the notes that land on its channel).
+- **Three more items from that same "what's standardized that we haven't
+  built" research, all now built:**
+  - **Active Sensing on DIN output.** A DIN receiver has no way to know
+    the cable itself didn't die -- MIDI 1.0's own answer is Active
+    Sensing (0xFE): once a device has sent it at all, it commits to
+    sending SOME byte at least every 300 ms, and a receiver that then
+    hears nothing for ~300 ms is spec-licensed to assume the connection
+    dropped and release every note it's holding, rather than a stuck
+    note lasting forever. USB-MIDI doesn't need this (the class itself
+    reports device presence), which is why this is DIN-only, same
+    scoping logic as running status above. `din_midi.c` tracks the last
+    time it actually put a byte on the wire (`din_note_activity()`,
+    called from both `tiles_din_midi_send()` on a successful queue push
+    and the new idle path) and `tiles_din_midi_service()` -- already
+    polled every main-loop iteration for the queue drain -- pushes a
+    single 0xFE once 250 ms have passed with nothing else sent, a safe
+    margin under the 300 ms ceiling. Real-Time bytes bypass the reliable/
+    coalesced ring entirely (see the rate-limiting section above), so
+    this never competes with or gets stuck behind a note or CC.
+  - **Identity Request/Reply (Universal SysEx, `midi/identity.{h,c}`,
+    new files).** Part of MIDI 1.0 since the original spec: a host or
+    DAW can send a Non-Realtime Universal SysEx (0xF0 0x7E 0x7F 0x06 0x01
+    0xF7, General Information / Identity Request, unaddressed) and expect
+    an Identity Reply naming the manufacturer, model and version back --
+    what lets a DAW auto-detect "a SENTIA TILES is connected" instead of
+    a human picking it from a device list by name alone. Uses the MMA's
+    own reserved non-commercial manufacturer ID (0x7D), since this board
+    has no registered commercial SysEx ID. Wired up as a new SysEx
+    listener alongside the existing Scene Launch one (`tiles_midi_in_
+    register_sysex_callback()`) -- `identity_on_sysex()` ignores anything
+    that isn't exactly the 4-byte Identity Request header and only ever
+    replies over USB (`tiles_midi_send_sysex()`); a DIN reply would need
+    its own SysEx framing on `din_midi_tx`, not built, since nothing on a
+    hardware synth jack is expected to probe a controller's identity the
+    way a DAW does. `main.c` calls `tiles_midi_identity_init()` once at
+    boot, right after `tiles_midi_in_init()`.
+  - **MIDI panic (`tiles_midi_send_panic()`, `midi_out.{h,c}`).** Real
+    feedback: "panic should be forced sleep with shift button. like that
+    action sends a panic note off." All Notes Off (CC 123) then All
+    Sound Off (CC 120), broadcast the same full 2-16 channel range as
+    `tiles_midi_send_cc_broadcast()` above -- both are standard MIDI 1.0
+    Channel Mode messages, sent together because CC 123 alone is only
+    a polite "release your notes" that a synth with its own sustain/
+    envelope can still choose to interpret loosely, while CC 120 is the
+    harder "stop making sound now." Deliberately independent of this
+    device's own per-pad/per-channel note-tracking state (`services/
+    expression.c`'s MPE channel allocator, chord/sequencer/Song's own
+    sounding-note bookkeeping) -- a panic exists precisely for the case
+    where that bookkeeping and what the receiver is actually doing have
+    diverged, so it broadcasts unconditionally rather than only for
+    channels this device currently believes are sounding.
+    `services/standby.c` fires it from the manual shift+circle-held
+    forced-sleep gesture specifically (see that file's own entry in
+    `services/README.md` for why not the automatic idle-timeout sleep
+    too), right before `enter_deep_sleep()`.

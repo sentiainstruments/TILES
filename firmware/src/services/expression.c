@@ -364,6 +364,64 @@ static uint16_t s_depth_to_aftertouch_full_scale = 1450u;
  * full-press depth, not how noisy a held reading is). */
 #define AFTERTOUCH_SMOOTHING_ALPHA 0.35f
 
+/* ---- Release velocity from lift-off speed -------------------------------
+ * Real feedback: "before bnooting look into what actually is standardized
+ * or good practice in this industry that we havent implemented yet" ->
+ * "5. research and implement it." Research: MPE's own spec lists release
+ * (note-off) velocity alongside pitch bend/pressure/CC74 as a real per-
+ * note expressive dimension -- this codebase always sent 0 (the universal
+ * "no data" convention every device that doesn't measure it already
+ * sends), a genuine, real gap given "fine control of expression is
+ * important and integral to the experience."
+ *
+ * The honest limitation this design works around: release is detected
+ * purely on capacitive touch going false (the `!touched` branch below),
+ * which is a binary finger-presence signal, not a continuous one -- unlike
+ * a real MPE keybed (Seaboard, LinnStrument) that keeps sensing position
+ * through the whole physical release motion, this pipeline stops reading
+ * Hall depth the instant the finger lifts, so there is no clean "how fast
+ * did the switch spring back after release" measurement available without
+ * adding real latency (reading depth for a window AFTER release, delaying
+ * every single note-off by that window -- rejected: this codebase has
+ * fought hard for correct, prompt note-offs, and delaying all of them for
+ * an unproven feature is the wrong trade). Instead: depth_fall_rate (see
+ * pad_expr_t's own comment) is a smoothed depth-units/ms rate, continuously
+ * updated every scan WHILE STILL TOUCHED, so whatever it reads at the
+ * instant of release reflects the trend in the last real samples just
+ * before the finger lifted -- an approximation of release speed, not a
+ * true post-release measurement, but real, existing data with zero added
+ * note-off latency, which is the trade this codebase's own history says to
+ * make. release_velocity_from_fall_rate() below is the pure mapping;
+ * end_held_note() is the only caller that ever computes a non-zero value.
+ * Unmeasured against real hardware, like every first-pass sensing curve in
+ * this file -- MIN/MAX_FALL_RATE are a first guess at the range a slow vs.
+ * fast finger lift produces, derived from this file's own existing depth
+ * scale (TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA 150, aftertouch full
+ * scale ~1450), not measured release motion. */
+#define RELEASE_FALL_RATE_SMOOTHING_ALPHA 0.5f
+#define RELEASE_VELOCITY_MIN_FALL_RATE 2.0f  /* depth-units/ms; at/below this, minimum release velocity */
+#define RELEASE_VELOCITY_MAX_FALL_RATE 25.0f /* depth-units/ms; at/above this, maximum release velocity */
+#define RELEASE_VELOCITY_MIN 1u
+#define RELEASE_VELOCITY_MAX 127u
+
+/* fall_rate >= 0 means depth wasn't actually falling as of the last sample
+ * (held steady, or even still increasing) -- no real release motion was
+ * captured, so this returns the floor rather than guessing. Otherwise maps
+ * the magnitude of the (negative) rate linearly onto 1-127, clamped. */
+static uint8_t release_velocity_from_fall_rate(float fall_rate) {
+    if (fall_rate >= 0.0f) {
+        return RELEASE_VELOCITY_MIN;
+    }
+    float magnitude = -fall_rate;
+    float t = (magnitude - RELEASE_VELOCITY_MIN_FALL_RATE) / (RELEASE_VELOCITY_MAX_FALL_RATE - RELEASE_VELOCITY_MIN_FALL_RATE);
+    if (t < 0.0f) {
+        t = 0.0f;
+    } else if (t > 1.0f) {
+        t = 1.0f;
+    }
+    return (uint8_t)((float)RELEASE_VELOCITY_MIN + t * (float)(RELEASE_VELOCITY_MAX - RELEASE_VELOCITY_MIN));
+}
+
 /* ---- Pitch bend from sideways motion -----------------------------------
  * Real feedback: "pitch bend on sideways motion for pads. This is only
  * relevant after the initial velocity and should compensate for
@@ -972,6 +1030,20 @@ typedef struct {
      * from 0. */
     float smoothed_depth;
 
+    /* Feeds release velocity -- see RELEASE_VELOCITY_MIN_FALL_RATE's own
+     * comment for the full reasoning. A SEPARATE smoothed quantity from
+     * smoothed_depth above (which only ever needs the depth level itself,
+     * for aftertouch): this is a smoothed RATE, the depth-units-per-ms
+     * this pad was moving as of the last real sample while still touched
+     * -- negative while depth is falling back toward rest, which is
+     * exactly the release motion. prev_raw_depth/last_depth_sample_ms are
+     * the raw two-sample state the rate is computed from each scan;
+     * last_depth_sample_ms == 0 means "no sample yet this hold" (seeded
+     * at note-on, not zero-initialized rate from a fake first delta). */
+    float depth_fall_rate;
+    float prev_raw_depth;
+    uint32_t last_depth_sample_ms;
+
     /* Cached at note-on and reused for aftertouch/note-off, so a live
      * scale change mid-hold (once scale switching exists) can't send
      * note-off for a different note than was turned on -- a stuck note
@@ -1189,6 +1261,15 @@ typedef struct {
      * current state. */
     bool sustain_pending;
     uint8_t sustained_note; /* valid only while sustain_pending */
+    /* The finger's OWN release velocity, computed at the moment it
+     * actually lifted (end_held_note()'s own call, before the note-off
+     * itself got deferred) -- without this, every sustain-pedal-held
+     * release would send 0 (no data) once the pedal eventually let it go,
+     * even though the real lift-off speed WAS measured; playing with the
+     * pedal down is common enough that silently losing this here would
+     * defeat "fine control of expression is integral" for a large
+     * fraction of real playing. Valid only while sustain_pending. */
+    uint8_t sustained_release_velocity;
 } mpe_channel_slot_t;
 /* Sized for the live zone's maximum possible extent (services/midi_
  * channels.h's TILES_MIDI_SHARED_POOL_SIZE, 8 -- the zone can never be
@@ -1450,7 +1531,7 @@ static void end_harmonic_voice(uint8_t idx) {
     if (!v->active) {
         return;
     }
-    tiles_midi_note_off(v->midi_channel, v->note);
+    tiles_midi_note_off(v->midi_channel, v->note, 0u); /* a timed pluck ending, not a measured player release */
     /* Deliberately NOT tiles_cv_gate_note_off()/_note_on() below -- CV/
      * gate is explicitly monophonic, tracking whichever note claimed it
      * most recently (see cv_gate.h's own last-note-priority arbitration).
@@ -1543,7 +1624,7 @@ static uint8_t claim_harmonic_channel(void) {
 static void fire_harmonic_pluck(uint8_t slot, uint8_t pad, uint8_t note, uint8_t channel, uint32_t now_ms) {
     harmonic_voice_t *v = &s_harmonic_voices[slot];
     if (v->active) {
-        tiles_midi_note_off(v->midi_channel, v->note);
+        tiles_midi_note_off(v->midi_channel, v->note, 0u); /* re-plucked, not a measured player release */
     }
     v->active = true;
     v->pad = pad;
@@ -2457,13 +2538,22 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool allow_sustain_defer) 
     tiles_haptics_stop(pad);
     tiles_midi_send_pitch_bend(s->midi_channel, PITCH_BEND_CENTER);
     s->pitch_bend_active = false;
+    /* allow_sustain_defer is true for exactly one call site -- the genuine
+     * "player let go" release, per this function's own header comment --
+     * so it's also the right gate for "is there real lift-off speed to
+     * measure here at all." Every other caller (a hard reset, a channel
+     * steal, a clean retrigger) ends this note for a reason that has
+     * nothing to do with how fast a finger moved, so they get 0 (no
+     * data), the same as before this feature existed. */
+    uint8_t release_velocity = allow_sustain_defer ? release_velocity_from_fall_rate(s->depth_fall_rate) : 0u;
     if (allow_sustain_defer && s->midi_channel != TILES_MIDI_MPE_MASTER_CHANNEL && tiles_pedal_is_sustained()) {
         uint8_t idx = (uint8_t)(s->midi_channel - TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL);
         s_mpe_channels[idx].sustain_pending = true;
         s_mpe_channels[idx].sustained_note = s->active_note;
+        s_mpe_channels[idx].sustained_release_velocity = release_velocity; /* carried through to the deferred send */
         return;
     }
-    tiles_midi_note_off(s->midi_channel, s->active_note);
+    tiles_midi_note_off(s->midi_channel, s->active_note, release_velocity);
     if (s->midi_channel == TILES_MIDI_MPE_MASTER_CHANNEL) {
         /* Real bug this addition itself would otherwise introduce: the
          * MPE-only cleanup below computes idx as midi_channel minus
@@ -2510,7 +2600,11 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool allow_sustain_defer) 
 static void flush_sustained_notes(void) {
     for (uint8_t i = 0; i < TILES_MIDI_SHARED_POOL_SIZE; i++) {
         if (s_mpe_channels[i].sustain_pending) {
-            tiles_midi_note_off((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i), s_mpe_channels[i].sustained_note);
+            /* The finger's own release velocity, measured back when it
+             * actually lifted -- see sustained_release_velocity's own
+             * comment for why this isn't just 0. */
+            tiles_midi_note_off((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i), s_mpe_channels[i].sustained_note,
+                                 s_mpe_channels[i].sustained_release_velocity);
             set_channel_in_use(i, false);
             s_mpe_channels[i].sustain_pending = false;
         }
@@ -2631,7 +2725,8 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
                "zone in use)\n",
                pad, (unsigned)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx), (unsigned)zone_size);
         tiles_midi_note_off((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx),
-                             s_mpe_channels[oldest_idx].sustained_note);
+                             s_mpe_channels[oldest_idx].sustained_note,
+                             s_mpe_channels[oldest_idx].sustained_release_velocity);
         s_mpe_channels[oldest_idx].sustain_pending = false;
     } else {
         printf("[expression] pad %u stealing pad %u's MPE channel %u (all %u channels of the live zone in use)\n",
@@ -2843,6 +2938,17 @@ void tiles_expression_scan(void) {
                 /* Seed the smoother with the real depth right now rather
                  * than 0 -- see the field's own comment. */
                 s->smoothed_depth = (float)tiles_hall_get_depth(pad);
+                /* Same seeding for the release-velocity tracker -- see
+                 * depth_fall_rate's own comment. last_depth_sample_ms = 0
+                 * would read as "no sample yet," which now() will never
+                 * legitimately be at boot+0, but seeding it explicitly
+                 * here (rather than relying on a fresh pad_expr_t's own
+                 * zero-init) is what makes the very first scan after
+                 * note-on compute a real (zero) delta instead of treating
+                 * this as still-unseeded. */
+                s->prev_raw_depth = s->smoothed_depth;
+                s->last_depth_sample_ms = now_ms;
+                s->depth_fall_rate = 0.0f;
                 s->note_on_ms = now_ms;
                 s->state = PAD_STATE_NOTE_ON;
                 continue;
@@ -2889,6 +2995,23 @@ void tiles_expression_scan(void) {
          * (more pressure past the strike) and an easing-off one (less
          * pressure, still touching) move it, smoothly. */
         s->smoothed_depth += AFTERTOUCH_SMOOTHING_ALPHA * (raw_depth - s->smoothed_depth);
+
+        /* Feeds release velocity -- see depth_fall_rate's own comment.
+         * Runs every scan while genuinely touched (this whole branch is
+         * unreachable once !touched fires above), so whatever this reads
+         * at the moment of an eventual release is the smoothed trend from
+         * the last real samples just before the finger actually lifted. A
+         * zero dt_ms (two scans landing in the same millisecond) is
+         * skipped rather than dividing by it -- the rate just doesn't
+         * update that particular scan, which is harmless since the EMA
+         * only needs SOME recent samples, not literally every one. */
+        uint32_t dt_ms = now_ms - s->last_depth_sample_ms;
+        if (dt_ms > 0u) {
+            float instant_rate = (raw_depth - s->prev_raw_depth) / (float)dt_ms;
+            s->depth_fall_rate += RELEASE_FALL_RATE_SMOOTHING_ALPHA * (instant_rate - s->depth_fall_rate);
+        }
+        s->prev_raw_depth = raw_depth;
+        s->last_depth_sample_ms = now_ms;
 
         uint8_t at = aftertouch_from_depth((uint16_t)s->smoothed_depth);
         if (at != s->last_sent_aftertouch) {

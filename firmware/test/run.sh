@@ -26,6 +26,9 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/storage test/test_kv_store.c src/stor
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/profiles -Isrc/storage test/test_settings.c src/profiles/settings.c src/profiles/settings_persist.c src/storage/kv_store.c -lm -o /tmp/sentia_tiles_test_settings
 /tmp/sentia_tiles_test_settings
 
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/midi test/test_identity.c -o /tmp/sentia_tiles_test_identity
+/tmp/sentia_tiles_test_identity
+
 # The assembled DIN OUT PIO program, decoded as 8N1 @ 31250 baud. Needs a firmware build first
 # (pioasm produces the header it reads); skipped with a note if there isn't one yet.
 if [ -n "$(find build -name din_midi_tx.pio.h 2>/dev/null | head -1)" ]; then

@@ -164,9 +164,24 @@ void tiles_midi_send_mpe_zone_size(uint8_t member_channel_count);
 
 /* Note on/off, on a specific MPE Member Channel (status-byte nibble --
  * see services/expression.c's per-pad MPE channel allocator for how a
- * pad's currently-held note gets one). */
+ * pad's currently-held note gets one). `release_velocity` is note-off's
+ * own third data byte -- real feedback: "before bnooting look into what
+ * actually is standardized or good practice in this industry that we
+ * havent implemented yet" -> "5. research and implement it": MPE's own
+ * spec lists release velocity as one of its supported per-note
+ * dimensions, alongside pitch bend, pressure and CC74, and this codebase
+ * used to hardcode it to 0 (meaning "no release-velocity data," the
+ * universal convention every existing device that doesn't measure it
+ * already sends). services/expression.c's own end_held_note() is the one
+ * caller that derives a real, non-zero value, from how fast this pad's
+ * Hall depth was returning toward rest just before the finger actually
+ * lifted -- see that function's own comment for the full reasoning and
+ * why it's an unmeasured first attempt, same as every other sensing-
+ * derived curve in that file. Every other caller (chord/sequencer/Song/
+ * game mode, harmonics, a sustain-pedal-stolen or steal-evicted channel)
+ * has no real release gesture behind its own note-offs and passes 0. */
 void tiles_midi_note_on(uint8_t channel, uint8_t note, uint8_t velocity);
-void tiles_midi_note_off(uint8_t channel, uint8_t note);
+void tiles_midi_note_off(uint8_t channel, uint8_t note, uint8_t release_velocity);
 
 /* Channel Pressure (0xD0 | channel, pressure) on a specific Member
  * Channel -- this, not Poly Key Pressure, is MPE's actual Z-dimension
@@ -215,6 +230,18 @@ void tiles_midi_send_daw_cc(uint8_t channel, uint8_t controller, uint8_t value);
  * header's own comment) -- it just always covers the full channel range
  * that could ever carry a note, the same way it always has. */
 void tiles_midi_send_cc_broadcast(uint8_t controller, uint8_t value);
+
+/* MIDI panic: All Notes Off (CC 123) then All Sound Off (CC 120), on every
+ * channel this device could ever have a note on -- real feedback: "panic
+ * should be forced sleep with shift button. like that action sends a
+ * panic note off." services/standby.c calls this from the manual (shift/
+ * circle-held) forced-sleep gesture specifically, not the automatic
+ * inactivity timeout that reaches the same sleep state -- a panic
+ * broadcast is a deliberate player action, not something that should also
+ * fire silently every time the board goes idle. See this function's own
+ * definition for why CC 123 then CC 120, and why it deliberately doesn't
+ * touch this device's own internal note-tracking state at all. */
+void tiles_midi_send_panic(void);
 
 /* Sends a Pitch Bend Change (0xE0 | channel, LSB, MSB) on one specific
  * Member Channel. bend_14bit is the full unsigned wire value (0-16383,

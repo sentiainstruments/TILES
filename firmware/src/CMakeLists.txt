@@ -37,6 +37,7 @@ add_executable(sentia_tiles_firmware
     midi/usb_descriptors.c
     midi/midi_out.c
     midi/midi_in.c
+    midi/identity.c
     midi/din_midi.c
     midi/din_midi_queue.c
     storage/kv_store.c

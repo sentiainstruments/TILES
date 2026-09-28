@@ -8646,5 +8646,99 @@ not its code.
     `op_mode.c` themselves, which (like the rest of both files) has no
     host-test harness and is verified by code review plus the real-
     hardware round this change is waiting on.
+- **Five real, sourced industry-standard gaps closed in one round.** Real
+  feedback: "before bnooting look into what actually is standardized or
+  good practice in this industry that we havent implemented yet," then,
+  once five candidates were reported back: "panic should be forced sleep
+  with shift button. like that action sends a panic note off, 2 fix it.
+  3 make sure we are ok and fix whaterver needs. 4 fix it. 5. research and
+  implement it."
+  1. **MIDI panic tied to the manual forced-sleep gesture.** `midi/
+     midi_out.c`'s new `tiles_midi_send_panic()` sends CC 123 (All Notes
+     Off) then CC 120 (All Sound Off) across every channel this device
+     could ever have a note on -- reuses `tiles_midi_send_cc_broadcast()`,
+     which already covers the Master Channel plus 2-16 (confirmed against
+     real-world practice: "use CC 123 first for standard panic control,
+     and CC 120 as a backup"). Called from `standby.c`'s circle-held (8s,
+     "shift") manual deep-sleep gesture specifically -- not the automatic
+     inactivity timeout that reaches the same sleep state, since a panic
+     broadcast is a deliberate player action, not something that should
+     fire every time the board happens to sit idle. Deliberately
+     independent of this device's own internal note bookkeeping (unlike
+     `tiles_expression_force_release_all()`) -- the whole point of a panic
+     is to silence a receiver even if the sender's own tracking is wrong.
+  2. **Active Sensing (0xFE) on DIN MIDI OUT.** Confirmed standard practice
+     (the spec: sent at least every 300ms whenever the line is otherwise
+     idle, so a receiver that understands it can tell a dead connection --
+     cable unplugged, or this board crashed mid-note -- from ordinary
+     silence, and silence itself as a failsafe). Only mattered once DIN
+     MIDI OUT existed as a real cable (USB has its own disconnect signal
+     via `tud_midi_mounted()`); `midi/din_midi.c`'s `tiles_din_midi_
+     service()` now tracks time since the last real byte actually left the
+     transmitter and injects a single 0xFE after ~250ms of silence, well
+     under the 300ms ceiling.
+  3. **Universal MIDI Identity Request/Reply -- audited and built.** New
+     `midi/identity.h/.c`: replies to the standard device-inquiry SysEx
+     (`F0 7E <id> 06 01 F7`) with manufacturer ID `0x7D` (the same MMA
+     "non-commercial" ID Scene Launch's own protocol already uses, for the
+     same reason -- SENTIA has no registered ID), a self-assigned family/
+     member code, and a placeholder software version (no real firmware
+     versioning scheme exists yet). Confirmed it coexists cleanly with
+     Scene Launch's own SysEx listener on the same shared callback
+     mechanism (each checks its own leading byte -- 0x7E here, 0x7D there
+     -- and ignores the other's frames), and is USB-only like `tiles_midi_
+     send_sysex()` itself -- DIN has no SysEx support at all
+     (`din_midi_queue.c` rejects it by design), so a DIN-only connection
+     won't get a reply, accepted rather than building DIN SysEx support
+     for this one feature. Host-tested (`firmware/test/test_identity.c`).
+  4. **Running status on DIN output -- built.** See `midi/README.md`'s own
+     entry for the full reasoning (why DIN specifically, not USB, and the
+     "per status byte, not per message" subtlety that lets two different
+     CCs on the same channel legitimately compress into each other).
+     `din_midi_queue.c`'s `tx_push()` is the one place this happens;
+     existing host tests were updated to their new, correct byte counts,
+     plus a dedicated new test section for the feature itself.
+  5. **Note-off release velocity -- researched, then implemented within a
+     real limitation.** Research: MPE's own spec lists release velocity
+     as a real per-note dimension alongside pitch bend/pressure/CC74; this
+     codebase always hardcoded 0. The honest limitation: release is
+     detected purely on capacitive touch going false (a binary signal),
+     unlike a real MPE keybed that keeps sensing position through the
+     whole physical release motion -- there's no clean "how fast did the
+     switch spring back" measurement available without adding real note-
+     off latency (reading depth for a window AFTER release), which was
+     rejected as the wrong trade for an unproven feature given this
+     codebase's own history of fighting for correct, prompt note-offs.
+     Built instead as an approximation with zero added latency: `pad_
+     expr_t`'s new `depth_fall_rate` is a smoothed depth-units/ms rate,
+     updated every scan while genuinely touched, so whatever it reads at
+     the instant of release reflects the trend in the last real samples
+     just before the finger lifted. `release_velocity_from_fall_rate()`
+     maps its magnitude onto 1-127 (a non-falling reading at release, e.g.
+     held steady then lifted with no measurable trend, gets the floor, not
+     a guess). `end_held_note()`'s own `allow_sustain_defer` parameter
+     (already documented as true for exactly one call site, the genuine
+     "player let go" release) is the natural, already-correct gate for
+     "is there real data here" -- every other caller of `tiles_midi_note_
+     off()` (chord/sequencer/Song/game mode, harmonics, a hard reset, a
+     channel steal, a clean retrigger) passes 0, unchanged from before.
+     **Also fixed carrying this through the sustain pedal**: a release
+     velocity measured at finger-lift used to have nowhere to go once
+     the actual note-off was deferred for the pedal -- `mpe_channel_
+     slot_t` gained its own `sustained_release_velocity`, set at the
+     original lift and read back whenever `flush_sustained_notes()` or a
+     channel steal finally sends that deferred note-off, so playing with
+     the pedal down (common enough to matter) doesn't silently lose the
+     feature. `tiles_midi_note_off()`'s signature changed (a real
+     velocity parameter, not always 0) -- all 14 other call sites across
+     `op_mode.c`/`game_mode.c`/`expression.c`'s own harmonics section were
+     updated to pass 0 explicitly, each with a comment on why that call
+     site has no real release gesture behind it. Unmeasured against real
+     hardware, like every first-pass sensing curve in this file -- the
+     fall-rate thresholds are a first guess from this file's own existing
+     depth scale, not measured release motion; the mapping math itself was
+     checked by hand (monotonic, correctly floored/ceilinged) but the
+     scan-loop integration has no host-test harness, same as the rest of
+     this file.
 - Everything else (per-pad Hall calibration) is not built
   yet.

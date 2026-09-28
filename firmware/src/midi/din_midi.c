@@ -10,6 +10,8 @@
 #include "hardware/pio.h"
 #include "hardware/uart.h"
 
+#include "pico/time.h"
+
 #define DIN_MIDI_BAUD 31250u
 #define DIN_UART uart0
 #define DIN_UART_IRQ UART0_IRQ
@@ -21,6 +23,28 @@ static PIO s_pio;
 static uint s_sm;
 static uint s_offset;
 static tiles_din_midi_trs_type_t s_type;
+
+/* Active Sensing (0xFE): real feedback: "before bnooting look into what
+ * actually is standardized or good practice in this industry that we
+ * havent implemented yet" -> confirmed standard practice for a DIN MIDI
+ * transmitter (the spec: sent at least every 300ms whenever the line is
+ * otherwise idle, so a receiver that understands it can tell a genuinely
+ * dead connection -- cable unplugged, or this board crashed mid-note --
+ * from ordinary silence, and silence itself as a failsafe rather than
+ * leaving a note stuck forever). USB never needed this (tud_midi_mounted()
+ * already tells a USB host the connection state directly, and sending an
+ * unsolicited Active Sensing byte over USB-MIDI's class protocol would be
+ * unusual, not established practice) -- this is DIN-only, and lives here
+ * rather than in din_midi_queue.c because it's a real-time concern (when
+ * did a byte last actually go out) that module deliberately has no clock
+ * for. Support is optional on either end per spec; this only ever helps,
+ * never hurts, a receiver that doesn't implement it. */
+#define DIN_ACTIVE_SENSE_INTERVAL_MS 250u /* under the spec's 300ms ceiling, a safety margin for scan-rate jitter */
+static uint32_t s_din_last_activity_ms;
+
+static void din_note_activity(uint32_t now_ms) {
+    s_din_last_activity_ms = now_ms;
+}
 
 /* The GPIO that carries the data waveform for a TRS type (see din_midi.h for
  * why Type A = GP0). */
@@ -143,6 +167,7 @@ bool tiles_din_midi_init(void) {
     irq_set_enabled(DIN_UART_IRQ, true);
     uart_set_irq_enables(DIN_UART, true, false); /* RX data (+ receive timeout), no TX interrupt */
 
+    din_note_activity(to_ms_since_boot(get_absolute_time()));
     s_ready = true;
     return true;
 }
@@ -176,7 +201,9 @@ void tiles_din_midi_send(const uint8_t *msg, uint8_t len) {
     if (!s_ready) {
         return;
     }
-    (void)tiles_din_queue_push_message(msg, len);
+    if (tiles_din_queue_push_message(msg, len)) {
+        din_note_activity(to_ms_since_boot(get_absolute_time()));
+    }
     tx_kick();
 }
 
@@ -184,7 +211,20 @@ void tiles_din_midi_service(void) {
     if (!s_ready) {
         return;
     }
-    (void)tiles_din_queue_service();
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    if (tiles_din_queue_service()) {
+        din_note_activity(now_ms);
+    } else if ((uint32_t)(now_ms - s_din_last_activity_ms) >= DIN_ACTIVE_SENSE_INTERVAL_MS) {
+        /* tiles_din_queue_push_message() rejects nothing for a single
+         * Real-Time byte (status >= 0xF8), so this can't fail -- but even a
+         * dropped Active Sensing byte is harmless (it's optional, and the
+         * NEXT tick tries again in another 250ms regardless, since a failed
+         * push doesn't touch s_din_last_activity_ms). */
+        uint8_t active_sense = 0xFEu;
+        if (tiles_din_queue_push_message(&active_sense, 1u)) {
+            din_note_activity(now_ms);
+        }
+    }
     tx_kick();
 }
 

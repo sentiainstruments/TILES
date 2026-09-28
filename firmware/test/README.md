@@ -23,6 +23,10 @@ allocation, calibration math, `usb_vendor/` protocol framing.
   contiguous zone-size math, change notification, and the cross-module
   invariant that Song can never claim a channel a live MPE note is using
   (and vice versa) even though the two are otherwise independent bookkeeping.
+- `test_identity.c` -- `midi/identity.c`'s Universal MIDI Identity Request/Reply:
+  a real request gets the right reply bytes, the request's own device-id byte
+  is ignored, every malformed/unrelated frame (including a real Scene Launch
+  one) is silently ignored.
 - `test_kv_store.c` -- `storage/kv_store.c` against a simulated NOR flash, including a
   power cut after every erase/program step (and partially-applied operations):
   the store always comes back with the old payload or the new one, never garbage,

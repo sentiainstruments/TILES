@@ -113,8 +113,8 @@ void tiles_midi_note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
     send3((uint8_t)(0x90u | channel), note, velocity);
 }
 
-void tiles_midi_note_off(uint8_t channel, uint8_t note) {
-    send3((uint8_t)(0x80u | channel), note, 0u);
+void tiles_midi_note_off(uint8_t channel, uint8_t note, uint8_t release_velocity) {
+    send3((uint8_t)(0x80u | channel), note, release_velocity);
 }
 
 void tiles_midi_send_channel_pressure(uint8_t channel, uint8_t pressure) {
@@ -144,6 +144,29 @@ void tiles_midi_send_cc_broadcast(uint8_t controller, uint8_t value) {
     for (uint8_t i = 0; i < MIDI_BROADCAST_CHANNEL_COUNT; i++) {
         tiles_midi_send_cc((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i), controller, value);
     }
+}
+
+/* Real feedback: "panic should be forced sleep with shift button. like
+ * that action sends a panic note off" -- standard MIDI practice for a
+ * hardware controller's own "stop everything" gesture: CC 123 (All Notes
+ * Off) is what a DAW's own panic button sends and is the accepted cure for
+ * a stuck note; CC 120 (All Sound Off) is the harsher backup for a
+ * receiver that doesn't fully honor 123 (confirmed against real-world
+ * practice: "use CC 123 first for standard panic control, and CC 120 as a
+ * backup if you need guaranteed immediate silence"). Sent on every channel
+ * -- reuses tiles_midi_send_cc_broadcast(), which already covers the
+ * Master Channel plus 2-16 (chord/game/sequencer/Song's channels included,
+ * not just the live MPE zone -- see that function's own header comment),
+ * since a stuck note could genuinely be on any of them, not only a live
+ * MPE one. Deliberately independent of this device's own internal note
+ * bookkeeping: the whole point of a MIDI panic is to silence a receiver
+ * even if the sender's own tracking of what's held is wrong -- unlike
+ * tiles_expression_force_release_all() (services/expression.c), which
+ * only sends note-offs for whatever this file's own state believes is
+ * currently held. */
+void tiles_midi_send_panic(void) {
+    tiles_midi_send_cc_broadcast(123u, 0u); /* All Notes Off */
+    tiles_midi_send_cc_broadcast(120u, 0u); /* All Sound Off */
 }
 
 void tiles_midi_send_pitch_bend(uint8_t channel, uint16_t bend_14bit) {

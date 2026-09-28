@@ -63,6 +63,7 @@
 #include "diagnostics/calibration.h"
 #include "diagnostics/i2c_scan.h"
 #include "midi/din_midi.h"
+#include "midi/identity.h"
 #include "midi/midi_in.h"
 #include "midi/midi_out.h"
 #include "midi/usb_device.h"
@@ -374,6 +375,13 @@ int main(void) {
      * this resets that registration table, so registering before this
      * ran would get silently wiped. See midi/midi_in.h. */
     tiles_midi_in_init();
+
+    /* Universal MIDI Identity Request/Reply -- standard device-inquiry
+     * handshake some DAWs and generic MIDI utilities use for auto-
+     * detection. Registers a sysex callback, so it must run after
+     * tiles_midi_in_init() just above for the same reason midi_clock's own
+     * callback does. See midi/identity.h. */
+    tiles_midi_identity_init();
 
     /* MIDI clock RX (USB MIDI IN) -- the timing source op_mode.h's
      * sequencer mode runs from. See services/midi_clock.h. */

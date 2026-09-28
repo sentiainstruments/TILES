@@ -29,6 +29,36 @@ static volatile bool s_rx_overflow;
 
 static uint32_t s_tx_dropped;
 
+/* Running status: MIDI 1.0's own standard wire-bandwidth optimization --
+ * real feedback: "before bnooting look into what actually is standardized
+ * or good practice in this industry that we havent implemented yet" ->
+ * "4. fix it." Every practical MIDI receiver already understands it;
+ * omitting a repeated status byte for two consecutive same-status
+ * messages is real, free bandwidth back specifically on THIS wire's slow
+ * 31,250 baud (~32 microseconds/byte) -- worth doing here and nowhere
+ * else in this firmware, because USB-MIDI's own class protocol packs
+ * every message into a fixed 4-byte Event Packet with an explicit Code
+ * Index Number regardless of the underlying byte stream, so there is no
+ * equivalent USB saving to make (a compressed, status-less send would not
+ * even be a valid USB-MIDI Event Packet). This lives entirely inside this
+ * ring (see tx_push() below), never touching midi/midi_out.c's own USB
+ * path or the bytes it hands this file via tiles_din_midi_send() -- those
+ * still always carry a full status byte; the compression happens only
+ * here, at the point of actually queueing wire bytes.
+ *
+ * Tracks the status byte of the last message tx_push() actually wrote to
+ * the ring (0 = none yet). Correct because nothing else this queue ever
+ * enqueues here can legally cancel running status: System Common bytes
+ * (which the spec says DO cancel it) and SysEx are both already rejected
+ * by tiles_din_queue_push_message() before reaching tx_push() (see that
+ * function's own comment), and Real-Time bytes (which do NOT cancel it,
+ * and may legally appear between two running-status messages without
+ * disturbing it) go through the entirely separate RT queue, never through
+ * this ring at all -- so every message that ever reaches tx_push() really
+ * is either the compressed continuation of, or a genuine change from, the
+ * immediately preceding one on the wire. */
+static uint8_t s_last_wire_status;
+
 /* ---- coalescing slots ----
  * One per (channel, continuous kind). `dirty` = a value is waiting to go out.
  * Only ever touched from main context (push_message / service), so no
@@ -69,6 +99,7 @@ void tiles_din_queue_init(void) {
     s_tx_dropped = 0u;
     s_scan_pos = 0u;
     s_dirty_count = 0u;
+    s_last_wire_status = 0u;
     for (uint8_t c = 0u; c < NUM_CHANNELS; c++) {
         for (uint8_t k = 0u; k < (uint8_t)KIND_COUNT; k++) {
             s_slots[c][k].dirty = false;
@@ -90,17 +121,23 @@ static uint16_t tx_free(void) {
 /* Whole-message enqueue: either every byte goes in, or none do (and the
  * drop is counted). The head is published once, after the last byte, so the
  * consumer never sees half a message. */
+/* Running status compression -- see s_last_wire_status's own comment
+ * above for the full reasoning. */
 static bool tx_push(const uint8_t *msg, uint8_t len) {
-    if (tx_free() < len) {
+    bool compress = len > 1u && msg[0] == s_last_wire_status;
+    const uint8_t *bytes = compress ? &msg[1] : msg;
+    uint8_t n = compress ? (uint8_t)(len - 1u) : len;
+    if (tx_free() < n) {
         s_tx_dropped++;
         return false;
     }
     uint16_t head = s_tx_head;
-    for (uint8_t i = 0u; i < len; i++) {
-        s_tx_buf[(head + i) & TX_MASK] = msg[i];
+    for (uint8_t i = 0u; i < n; i++) {
+        s_tx_buf[(head + i) & TX_MASK] = bytes[i];
     }
     DIN_COMPILER_BARRIER();
-    s_tx_head = (uint16_t)((head + len) & TX_MASK);
+    s_tx_head = (uint16_t)((head + n) & TX_MASK);
+    s_last_wire_status = msg[0]; /* only reached on success -- a dropped message never touches this */
     return true;
 }
 
@@ -187,10 +224,14 @@ static bool flush_slot(uint8_t channel, uint8_t kind) {
     }
     uint8_t msg[3];
     uint8_t len = slot_to_message(channel, (continuous_kind_t)kind, s, msg);
-    if (tx_free() < len) {
-        return false;
+    /* No separate "does it fit" pre-check here anymore -- tx_push() is the
+     * single source of truth for that now that it can compress a message
+     * to less than `len` bytes via running status; checking `len` here
+     * (the uncompressed size) could wrongly skip a flush that would have
+     * fit compressed. */
+    if (!tx_push(msg, len)) {
+        return false; /* try again next scan */
     }
-    (void)tx_push(msg, len);
     s->dirty = false;
     s_dirty_count--;
     return true;

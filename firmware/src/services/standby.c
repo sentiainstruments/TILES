@@ -7,6 +7,7 @@
 #include "hall.h"
 #include "lighting.h"
 #include "midi_in.h"
+#include "midi_out.h"
 #include "op_mode.h"
 #include "pedal.h"
 #include "pixel_font.h"
@@ -2226,6 +2227,17 @@ static void handle_circle_hold(uint32_t now_ms) {
         if (held_ms >= TILES_CIRCLE_DEEP_SLEEP_HOLD_MS && !s_circle_deep_sleep_fired) {
             s_circle_deep_sleep_fired = true;
             s_last_activity_ms = now_ms;
+            /* Real feedback: "panic should be forced sleep with shift
+             * button. like that action sends a panic note off." Only on
+             * THIS, the deliberate player-held gesture -- not inside
+             * enter_deep_sleep() itself, which the automatic inactivity
+             * timeout below also reaches, and a panic broadcast has no
+             * business firing just because the board sat idle. See
+             * midi/midi_out.h's own tiles_midi_send_panic() for what it
+             * actually sends and why. Before enter_deep_sleep() rather
+             * than after -- a panic is a "stop right now" action, so it
+             * goes out before anything else this gesture does, not last. */
+            tiles_midi_send_panic();
             enter_deep_sleep();
             s_deep_sleep_manual = true; /* the player asked for this one -- see s_deep_sleep_manual's comment */
         } else if (held_ms >= TILES_CIRCLE_SCREENSAVER_HOLD_MS && !s_circle_screensaver_fired) {

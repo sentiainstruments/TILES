@@ -982,7 +982,7 @@ static void chord_pad_note_off(uint8_t pad) {
         return;
     }
     for (uint8_t i = 0; i < OP_CHORD_NUM_VOICES; i++) {
-        tiles_midi_note_off(OP_CHORD_CHANNEL, s_chord_pad_notes[pad - 1u][i]);
+        tiles_midi_note_off(OP_CHORD_CHANNEL, s_chord_pad_notes[pad - 1u][i], 0u); /* chord voicing ends on touch release, not a measured player gesture */
         tiles_cv_gate_note_off(s_chord_pad_notes[pad - 1u][i]);
     }
     tiles_haptics_stop(pad);
@@ -1185,7 +1185,7 @@ static void seq_end_current_note(uint8_t lane) {
     /* Every note this step's cluster fired gets its own Note-Off --
      * see s_seq_sounding_notes[]'s own declaration comment. */
     for (uint8_t i = 0; i < s_seq_sounding_note_count[lane]; i++) {
-        tiles_midi_note_off(s_seq_sounding_channel[lane], s_seq_sounding_notes[lane][i]);
+        tiles_midi_note_off(s_seq_sounding_channel[lane], s_seq_sounding_notes[lane][i], 0u); /* clock-fired note, no player release */
         tiles_cv_gate_note_off(s_seq_sounding_notes[lane][i]);
     }
     /* Only undoes the haptic if this note actually triggered one --
@@ -3504,7 +3504,7 @@ static void seq_capture_end_one_sounding_note(uint8_t pad) {
         if (s_seq_capture_live_pads[i] != pad) {
             continue;
         }
-        tiles_midi_note_off(s_seq_lane_channel[s_seq_edit_lane], s_seq_capture_live_notes[i]);
+        tiles_midi_note_off(s_seq_lane_channel[s_seq_edit_lane], s_seq_capture_live_notes[i], 0u); /* a live-captured note ended by exiting capture, not a measured release */
         tiles_cv_gate_note_off(s_seq_capture_live_notes[i]);
         tiles_haptics_stop(pad);
         for (uint8_t j = i; (uint8_t)(j + 1u) < s_seq_capture_live_count; j++) {
@@ -3521,7 +3521,7 @@ static void seq_capture_end_one_sounding_note(uint8_t pad) {
  * hand lifting off the whole cluster together. */
 static void seq_capture_end_all_sounding_notes(void) {
     for (uint8_t i = 0; i < s_seq_capture_live_count; i++) {
-        tiles_midi_note_off(s_seq_lane_channel[s_seq_edit_lane], s_seq_capture_live_notes[i]);
+        tiles_midi_note_off(s_seq_lane_channel[s_seq_edit_lane], s_seq_capture_live_notes[i], 0u); /* a live-captured note ended by exiting capture, not a measured release */
         tiles_cv_gate_note_off(s_seq_capture_live_notes[i]);
         tiles_haptics_stop(s_seq_capture_live_pads[i]);
     }
@@ -5925,7 +5925,7 @@ static void song_end_current_note(uint8_t slot) {
         return;
     }
     for (uint8_t i = 0; i < s_song_sounding_note_count[slot]; i++) {
-        tiles_midi_note_off(s_song_slot_channel[slot], s_song_sounding_notes[slot][i]);
+        tiles_midi_note_off(s_song_slot_channel[slot], s_song_sounding_notes[slot][i], 0u); /* clock-fired note, no player release */
         tiles_cv_gate_note_off(s_song_sounding_notes[slot][i]);
     }
     s_song_note_sounding[slot] = false;
@@ -6709,7 +6709,7 @@ static void song_capture_end_one_sounding_note(uint8_t pad) {
     uint8_t slot = s_song_capture_slot - 1u;
     for (uint8_t i = 0; i < s_song_capture_live_count; i++) {
         if (s_song_capture_live_pads[i] == pad) {
-            tiles_midi_note_off(s_song_slot_channel[slot], s_song_capture_live_notes[i]);
+            tiles_midi_note_off(s_song_slot_channel[slot], s_song_capture_live_notes[i], 0u); /* a live-captured note ended by exiting capture, not a measured release */
             tiles_cv_gate_note_off(s_song_capture_live_notes[i]);
             for (uint8_t j = i; (uint8_t)(j + 1u) < s_song_capture_live_count; j++) {
                 s_song_capture_live_pads[j] = s_song_capture_live_pads[j + 1u];
@@ -6724,7 +6724,7 @@ static void song_capture_end_one_sounding_note(uint8_t pad) {
 static void song_capture_end_all_sounding_notes(void) {
     uint8_t slot = s_song_capture_slot - 1u;
     for (uint8_t i = 0; i < s_song_capture_live_count; i++) {
-        tiles_midi_note_off(s_song_slot_channel[slot], s_song_capture_live_notes[i]);
+        tiles_midi_note_off(s_song_slot_channel[slot], s_song_capture_live_notes[i], 0u); /* a live-captured note ended by exiting capture, not a measured release */
         tiles_cv_gate_note_off(s_song_capture_live_notes[i]);
     }
     s_song_capture_live_count = 0u;

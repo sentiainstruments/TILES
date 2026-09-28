@@ -87,7 +87,7 @@ static uint8_t s_gm_melody_sounding_note;
 
 static void gm_melody_stop(void) {
     if (s_gm_melody_active) {
-        tiles_midi_note_off(GM_MELODY_CHANNEL, s_gm_melody_sounding_note);
+        tiles_midi_note_off(GM_MELODY_CHANNEL, s_gm_melody_sounding_note, 0u); /* a scheduled game melody note, no player release gesture */
         tiles_cv_gate_note_off(s_gm_melody_sounding_note);
         s_gm_melody_active = false;
     }
@@ -117,7 +117,7 @@ static void gm_melody_update(uint32_t now_ms) {
     }
     if (step != s_gm_melody_step) {
         if (s_gm_melody_step != 0xFFu) {
-            tiles_midi_note_off(GM_MELODY_CHANNEL, s_gm_melody_sounding_note);
+            tiles_midi_note_off(GM_MELODY_CHANNEL, s_gm_melody_sounding_note, 0u); /* a scheduled game melody note, no player release gesture */
             tiles_cv_gate_note_off(s_gm_melody_sounding_note);
         }
         s_gm_melody_step = step;

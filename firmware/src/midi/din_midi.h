@@ -71,8 +71,10 @@ tiles_din_midi_trs_type_t tiles_din_midi_get_trs_type(void);
 void tiles_din_midi_send(const uint8_t *msg, uint8_t len);
 
 /* Call every main-loop iteration: flushes coalesced values (bend/pressure/
- * expression) into the transmit queue and makes sure the transmitter is
- * running. */
+ * expression) into the transmit queue, makes sure the transmitter is
+ * running, and sends a single Active Sensing byte (0xFE) if nothing else
+ * has gone out in the last ~250ms -- see din_midi.c's own comment on why
+ * (standard DIN MIDI practice, not needed on USB). */
 void tiles_din_midi_service(void);
 
 /* RX side, for midi/midi_in.c. Pops one received byte; false if none. */
