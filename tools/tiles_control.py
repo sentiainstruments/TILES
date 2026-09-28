@@ -25,6 +25,8 @@ Usage:
     python3 tools/tiles_control.py reset ALL
     python3 tools/tiles_control.py save                  # write unsaved changes to flash now
     python3 tools/tiles_control.py info                  # flash-store status
+    python3 tools/tiles_control.py reboot bootsel         # reboot into the ROM bootloader (for picotool)
+    python3 tools/tiles_control.py reboot app             # plain warm restart back into this firmware
 
 Changes apply immediately and are saved to flash automatically a couple of
 seconds after the last one (only while no pad is being touched); `save` just
@@ -148,9 +150,23 @@ def main():
         request, multi = f"SET {sys.argv[2]} {sys.argv[3]}", False
     elif command == "reset" and argc == 3:
         request, multi = f"RESET {sys.argv[2]}", False
+    elif command == "reboot" and argc == 3 and sys.argv[2].lower() in ("bootsel", "app"):
+        request, multi = f"REBOOT {sys.argv[2].upper()}", False
     else:
         print(__doc__)
         sys.exit(1)
+
+    if request == "REBOOT BOOTSEL":
+        # The device does its best to reply OK, but reset_usb_boot() can make it
+        # vanish from USB before that reply arrives -- a read timeout/USB error
+        # here means it worked, not that it failed. See shared/protocol/README.md's
+        # own "REBOOT" section.
+        try:
+            for line in session.command(request, multi_line=multi):
+                print(line)
+        except SystemExit:
+            print("(no reply -- the device likely rebooted into BOOTSEL before it could send one, which is expected)")
+        return
 
     for line in session.command(request, multi_line=multi):
         print(line)

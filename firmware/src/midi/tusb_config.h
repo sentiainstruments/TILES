@@ -55,3 +55,31 @@
  * uses is plenty. */
 #define CFG_TUD_VENDOR_RX_BUFSIZE 64
 #define CFG_TUD_VENDOR_TX_BUFSIZE 64
+
+/* pico-sdk's own USB reset interface (pico_usb_reset, linked in
+ * CMakeLists.txt) -- a fourth composite interface, control-transfers
+ * only (no data endpoints), that lets `picotool` reboot this board into
+ * BOOTSEL over USB instead of a physical button. Real feedback: "will
+ * we be able to flash updates without putting the board in bootloader
+ * mode" -> "yes add the software reboot command."
+ *
+ * `picotool load -f ...` (or `reboot -u`) already knows this interface
+ * (class 0xFF, subclass 0x00, protocol 0x01, added to the descriptor in
+ * usb_descriptors.c) without any picotool-side configuration -- this is
+ * the exact mechanism pico_stdio_usb itself would set up automatically
+ * if this codebase used its descriptors instead of its own (see this
+ * file's own header comment on why it doesn't). Every other #define
+ * this needs (PICO_USB_RESET_SUPPORT_RESET_TO_BOOTSEL/_FLASH_BOOT,
+ * PICO_USB_RESET_INCLUDE_DEFAULT_APP_DRIVER_CB) already defaults to the
+ * right value for this build (confirmed against
+ * src/rp2_common/pico_usb_reset/include/pico/usb_reset_config.h) --
+ * spelled out here anyway so this isn't relying on an unstated SDK
+ * default. PICO_ENABLE_USB_RESET_VIA_BAUD_RATE stays OFF (its own
+ * default is already 0 for a project linking tinyusb_device directly,
+ * like this one) -- the CDC "magic baud rate" reset trick is a
+ * pico_stdio_usb-only convenience this composite device doesn't need a
+ * second reset path for. */
+#define PICO_ENABLE_USB_RESET_VIA_VENDOR_INTERFACE 1
+#define PICO_USB_RESET_SUPPORT_RESET_TO_BOOTSEL 1
+#define PICO_USB_RESET_SUPPORT_RESET_TO_FLASH_BOOT 1
+#define PICO_USB_RESET_INCLUDE_DEFAULT_APP_DRIVER_CB 1

@@ -5,6 +5,10 @@
 
 #include "tusb.h"
 
+#include "hardware/watchdog.h"
+#include "pico/bootrom.h"
+#include "pico/time.h"
+
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -161,6 +165,46 @@ static void handle_line(char *line) {
         } else {
             snprintf(text, sizeof(text), "save-failed-%s", kv_result_name(r));
             reply_err(text);
+        }
+        return;
+    }
+
+    /* REBOOT BOOTSEL | APP -- real feedback: "will we be able to flash
+     * updates without putting the board in bootloader mode" -> "yes add the
+     * software reboot command." This is the scriptable/app-side path;
+     * `picotool load -f`/`reboot -u` use a separate, standard USB reset
+     * interface (tusb_config.h) that needs no command at all.
+     *
+     * BOOTSEL puts the board in the ROM USB bootloader for reflashing.
+     * reset_usb_boot() never returns (it jumps straight into the ROM), so the
+     * "OK" a normal command's return would send never leaves the endpoint --
+     * flushed by hand first instead, bounded the same way midi_out.c's own
+     * send_with_retry() waits out USB backpressure rather than trusting a
+     * single pump_out() call (which only hands bytes to the peripheral's own
+     * TX FIFO, not necessarily all the way to the host). No activity LED pin
+     * is wired for this on the current board, hence the two 0 arguments.
+     *
+     * APP is a plain warm restart back into this same firmware -- not a
+     * bootloader entry, just "start over" for testing a fresh boot (does a
+     * saved setting really come back?) or nudging a wedged non-USB subsystem
+     * without unplugging. watchdog_reboot() schedules the reset in hardware
+     * and returns immediately, so the reply below reaches the host during
+     * the delay, same as every other command. */
+    if (strcmp(cmd, "REBOOT") == 0) {
+        char *what = strtok(NULL, " ");
+        if (what != NULL && strcmp(what, "BOOTSEL") == 0) {
+            reply_ok();
+            uint32_t deadline_ms = to_ms_since_boot(get_absolute_time()) + 50u;
+            while (to_ms_since_boot(get_absolute_time()) < deadline_ms) {
+                tud_task();
+                pump_out();
+            }
+            reset_usb_boot(0, 0);
+        } else if (what != NULL && strcmp(what, "APP") == 0) {
+            watchdog_reboot(0, 0, 100u);
+            reply_ok();
+        } else {
+            reply_err(what == NULL ? "missing-key" : "unknown-key");
         }
         return;
     }

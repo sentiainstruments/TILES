@@ -10,6 +10,23 @@ UART) with rate limiting for continuous expression data — see Status below.
 
 ## Status
 
+- **USB reset interface (`usb_descriptors.c`, `tusb_config.h`)** -- a fourth
+  composite interface (control transfers only, no data endpoints) that lets
+  `picotool` reboot this board into the ROM bootloader over USB. Real
+  feedback: "will we be able to flash updates without putting the board in
+  bootloader mode" -> "yes add the software reboot command." Standard pico-sdk
+  library (`pico_usb_reset`), not custom protocol: class 0xFF, subclass 0x00,
+  protocol 0x01 -- the exact signature `pico_stdio_usb` sets up automatically,
+  added here by hand because this composite device owns its own descriptors
+  (see this file's own header comment on why). `picotool load -f`/`reboot -u`
+  already know it with no configuration. Doesn't collide with the settings
+  vendor interface just above it: TinyUSB matches interfaces to class drivers
+  by exact subclass+protocol, and app-registered drivers (this one) are tried
+  before the built-in vendor class, so a plain vendor interface (subclass 0,
+  protocol 0) still falls through to the built-in driver untouched. Also
+  reachable without `picotool` at all, over the settings shell (`usb_vendor/`,
+  `shared/protocol/README.md`): `REBOOT BOOTSEL` / `REBOOT APP`.
+
 - `tusb_config.h`, `usb_descriptors.c`, `usb_device.{h,c}` — done. A
   composite CDC (diagnostics console) + MIDI USB device, modeled on
   pico-sdk's own `pico_stdio_usb` reference config and TinyUSB's

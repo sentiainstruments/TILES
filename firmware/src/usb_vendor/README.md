@@ -25,6 +25,14 @@ the store's state). Replies go through a 4 KB output queue drained into the
 each line straight into that FIFO with nothing draining it between lines, so any
 response longer than one packet could silently lose its tail.
 
+`REBOOT BOOTSEL` / `REBOOT APP` reboot the board without any USB tooling --
+the app-scriptable path alongside `picotool load -f`'s own USB reset
+interface (`../midi/README.md`'s "USB reset interface" entry). BOOTSEL is
+handled specially: `reset_usb_boot()` never returns, so this file flushes its
+own reply for up to 50ms (bounded, like `midi/midi_out.c`'s own USB
+backpressure wait) before calling it, rather than trusting a single
+`pump_out()` to have reached the host.
+
 Kept off the MIDI interface on purpose: calibration/live-monitor streaming
 (24 pads × XYZ at ~120Hz, not built yet either) is high-bandwidth and
 bursty in a way that would otherwise compete with note/expression MIDI

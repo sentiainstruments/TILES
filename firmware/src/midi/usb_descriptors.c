@@ -24,6 +24,7 @@
 
 #include "board/unit_id.h"
 #include "pico/unique_id.h"
+#include "pico/usb_reset.h"
 #include "tusb.h"
 
 /* Full-speed only: RP2350's USB controller has no high-speed PHY, so
@@ -83,6 +84,7 @@ enum {
     ITF_NUM_MIDI,
     ITF_NUM_MIDI_STREAMING,
     ITF_NUM_VENDOR,
+    ITF_NUM_RESET, /* picotool's software-reboot interface -- see tusb_config.h */
     ITF_NUM_TOTAL,
 };
 
@@ -96,7 +98,8 @@ enum {
 #define EPNUM_VENDOR_OUT 0x04u
 #define EPNUM_VENDOR_IN 0x84u
 
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_MIDI_DESC_LEN + TUD_VENDOR_DESC_LEN)
+#define CONFIG_TOTAL_LEN \
+    (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_MIDI_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_RPI_RESET_DESC_LEN)
 
 uint8_t const desc_fs_configuration[] = {
     /* Config number, interface count, string index, total length, attribute, power in mA */
@@ -110,6 +113,10 @@ uint8_t const desc_fs_configuration[] = {
 
     /* Interface number, string index, EP out & in address, EP size */
     TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 6, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
+
+    /* Control-transfers-only (no data endpoints, no string) -- see
+     * tusb_config.h's own comment on why this interface exists. */
+    TUD_RPI_RESET_DESCRIPTOR(ITF_NUM_RESET, 0),
 };
 
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {

@@ -76,6 +76,7 @@ target_link_libraries(sentia_tiles_firmware
     tinyusb_device
     pico_unique_id
     pico_rand
+    pico_usb_reset
     m
 )
 

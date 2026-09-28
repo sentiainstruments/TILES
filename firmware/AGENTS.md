@@ -28,17 +28,35 @@ change here is held to, not just "it compiles."
 onto this hardware was found unreliable (it's how the `-DPICO_BOARD`
 issue above went unnoticed for a while — a bad `.uf2` copied via Finder
 gives no error, just a board that won't boot). `brew install picotool`
-once, then:
+once, then, with the board **already running the app** (not BOOTSEL):
 
 ```bash
-picotool load -x -v --ignore-partitions firmware/build/src/sentia_tiles_firmware.uf2
+picotool load -f -x -v --ignore-partitions firmware/build/src/sentia_tiles_firmware.uf2
 ```
 
-The board must be in BOOTSEL mode first — `picotool info -a` confirms
-("No accessible RP-series devices in BOOTSEL mode" means it isn't). This
-one command flashes, verifies, and reboots into the application. Confirm
-the reboot with `ls /dev/cu.usbmodem*` (present = booted into the app;
-absent = still in bootloader, or didn't come up).
+**`-f` reboots the board into BOOTSEL automatically** — no physical
+button. Real feedback: "will we be able to flash updates without
+putting the board in bootloader mode" → "yes add the software reboot
+command." This works because the firmware exposes a standard USB reset
+interface (`midi/usb_descriptors.c`'s `TUD_RPI_RESET_DESCRIPTOR`,
+enabled in `midi/tusb_config.h`) that `picotool` already knows how to
+use — the same mechanism `pico_stdio_usb` sets up by default, added
+here by hand because this project owns its own USB descriptors (see
+`tusb_config.h`'s own header comment on why). One command flashes,
+verifies, and reboots back into the application; confirm with
+`ls /dev/cu.usbmodem*` (present = booted into the app).
+
+**If `-f` finds no device** (the app crashed, or the board is already in
+BOOTSEL from a manual button press), it's a no-op — drop `-f` and use
+BOOTSEL as before. `picotool info -a` confirms the mode ("No accessible
+RP-series devices in BOOTSEL mode" = it isn't in one).
+
+**Software-only reboot**, without `picotool` or a firmware load — e.g.
+from a script or the future companion app — over the settings USB
+vendor interface (`usb_vendor/usb_vendor.c`, `shared/protocol/
+README.md`): `REBOOT BOOTSEL` (into the bootloader, for reflashing) or
+`REBOOT APP` (a plain warm restart, for testing a fresh boot).
+`tools/tiles_control.py reboot bootsel` / `reboot app`.
 
 ## Workflow for a real-hardware feedback round
 

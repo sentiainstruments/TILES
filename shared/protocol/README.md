@@ -34,6 +34,8 @@ GET <key>\n               the value as one line, or ERR unknown-key
 SET <key> <value>\n       OK, or ERR unknown-key / bad-value / out-of-range
 RESET <key>|ALL\n         one setting (or every one) back to its default: OK / ERR unknown-key
 SAVE\n                    write unsaved changes to flash now: OK / ERR save-failed-<why>
+REBOOT BOOTSEL\n          reboot into the ROM bootloader for reflashing (no reply -- see below)
+REBOOT APP\n              plain warm restart back into this firmware: OK
 SCHEMA\n                  one line per setting describing it, then OK (see below)
 INFO\n                    flash-store status as key=value lines, then OK
 ```
@@ -56,6 +58,23 @@ under request/response interleaving -- both explicitly deferred to
 whatever protocol version eventually covers that. Replies can be long (SCHEMA is
 ~3 KB) and arrive across several 64-byte USB packets: **read lines, not
 packets**.
+
+### REBOOT
+
+Real feedback: "will we be able to flash updates without putting the board in
+bootloader mode" -> "yes add the software reboot command." `REBOOT BOOTSEL`
+puts the device in the RP2350's ROM USB bootloader (for reflashing); the
+device does its best to get an `OK` out first, but don't rely on seeing it --
+it may vanish from USB before the reply arrives, and the correct client
+behaviour is to treat that disconnect as success, not a failure, and wait for
+a device in BOOTSEL mode to reappear. `REBOOT APP` is a plain warm restart
+back into the same firmware and always replies `OK` normally.
+
+This is the software/scriptable path. `picotool load -f` and `picotool
+reboot -u` don't need either command -- the device also exposes a standard
+USB reset interface (a fourth, separate composite interface; see
+`firmware/src/midi/README.md`) that `picotool` already knows how to drive
+without any app-level protocol at all.
 
 ### SCHEMA
 

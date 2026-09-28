@@ -18,6 +18,21 @@ store means downloading from online eventually."
   of hard-coding the list.
 - **Not built:** the binary protocol, layouts/profiles as stored objects,
   calibration streaming, the app itself.
+- **Software reboot** -- built. Real feedback: "will we be able to flash
+  updates without putting the board in bootloader mode" -> "yes add the
+  software reboot command." Two independent paths (`firmware/src/midi/
+  usb_descriptors.c`, `tusb_config.h`, `usb_vendor/usb_vendor.c`):
+  - `picotool load -f` now works with the board already running the app --
+    no BOOTSEL button. A standard, separate USB interface (pico-sdk's own
+    `pico_usb_reset`, the same one `pico_stdio_usb` would add automatically)
+    handles it; `picotool` needs no configuration to find it.
+  - `REBOOT BOOTSEL` / `REBOOT APP` over the settings shell, for a script or
+    the future app to trigger the same thing without shelling out to
+    `picotool`.
+  This removes the manual BOOTSEL step for every build-time flash. It is
+  NOT yet the app's own firmware-update flow -- that still needs a real UI
+  and, eventually, the A/B flash-partition rollback under "Next steps"
+  below; this is the plumbing that flow will use.
 
 ## Decisions
 

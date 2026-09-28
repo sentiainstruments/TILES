@@ -29,12 +29,16 @@ make -j
 Produces `src/sentia_tiles_firmware.uf2`. Flash with `picotool`, not
 drag-and-drop copy to the mass-storage device — the latter was found
 unreliable on this hardware (see `AGENTS.md` for why and the full flash
-workflow). `brew install picotool`, then, with the board in BOOTSEL
-mode:
+workflow). `brew install picotool`, then:
 
 ```bash
-picotool load -x -v --ignore-partitions build/src/sentia_tiles_firmware.uf2
+picotool load -f -x -v --ignore-partitions build/src/sentia_tiles_firmware.uf2
 ```
+
+`-f` reboots a board that's already running the app into BOOTSEL by
+itself — no button press needed (see `AGENTS.md`'s own "Flash" section
+for how). Only fall back to a manual BOOTSEL button press (and drop
+`-f`) if the app isn't running to begin with.
 
 ## Running the pad-table test (no toolchain needed)
 
