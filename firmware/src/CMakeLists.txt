@@ -27,6 +27,7 @@ add_executable(sentia_tiles_firmware
     services/boot_sequence.c
     services/octave_control.c
     services/game_mode.c
+    services/midi_channels.c
     services/expression_control.c
     services/midi_clock.c
     services/op_mode.c

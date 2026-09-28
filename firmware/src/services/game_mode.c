@@ -9,6 +9,7 @@
 #include "hall.h"
 #include "haptics.h"
 #include "lighting.h"
+#include "midi_channels.h"
 #include "midi_out.h"
 #include "op_mode.h"
 #include "touch.h"
@@ -54,12 +55,14 @@ static bool s_gm_round_end_red_only;
  * with that same touch. This section is the other half: deliberate,
  * game-triggered notes/haptics to replace what that fix removes.
  *
- * Fixed MIDI channel, reserved the same way services/op_mode.c reserves
- * its own sequencer-pattern channels (from the top of the MPE member
- * range downward, statically at init, never through services/
- * expression.c's dynamic per-strike allocator) -- one nibble below
- * op_mode.c's own reserved range (12-15) so the two can never collide. */
-#define GM_MELODY_CHANNEL 11u
+ * Permanent, from services/midi_channels.h -- see that header's own
+ * comment for the whole-board channel layout this is one piece of. Never
+ * through services/expression.c's dynamic per-strike allocator, and (real
+ * gap found auditing that whole scheme for "the midi channel asignement
+ * is weirtd and not consistent") no longer reachable by it at all, not
+ * just conventionally avoided by picking a number next to op_mode.c's
+ * own reserved range the way this used to work. */
+#define GM_MELODY_CHANNEL TILES_MIDI_CH_GAME
 #define GM_MELODY_STEP_MS 130u
 #define GM_MELODY_VELOCITY 100u
 #define GM_MELODY_MAX_STEPS 4u

@@ -380,15 +380,12 @@ bool tiles_op_mode_melodic_harmonics_may_play(void);
  * touch at all while waiting for a tempo/the next beat. */
 bool tiles_op_mode_has_menu_open(void);
 
-/* True if `channel` (an MPE Member Channel, 1-15) is one of the sequencer's
- * OP_SEQ_NUM_LANES own output channels AND the sequencer is genuinely
- * running right now -- always false otherwise. services/expression.c's
- * own claim_mpe_channel() checks every candidate channel against this
- * before claiming it from its live-touch pool, so the two independent
- * channel-allocation systems can't collide -- see that function's own
- * comment, and this accessor's own comment in op_mode.c, for the real
- * stuck-note failure mode this prevents. */
-bool tiles_op_mode_sequencer_channel_is_reserved(uint8_t channel);
+/* tiles_op_mode_sequencer_channel_is_reserved() used to live here --
+ * removed. See services/midi_channels.h and op_mode.c's own comment at
+ * its old call site for why it's no longer needed: the sequencer's 4
+ * lanes (and chord, and game mode) are now permanently outside the range
+ * services/expression.c's claim_mpe_channel() can ever reach, so there is
+ * nothing left to query. */
 
 /* True while Song mode's own capture is actively recording (shift+
  * diamond from melodic/chord/guitar mode, or from within Song mode

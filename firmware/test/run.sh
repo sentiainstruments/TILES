@@ -16,6 +16,9 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/midi test/test_din_midi_queue.c src/m
 cc -std=c11 -Wall -Wextra -Itest/stubs -Isrc/midi test/test_midi_in.c src/midi/midi_in.c -o /tmp/sentia_tiles_test_midi_in
 /tmp/sentia_tiles_test_midi_in
 
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_midi_channels.c src/services/midi_channels.c -o /tmp/sentia_tiles_test_midi_channels
+/tmp/sentia_tiles_test_midi_channels
+
 # Flash store (power-cut simulation) and the settings table on top of it.
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/storage test/test_kv_store.c src/storage/kv_store.c -o /tmp/sentia_tiles_test_kv_store
 /tmp/sentia_tiles_test_kv_store

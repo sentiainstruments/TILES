@@ -6,6 +6,7 @@
 #include "touch.h"
 #include "note_map.h"
 #include "cv_gate.h"
+#include "midi_channels.h"
 #include "midi_out.h"
 #include "haptics.h"
 #include "expression_control.h"
@@ -1160,8 +1161,9 @@ static pad_expr_t s_pads[TILES_NUM_PADS];
 static bool s_pitch_bend_enabled;
 
 
-/* MPE Member Channel allocator -- one slot per Member Channel
- * (TILES_MIDI_MPE_NUM_MEMBER_CHANNELS of them), mirroring
+/* MPE Member Channel allocator -- one slot per shared-pool channel (up to
+ * TILES_MIDI_SHARED_POOL_SIZE of them; see services/midi_channels.h for
+ * why the live zone can never be larger), mirroring
  * services/haptics.c's own voice-stealing policy almost exactly
  * (oldest-claim-wins eviction via a monotonic sequence number) for the
  * same "ran out of a limited hardware/protocol resource, evict the
@@ -1188,12 +1190,38 @@ typedef struct {
     bool sustain_pending;
     uint8_t sustained_note; /* valid only while sustain_pending */
 } mpe_channel_slot_t;
-static mpe_channel_slot_t s_mpe_channels[TILES_MIDI_MPE_NUM_MEMBER_CHANNELS];
+/* Sized for the live zone's maximum possible extent (services/midi_
+ * channels.h's TILES_MIDI_SHARED_POOL_SIZE, 8 -- the zone can never be
+ * larger, since channels above it permanently belong to chord/game/the
+ * sequencer or General MIDI's percussion channel), not the old fixed 15. */
+static mpe_channel_slot_t s_mpe_channels[TILES_MIDI_SHARED_POOL_SIZE];
 /* Edge-tracks tiles_pedal_is_sustained() across scans so flush_sustained_
  * notes()'s own release-triggered flush fires exactly once per genuine
  * pedal release, not every scan it happens to read false. */
 static bool s_pedal_prev_sustained;
 static uint32_t s_next_mpe_claim_seq = 1u;
+
+/* The ONE place this file flips a shared-pool channel's own in_use bit --
+ * every claim/release/steal site below goes through this instead of
+ * writing s_mpe_channels[index].in_use directly, so the mirror into
+ * services/midi_channels.h (tiles_midi_channels_note_channel_claimed()/
+ * _released()) can never be forgotten at a new call site the way the
+ * sequencer-reservation check once was (see this file's "the midi channel
+ * asignement is weirtd and not consistent" rework). Without that mirror,
+ * services/op_mode.c's Song mode could claim a channel this exact function
+ * just marked as carrying a live note -- the two systems have no other way
+ * to know about each other. `index` is this file's own s_mpe_channels[]
+ * index; see that header's own comment for why the channel number derived
+ * from it is always within the shared pool. */
+static void set_channel_in_use(uint8_t index, bool in_use) {
+    s_mpe_channels[index].in_use = in_use;
+    uint8_t channel = (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + index);
+    if (in_use) {
+        tiles_midi_channels_note_channel_claimed(channel);
+    } else {
+        tiles_midi_channels_note_channel_released(channel);
+    }
+}
 
 /* ============================================================================
  * Melodic harmonics (see s_harmonics_enabled's own comment above). Real feedback: "capacitive touch only plays the
@@ -1361,22 +1389,45 @@ static uint8_t s_harmonic_fundamental_pad;
  * machine in ways this section has no reason to depend on). */
 static bool s_harmonic_prev_touched[TILES_NUM_PADS];
 
-/* The LAST HARMONIC_MAX_VOICES Member Channels, permanently carved out
- * for harmonics only -- see this section's own header comment on why a
- * separate reserved range, not a second stealing policy, is what keeps
- * a harmonic from ever being able to take a channel a real note needs.
- * claim_mpe_channel() below skips every channel this covers, exactly
- * like it already skips the sequencer's own reserved lanes. */
+/* The top of the CURRENT live MPE zone -- see services/midi_channels.h's own
+ * header for why the zone itself is no longer a fixed 15 (it's whatever
+ * services/op_mode.c's chord/sequencer/game channels and Song mode's own
+ * pool have left over, honestly declared to the receiver). Real feedback
+ * that shaped that whole rework: "the midi channel asignement is weirtd and
+ * not consistent." This used to reserve a fixed range (channels 11-15 of a
+ * fixed 15); it now reserves up to HARMONIC_MAX_VOICES of WHATEVER the zone
+ * currently is, and -- new, real fix found in that same audit -- never
+ * reserves the entire thing: `zone_size - 1` caps it so a real, currently-
+ * held note's channel can always be found, matching this section's own
+ * "Channel budget" promise ("harmonics never steal a Member Channel from a
+ * real note") even when Song mode has squeezed the zone down to just a
+ * handful. Below HARMONIC_MAX_VOICES the ratio is worse than the old
+ * scheme's 5-of-15 (a full-size zone is now only 8, so 5 reserved leaves
+ * just 3 for real polyphony) -- an accepted, documented trade for a zone
+ * that's spec-correct and doesn't collide with General MIDI's percussion
+ * channel; see services/README.md's own entry on this rework if that ratio
+ * ever needs revisiting. claim_mpe_channel() below skips every channel this
+ * covers, exactly like it already skips a Song-held one -- by construction,
+ * since both now only ever scan channels 1..zone_size in the first place,
+ * not the full 1..15 range this used to have to actively exclude channels
+ * from. */
 static bool harmonic_channel_is_reserved(uint8_t channel) {
     /* Only while the feature is ON. With harmonics switched off at runtime
-     * (features.melodic_harmonics 0) the whole range goes back to real notes --
-     * 15 Member Channels of polyphony, not 10 -- exactly what a build with the
-     * feature compiled out used to have. */
+     * (features.melodic_harmonics 0) the whole zone goes back to real
+     * notes -- exactly what a build with the feature compiled out used to
+     * have. */
     if (!s_harmonics_enabled) {
         return false;
     }
-    return channel > (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + TILES_MIDI_MPE_NUM_MEMBER_CHANNELS -
-                                1u - HARMONIC_MAX_VOICES);
+    uint8_t zone_size = tiles_midi_channels_lower_zone_size();
+    if (zone_size == 0u) {
+        return false; /* nothing to reserve from */
+    }
+    uint8_t reserved_count = (uint8_t)(zone_size - 1u); /* always leave at least 1 for a real note */
+    if (reserved_count > HARMONIC_MAX_VOICES) {
+        reserved_count = HARMONIC_MAX_VOICES;
+    }
+    return channel > (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + zone_size - 1u - reserved_count);
 }
 
 /* Pad currently in PAD_STATE_NOTE_ON, IF exactly one is -- 0 if none or
@@ -1425,8 +1476,8 @@ static void end_harmonic_voice(uint8_t idx) {
      * claim_harmonic_channel() set, computed directly from the channel
      * number rather than re-searching for it. */
     uint8_t mpe_index = (uint8_t)(v->midi_channel - TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL);
-    if (mpe_index < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS) {
-        s_mpe_channels[mpe_index].in_use = false;
+    if (mpe_index < TILES_MIDI_SHARED_POOL_SIZE) {
+        set_channel_in_use(mpe_index, false);
     }
     v->active = false;
 }
@@ -1444,10 +1495,28 @@ static void end_all_harmonic_voices(void) {
  * why harmonics are deliberately the lowest-priority thing on this
  * board's MPE bus. */
 static uint8_t claim_harmonic_channel(void) {
-    for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
+    /* Real bug, found auditing the channel scheme for "is this actually
+     * consistent" (real feedback: "the midi channel asignement is weirtd
+     * and not consistent"): this used to scan the full, fixed 1..15 range
+     * and rely on harmonic_channel_is_reserved() alone to exclude the
+     * sequencer's own reserved lanes -- but the sequencer's lanes never
+     * marked s_mpe_channels[].in_use (a lane sends tiles_midi_note_on()
+     * directly on its own fixed channel, never through this file's
+     * allocator), so a harmonic voice could claim a channel a lane was
+     * ACTIVELY sounding a note on right now, and a receiver that applies
+     * channel-wide (not per-note) pitch bend/pressure would warp the
+     * sequenced note by an unrelated harmonic pluck's own expression.
+     * Now structurally impossible rather than a checklist item: the
+     * sequencer's lanes (and chord, and game mode) are permanently OUTSIDE
+     * the live zone entirely (services/midi_channels.h), so this loop --
+     * like claim_mpe_channel() below -- only ever scans the zone's own
+     * current size and can no longer reach a fixed part's channel at all,
+     * regardless of whether anyone remembers to exclude it. */
+    uint8_t zone_size = tiles_midi_channels_lower_zone_size();
+    for (uint8_t i = 0; i < zone_size; i++) {
         uint8_t channel = (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i);
         if (harmonic_channel_is_reserved(channel) && !s_mpe_channels[i].in_use) {
-            s_mpe_channels[i].in_use = true;
+            set_channel_in_use(i, true);
             /* owner_pad = 0 -- a real note's pad is always 1..24 (see
              * mpe_channel_slot_t's own comment), so this both reads as
              * "not owned by a real held pad" and can never collide with
@@ -1670,7 +1739,10 @@ void tiles_expression_init(void) {
         s_pads[i] = (pad_expr_t){0};
         s_pads[i].state = PAD_STATE_IDLE;
     }
-    for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
+    for (uint8_t i = 0; i < TILES_MIDI_SHARED_POOL_SIZE; i++) {
+        if (s_mpe_channels[i].in_use) {
+            tiles_midi_channels_note_channel_released((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i));
+        }
         s_mpe_channels[i] = (mpe_channel_slot_t){0};
     }
     s_next_mpe_claim_seq = 1u;
@@ -2149,6 +2221,26 @@ void tiles_expression_set_muted(bool muted) {
 void tiles_expression_set_mpe_enabled(bool enabled) {
     s_mpe_enabled = enabled;
     printf("[expression] MPE mode %s\n", enabled ? "enabled" : "disabled (single-channel, standard MIDI)");
+    /* Real gap found researching this rework: turning MPE off here used to
+     * change local behavior only -- the receiver was never told. It had
+     * already been sent a "15 Member Channels" MPE Configuration Message
+     * at connection time and had no way to know melodic notes were now
+     * landing on the Master Channel instead. The spec's own documented way
+     * to say "this isn't an MPE zone anymore" is an MCM with 0 member
+     * channels (JUCE's MPE tutorial: "An MPE zone can be turned off by
+     * sending an MCM without any member channels"); turning MPE back on
+     * re-declares the zone's REAL current size (services/midi_channels.h),
+     * not a blind 15 -- honest either way. The explicit tiles_midi_
+     * channels_zone_size_changed() call resyncs this file's own change-
+     * tracking to whatever the zone size already is, so the very next scan
+     * doesn't immediately re-fire a redundant, already-sent declaration --
+     * see that function's own header comment. */
+    if (enabled) {
+        tiles_midi_send_mpe_zone_size(tiles_midi_channels_lower_zone_size());
+    } else {
+        tiles_midi_send_mpe_zone_size(0u);
+    }
+    (void)tiles_midi_channels_zone_size_changed();
 }
 
 bool tiles_expression_is_mpe_enabled(void) {
@@ -2399,7 +2491,7 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool allow_sustain_defer) 
         }
     } else {
         uint8_t idx = (uint8_t)(s->midi_channel - TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL);
-        s_mpe_channels[idx].in_use = false;
+        set_channel_in_use(idx, false);
         s_mpe_channels[idx].sustain_pending = false; /* defensive -- see this function's own comment */
     }
 }
@@ -2416,10 +2508,10 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool allow_sustain_defer) 
  * scan release-edge flush above never gets another chance to fire until
  * control comes back. */
 static void flush_sustained_notes(void) {
-    for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
+    for (uint8_t i = 0; i < TILES_MIDI_SHARED_POOL_SIZE; i++) {
         if (s_mpe_channels[i].sustain_pending) {
             tiles_midi_note_off((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i), s_mpe_channels[i].sustained_note);
-            s_mpe_channels[i].in_use = false;
+            set_channel_in_use(i, false);
             s_mpe_channels[i].sustain_pending = false;
         }
     }
@@ -2474,35 +2566,52 @@ void tiles_expression_force_release_all(void) {
  * few) AND the sequencer starting at that exact moment; narrower still
  * than the gap this fix closes, and not chased here. */
 static uint8_t claim_mpe_channel(uint8_t pad) {
-    for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
+    /* Scans only the live zone's OWN current size, never the full 1-15
+     * range this used to scan while excluding the sequencer's reserved
+     * lanes by hand -- see services/midi_channels.h's own header and this
+     * file's "the midi channel asignement is weirtd and not consistent"
+     * rework. Chord's, game mode's, and the sequencer's 4 lanes' channels
+     * are now permanently outside this range entirely, so a real note can
+     * no longer land on one of them no matter what condition anyone
+     * remembers (or forgets) to check -- only harmonics (still genuinely
+     * conditional: on or off, and how much of the CURRENT zone it reserves)
+     * needs its own exclusion here. */
+    uint8_t zone_size = tiles_midi_channels_lower_zone_size();
+    for (uint8_t i = 0; i < zone_size; i++) {
         uint8_t channel = (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i);
-        if (!s_mpe_channels[i].in_use && !tiles_op_mode_sequencer_channel_is_reserved(channel) &&
-            !harmonic_channel_is_reserved(channel)) {
-            s_mpe_channels[i].in_use = true;
+        if (!s_mpe_channels[i].in_use && !harmonic_channel_is_reserved(channel)) {
+            set_channel_in_use(i, true);
             s_mpe_channels[i].owner_pad = pad;
             s_mpe_channels[i].claim_seq = s_next_mpe_claim_seq++;
             return channel;
         }
     }
 
-    uint8_t oldest_idx = TILES_MIDI_MPE_NUM_MEMBER_CHANNELS;
-    for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
-        if (tiles_op_mode_sequencer_channel_is_reserved((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i))) {
-            continue;
-        }
+    uint8_t oldest_idx = zone_size;
+    for (uint8_t i = 0; i < zone_size; i++) {
         if (harmonic_channel_is_reserved((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i))) {
             continue;
         }
-        if (oldest_idx == TILES_MIDI_MPE_NUM_MEMBER_CHANNELS || s_mpe_channels[i].claim_seq < s_mpe_channels[oldest_idx].claim_seq) {
+        if (oldest_idx == zone_size || s_mpe_channels[i].claim_seq < s_mpe_channels[oldest_idx].claim_seq) {
             oldest_idx = i;
         }
     }
-    if (oldest_idx == TILES_MIDI_MPE_NUM_MEMBER_CHANNELS) {
-        /* Every single Member Channel is reserved -- impossible given
-         * TILES_MIDI_MPE_NUM_MEMBER_CHANNELS (15) > OP_SEQ_NUM_LANES (4),
-         * but a defined, harmless fallback (the first Member Channel)
-         * rather than reading s_mpe_channels[15] out of bounds if either
-         * constant ever changed. */
+    if (oldest_idx == zone_size) {
+        /* Every channel the live zone currently has is reserved for
+         * harmonics, OR the zone itself is genuinely empty (zone_size ==
+         * 0) -- real and reachable now that the zone shrinks as Song
+         * mode's own pool grows (services/midi_channels.h), unlike the
+         * fixed-15 scheme this replaced where "every channel reserved"
+         * truly couldn't happen. TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL is
+         * still a bounded, defined fallback (never reads out of bounds),
+         * but in this specific, extreme corner -- Song mode already
+         * holding every one of the 8 shared channels AND a brand-new
+         * melodic touch arriving in that exact instant -- it CAN
+         * genuinely collide with a Song track actively using that same
+         * channel. Accepted: this needs Song's pool to be completely
+         * exhausted (8 concurrent looper tracks) at the precise moment a
+         * new note also needs a channel, which is an extreme, atypical
+         * pattern of use, not ordinary play. */
         return TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL;
     }
     uint8_t stolen_pad = s_mpe_channels[oldest_idx].owner_pad;
@@ -2518,15 +2627,15 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
          * instead of calling end_held_note() (which would read the
          * WRONG note/channel off stolen_pad's current, unrelated
          * state) or touching stolen_pad's state machine at all. */
-        printf("[expression] pad %u stealing a sustain-held ghost on MPE channel %u (all %u member channels in use)\n",
-               pad, (unsigned)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx),
-               (unsigned)TILES_MIDI_MPE_NUM_MEMBER_CHANNELS);
+        printf("[expression] pad %u stealing a sustain-held ghost on MPE channel %u (all %u channels of the live "
+               "zone in use)\n",
+               pad, (unsigned)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx), (unsigned)zone_size);
         tiles_midi_note_off((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx),
                              s_mpe_channels[oldest_idx].sustained_note);
         s_mpe_channels[oldest_idx].sustain_pending = false;
     } else {
-        printf("[expression] pad %u stealing pad %u's MPE channel %u (all %u member channels in use)\n", pad, stolen_pad,
-               (unsigned)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx), (unsigned)TILES_MIDI_MPE_NUM_MEMBER_CHANNELS);
+        printf("[expression] pad %u stealing pad %u's MPE channel %u (all %u channels of the live zone in use)\n",
+               pad, stolen_pad, (unsigned)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx), (unsigned)zone_size);
         pad_expr_t *stolen = &s_pads[stolen_pad - 1u];
         end_held_note(stolen, stolen_pad, false);
         stolen->state = PAD_STATE_IDLE;
@@ -2542,7 +2651,7 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
      * share one MPE channel: pitch bend/pressure from either bends the
      * other's note, and a note-off from either can strand or kill the
      * other's. */
-    s_mpe_channels[oldest_idx].in_use = true;
+    set_channel_in_use(oldest_idx, true);
     s_mpe_channels[oldest_idx].owner_pad = pad;
     s_mpe_channels[oldest_idx].claim_seq = s_next_mpe_claim_seq++;
     return (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx);
@@ -2564,6 +2673,18 @@ void tiles_expression_scan(void) {
         flush_sustained_notes();
     }
     s_pedal_prev_sustained = sustained_now;
+
+    /* Keeps the receiver's understanding of the live MPE Lower Zone's size
+     * (services/midi_channels.h) from ever going stale as Song mode's own
+     * pool claims/releases channels mid-session -- see tiles_midi_send_mpe_
+     * zone_size()'s own header comment. Skipped entirely while MPE is off:
+     * the zone is already fully withdrawn then (tiles_expression_set_mpe_
+     * enabled() sent that), and re-declaring a size while there's no zone
+     * to describe would be meaningless; the pending change (if any) is left
+     * for the very next poll after MPE is turned back on to pick up. */
+    if (s_mpe_enabled && tiles_midi_channels_zone_size_changed()) {
+        tiles_midi_send_mpe_zone_size(tiles_midi_channels_lower_zone_size());
+    }
 
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         uint8_t pad = (uint8_t)(i + 1u);

@@ -18,6 +18,11 @@ allocation, calibration math, `usb_vendor/` protocol framing.
 - `test_midi_in.c` -- the real `midi/midi_in.c` (tusb/pico-time stubbed in
   `stubs/`): USB and DIN each parse with their own state, running status
   per source, one clock owner at a time, loss recovery, SysEx from DIN.
+- `test_midi_channels.c` -- `services/midi_channels.c`, the shared 8-channel pool
+  Song mode and the live MPE Lower Zone draw from: claim-highest-first, the
+  contiguous zone-size math, change notification, and the cross-module
+  invariant that Song can never claim a channel a live MPE note is using
+  (and vice versa) even though the two are otherwise independent bookkeeping.
 - `test_kv_store.c` -- `storage/kv_store.c` against a simulated NOR flash, including a
   power cut after every erase/program step (and partially-applied operations):
   the store always comes back with the old payload or the new one, never garbage,

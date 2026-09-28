@@ -130,9 +130,18 @@ void tiles_midi_send_daw_cc(uint8_t channel, uint8_t controller, uint8_t value) 
     usb_write("send_daw_cc", msg, sizeof(msg));
 }
 
+/* Every channel 2-16 could ever carry -- see this function's own header
+ * comment in midi_out.h for why this is deliberately NOT services/midi_
+ * channels.h's own (dynamic, often smaller) live zone size. 15, not a
+ * services/midi_channels.h constant: this file stays unaware of that
+ * module entirely (see midi_out.h's own header on the module boundary),
+ * and this number is fixed by the 16-channel MIDI spec itself, not by
+ * anything this board's layout could change. */
+#define MIDI_BROADCAST_CHANNEL_COUNT 15u
+
 void tiles_midi_send_cc_broadcast(uint8_t controller, uint8_t value) {
     tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, controller, value);
-    for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
+    for (uint8_t i = 0; i < MIDI_BROADCAST_CHANNEL_COUNT; i++) {
         tiles_midi_send_cc((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i), controller, value);
     }
 }
@@ -159,12 +168,17 @@ static void send_rpn(uint8_t channel, uint8_t param_msb, uint8_t param_lsb, uint
     tiles_midi_send_cc(channel, 100u, 127u);
 }
 
-void tiles_midi_mpe_init(void) {
+void tiles_midi_send_mpe_zone_size(uint8_t member_channel_count) {
     /* MPE Configuration Message: RPN 6 (param MSB=0x00, LSB=0x06), value
      * MSB = number of Member Channels, LSB unused (0). Sent on the Zone
      * Master Channel -- this is the message an MPE-aware receiver uses
-     * to recognize this as an MPE Lower Zone at all. */
-    send_rpn(TILES_MIDI_MPE_MASTER_CHANNEL, 0x00u, 0x06u, (uint8_t)TILES_MIDI_MPE_NUM_MEMBER_CHANNELS, 0x00u);
+     * to recognize this as an MPE Lower Zone at all (0 = none: withdraws
+     * the zone -- see this function's own declaration in midi_out.h). */
+    send_rpn(TILES_MIDI_MPE_MASTER_CHANNEL, 0x00u, 0x06u, member_channel_count, 0x00u);
+}
+
+void tiles_midi_mpe_init(uint8_t member_channel_count) {
+    tiles_midi_send_mpe_zone_size(member_channel_count);
 
     /* Pitch Bend Sensitivity: RPN 0 (param MSB=0x00, LSB=0x00), value
      * MSB = semitones, LSB = cents (0 here -- whole-semitone range).
@@ -176,7 +190,7 @@ void tiles_midi_mpe_init(void) {
      * pitch bend, which only ever reads it from the Member Channel a
      * note is actually on. */
     send_rpn(TILES_MIDI_MPE_MASTER_CHANNEL, 0x00u, 0x00u, (uint8_t)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES, 0x00u);
-    for (uint8_t i = 0; i < TILES_MIDI_MPE_NUM_MEMBER_CHANNELS; i++) {
+    for (uint8_t i = 0; i < member_channel_count; i++) {
         send_rpn((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i), 0x00u, 0x00u,
                  (uint8_t)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES, 0x00u);
     }

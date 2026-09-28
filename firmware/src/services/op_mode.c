@@ -13,6 +13,7 @@
 #include "lighting.h"
 #include "midi_clock.h"
 #include "midi_in.h"
+#include "midi_channels.h"
 #include "midi_out.h"
 #include "note_map.h"
 #include "octave_control.h"
@@ -597,14 +598,12 @@ static uint8_t __uninitialized_ram(s_seq_active_alt)[OP_SEQ_NUM_LANES];
  * for the sequencer as a whole vs. other top-level modes. active_pattern()
  * below always resolves through this + s_seq_active_alt[this lane]. */
 static uint8_t s_seq_edit_lane;
-/* Default channel per lane claims from the TOP of the 15 MPE Member
- * Channels downward (lane 0 = nibble 15, exactly today's original
- * single-pattern behavior, unchanged for anyone never touching the bank)
- * -- a default, not a hard reservation against LIVE touch (services/
- * expression.c's own per-touch allocator is untouched and can still use
- * any of these 15 channels when the sequencer isn't genuinely running --
- * see tiles_op_mode_sequencer_channel_is_reserved()'s own comment for
- * when it IS). */
+/* One fixed channel per lane, permanently -- services/midi_channels.h,
+ * TILES_MIDI_CH_SEQ_LANE_0../_3. Unlike a live MPE touch's channel, this
+ * is never shared with anything else, running or not (see that header's
+ * own "why permanent" reasoning) -- lane 0 = TILES_MIDI_CH_SEQ_LANE_0,
+ * exactly today's original single-pattern behavior's own channel,
+ * unchanged for anyone never touching the bank. */
 static uint8_t s_seq_lane_channel[OP_SEQ_NUM_LANES];
 /* See OP_SEQ_LENGTH_FLASH_DURATION_MS's own comment. 0 at boot/pattern
  * init is indistinguishable from "just flashed at boot time" for a
@@ -857,21 +856,21 @@ static bool s_plus_used_as_combo;
  * state (not a single global "sounding note" the way the sequencer has)
  * because, unlike the sequencer's one-step-at-a-time playhead, multiple
  * chord pads can plausibly be held down together. */
-#define OP_CHORD_CHANNEL 10u /* raw 0-15 nibble -- one below game_mode.c's
-                                 own GM_MELODY_CHANNEL (11) and this
-                                 file's own sequencer patterns (12-15), so
-                                 none of this codebase's other direct-MIDI
-                                 claims collide. A default claim, not a
-                                 hard reservation, same as the sequencer's
-                                 own per-pattern channels above: services/
-                                 expression.c's live per-touch allocator
-                                 (still running for chord mode's own
-                                 melody columns) is untouched, so this can
-                                 only ever collide with live touch play in
-                                 the rare case of using many fingers at
-                                 once while chords are also held -- an
-                                 accepted edge case, not worth shrinking
-                                 live MPE polyphony to avoid. */
+/* Permanent, unconditional -- services/midi_channels.h, the single source
+ * of truth for this board's whole 16-channel layout now. Real feedback:
+ * "the midi channel asignement is weirtd and not consistent." This used to
+ * be a "default claim, not a hard reservation... an accepted edge case, not
+ * worth shrinking live MPE polyphony to avoid" -- i.e. a KNOWN, deliberately
+ * accepted risk that a live touch on chord mode's own melody columns
+ * (services/expression.c's claim_mpe_channel(), still running for that
+ * sub-grid) could claim this exact channel while the chord strip was
+ * actively using it. Auditing the whole scheme for consistency found that
+ * risk was real, not just theoretical, and the fix (services/midi_channels.h
+ * permanently excluding chord's channel from the live zone's own scan range
+ * entirely) costs nothing extra beyond what the dynamic zone sizing already
+ * has to do for the sequencer's lanes and game mode -- so the tradeoff this
+ * comment used to accept no longer needs accepting. */
+#define OP_CHORD_CHANNEL TILES_MIDI_CH_CHORD
 static bool s_chord_pad_touched[TILES_NUM_PADS];
 static bool s_chord_pad_sounding[TILES_NUM_PADS];
 
@@ -3197,6 +3196,7 @@ static void scene_send_stop_all(void); /* needed this early too -- handle_diamon
 static void scene_send_track_offset(uint8_t offset); /* needed this early too -- handle_transport_and_length()'s own "-"/"+" pan branches call it directly */
 static void scene_launch_enter(void); /* needed this early too -- set_active_mode() calls it on entering Scene Launch mode */
 static void scene_launch_leave(void); /* needed this early too -- set_active_mode() calls it on leaving Scene Launch mode */
+static void song_stop_all_running(void); /* needed this early too -- set_active_mode() calls it on entering Scene Launch mode, see that call site's own comment */
 
 /* Set by Ableton (see scene_on_sysex()'s OPEN_MELODIC handling) once a
  * pressure click on an EMPTY clip slot has armed a track and started
@@ -3285,6 +3285,18 @@ static void set_active_mode(tiles_op_mode_t mode) {
      * stopping its PLAYBACK. */
     if (s_active_mode == OP_MODE_CHORD && mode != OP_MODE_CHORD) {
         chord_end_all_notes();
+    }
+    /* Real feedback: "since layouts work like apps we know ableton mode
+     * and song mode cant run at once so compensate mappigns fotr that" --
+     * see song_stop_all_running()'s own comment for the full reasoning.
+     * Checked on the way INTO Scene Launch, from any previous mode (not
+     * `s_active_mode == OP_MODE_SONG`-gated the way chord's own teardown
+     * above is), because Song's slots run in the background regardless of
+     * which mode is displayed -- entering Scene Launch from melodic or
+     * the sequencer's own view must stop them just as much as entering it
+     * from Song mode's own track overview would. */
+    if (mode == OP_MODE_SCENE_LAUNCH) {
+        song_stop_all_running();
     }
     if (mode != OP_MODE_MELODIC) {
         /* Melodic's own sub-menu can't stay open once melodic isn't the
@@ -5054,12 +5066,15 @@ void tiles_op_mode_init(bool crash_recovered) {
             s_seq_active_alt[lane] = 0u;
             s_seq_lane_running[lane] = false;
         }
-        /* Claims from the TOP of the 15 MPE Member Channels downward --
-         * see this file's own "Multi-lane pattern bank" section. Lane 0
-         * = nibble 15, exactly today's original single-pattern behavior,
-         * unchanged for anyone never touching the bank. */
-        s_seq_lane_channel[lane] =
-            (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + TILES_MIDI_MPE_NUM_MEMBER_CHANNELS - 1u - lane);
+        /* Permanent, one per lane, from services/midi_channels.h -- see
+         * this file's own "Multi-lane pattern bank" section and that
+         * header's own comment for the whole-board channel layout this is
+         * now one piece of. Lane 0 = TILES_MIDI_CH_SEQ_LANE_0, matching
+         * the original single-pattern behavior's own channel exactly
+         * (nibble 15) for anyone never touching the bank. */
+        static const uint8_t SEQ_LANE_CHANNELS[OP_SEQ_NUM_LANES] = {TILES_MIDI_CH_SEQ_LANE_0, TILES_MIDI_CH_SEQ_LANE_1,
+                                                                    TILES_MIDI_CH_SEQ_LANE_2, TILES_MIDI_CH_SEQ_LANE_3};
+        s_seq_lane_channel[lane] = SEQ_LANE_CHANNELS[lane];
         s_seq_current_step[lane] = 0u;
         s_seq_note_sounding[lane] = false;
         s_seq_step_started_at_pulse[lane] = 0u;
@@ -5095,8 +5110,9 @@ void tiles_op_mode_init(bool crash_recovered) {
     pattern_store_load_all();
     /* Song mode's own pattern library -- same "plain read, safe and
      * cheap unconditionally" reasoning as pattern_store_load_all()
-     * just above. s_song_slot_running[]/s_song_channel_in_use[] etc.
-     * are plain statics, not __uninitialized_ram, so every song track
+     * just above. s_song_slot_running[] and services/midi_channels.h's
+     * own claim bookkeeping are plain statics, not __uninitialized_ram,
+     * so every song track
      * comes up stopped after ANY reboot including crash-recovery --
      * unlike the regular sequencer's own s_seq_lane_running[], which
      * deliberately survives a crash so a playing pattern picks back up
@@ -5616,13 +5632,20 @@ bool tiles_op_mode_has_menu_open(void) {
  *   PER_STEP (4) notes each, no probability/ratchet (real feedback:
  *   "plain armed/notes only" -- confirmed over the equivalent option
  *   that would have matched the old sequencer's fuller feature set).
- * - Up to OP_SONG_MAX_CONCURRENT (9) patterns can be PLAYING at once --
- *   a real concurrency limit, not a slot-count one (a stopped, saved
- *   pattern doesn't hold a channel at all). Starting a 10th while 9
- *   already play is blocked, confirmed red-flash feedback (song_
+ * - Up to OP_SONG_MAX_CONCURRENT patterns can be PLAYING at once -- a real
+ *   concurrency limit, not a slot-count one (a stopped, saved pattern
+ *   doesn't hold a channel at all). Starting one more than that while
+ *   the pool is full is blocked, confirmed red-flash feedback (song_
  *   toggle_start_stop()'s own song_flash_error() call). This number is
- *   exactly the channel budget below, not a round number picked for
- *   its own sake -- see song_claim_channel()'s own comment for why.
+ *   exactly the channel budget below, not a round number picked for its
+ *   own sake -- see services/midi_channels.h for why it's 8, not the 9
+ *   this section originally shipped with (real feedback: "the midi
+ *   channel asignement is weirtd and not consistent" prompted a full
+ *   rework of the whole board's channel layout; Song's pool now shares
+ *   exactly the 8 channels the live MPE zone can also use, no longer
+ *   able to opportunistically borrow chord's or game mode's channel
+ *   while those happened to be idle -- see that header for the full
+ *   reasoning and the tradeoff this accepts).
  * - MIDI channel: real feedback originally asked for a channel that
  *   "follows the pattern" (survives reordering, doesn't depend on
  *   which of the 24 slots it's currently sitting in) and, separately,
@@ -5724,60 +5747,22 @@ static bool s_song_note_sounding[OP_SONG_NUM_SLOTS];
 static uint8_t s_song_sounding_notes[OP_SONG_NUM_SLOTS][OP_SONG_MAX_NOTES_PER_STEP];
 static uint8_t s_song_sounding_note_count[OP_SONG_NUM_SLOTS];
 
-/* Real feedback: "9 song tracks, 1 channel stays free for live MPE" --
- * see the channel-pool comment just below for the full reasoning. */
-#define OP_SONG_MAX_CONCURRENT 9u
+/* Real feedback, originally: "9 song tracks, 1 channel stays free for live
+ * MPE." Now services/midi_channels.h's TILES_MIDI_SONG_MAX_CONCURRENT (8) --
+ * see that header for why the number changed and the whole-board reasoning
+ * it's now one piece of; kept as a local alias so nothing else in this file
+ * needs renaming. */
+#define OP_SONG_MAX_CONCURRENT TILES_MIDI_SONG_MAX_CONCURRENT
 
-/* Real feedback: "we can assign a costume midi channel for each bank
- * kinda like a looper," followed up once the actual 16-channel MIDI
- * budget got worked through against what's already committed
- * elsewhere: channel 0 (nibble) is the MPE master/zone channel;
- * nibbles 1-15 are the MPE member pool live melodic/chord/guitar
- * touches dynamically claim from (services/expression.c's own claim_
- * mpe_channel()); of those 15, nibbles 12-15 are already permanently
- * reserved for the regular sequencer's own 4 lanes (see set_active_
- * mode()'s -- actually tiles_op_mode_init()'s -- own s_seq_lane_
- * channel[] assignment), and nibble 10 is separately, permanently
- * used by chord mode's own fixed OP_CHORD_CHANNEL, outside the
- * dynamic pool entirely. That leaves exactly 10 nibbles genuinely
- * free (1-9, 11) before Song mode existed at all -- confirmed real
- * feedback: "9 song tracks, 1 channel stays free for live MPE," so
- * Song mode's own pool claims 9 of those 10 (working from the top of
- * ITS OWN free range downward, same "claim from the top down"
- * convention the 4 existing lanes already established), leaving
- * nibble 1 as the one channel live MPE polyphony keeps for itself
- * whenever any song track is playing. */
-static const uint8_t s_song_channel_pool[OP_SONG_MAX_CONCURRENT] = {11u, 9u, 8u, 7u, 6u, 5u, 4u, 3u, 2u};
-static bool s_song_channel_in_use[OP_SONG_MAX_CONCURRENT];
-
-/* Claims the next free channel from Song mode's own 9-slot pool --
- * false (out param untouched) if all 9 are already in use, which the
- * caller (still to come: whatever handles the track-overview's own
- * tap-to-start gesture) treats as "blocked, can't start a 10th,"
- * confirmed real feedback ("blocked, no-op but it flashes red to
- * idicate error"). Dynamic claim/release rather than a permanent per-
- * pattern assignment -- see this section's own header comment for why
- * that's the one design that satisfies both "channel survives
- * reordering" and "up to 24 real independent patterns" at once. */
-static bool song_claim_channel(uint8_t *out_channel) {
-    for (uint8_t i = 0u; i < OP_SONG_MAX_CONCURRENT; i++) {
-        if (!s_song_channel_in_use[i]) {
-            s_song_channel_in_use[i] = true;
-            *out_channel = s_song_channel_pool[i];
-            return true;
-        }
-    }
-    return false;
-}
-
-static void song_release_channel(uint8_t channel) {
-    for (uint8_t i = 0u; i < OP_SONG_MAX_CONCURRENT; i++) {
-        if (s_song_channel_pool[i] == channel) {
-            s_song_channel_in_use[i] = false;
-            return;
-        }
-    }
-}
+/* Real feedback: "we can assign a costume midi channel for each bank kinda
+ * like a looper." Claim/release, not a permanent per-pattern assignment --
+ * see this section's own header comment for why that's the one design that
+ * satisfies both "channel survives reordering" and "up to 24 real
+ * independent patterns" at once. The actual pool (which 8 channels, in what
+ * priority order, shared with what else) now lives in services/midi_
+ * channels.h -- tiles_midi_channels_song_claim()/_release() -- alongside
+ * every other fixed and dynamic piece of this board's 16-channel budget,
+ * rather than as a second, separate array only this file knew about. */
 
 #define TILES_SONG_STORE_MAGIC 0x474e4f53u /* "SONG" */
 /* Bumped 1 -> 2 for next_hue_byte below: an old v1 image is a different
@@ -5897,49 +5882,21 @@ static void song_store_load_all(void) {
 /* Real feedback: "is there anything needed to stop stuck niotes?" --
  * investigated the one real gap: services/expression.c's live-touch MPE
  * channel allocator (claim_mpe_channel()) and this file's own per-lane
- * channel assignment are two independent systems that don't know about
- * each other. Since seq_advance_clock() can now genuinely fire notes on
- * any of OP_SEQ_NUM_LANES channels WHILE a different mode is displayed
- * and live melodic touches are ALSO claiming channels from the same 1-15
- * pool, a live touch claiming the exact channel a lane is using for its
- * own background note would desync both sides -- that lane's own next
- * seq_fire_note() would end/steal whatever the live touch put there
- * without expression.c ever knowing, and that pad's own state machine
- * would still believe it owns a note that's already gone, never able to
- * send its own eventual note-off (the actual stuck-note failure mode).
- * A query rather than a single return value -- once all 4 lanes can be
- * simultaneously reserved (not just one pattern's worth), "the reserved
- * channel" stopped being a single number; claim_mpe_channel() asks this
- * once per CANDIDATE channel instead. Checks each lane's OWN s_seq_lane_
- * running flag now, not just whether the shared clock is ticking at all
- * -- real feedback: "play and stop are independent per active pattern."
- * A STOPPED lane can't have a note sounding (seq_advance_clock() ends it
- * the instant that lane stops, see that function's own comment) and
- * won't fire a new one, so its channel is genuinely free for live touch
- * to use -- reserving it anyway would just shrink live polyphony for no
- * real reason.
- * Extended for Song mode's own dynamically-claimed channel pool (see
- * this file's own "Song mode" section, song_claim_channel()'s comment
- * specifically, for why that has to be dynamic -- claimed at play-
- * start, released at stop -- rather than a permanent per-lane
- * assignment the way the 4 lanes above are). claim_mpe_channel() in
- * services/expression.c calls this same one function for every
- * candidate channel already, so extending it here is the only change
- * needed to keep live MPE touches from stealing a channel a song track
- * is actively sounding on -- no new call site anywhere. */
-bool tiles_op_mode_sequencer_channel_is_reserved(uint8_t channel) {
-    for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
-        if (s_seq_lane_running[lane] && s_seq_lane_channel[lane] == channel) {
-            return true;
-        }
-    }
-    for (uint8_t i = 0u; i < OP_SONG_MAX_CONCURRENT; i++) {
-        if (s_song_channel_in_use[i] && s_song_channel_pool[i] == channel) {
-            return true;
-        }
-    }
-    return false;
-}
+ * channel assignment used to be two independent systems that didn't know
+ * about each other, which could desync both sides (a live touch claiming
+ * the exact channel a lane was using for its own background note) and
+ * strand a pad's state machine believing it owned a note that was
+ * already gone. Fixed then by a query function (tiles_op_mode_sequencer_
+ * channel_is_reserved(), later extended to cover Song mode's own pool
+ * too); fixed MORE FUNDAMENTALLY now, auditing the whole channel scheme
+ * for "the midi channel asignement is weirtd and not consistent":
+ * services/midi_channels.h makes the sequencer's 4 lanes (and chord, and
+ * game mode) permanently OUTSIDE the range claim_mpe_channel() ever scans
+ * at all, so a live touch can no longer reach one of those channels
+ * regardless of whether the owning lane happens to be running -- nothing
+ * left to query, because there's nothing left that CAN collide. This
+ * query function is gone; see services/midi_channels.h and services/
+ * expression.c's own claim_mpe_channel() for what replaced it. */
 
 /* ---- Song mode: track-overview screen (stage 2) -------------------------
  * All 24 pads, one per library slot -- tap a stopped, occupied slot to
@@ -6128,7 +6085,7 @@ static void song_delete_slot(uint8_t pad) {
     uint8_t slot = pad - 1u;
     if (s_song_slot_running[slot]) {
         song_end_current_note(slot);
-        song_release_channel(s_song_slot_channel[slot]);
+        tiles_midi_channels_song_release(s_song_slot_channel[slot]);
         s_song_slot_running[slot] = false;
     }
     memset(&s_song_pattern[slot], 0, sizeof(s_song_pattern[slot]));
@@ -6141,15 +6098,16 @@ static void song_toggle_start_stop(uint8_t pad) {
     uint8_t slot = pad - 1u;
     if (s_song_slot_running[slot]) {
         song_end_current_note(slot);
-        song_release_channel(s_song_slot_channel[slot]);
+        tiles_midi_channels_song_release(s_song_slot_channel[slot]);
         s_song_slot_running[slot] = false;
         return;
     }
     uint8_t channel;
-    if (!song_claim_channel(&channel)) {
+    if (!tiles_midi_channels_song_claim(&channel)) {
         /* Real feedback: "blocked, no-op but it flashes red to idicate
-         * error" -- confirmed for exactly this case (a 10th concurrent
-         * play attempt while the other 9 channels are all claimed). */
+         * error" -- confirmed for exactly this case (one concurrent play
+         * attempt too many while every channel in the pool -- see
+         * services/midi_channels.h for the current size -- is claimed). */
         song_flash_error(pad);
         return;
     }
@@ -6160,6 +6118,33 @@ static void song_toggle_start_stop(uint8_t pad) {
      * section's own header comment), so this is the whole start
      * action for now. */
     s_song_current_step[slot] = 0u;
+}
+
+/* Real feedback: "since layouts work like apps we know ableton mode and
+ * song mode cant run at once so compensate mappigns fotr that" -- unlike
+ * the regular sequencer's own 4 lanes, Song mode's slots were designed as
+ * a genuine looper that keeps running in the background no matter which
+ * mode is displayed (this file's own "Song mode" section), which had
+ * quietly stayed true even while Scene Launch mode -- a DAW performance
+ * view -- was the one on screen. Confirmed there was nothing already
+ * stopping that. Called from set_active_mode() the instant Scene Launch
+ * becomes active, from ANY previous mode (not just when leaving Song mode
+ * itself, since a song can be looping in the background while melodic or
+ * the sequencer's own view is what's actually displayed) -- ends every
+ * running slot's current note and releases its channel, same "clean up
+ * whatever's active before it disappears" shape chord_end_all_notes()
+ * already establishes for chord mode. Frees Song mode's entire channel
+ * pool for the length of a Scene Launch session, which is the other half
+ * of what makes services/midi_channels.h's shared pool a real 8 channels
+ * rather than a much smaller number split three ways at once. */
+static void song_stop_all_running(void) {
+    for (uint8_t slot = 0u; slot < OP_SONG_NUM_SLOTS; slot++) {
+        if (s_song_slot_running[slot]) {
+            song_end_current_note(slot);
+            tiles_midi_channels_song_release(s_song_slot_channel[slot]);
+            s_song_slot_running[slot] = false;
+        }
+    }
 }
 
 static bool s_song_prev_pad_touched[OP_SONG_NUM_SLOTS];
@@ -6931,7 +6916,7 @@ static void song_capture_enter(void) {
         return;
     }
     uint8_t channel;
-    if (!song_claim_channel(&channel)) {
+    if (!tiles_midi_channels_song_claim(&channel)) {
         return;
     }
     memset(s_song_pattern[slot_index].step_notes, 0xFF, sizeof(s_song_pattern[slot_index].step_notes));

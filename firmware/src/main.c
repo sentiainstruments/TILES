@@ -78,6 +78,7 @@
 #include "services/hall.h"
 #include "services/haptics.h"
 #include "services/lighting.h"
+#include "services/midi_channels.h"
 #include "services/midi_clock.h"
 #include "services/note_map.h"
 #include "services/octave_control.h"
@@ -346,14 +347,24 @@ int main(void) {
      * above, whose rendering path it shares. See services/game_mode.h. */
     tiles_game_mode_init();
 
+    /* The shared 16-channel MIDI budget (which channels are chord's, the
+     * sequencer's 4 lanes', game mode's, permanently; which are Song
+     * mode's pool; how big the live MPE Lower Zone honestly is right now)
+     * -- must run before anything below reads tiles_midi_channels_lower_
+     * zone_size() (the very next block) or claims/releases a Song
+     * channel. See services/midi_channels.h. */
+    tiles_midi_channels_init();
+
     /* DIN MIDI jacks (IN + OUT) -- real feedback: "are midi plugs
      * working?" / "yes build DIN MIDI". Independent of USB: works with no
      * host at all. A failure here disables DIN only (printed, nothing
      * else blocked). On success, sends the MPE zone configuration once
      * now, while only DIN is up -- the USB mount below repeats it for USB.
-     * See midi/din_midi.h. */
+     * See midi/din_midi.h. member_channel_count is the Lower Zone's real
+     * size at this exact moment (services/midi_channels.h) -- always 8 this
+     * early (nothing has claimed a Song channel yet), not a hardcoded 15. */
     if (tiles_din_midi_init()) {
-        tiles_midi_mpe_init();
+        tiles_midi_mpe_init(tiles_midi_channels_lower_zone_size());
     } else {
         printf("[main] DIN MIDI unavailable (no free PIO state machine?) -- USB MIDI unaffected\n");
     }
@@ -438,7 +449,7 @@ int main(void) {
         static bool s_mpe_was_mounted = false;
         bool mpe_mounted_now = tud_midi_mounted();
         if (mpe_mounted_now && !s_mpe_was_mounted) {
-            tiles_midi_mpe_init();
+            tiles_midi_mpe_init(tiles_midi_channels_lower_zone_size());
         }
         s_mpe_was_mounted = mpe_mounted_now;
 

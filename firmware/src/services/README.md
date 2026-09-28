@@ -3060,10 +3060,11 @@ not its code.
      non-blocking melody player (`gm_melody_start()`/`_update()`/
      `_stop()`, same "elapsed_ms / STEP_MS" stepping `gsim_update()`'s
      own pattern playback already uses) on a fixed, statically-reserved
-     MIDI channel (`GM_MELODY_CHANNEL` 11 -- one nibble below
-     `op_mode.c`'s own sequencer-reserved 12-15 range, same "reserve
-     from the top down, never through `expression.c`'s dynamic per-
-     strike allocator" pattern that file established). Win = a short
+     MIDI channel (`GM_MELODY_CHANNEL`, now `services/midi_channels.h`'s
+     `TILES_MIDI_CH_GAME` -- permanently outside the range `expression.c`'s
+     dynamic per-strike allocator can ever reach; see this file's own later
+     "whole 16-channel MIDI layout, reworked" entry for why the channel
+     numbers here are historical, not current). Win = a short
      ascending C-E-G-C arpeggio; lose = a plain three-note descending
      line, matching the quote exactly. Hooked into every real win/lose
      point across all five games: `gm_start_round_end()` gained a second
@@ -3342,12 +3343,12 @@ not its code.
   after that fold. Each chord pad's 3 notes fire together as real
   polyphonic MIDI (`tiles_midi_note_on()` x3 on press,
   `tiles_midi_note_off()` x3 on release) on a new dedicated channel,
-  nibble 10 (`OP_CHORD_CHANNEL`) -- one below `game_mode.c`'s own
-  `GM_MELODY_CHANNEL` (11) and below the sequencer's own per-pattern
-  channels (12-15), so none of this codebase's direct-MIDI claims
-  collide. Like those existing claims, this is a default, not a hard
-  reservation: `expression.c`'s live per-touch MPE allocator (still
-  running for chord mode's own melody columns) is untouched, so a
+  `OP_CHORD_CHANNEL` (now `services/midi_channels.h`'s `TILES_MIDI_CH_
+  CHORD` -- see this file's own later "whole 16-channel MIDI layout,
+  reworked" entry; the specific numbers and "default, not a hard
+  reservation" framing below are historical). `expression.c`'s live
+  per-touch MPE allocator (still running for chord mode's own melody
+  columns) is untouched, so a
   genuine collision is only possible while using many fingers at once
   AND holding chords simultaneously -- an accepted edge case, not worth
   shrinking live MPE polyphony to avoid, matching the precedent already
@@ -6704,7 +6705,10 @@ not its code.
   questions as necesarely so no ambiguity") settled the actual shape,
   including two real technical conflicts worth recording since they
   shaped the design directly:
-  - **MIDI channel budget.** Of the 16 standard channels, channel 1 is
+  - **MIDI channel budget** (historical -- see this file's own later
+    "whole 16-channel MIDI layout, reworked" entry for the current
+    scheme, including two real collision bugs this original budget
+    turned out to have). Of the 16 standard channels, channel 1 is
     the MPE master/zone channel; channels 2-16 are the member pool live
     melodic/chord/guitar touches dynamically claim from
     (`services/expression.c`'s own `claim_mpe_channel()`). Of those 15,
@@ -8513,5 +8517,134 @@ not its code.
     debounced (2 s after the last change) and only happen with every pad
     untouched, so they land between phrases, not in them. DIN RX bytes
     arriving during the stall are flagged lost and the parser resyncs.
+- **This board's whole 16-channel MIDI layout, reworked.** Real feedback:
+  "i feel like the midi channel asignement is weirtd and not consistent or
+  standaerd for industry compatibility" -> "large [rework]... do good
+  research on protocols. we want ease of use and consistency." New module,
+  `services/midi_channels.h/.c` (pure logic, host-tested), replaces every
+  scattered, one-off channel constant this codebase had accumulated
+  feature by feature (`op_mode.c`'s `OP_CHORD_CHANNEL`/`s_seq_lane_
+  channel[]`/`s_song_channel_pool[]`, `game_mode.c`'s `GM_MELODY_CHANNEL`)
+  -- see that header for the full layout, citations, and reasoning; the
+  earlier entries above for chord mode, game mode, and Song mode's own
+  channel budget are the historical record of how each piece was
+  originally justified, now superseded by this single source of truth.
+  - **Two real collision bugs found auditing the old scheme, both now
+    structurally impossible rather than fixed by remembering one more
+    condition.** (1) Harmonics' own reserved range and the sequencer's 4
+    reserved lanes overlapped on 4 of harmonics' 5 slots, and
+    `claim_harmonic_channel()` never checked the sequencer's own
+    reservation (only `claim_mpe_channel()`, for real notes, did) -- a
+    harmonic voice could claim a channel a sequencer lane was actively
+    sounding a note on right now. (2) Chord mode's own fixed channel was
+    only ever a "default claim, not a hard reservation... an accepted edge
+    case" against chord mode's own melody sub-grid, whose pads run through
+    the SAME live per-touch MPE allocator -- a live touch there could claim
+    chord's exact channel while the chord strip was actively using it,
+    something the code's own old comment already knew about and accepted
+    as a risk. Both are now impossible by construction: chord's, game
+    mode's, and the sequencer's 4 lanes' channels are permanently OUTSIDE
+    the range the live allocator can ever scan at all, not excluded by a
+    condition anyone has to remember to check.
+  - **General MIDI's percussion channel (10) is now permanently unused.**
+    Never assigned to chord, game, the sequencer, Song's pool, or live MPE
+    -- a GM-aware receiver reinterprets whatever lands on channel 10 as a
+    drum hit regardless of what was meant (Wikipedia "General MIDI";
+    MIDI.org forum "General Midi Level 2 ch 11 percussion"), and Song
+    mode's own old pool included it.
+  - **The MPE Configuration Message (RPN 6) is now honest and can be
+    withdrawn.** The spec defines it as "Master Channel plus a COUNT of
+    ascending Member Channels," sized to whatever the zone actually is --
+    not always 15 regardless of reality (MIDI.org community, "How MIDI MPE
+    pitch bend works"; JUCE's MPE tutorial: "An MPE zone can be turned off
+    by sending an MCM without any member channels"). Before this, TILES
+    always declared 15 at boot and never updated or withdrew it -- a
+    receiver had no way to know some of "its" 15 channels might be
+    carrying a sequencer lane, and turning `expression.mpe_enabled` off at
+    runtime never told the receiver its zone was gone.
+    `tiles_expression_set_mpe_enabled()` now sends a real withdrawal (0)
+    turning off, and the honest current size turning back on;
+    `services/expression.c`'s scan polls `tiles_midi_channels_zone_size_
+    changed()` every tick and re-declares whenever Song mode's own pool
+    grows or shrinks it.
+  - **Why the zone caps at 8, not 15, even at its largest.** The Lower
+    Zone must stay a single CONTIGUOUS run starting at channel 2 (there's
+    no spec-legal "channels 2-5 and 11-16 but not 6-10" shape), and channel
+    10 can never be a member -- so its maximum possible size is a hard 8
+    (channels 2-9), a direct, unavoidable consequence of honoring GM's
+    channel-10 convention while staying spec-correct, not a number picked
+    for its own sake. (A second, spec-legal Upper Zone running alongside
+    the Lower one could theoretically recover a few more channels at the
+    cost of a second, independent zone declaration a receiver has to
+    understand as one instrument -- documented as a deferred option in
+    `midi_channels.h`, not built.)
+  - **Six channels are now permanently, individually fixed** -- chord,
+    game mode, and the 4 sequencer lanes (`TILES_MIDI_CH_CHORD`/`_GAME`/
+    `_SEQ_LANE_0.._3`) -- satisfying "we also want to be able to control
+    at least 6 channels or devices independently" on its own, regardless
+    of Song mode. A player who patches an external synth to one of these
+    can rely on it never moving depending on what else happens to be
+    running.
+  - **Song mode's own pool shares the SAME 8 channels the live MPE zone
+    can use**, not a separate, additionally-carved-out range -- both needs
+    are genuinely mutually exclusive in total size on one 16-channel port,
+    not two independently-sized budgets that happened to add up on paper.
+    Song claims from the top of the pool down, same "always take the
+    highest currently-free one" policy as before, which is what makes the
+    live zone's own size a simple contiguous count from the bottom.
+    **Real, visible change: Song's own concurrency cap drops from 9 to 8**
+    -- the old 9 depended on chord's channel being borrowable whenever
+    chord mode wasn't active, which is exactly the bug class this rework
+    removes; 8 is the honest size of the pool Song now always has to
+    itself.
+  - **A new gap found designing the fix, closed before it shipped**: Song's
+    own claim and the live zone's own claim are two independent records of
+    "who's using which shared channel" that otherwise have no way to know
+    about each other -- a live note claiming a channel doesn't shrink the
+    declared zone size (deliberately, so the zone doesn't flicker on every
+    note-on/off), so Song's claim function had no way to know a channel was
+    already sounding a live note and could take it anyway. Fixed with a
+    third, minimal piece of shared state (`tiles_midi_channels_note_
+    channel_claimed()/_released()`), mirrored from the ONE place
+    `services/expression.c` flips a channel's own in_use bit
+    (`set_channel_in_use()`) so this can't be forgotten at a future call
+    site the way the sequencer-reservation check once was.
+  - **`features.melodic_harmonics`'s own reserved slice now scales with
+    the live zone's real size**, capped so it never takes the WHOLE zone
+    (always leaves at least 1 channel for a real note) -- the old fixed
+    "top 5 of 15" ratio (1/3 given to harmonics) is now "up to 5 of a
+    zone that maxes at 8" (5/8 at the zone's largest), a real, worth-
+    knowing-about shift in the tradeoff between harmonic voices and real
+    polyphony now that the zone itself is smaller by design.
+  - **Song mode and Scene Launch mode now stop each other** -- real
+    feedback: "since layouts work like apps we know ableton mode and song
+    mode cant run at once so compensate mappigns fotr that." Song's slots
+    used to keep looping in the background regardless of which mode was
+    displayed (deliberately, like the regular sequencer's own lanes) --
+    including while Scene Launch, a DAW performance view, was on screen,
+    with nothing stopping that. `set_active_mode()` now calls a new
+    `song_stop_all_running()` the instant Scene Launch becomes active,
+    from ANY previous mode, freeing Song's entire channel pool for the
+    length of a Scene Launch session -- the scenario "playing expressively
+    into a DAW instrument while triggering clips" now gets the full 8-
+    channel zone rather than competing with a looper that was never the
+    point of that session anyway.
+  - **Extreme, accepted edge case, documented rather than hidden**: if
+    Song mode has claimed every one of its 8 possible channels (8
+    concurrent looper tracks) at the EXACT instant a brand-new melodic
+    touch also needs one, `claim_mpe_channel()`'s bounded fallback
+    (channel 2) can collide with whatever Song track is using it -- this
+    needs the pool completely exhausted by an atypical pattern of use, not
+    ordinary play, and was judged not worth a new "silently drop this
+    note" code path to close for something this rare.
+  - **Tested natively** (`firmware/test/test_midi_channels.c`): the
+    claim-highest-first invariant, the contiguous zone-size math including
+    the "a free channel above a still-held one must not count" case,
+    change notification, and the cross-module invariant above (Song can
+    never claim a live channel, in either direction) -- 12 scenarios, all
+    passing. Not host-tested: the integration into `expression.c`/
+    `op_mode.c` themselves, which (like the rest of both files) has no
+    host-test harness and is verified by code review plus the real-
+    hardware round this change is waiting on.
 - Everything else (per-pad Hall calibration) is not built
   yet.
