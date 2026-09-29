@@ -9199,5 +9199,76 @@ not its code.
     soon).
   The chord sample is small; the settings exist to adjust by ear. Not
   hardware-verified at the new default yet.
+- **Standardization round: MPE sender conformance.** Real feedback: "what
+  else does it look like we need to fix for standarization and
+  cokmpatibility/ streamlining in our code" -> "do all and for 5 we can
+  ignore that aditional dimension for now but put a pin on it." Checked
+  against the MPE specification (MMA RP-053 v1.0); four gaps, all in how
+  TILES *sends* MPE:
+  - **Released notes kept their pitch.** `end_held_note()` used to send
+    pitch bend center BEFORE the Note-Off, so the next note on that
+    channel couldn't inherit a stale bend -- but it snapped every bent
+    note's release tail, and every pedal-sustained note, back to center.
+    The spec ends a note's control at Note-Off (the note rings out as it
+    was) and resets the channel as setup for the NEXT note. Now
+    `tiles_midi_send_note_setup()` (`midi/midi_out.h`) sends bend center
+    and pressure 0 right before every Member-Channel Note-On -- played
+    notes, harmonic plucks, and a channel Song mode takes over -- and
+    skips whichever is already at its default (`midi_out.c` tracks the
+    last value sent per channel), so on DIN a note is delayed only when
+    there's really something to reset. With MPE off the shared channel
+    works the same way; a departing owner still hands the bend to the
+    next held pad, and with none left the bend waits for the next Note-On.
+  - **Channel Pressure goes to 0 around every note** -- the spec: "must be
+    set to zero immediately before NoteOn or NoteOff". Before Note-On via
+    the setup above; before Note-Off in `end_held_note()` (Member Channels
+    only, skipped if already 0) -- including a note held for the pedal
+    (`pedal.sustain_style hold`), since the finger has left even though
+    the Note-Off waits.
+  - **Channel choice follows the spec's order** (section 3.2), in the new
+    `services/mpe_alloc.{h,c}` -- pure functions, native tests in
+    `firmware/test/test_mpe_alloc.c`. It used to take the LOWEST free
+    channel, so every new note went back onto channel 2, whose previous
+    note was usually still in its release tail. Now: the channel that last
+    carried this same note number (so a re-struck note retriggers its own
+    voice instead of stacking a copy), otherwise the channel idle longest.
+    Stealing is unchanged (a pedal-held note first, then the oldest).
+    Harmonic plucks use the same order within their reserved range.
+  - **The zone is no longer re-declared mid-performance.** Song mode
+    claiming or freeing a channel used to re-send the MPE Configuration
+    Message (RPN 6) immediately. A receiver stops every note on a zone
+    change, and JUCE-based synths (ROLI Equator among them) also reset the
+    zone's bend range to the spec's 48-semitone default on every RPN 6 --
+    which this re-declaration sent WITHOUT the RPN 0 that follows it at
+    boot (the "bending too far in Equator/Serum" history in `midi/
+    midi_out.h` may have had this as one cause). Now `services/
+    midi_channels.h` tracks the size the receiver was last told
+    (`tiles_midi_channels_declared_zone_size()`); the allocator scans that
+    size and skips Song-held channels inside it
+    (`tiles_midi_channels_song_holds()`); and `tiles_expression_scan()`
+    re-declares only once nothing is sounding -- no note played, held or
+    plucked, pedal up, for `MPE_ZONE_REDECLARE_IDLE_MS` (2 s, for release
+    tails TILES can't see) -- always as the full RPN 6 + RPN 0.
+  - **Every declaration comes from one place**,
+    `tiles_expression_announce_mpe_zone()`. Real bug found doing this:
+    `main.c` declared the full zone itself at boot and on every USB mount
+    without checking the MPE setting, so with `expression.mpe_enabled 0`
+    saved, every plug-in re-announced an 8-channel zone the notes weren't
+    using. The DIN boot declaration also moved after `tiles_settings_boot()`
+    for the same reason.
+  - **Harmonics with MPE off** now pluck on channel 1 with every other
+    note. They used to go out on Member Channels 2-9, which a plain
+    single-channel synth never hears.
+  - **Pinned, not built: CC74 (MPE's third dimension, "slide"/timbre).**
+    The spec expects receivers to handle it and many MPE patches map
+    something to it; TILES sends only pitch bend and pressure. Parked on
+    purpose ("we can ignore that aditional dimension for now but put a pin
+    on it") -- the open question is which physical gesture should drive
+    it. When it's built, its per-note setup value (64, center) belongs in
+    `tiles_midi_send_note_setup()` next to bend and pressure.
+  Not hardware-verified yet. The one to listen for: bent notes now keep
+  their bend through the release -- if a release sounds detuned, the
+  bend reading during the finger lift is noisy and the release path
+  needs a look (with pitch bend off, the default, nothing changes).
 - Everything else (per-pad Hall calibration) is not built
   yet.

@@ -8,6 +8,7 @@
 #include "cv_gate.h"
 #include "midi_channels.h"
 #include "midi_out.h"
+#include "mpe_alloc.h"
 #include "haptics.h"
 #include "expression_control.h"
 #include "game_mode.h"
@@ -508,9 +509,10 @@ static uint8_t release_velocity_from_fall_rate(float fall_rate) {
  * directly on each pad's own pad_expr_t, and multiple pads can each
  * bend independently at the same time, exactly like a real Seaboard.
  * The old "reset to center before handing off" concern doesn't
- * disappear entirely -- it becomes "always leave a freed MPE channel
- * centered before it's reused by a different note," which
- * end_held_note() below is the single place that guarantees. */
+ * disappear entirely -- it becomes "a channel is back at center before
+ * the next note on it sounds," which tiles_midi_send_note_setup() right
+ * before every Note-On guarantees (NOT a recenter at note-off any more,
+ * which snapped release tails -- see end_held_note()). */
 #define PITCH_BEND_CENTER 8192u
 
 /* NOTE on everything calibrated below: these constants (deadzone,
@@ -1263,28 +1265,31 @@ static pad_expr_t s_pads[TILES_NUM_PADS];
 static bool s_pitch_bend_enabled;
 
 
-/* MPE Member Channel allocator -- one slot per shared-pool channel (up to
+/* MPE Member Channel table -- one slot per shared-pool channel (up to
  * TILES_MIDI_SHARED_POOL_SIZE of them; see services/midi_channels.h for
- * why the live zone can never be larger), mirroring
- * services/haptics.c's own voice-stealing policy almost exactly
- * (oldest-claim-wins eviction via a monotonic sequence number) for the
- * same "ran out of a limited hardware/protocol resource, evict the
- * longest-held one rather than refuse the new one" reasoning -- see
- * claim_mpe_channel() below. Running out of 15 simultaneous independent
- * channels on a 24-pad board is a real possibility (unlike haptics'
- * ceiling, which is driven by power budget and typically much lower),
- * but still an edge case most sessions won't hit. */
-typedef struct {
-    bool in_use;
-    uint8_t owner_pad; /* 1..TILES_NUM_PADS, valid only while in_use */
-    uint32_t claim_seq;
-} mpe_channel_slot_t;
+ * why the live zone can never be larger). WHICH channel a new note gets,
+ * and which note is stolen when all are busy, is services/mpe_alloc.h's
+ * job (the MPE spec's section 3.2 order: same note's old channel, else the
+ * longest-idle one; steal the oldest) -- see claim_mpe_channel() below.
+ * Running out of the zone's 8 channels on a 24-pad board is a real
+ * possibility, but still an edge case most sessions won't hit. */
 /* Sized for the live zone's maximum possible extent (services/midi_
  * channels.h's TILES_MIDI_SHARED_POOL_SIZE, 8 -- the zone can never be
  * larger, since channels above it permanently belong to chord/game/the
  * sequencer or General MIDI's percussion channel), not the old fixed 15. */
-static mpe_channel_slot_t s_mpe_channels[TILES_MIDI_SHARED_POOL_SIZE];
+static tiles_mpe_slot_t s_mpe_channels[TILES_MIDI_SHARED_POOL_SIZE];
 static uint32_t s_next_mpe_claim_seq = 1u;
+
+/* ---- Non-MPE compatibility mode -----------------------------------------
+ * Real feedback: "lets make sure the pitch bend works with non mpe
+ * layouts meaning pitch bend wheel... look for the max most
+ * compatible and standardized version." Default true (MPE, this
+ * file's original and still-recommended behavior) -- see tiles_
+ * expression_set_mpe_enabled()'s own header-comment for what flipping
+ * this actually changes. */
+static bool s_mpe_enabled = true;
+/* Stamps each slot's release_seq as it's freed -- see tiles_mpe_slot_t. */
+static uint32_t s_next_mpe_release_seq = 1u;
 
 /* The ONE place this file flips a shared-pool channel's own in_use bit --
  * every claim/release/steal site below goes through this instead of
@@ -1304,8 +1309,27 @@ static void set_channel_in_use(uint8_t index, bool in_use) {
     if (in_use) {
         tiles_midi_channels_note_channel_claimed(channel);
     } else {
+        s_mpe_channels[index].release_seq = s_next_mpe_release_seq++;
         tiles_midi_channels_note_channel_released(channel);
     }
+}
+
+/* Marks slot `index` claimed for `note` -- owner_pad 0 for a harmonic
+ * pluck. The one place a claim fills in a slot, so the same-note rule in
+ * services/mpe_alloc.h always has the right note to compare against. */
+static void claim_slot(uint8_t index, uint8_t owner_pad, uint8_t note) {
+    set_channel_in_use(index, true);
+    s_mpe_channels[index].owner_pad = owner_pad;
+    s_mpe_channels[index].note = note;
+    s_mpe_channels[index].claim_seq = s_next_mpe_claim_seq++;
+}
+
+/* True if Member Channel slot `index` is one the receiver has been told is
+ * in the zone AND Song mode isn't currently using -- see services/
+ * midi_channels.h's header on why those can briefly differ. */
+static bool slot_in_live_zone(uint8_t index) {
+    return index < tiles_midi_channels_declared_zone_size() &&
+           !tiles_midi_channels_song_holds((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + index));
 }
 
 /* ---- pedal.sustain_style HOLD: TILES holds released notes itself ---------
@@ -1661,7 +1685,7 @@ static bool harmonic_channel_is_reserved(uint8_t channel) {
     if (!s_harmonics_enabled || s_harmonic_fundamental_pad == 0u) {
         return false;
     }
-    uint8_t zone_size = tiles_midi_channels_lower_zone_size();
+    uint8_t zone_size = tiles_midi_channels_declared_zone_size();
     if (zone_size == 0u) {
         return false; /* nothing to reserve from */
     }
@@ -1748,8 +1772,10 @@ static void end_all_harmonic_voices(void) {
  * and simply returns 0xFF (no voice starts) if every reserved channel
  * already holds a harmonic -- see this section's own header comment on
  * why harmonics are deliberately the lowest-priority thing on this
- * board's MPE bus. */
-static uint8_t claim_harmonic_channel(void) {
+ * board's MPE bus. Within that range, the same MPE-spec channel order as a
+ * played note (services/mpe_alloc.h) -- a re-plucked overtone gets its own
+ * previous channel back, otherwise the longest-idle one. */
+static uint8_t claim_harmonic_channel(uint8_t note) {
     /* Real bug, found auditing the channel scheme for "is this actually
      * consistent" (real feedback: "the midi channel asignement is weirtd
      * and not consistent"): this used to scan the full, fixed 1..15 range
@@ -1767,26 +1793,21 @@ static uint8_t claim_harmonic_channel(void) {
      * like claim_mpe_channel() below -- only ever scans the zone's own
      * current size and can no longer reach a fixed part's channel at all,
      * regardless of whether anyone remembers to exclude it. */
-    uint8_t zone_size = tiles_midi_channels_lower_zone_size();
-    for (uint8_t i = 0; i < zone_size; i++) {
-        uint8_t channel = (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i);
-        if (harmonic_channel_is_reserved(channel) && !s_mpe_channels[i].in_use) {
-            set_channel_in_use(i, true);
-            /* owner_pad = 0 -- a real note's pad is always 1..24 (see
-             * mpe_channel_slot_t's own comment), so this both reads as
-             * "not owned by a real held pad" and can never collide with
-             * a genuine pad number. claim_mpe_channel() below already
-             * skips this whole range for real notes regardless, so
-             * nothing ever inspects this field for a harmonic-held
-             * channel -- set purely so a slot showing in_use=true is
-             * never mistaken for stale/uninitialized data if this file
-             * is debugged later. */
-            s_mpe_channels[i].owner_pad = 0u;
-            s_mpe_channels[i].claim_seq = s_next_mpe_claim_seq++;
-            return channel;
-        }
+    bool eligible[TILES_MIDI_SHARED_POOL_SIZE];
+    for (uint8_t i = 0; i < TILES_MIDI_SHARED_POOL_SIZE; i++) {
+        eligible[i] =
+            slot_in_live_zone(i) && harmonic_channel_is_reserved((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i));
     }
-    return 0xFFu;
+    int idx = tiles_mpe_alloc_pick_free(s_mpe_channels, eligible, TILES_MIDI_SHARED_POOL_SIZE, note);
+    if (idx < 0) {
+        return 0xFFu;
+    }
+    /* owner_pad = 0 -- a real note's pad is always 1..24 (see
+     * tiles_mpe_slot_t's own comment), so this both reads as "not owned by
+     * a real held pad" and can never collide with a genuine pad number --
+     * which is exactly what keeps the steal path from ever picking it. */
+    claim_slot((uint8_t)idx, 0u, note);
+    return (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + idx);
 }
 
 /* Fires a fresh pluck for `pad` into harmonic slot `slot` -- shared by
@@ -1805,6 +1826,15 @@ static void fire_harmonic_pluck(uint8_t slot, uint8_t pad, uint8_t note, uint8_t
     v->note = note;
     v->midi_channel = channel;
     v->ends_at_ms = now_ms + HARMONIC_PLUCK_DURATION_MS;
+    /* Same rules as a played note's Note-On in tiles_expression_scan(): a
+     * held note of this pitch closes first (pedal.sustain_style HOLD), and
+     * a Member Channel gets its per-note setup. Not on the shared channel
+     * with MPE off -- its bend/pressure belong to the fundamental, which is
+     * still being played. */
+    release_held_notes_of_pitch(note);
+    if (channel != TILES_MIDI_MPE_MASTER_CHANNEL) {
+        tiles_midi_send_note_setup(channel);
+    }
     tiles_midi_note_on(channel, note, HARMONIC_VELOCITY);
 }
 
@@ -1859,8 +1889,16 @@ static void try_harmonic_pluck(uint8_t pad, uint8_t fundamental_note, uint32_t n
     uint8_t channel;
     if (reuse) {
         channel = s_harmonic_voices[slot].midi_channel; /* reuse -- still held from the ring in progress */
+    } else if (!s_mpe_enabled) {
+        /* Real gap found in the standardization audit ("do all"): with MPE
+         * off, plucks still went out on Member Channels 2-9, which a plain
+         * single-channel synth listening on channel 1 never hears -- the
+         * feature just went silent. With MPE off they go where every other
+         * note goes; the overtones are different note numbers from the
+         * fundamental, so they never collide with it on the shared channel. */
+        channel = TILES_MIDI_MPE_MASTER_CHANNEL;
     } else {
-        channel = claim_harmonic_channel();
+        channel = claim_harmonic_channel((uint8_t)note);
         if (channel == 0xFFu) {
             return; /* every reserved channel already holds a harmonic */
         }
@@ -2040,16 +2078,6 @@ uint16_t tiles_expression_get_harmonics_press_depth(void) {
     return s_harmonic_press_depth;
 }
 
-
-/* ---- Non-MPE compatibility mode -----------------------------------------
- * Real feedback: "lets make sure the pitch bend works with non mpe
- * layouts meaning pitch bend wheel... look for the max most
- * compatible and standardized version." Default true (MPE, this
- * file's original and still-recommended behavior) -- see tiles_
- * expression_set_mpe_enabled()'s own header-comment for what flipping
- * this actually changes. */
-static bool s_mpe_enabled = true;
-
 /* Which pad currently drives the shared master channel's continuous
  * controllers (pitch bend, channel pressure) while !s_mpe_enabled --
  * 0 means no pad is currently held at all. Real feedback: "most
@@ -2085,9 +2113,10 @@ void tiles_expression_init(void) {
         if (s_mpe_channels[i].in_use) {
             tiles_midi_channels_note_channel_released((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i));
         }
-        s_mpe_channels[i] = (mpe_channel_slot_t){0};
+        s_mpe_channels[i] = (tiles_mpe_slot_t){0};
     }
     s_next_mpe_claim_seq = 1u;
+    s_next_mpe_release_seq = 1u;
     s_mpe_enabled = true;
     s_non_mpe_owner_pad = 0u;
     s_prev_holding_notes = false; /* s_pads' held_* were just zeroed above */
@@ -2394,9 +2423,10 @@ static uint16_t pitch_bend_14bit_from_cosine_delta(pad_expr_t *s, float delta, u
  * floor was a single tick at the exact instant of RELEASING a held tilt
  * (a fast depth-ramp event, same class of transient as every other
  * cross-axis-coupling artifact this file has fought, just at release
- * instead of onset) -- harmless there on its own since pitch bend resets
- * to center on note-off regardless of what this detector is doing, but
- * a similarly brief transient from a deliberate hard press MID-hold
+ * instead of onset) -- and since a note now keeps its last bend through
+ * its release tail (the MPE spec's order, see end_held_note()), a
+ * transient there would be heard, so this gate matters at release too; so
+ * would a similarly brief transient from a deliberate hard press MID-hold
  * (untested; no capture of that specific gesture yet) is exactly the
  * kind of thing this file's history says not to assume away. A real
  * wiggle's own 93%-of-duration coverage sails through this easily; a
@@ -2578,21 +2608,24 @@ void tiles_expression_set_mpe_enabled(bool enabled) {
      * channels (JUCE's MPE tutorial: "An MPE zone can be turned off by
      * sending an MCM without any member channels"); turning MPE back on
      * re-declares the zone's REAL current size (services/midi_channels.h),
-     * not a blind 15 -- honest either way. The explicit tiles_midi_
-     * channels_zone_size_changed() call resyncs this file's own change-
-     * tracking to whatever the zone size already is, so the very next scan
-     * doesn't immediately re-fire a redundant, already-sent declaration --
-     * see that function's own header comment. */
-    if (enabled) {
-        tiles_midi_send_mpe_zone_size(tiles_midi_channels_lower_zone_size());
-    } else {
-        tiles_midi_send_mpe_zone_size(0u);
-    }
-    (void)tiles_midi_channels_zone_size_changed();
+     * not a blind 15 -- honest either way. An immediate declaration is
+     * right here, unlike Song mode's mid-performance changes (see tiles_
+     * expression_scan()): this IS the player changing the zone. */
+    tiles_expression_announce_mpe_zone();
 }
 
 bool tiles_expression_is_mpe_enabled(void) {
     return s_mpe_enabled;
+}
+
+/* The one place an MPE Configuration Message is sent from -- see
+ * expression.h. Real bug found in the standardization round: main.c used
+ * to declare the full zone itself at boot and on every USB mount, without
+ * asking whether MPE was on -- so with `expression.mpe_enabled 0` saved,
+ * every plug-in re-announced an 8-channel MPE zone the notes were no
+ * longer using. */
+void tiles_expression_announce_mpe_zone(void) {
+    tiles_midi_mpe_init(s_mpe_enabled ? tiles_midi_channels_declare_zone() : 0u);
 }
 
 static void begin_awaiting_strike(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
@@ -2754,19 +2787,20 @@ static uint8_t find_most_recent_held_pad(uint8_t exclude_pad) {
     return best_pad;
 }
 
-/* Ends `pad`'s currently-held note completely and cleanly: MIDI note-off,
- * haptic stop, pitch bend reset to center, and frees its MPE channel slot
- * -- the single place this whole sequence happens, used by every normal
- * note-off/retrigger call site below AND by claim_mpe_channel()'s
+/* Ends `pad`'s currently-held note completely and cleanly: Channel
+ * Pressure to 0, MIDI note-off, haptic stop, and frees its MPE channel
+ * slot -- the single place this whole sequence happens, used by every
+ * normal note-off/retrigger call site below AND by claim_mpe_channel()'s
  * channel-stealing further below (running out of the zone's Member
  * Channels must still leave everything -- the synth's note state, this
- * pad's own state machine -- consistent when it happens). Always centers
- * the freed channel's pitch bend, whether or not this specific pad was
- * actively bending, so the NEXT note assigned to this channel (by
- * claim_mpe_channel() below) can never inherit a stale bend -- the
- * per-note equivalent of the old single-owner design's "reset to center
- * when ownership changes" rule, now enforced once per channel release
- * instead of scattered across every caller. Does NOT set state =
+ * pad's own state machine -- consistent when it happens). Does NOT center
+ * the pitch bend any more. It used to, BEFORE the Note-Off, so the next
+ * note on the channel couldn't inherit a stale bend -- but that audibly
+ * snapped every bent note's release tail (and every pedal-sustained note)
+ * back to center. Real feedback: "do all" (the standardization round);
+ * the MPE spec ends a note's control at its Note-Off and resets the
+ * channel as the NEXT note's setup instead, which is tiles_midi_send_
+ * note_setup() right before every Note-On. Does NOT set state =
  * PAD_STATE_IDLE; callers do that themselves since the two normal call
  * sites (note-off, retrigger) transition to different next states.
  *
@@ -2829,8 +2863,15 @@ static uint8_t find_most_recent_held_pad(uint8_t exclude_pad) {
 static void end_held_note(pad_expr_t *s, uint8_t pad, bool player_release, bool may_hold) {
     tiles_cv_gate_note_off(s->active_note);
     tiles_haptics_stop(pad);
-    tiles_midi_send_pitch_bend(s->midi_channel, PITCH_BEND_CENTER);
     s->pitch_bend_active = false;
+    if (s->midi_channel != TILES_MIDI_MPE_MASTER_CHANNEL && s->last_sent_aftertouch != 0u) {
+        /* MPE spec: Channel Pressure to 0 immediately before Note-Off -- the
+         * finger has left, whether or not the Note-Off itself waits for the
+         * pedal below. (Not on the shared channel with MPE off: its pressure
+         * belongs to whichever pad is still being played.) */
+        tiles_midi_send_channel_pressure(s->midi_channel, 0u);
+        s->last_sent_aftertouch = 0u;
+    }
     uint8_t release_velocity = player_release ? release_velocity_from_fall_rate(s->depth_fall_rate) : 0u;
     bool hold = may_hold && tiles_pedal_is_holding_notes();
     if (hold) {
@@ -2856,8 +2897,9 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool player_release, bool 
          * pressure, hand that back to whichever OTHER held pad was
          * touched most recently, and immediately resend ITS actual
          * current bend so the channel reflects that pad's real tilt
-         * instead of staying wherever this departing pad (or the
-         * center send just above) left it. */
+         * instead of staying wherever this departing pad left it. With no
+         * other pad held the bend is left alone -- the next Note-On's
+         * setup (tiles_midi_send_note_setup()) centers it. */
         if (s_non_mpe_owner_pad == pad) {
             uint8_t next_owner = find_most_recent_held_pad(pad);
             s_non_mpe_owner_pad = next_owner;
@@ -2898,80 +2940,41 @@ void tiles_expression_force_release_all(void) {
     release_all_held_notes();
 }
 
-/* MPE Member Channel allocator -- see s_mpe_channels' own comment for
- * the voice-stealing policy. Returns the claimed channel (status-byte
- * nibble). If every (non-reserved) Member Channel is already in use,
- * forcibly ends the oldest-claimed one's note (via end_held_note()
- * above) and hands that SAME channel straight to the new pad, rather
- * than freeing it and re-searching -- avoids a redundant second scan
- * and keeps the "steal" atomic from this function's own perspective.
+/* MPE Member Channel allocator. Returns the claimed channel (status-byte
+ * nibble) for `pad`'s new `note`. Which channel -- and, if every eligible
+ * one is busy, which note gives its channel up -- is services/mpe_alloc.h's
+ * MPE-spec order; this function builds the eligibility masks and does the
+ * claiming. A stolen channel goes straight to the new pad (claim_slot()
+ * right after end_held_note() freed it), never back to the free pool in
+ * between.
  *
- * Real feedback: "is there anything needed to stop stuck niotes?" --
- * tiles_op_mode_sequencer_channel_is_reserved() (see that function's own
- * comment) is checked for every candidate in BOTH the free-slot search
- * and the steal-oldest fallback below, so a live touch can never claim
- * one of the sequencer's OP_SEQ_NUM_LANES own channels while it's
- * genuinely running -- the real, if narrow, collision that used to be
- * possible now that up to 4 lanes and live melodic touches can genuinely
- * run at the same time. Doesn't retroactively evict a live touch that
- * already sat on one of those channels BEFORE the sequencer started
- * wanting it -- reaching that needs several simultaneous fingers already
- * down (search fills the LOW channels first, lane channels are the top
- * few) AND the sequencer starting at that exact moment; narrower still
- * than the gap this fix closes, and not chased here. */
-static uint8_t claim_mpe_channel(uint8_t pad) {
-    /* Scans only the live zone's OWN current size, never the full 1-15
-     * range this used to scan while excluding the sequencer's reserved
-     * lanes by hand -- see services/midi_channels.h's own header and this
-     * file's "the midi channel asignement is weirtd and not consistent"
-     * rework. Chord's, game mode's, and the sequencer's 4 lanes' channels
-     * are now permanently outside this range entirely, so a real note can
-     * no longer land on one of them no matter what condition anyone
-     * remembers (or forgets) to check -- only harmonics (still genuinely
-     * conditional: on or off, and how much of the CURRENT zone it reserves)
-     * needs its own exclusion here. */
-    uint8_t zone_size = tiles_midi_channels_lower_zone_size();
-    for (uint8_t i = 0; i < zone_size; i++) {
-        uint8_t channel = (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i);
-        if (!s_mpe_channels[i].in_use && !harmonic_channel_is_reserved(channel)) {
-            set_channel_in_use(i, true);
-            s_mpe_channels[i].owner_pad = pad;
-            s_mpe_channels[i].claim_seq = s_next_mpe_claim_seq++;
-            return channel;
-        }
+ * Eligible = inside the zone the receiver has been told about, not held by
+ * Song mode (slot_in_live_zone()), and not reserved for a harmonics session
+ * (harmonic_channel_is_reserved()). Chord's, game mode's, and the
+ * sequencer's 4 lanes' channels are permanently outside the zone (services/
+ * midi_channels.h), so a real note can never land on one of them no matter
+ * what condition anyone remembers (or forgets) to check. */
+static uint8_t claim_mpe_channel(uint8_t pad, uint8_t note) {
+    bool eligible[TILES_MIDI_SHARED_POOL_SIZE];
+    bool pedal_held[TILES_MIDI_SHARED_POOL_SIZE];
+    for (uint8_t i = 0; i < TILES_MIDI_SHARED_POOL_SIZE; i++) {
+        eligible[i] =
+            slot_in_live_zone(i) && !harmonic_channel_is_reserved((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i));
+        pedal_held[i] = slot_is_held_note(i);
     }
 
-    uint8_t oldest_idx = zone_size;
-    for (uint8_t i = 0; i < zone_size; i++) {
-        if (harmonic_channel_is_reserved((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i))) {
-            continue;
-        }
-        /* owner_pad 0 is a harmonic voice (claim_harmonic_channel()'s own
-         * marker), never a stealable real note. Real bug found auditing the
-         * harmonics/pedal interaction: the reserved-range check above is
-         * computed from the zone's CURRENT size, so if Song mode releases a
-         * channel mid-session the reserved range shifts up and a still-
-         * ringing harmonic can land outside it -- this loop would then pick
-         * it and the code below would index s_pads[0 - 1u], a wild out-of-
-         * bounds write. Harmonic voices end on their own timer instead. */
-        if (s_mpe_channels[i].owner_pad == 0u) {
-            continue;
-        }
-        /* A note TILES is holding for the pedal (pedal.sustain_style HOLD --
-         * no finger on it) goes before any note being actively played; the
-         * oldest claim wins within each group, as before. */
-        bool better = oldest_idx == zone_size;
-        if (!better) {
-            bool i_held = slot_is_held_note(i);
-            bool best_held = slot_is_held_note(oldest_idx);
-            better = (i_held != best_held) ? i_held
-                                           : s_mpe_channels[i].claim_seq < s_mpe_channels[oldest_idx].claim_seq;
-        }
-        if (better) {
-            oldest_idx = i;
-        }
+    int idx = tiles_mpe_alloc_pick_free(s_mpe_channels, eligible, TILES_MIDI_SHARED_POOL_SIZE, note);
+    if (idx >= 0) {
+        claim_slot((uint8_t)idx, pad, note);
+        return (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + idx);
     }
-    if (oldest_idx == zone_size) {
+
+    /* Never picks a harmonic pluck (owner_pad 0) -- those end on their own
+     * timer. Real bug found auditing the harmonics/pedal interaction: the
+     * reserved range moves with the zone's size, so a still-ringing harmonic
+     * can end up outside it; picking one would index s_pads[0 - 1u]. */
+    idx = tiles_mpe_alloc_pick_steal(s_mpe_channels, eligible, pedal_held, TILES_MIDI_SHARED_POOL_SIZE);
+    if (idx < 0) {
         /* Every channel the live zone currently has is reserved for
          * harmonics, OR the zone itself is genuinely empty (zone_size ==
          * 0) -- real and reachable now that the zone shrinks as Song
@@ -2989,17 +2992,16 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
          * pattern of use, not ordinary play. */
         return TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL;
     }
-    uint8_t stolen_pad = s_mpe_channels[oldest_idx].owner_pad;
-    /* No diagnostic printf() here any more -- it sat directly before
+    uint8_t stolen_pad = s_mpe_channels[idx].owner_pad;
+    /* No diagnostic printf() here -- it would sit directly before
      * end_held_note()'s Note-Off send, the exact "USB-CDC stdio blocks the
      * main loop for up to 500ms when no terminal is draining it" bug class
      * this file has already hit three times (see services/pedal.c's
      * scan_sustain() header for the history), and this path fires
      * precisely at the zone's real voice ceiling, which real play does
-     * reach ("now the issue happens when i press 8 keys or more"). Removed
-     * pre-emptively, same reasoning as the harmonics pluck trace above. */
+     * reach ("now the issue happens when i press 8 keys or more"). */
     pad_expr_t *stolen = &s_pads[stolen_pad - 1u];
-    if (slot_is_held_note(oldest_idx)) {
+    if (pedal_held[idx]) {
         /* A note TILES is holding for the pedal (pedal.sustain_style HOLD):
          * no finger on it and its pad has moved on, so just close it -- its
          * Note-Off, channel freed -- without touching the pad's own state. */
@@ -3020,21 +3022,33 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
          * silent until it's genuinely released and touched again. */
         stolen->state = PAD_STATE_STOLEN;
     }
-    /* Real bug found reviewing this function, not from real feedback:
-     * end_held_note() above sets in_use=false for the stolen channel
-     * (freeing its OLD owner), and this steal path hands that same
-     * channel straight to the NEW pad without ever setting in_use back
-     * to true -- so the free-slot search at the top of this function
-     * would see this exact index as available again on the very next
-     * call, handing the identical channel to a THIRD pad while the
-     * second one is still actively sounding on it. Both would then
-     * share one MPE channel: pitch bend/pressure from either bends the
-     * other's note, and a note-off from either can strand or kill the
-     * other's. */
-    set_channel_in_use(oldest_idx, true);
-    s_mpe_channels[oldest_idx].owner_pad = pad;
-    s_mpe_channels[oldest_idx].claim_seq = s_next_mpe_claim_seq++;
-    return (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + oldest_idx);
+    claim_slot((uint8_t)idx, pad, note);
+    return (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + idx);
+}
+
+/* How long the MPE zone must have been completely silent on TILES's side --
+ * no note played, held for the pedal, or plucked, and the sustain pedal up
+ * -- before a Song-mode channel change is announced to the receiver (see
+ * services/midi_channels.h's header: a re-declaration stops every note in
+ * the zone). The extra time is for release tails, which TILES can't see:
+ * two seconds covers an ordinary release envelope without holding a
+ * pending change back for long. */
+#define MPE_ZONE_REDECLARE_IDLE_MS 2000u
+static uint32_t s_mpe_zone_last_busy_ms;
+
+static bool mpe_zone_is_idle(uint32_t now_ms) {
+    bool busy = tiles_pedal_is_sustained();
+    for (uint8_t i = 0; i < TILES_NUM_PADS && !busy; i++) {
+        busy = s_pads[i].state == PAD_STATE_NOTE_ON || s_pads[i].held;
+    }
+    for (uint8_t i = 0; i < HARMONIC_MAX_VOICES && !busy; i++) {
+        busy = s_harmonic_voices[i].active;
+    }
+    if (busy) {
+        s_mpe_zone_last_busy_ms = now_ms;
+        return false;
+    }
+    return (now_ms - s_mpe_zone_last_busy_ms) >= MPE_ZONE_REDECLARE_IDLE_MS;
 }
 
 void tiles_expression_scan(void) {
@@ -3051,16 +3065,19 @@ void tiles_expression_scan(void) {
     }
     s_prev_holding_notes = holding;
 
-    /* Keeps the receiver's understanding of the live MPE Lower Zone's size
-     * (services/midi_channels.h) from ever going stale as Song mode's own
-     * pool claims/releases channels mid-session -- see tiles_midi_send_mpe_
-     * zone_size()'s own header comment. Skipped entirely while MPE is off:
-     * the zone is already fully withdrawn then (tiles_expression_set_mpe_
-     * enabled() sent that), and re-declaring a size while there's no zone
-     * to describe would be meaningless; the pending change (if any) is left
-     * for the very next poll after MPE is turned back on to pick up. */
-    if (s_mpe_enabled && tiles_midi_channels_zone_size_changed()) {
-        tiles_midi_send_mpe_zone_size(tiles_midi_channels_lower_zone_size());
+    /* Tells the receiver about a zone size Song mode's own pool changed --
+     * but only once nothing is sounding (mpe_zone_is_idle()), because a
+     * re-declaration stops every note in the zone; until then the
+     * allocator keeps to the size the receiver already has, minus Song's
+     * channels. See services/midi_channels.h's header for the full reason.
+     * Skipped entirely while MPE is off: the zone is already withdrawn then
+     * (tiles_expression_set_mpe_enabled() sent that), and turning MPE back
+     * on declares the current size anyway. mpe_zone_is_idle() runs every
+     * scan (not only while a change is pending) so its busy timestamp is
+     * always current. */
+    bool zone_idle = mpe_zone_is_idle(now_ms);
+    if (s_mpe_enabled && zone_idle && tiles_midi_channels_zone_redeclare_pending()) {
+        tiles_expression_announce_mpe_zone();
     }
 
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
@@ -3182,20 +3199,15 @@ void tiles_expression_scan(void) {
                 s->active_note = tiles_note_map_get_note(pad);
                 uint8_t velocity = velocity_from_strike(s->strike_time_ms, s->peak_depth);
                 /* Claims this note's own MPE Member Channel BEFORE
-                 * sending note-on -- matters even under MPE's genuinely
-                 * per-note channels, because claim_mpe_channel() can
-                 * itself force-end a DIFFERENT pad's note to steal its
-                 * channel if all 15 are already in use (see that
-                 * function's own comment); that steal always leaves the
-                 * channel centered before handing it over
-                 * (end_held_note()'s own guarantee), so claiming first
-                 * still means this note-on can never reach the synth
-                 * while a stale bend from whatever used this channel
-                 * before is still in effect -- the same real-hardware
-                 * bug ("sometimes play lands in bent note") this
-                 * ordering originally fixed, now guaranteed structurally
-                 * by MPE's per-note channels in the common case and by
-                 * this ordering in the channel-stealing edge case. */
+                 * sending note-on, then sends that channel's per-note
+                 * setup (tiles_midi_send_note_setup(): bend to center,
+                 * pressure to 0) -- so this note-on can never reach the
+                 * synth while a stale bend from whatever used this channel
+                 * before is still in effect, the real-hardware bug
+                 * ("sometimes play lands in bent note") this ordering
+                 * originally fixed. That used to be guaranteed by centering
+                 * every channel as its previous note ended, which snapped
+                 * release tails -- see end_held_note()'s own comment. */
                 /* Real feedback: "make sure the pitch bend works with
                  * non mpe layouts meaning pitch bend wheel." Bypasses
                  * claim_mpe_channel()'s whole pool entirely while
@@ -3213,31 +3225,28 @@ void tiles_expression_scan(void) {
                  * No-ops in the default SYNTH style (nothing is ever held). */
                 release_held_note(s);
                 release_held_notes_of_pitch(s->active_note);
-                s->midi_channel = s_mpe_enabled ? claim_mpe_channel(pad) : TILES_MIDI_MPE_MASTER_CHANNEL;
+                s->midi_channel =
+                    s_mpe_enabled ? claim_mpe_channel(pad, s->active_note) : TILES_MIDI_MPE_MASTER_CHANNEL;
                 init_pitch_bend_for_pad(s, pad, now_ms);
                 s->touch_claim_seq = s_next_mpe_claim_seq++;
                 if (!s_mpe_enabled) {
                     /* Real feedback: "most recently touched/bent pad
                      * wins" -- the newly-struck pad always becomes the
                      * new owner (it's unconditionally the most recent
-                     * touch by construction). Force-sends center rather
-                     * than relying on this pad's own next computed bend
-                     * to naturally differ from its last-sent value --
-                     * init_pitch_bend_for_pad() above already reset
-                     * THIS pad's own bookkeeping to center, but the
-                     * actual synth channel could still be sitting
-                     * wherever the PREVIOUS owner (a different pad)
-                     * left it. */
+                     * touch by construction), and the shared channel's
+                     * bend/pressure start again from the setup below:
+                     * the synth channel could still be sitting wherever
+                     * the PREVIOUS owner (a different pad) left it. */
                     s_non_mpe_owner_pad = pad;
-                    tiles_midi_send_pitch_bend(TILES_MIDI_MPE_MASTER_CHANNEL, PITCH_BEND_CENTER);
                 }
+                tiles_midi_send_note_setup(s->midi_channel);
                 tiles_midi_note_on(s->midi_channel, s->active_note, velocity);
                 tiles_cv_gate_note_on(s->active_note, velocity);
                 /* Same velocity value driving both -- "mapped to the
                  * velocity curve by default" means the kick and the MIDI
                  * note agree exactly, not two independent estimates. */
                 tiles_haptics_trigger_kick(pad, velocity);
-                s->last_sent_aftertouch = 0xFFu;
+                s->last_sent_aftertouch = 0u; /* the setup above just put it there */
                 /* Seed the smoother with the real depth right now rather
                  * than 0 -- see the field's own comment. */
                 s->smoothed_depth = (float)tiles_hall_get_depth(pad);

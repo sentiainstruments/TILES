@@ -6111,6 +6111,11 @@ static void song_toggle_start_stop(uint8_t pad) {
         song_flash_error(pad);
         return;
     }
+    /* The channel may have just carried a live MPE note, which now keeps
+     * its last bend/pressure after Note-Off (the MPE spec's order -- see
+     * tiles_midi_send_note_setup()); Song's notes send neither, so reset
+     * them once as the channel changes hands. */
+    tiles_midi_send_note_setup(channel);
     s_song_slot_running[slot] = true;
     s_song_slot_channel[slot] = channel;
     /* Real feedback: "always restarts from step 1." No quantized-start
@@ -6919,6 +6924,7 @@ static void song_capture_enter(void) {
     if (!tiles_midi_channels_song_claim(&channel)) {
         return;
     }
+    tiles_midi_send_note_setup(channel); /* see the same call in the slot-start path above */
     memset(s_song_pattern[slot_index].step_notes, 0xFF, sizeof(s_song_pattern[slot_index].step_notes));
     s_song_pattern[slot_index].hue_byte = s_song_next_hue_byte;
     s_song_next_hue_byte = (uint8_t)(s_song_next_hue_byte + OP_SONG_HUE_STEP);

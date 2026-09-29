@@ -94,6 +94,15 @@ bool tiles_expression_is_pitch_bend_enabled(void);
 void tiles_expression_set_mpe_enabled(bool enabled);
 bool tiles_expression_is_mpe_enabled(void);
 
+/* Sends the MPE zone declaration that matches the current MPE setting --
+ * the full Lower Zone (services/midi_channels.h's current size, plus the
+ * pitch-bend range) while MPE is on, or a withdrawn zone (0 Member
+ * Channels) while it's off. main.c calls this once at boot, after saved
+ * settings are applied, and again every time USB MIDI mounts; tiles_
+ * expression_set_mpe_enabled() and the scan's own deferred re-declaration
+ * use it too, so nothing else sends an MPE Configuration Message. */
+void tiles_expression_announce_mpe_zone(void);
+
 /* Runtime sensitivity setters for services/expression_control.h's
  * expression sub-menu (rows 2 and 4) -- replace what used to be fixed
  * expression.c compile-time constants (PITCH_BEND_MAX_COSINE_DEVIATION,

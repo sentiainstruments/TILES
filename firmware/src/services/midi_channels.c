@@ -8,8 +8,10 @@
 static uint8_t s_pool_channel[TILES_MIDI_SHARED_POOL_SIZE];
 static bool s_pool_in_use[TILES_MIDI_SHARED_POOL_SIZE];
 
-static uint8_t s_last_declared_zone_size;
-static bool s_zone_size_dirty;
+/* What the receiver was last told (RPN 6) -- see tiles_midi_channels_declare_
+ * zone(). Starts at the full pool: nothing has claimed a Song channel yet at
+ * boot, so the first declaration is always the full 8. */
+static uint8_t s_declared_zone_size;
 
 /* Indexed by (channel - TILES_MIDI_SHARED_POOL_FIRST) -- see this file's own
  * header comment on tiles_midi_channels_note_channel_claimed(). */
@@ -20,13 +22,7 @@ void tiles_midi_channels_init(void) {
         s_pool_channel[i] = (uint8_t)(TILES_MIDI_SHARED_POOL_FIRST + TILES_MIDI_SHARED_POOL_SIZE - 1u - i);
         s_pool_in_use[i] = false;
     }
-    /* An impossible sentinel (the real range is 0..TILES_MIDI_SHARED_POOL_SIZE)
-     * so the first tiles_midi_channels_zone_size_changed() call always finds a
-     * "change" and fires -- boot always needs an initial declaration, even
-     * though the freshly-reset pool's real size (8) happens to match this
-     * module's own compile-time default. */
-    s_last_declared_zone_size = 0xFFu;
-    s_zone_size_dirty = true;
+    s_declared_zone_size = TILES_MIDI_SHARED_POOL_SIZE;
     for (uint8_t i = 0u; i < TILES_MIDI_SHARED_POOL_SIZE; i++) {
         s_live_note_active[i] = false;
     }
@@ -46,7 +42,6 @@ bool tiles_midi_channels_song_claim(uint8_t *out_channel) {
         if (!s_pool_in_use[i] && !s_live_note_active[channel - TILES_MIDI_SHARED_POOL_FIRST]) {
             s_pool_in_use[i] = true;
             *out_channel = channel;
-            s_zone_size_dirty = true;
             return true;
         }
     }
@@ -56,13 +51,19 @@ bool tiles_midi_channels_song_claim(uint8_t *out_channel) {
 void tiles_midi_channels_song_release(uint8_t channel) {
     for (uint8_t i = 0u; i < TILES_MIDI_SHARED_POOL_SIZE; i++) {
         if (s_pool_channel[i] == channel) {
-            if (s_pool_in_use[i]) {
-                s_pool_in_use[i] = false;
-                s_zone_size_dirty = true;
-            }
+            s_pool_in_use[i] = false;
             return;
         }
     }
+}
+
+bool tiles_midi_channels_song_holds(uint8_t channel) {
+    for (uint8_t i = 0u; i < TILES_MIDI_SHARED_POOL_SIZE; i++) {
+        if (s_pool_channel[i] == channel) {
+            return s_pool_in_use[i];
+        }
+    }
+    return false;
 }
 
 uint8_t tiles_midi_channels_song_in_use_count(void) {
@@ -103,15 +104,15 @@ void tiles_midi_channels_note_channel_released(uint8_t channel) {
     s_live_note_active[channel - TILES_MIDI_SHARED_POOL_FIRST] = false;
 }
 
-bool tiles_midi_channels_zone_size_changed(void) {
-    if (!s_zone_size_dirty) {
-        return false;
-    }
-    uint8_t current = tiles_midi_channels_lower_zone_size();
-    s_zone_size_dirty = false;
-    if (current == s_last_declared_zone_size) {
-        return false; /* claim+release cancelled out between polls; nothing to tell the receiver */
-    }
-    s_last_declared_zone_size = current;
-    return true;
+uint8_t tiles_midi_channels_declare_zone(void) {
+    s_declared_zone_size = tiles_midi_channels_lower_zone_size();
+    return s_declared_zone_size;
+}
+
+uint8_t tiles_midi_channels_declared_zone_size(void) {
+    return s_declared_zone_size;
+}
+
+bool tiles_midi_channels_zone_redeclare_pending(void) {
+    return tiles_midi_channels_lower_zone_size() != s_declared_zone_size;
 }

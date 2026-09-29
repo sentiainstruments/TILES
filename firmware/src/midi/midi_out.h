@@ -28,17 +28,18 @@
  * matter for a controller wanting BOTH zones simultaneously, which
  * nothing about this board's 24-pad, single-region layout calls for):
  *   - Channel 1 (TILES_MIDI_MPE_MASTER_CHANNEL) is the Zone Master
- *     Channel -- carries ONLY the zone configuration RPN messages
- *     tiles_midi_mpe_init() sends once at boot, never note data.
- *   - Channels 2-16 (TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL and up) are
+ *     Channel -- the zone configuration RPNs (tiles_midi_mpe_init()) and
+ *     zone-wide controls (the pedals, services/pedal.c), never an MPE
+ *     note. (With MPE switched off it is the one ordinary channel every
+ *     note goes on.)
+ *   - Channels 2-9 (TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL and up) are
  *     Member Channels, one per currently-held note -- of these, only
- *     however many services/midi_channels.h's own live MPE Lower Zone
- *     currently spans are genuine MPE members at any moment; the rest
- *     are permanently a fixed part's own channel (chord, game mode, the
- *     4 sequencer lanes) or Song mode's own pool, or General MIDI's
- *     percussion channel (10), never assigned to anything -- see that
- *     header for the full board-wide layout this file's own constants
- *     are now one piece of.
+ *     however many services/midi_channels.h's declared MPE Lower Zone
+ *     currently spans are genuine MPE members at any moment; channels
+ *     10-16 are permanently a fixed part's own channel (chord, game mode,
+ *     the 4 sequencer lanes) or General MIDI's percussion channel (10),
+ *     never assigned to anything -- see that header for the full
+ *     board-wide layout this file's own constants are now one piece of.
  * This file is only the wire-protocol layer -- every function here just
  * sends whatever channel it's told to. The actual per-note channel
  * ALLOCATION (claim on strike, release on note-off, steal-the-oldest if
@@ -47,9 +48,10 @@
  * reasoning) lives in services/expression.c, the module that already
  * owns each pad's note lifecycle.
  *
- * Sustain/expression pedal CCs (services/pedal.c) are the one thing
- * that still needs to reach every note at once rather than a single
- * channel -- see tiles_midi_send_cc_broadcast() below.
+ * Sustain/expression pedal CCs (services/pedal.c) reach every note at once
+ * by going on the Master Channel, per the MPE spec -- not by broadcasting
+ * to every channel (see tiles_midi_send_cc_broadcast() below for the one
+ * thing that does: panic).
  */
 
 #include <stdint.h>
@@ -61,11 +63,9 @@
  * MIDI's percussion channel (10, never assigned to anything) and six fixed
  * parts (chord, game mode, the 4 sequencer lanes), and channels 2-9 are a
  * pool shared with Song mode, so the Lower Zone's real, honest size varies
- * from 0 to 8 depending on what Song mode currently holds. Every function
- * below that used to assume "15" now takes the current size as a parameter
- * (services/midi_channels.h's tiles_midi_channels_lower_zone_size()) or
- * reads/sends it explicitly -- see tiles_midi_mpe_init() and tiles_midi_
- * send_mpe_zone_size() below. */
+ * from 0 to 8 depending on what Song mode currently holds. tiles_midi_mpe_
+ * init() below takes the size to declare as a parameter (services/
+ * midi_channels.h's tiles_midi_channels_declare_zone()). */
 
 /* This Lower Zone's declared per-Member-Channel pitch bend range, in
  * semitones, sent via RPN 0 as part of tiles_midi_mpe_init() below. This
@@ -130,37 +130,44 @@
  * Member Channel too is a well-known, low-risk robustness workaround
  * for exactly that gap -- redundant on a receiver that already handles
  * the Master-Channel version correctly, but a real fix for one that
- * doesn't. Call once, from main.c after USB MIDI is expected to be
- * reachable -- harmless to call before a host has actually enumerated:
- * the USB half of every send is gated on tud_midi_mounted(). main.c ALSO
- * calls it once at boot, when only DIN is up, so a receiver on the DIN jack
- * gets the zone configuration too (~300 bytes, ~100 ms of wire time); the
- * mount-time call then repeats it to both. */
+ * doesn't. Sent (via services/expression.c's tiles_expression_announce_
+ * mpe_zone()) once at boot, after saved settings are applied, so a
+ * receiver on the DIN jack gets the zone configuration too (~300 bytes,
+ * ~100 ms of wire time), and again every time USB MIDI mounts -- harmless
+ * before a host has enumerated: the USB half of every send is gated on
+ * tud_midi_mounted(). */
 /* `member_channel_count` is the Lower Zone's real size right now (0-8;
- * services/midi_channels.h's tiles_midi_channels_lower_zone_size()) --
- * this function no longer assumes 15. Declares that many Member Channels
- * (RPN 6) and sends the Pitch Bend Sensitivity RPN (RPN 0) redundantly on
- * the Master Channel and on exactly those `member_channel_count` Member
+ * services/midi_channels.h's tiles_midi_channels_declare_zone()) -- this
+ * function no longer assumes 15. Declares that many Member Channels (RPN 6)
+ * and sends the Pitch Bend Sensitivity RPN (RPN 0) redundantly on the
+ * Master Channel and on exactly those `member_channel_count` Member
  * Channels -- never on a channel outside the real zone, which by now
  * belongs to a fixed part (chord/game/sequencer) or Song mode, not this
- * device's own MPE declaration. */
+ * device's own MPE declaration.
+ *
+ * 0 withdraws the zone (RPN 6 only) -- the spec's own way to say "this is
+ * not an MPE zone anymore" (JUCE's MPE tutorial: "An MPE zone can be turned
+ * off by sending an MCM without any member channels"), used when the
+ * runtime `expression.mpe_enabled` setting is off. There is deliberately no
+ * way to send RPN 6 without RPN 0 any more: every non-zero declaration
+ * resets a JUCE-based receiver's bend range to 48 semitones, so the two
+ * always travel together (see services/midi_channels.h's header). Only
+ * services/expression.c calls this (tiles_expression_announce_mpe_zone()),
+ * so the declaration always matches the MPE on/off setting. */
 void tiles_midi_mpe_init(uint8_t member_channel_count);
 
-/* Re-declares JUST the Lower Zone's size (RPN 6 on the Master Channel),
- * without touching Pitch Bend Sensitivity -- for when the size changes
- * mid-session as Song mode's own channel pool grows or shrinks (services/
- * expression.c polls services/midi_channels.h's tiles_midi_channels_zone_
- * size_changed() every scan and calls this on a change), and for
- * withdrawing the zone entirely (`member_channel_count` = 0) when MPE is
- * turned off at runtime -- the spec's own documented way to say "this is
- * not an MPE zone anymore" (JUCE's MPE tutorial: "An MPE zone can be
- * turned off by sending an MCM without any member channels"). Before this
- * function existed, MPE was never actually withdrawn when the runtime
- * `expression.mpe_enabled` setting turned off -- a receiver that had
- * already been told "15 Member Channels" at connection time had no way to
- * know melodic mode's own notes were now landing on the Master Channel
- * instead. */
-void tiles_midi_send_mpe_zone_size(uint8_t member_channel_count);
+/* MPE per-note setup (MPE spec section 3.3.1/3.3.4): puts `channel`'s
+ * Pitch Bend back at center and its Channel Pressure at 0, right before a
+ * Note-On -- skipping either one that is already there (this file tracks
+ * the last value it sent per channel). Real feedback: "do all" (the
+ * standardization round). A released note's bend used to be snapped back
+ * to center BEFORE its Note-Off, which audibly yanked the pitch of every
+ * release tail and every pedal-sustained note ("released MPE notes lose
+ * their pitch bend" is a known receiver-side complaint about exactly
+ * that). The spec's order is the other way round: control of a note ends
+ * at its Note-Off, the note rings out as it was, and the channel is reset
+ * as setup for the NEXT note on it -- this function. */
+void tiles_midi_send_note_setup(uint8_t channel);
 
 /* Note on/off, on a specific MPE Member Channel (status-byte nibble --
  * see services/expression.c's per-pad MPE channel allocator for how a

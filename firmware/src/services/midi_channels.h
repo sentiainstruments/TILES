@@ -120,9 +120,24 @@
  * carrying a sequencer lane or a chord voicing, and turning MPE off in
  * TILES's own runtime setting never told the receiver its zone was gone.
  * tiles_midi_channels_lower_zone_size() below is the SAME number
- * services/expression.c now re-declares via RPN 6 every time it changes,
- * and sends as 0 (withdrawing the zone entirely) while MPE is toggled off
- * -- see expression.c's own tiles_expression_set_mpe_enabled().
+ * services/expression.c declares via RPN 6, and sends as 0 (withdrawing the
+ * zone entirely) while MPE is toggled off -- see expression.c's own
+ * tiles_expression_set_mpe_enabled().
+ *
+ * WHEN it re-declares matters as much as what. Real feedback: "what else
+ * does it look like we need to fix for standarization and compatibility" ->
+ * "do all." This used to re-send RPN 6 the moment Song mode claimed or freed
+ * a channel -- mid-performance. The MPE spec has a receiver stop every note
+ * and reset every controller on a channel that enters or leaves a zone
+ * (section 2.1.4), and JUCE-based synths (ROLI Equator among them) also
+ * reset the zone's pitch-bend range to the spec's 48-semitone default on
+ * every RPN 6 -- the re-declaration was sent WITHOUT the RPN 0 that follows
+ * it at boot, so after a Song claim the synth was back at 48 semitones. So
+ * the receiver is now only told about a new size when nothing is sounding
+ * (services/expression.c's mpe_zone_is_idle()), always as the full
+ * declaration (RPN 6 plus RPN 0), and until then live MPE keeps using the
+ * size the receiver was LAST told (tiles_midi_channels_declared_zone_size())
+ * minus whatever Song holds inside it (tiles_midi_channels_song_holds()).
  *
  * Because the zone must stay a single CONTIGUOUS run starting at channel 2
  * (the spec's Lower Zone shape -- there's no "channels 2-5 and 11-16 but
@@ -188,15 +203,34 @@ void tiles_midi_channels_song_release(uint8_t channel);
 /* How many of the shared pool's 8 channels Song currently holds. */
 uint8_t tiles_midi_channels_song_in_use_count(void);
 
+/* True if Song mode currently holds `channel` (a nibble). Live MPE skips
+ * these inside the declared zone -- see this file's header on why the
+ * declared zone can briefly still include a channel Song has just taken. */
+bool tiles_midi_channels_song_holds(uint8_t channel);
+
 /* The live MPE Lower Zone's honest size right now: how many channels,
  * counting up from channel 2 (nibble TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL),
  * are NOT currently held by Song mode -- 0..TILES_MIDI_SHARED_POOL_SIZE.
- * services/expression.c's claim_mpe_channel() scans exactly this many
- * nibbles, never more, so it can never land on a channel Song holds
- * without needing its own check for that (see this file's header). Also
- * what gets re-declared to the receiver via RPN 6 whenever it changes --
- * see tiles_midi_channels_zone_size_changed() below. */
+ * What the NEXT declaration will say -- see tiles_midi_channels_declare_
+ * zone() below. */
 uint8_t tiles_midi_channels_lower_zone_size(void);
+
+/* Records that the zone is being declared to the receiver right now, at
+ * its current honest size, and returns that size for the caller to send
+ * (tiles_midi_mpe_init()). Every RPN 6 this board sends goes through
+ * this, so tiles_midi_channels_declared_zone_size() always matches the
+ * wire. */
+uint8_t tiles_midi_channels_declare_zone(void);
+
+/* The size the receiver was last told -- what services/expression.c's
+ * channel allocator scans (skipping Song-held channels inside it), since a
+ * channel the receiver hasn't been told is a Member Channel isn't one. */
+uint8_t tiles_midi_channels_declared_zone_size(void);
+
+/* True while the honest size differs from the declared one -- Song claimed
+ * or freed a channel since the last declaration. services/expression.c
+ * re-declares once nothing is sounding (see this file's header). */
+bool tiles_midi_channels_zone_redeclare_pending(void);
 
 /* Marks/clears one shared-pool channel (a nibble in 1..8) as currently
  * carrying a live MPE note. services/expression.c calls this at every
@@ -221,15 +255,3 @@ uint8_t tiles_midi_channels_lower_zone_size(void);
  * a receiver needs to be told about via a fresh RPN 6). */
 void tiles_midi_channels_note_channel_claimed(uint8_t channel);
 void tiles_midi_channels_note_channel_released(uint8_t channel);
-
-/* Edge-detector for the value above: true (once) the first time this is
- * called after tiles_midi_channels_lower_zone_size() has changed since the
- * last call. services/expression.c polls this every scan and re-sends the
- * MPE Configuration Message (RPN 6) on the Master Channel when it fires,
- * so a receiver's understanding of the zone size never goes stale while
- * Song mode's own claims grow or shrink it. Deliberately a pull (poll a
- * flag), not a push (a registered callback) -- exactly one caller exists,
- * so a full callback-table registration (like midi_in.h's own multi-
- * listener tables, built for a genuinely shared resource) would be
- * machinery this single relationship doesn't need. */
-bool tiles_midi_channels_zone_size_changed(void);

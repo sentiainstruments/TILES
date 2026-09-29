@@ -1,6 +1,6 @@
 /* services/midi_channels.c -- the shared pool (Song mode <-> live MPE Lower Zone),
  * its "claim the highest free first" invariant, the contiguous zone-size math, and
- * the change-notification edge detector.
+ * the declared-vs-honest zone size tracking.
  *
  * Convention (matches the rest of the firmware -- see midi/midi_out.h's own header):
  * every channel value here is a raw 0-15 NIBBLE, not a 1-indexed MIDI channel number
@@ -33,12 +33,14 @@ int main(void) {
      * plus the master (nibble 0) account for exactly all 16 channels, no gaps, no overlap. */
     assert(TILES_MIDI_SHARED_POOL_FIRST == 1 && TILES_MIDI_SHARED_POOL_SIZE == 8);
 
-    /* 2. boot: full zone (8), nothing claimed, first change-check fires once. */
+    /* 2. boot: full zone (8), nothing claimed, the declared size already matches
+     * (the boot declaration is always the full 8), nothing pending. */
     reset();
     assert(tiles_midi_channels_lower_zone_size() == 8);
     assert(tiles_midi_channels_song_in_use_count() == 0);
-    assert(tiles_midi_channels_zone_size_changed());
-    assert(!tiles_midi_channels_zone_size_changed()); /* doesn't re-fire until it actually changes again */
+    assert(tiles_midi_channels_declared_zone_size() == 8);
+    assert(!tiles_midi_channels_zone_redeclare_pending());
+    assert(tiles_midi_channels_declare_zone() == 8);
 
     /* 3. claims come from the TOP of the pool (channel 9 first), shrinking the
      * zone by exactly one per claim, in order. */
@@ -106,21 +108,28 @@ int main(void) {
     assert(tiles_midi_channels_lower_zone_size() == 0);
     assert(tiles_midi_channels_song_in_use_count() == 7);
 
-    /* 7. change-notification: fires exactly once per net change, and a claim+release
-     * that cancel out between polls report no change at all (the receiver is never
-     * told about a size that never actually took hold on the wire). */
+    /* 7. declared vs honest size: a Song claim leaves the DECLARED size alone (the
+     * receiver hasn't been told yet) and flags a re-declaration; a claim+release
+     * that cancel out leave nothing pending; declaring catches the declared size
+     * up in one step however many claims happened in between. */
     reset();
-    tiles_midi_channels_zone_size_changed(); /* consume the initial boot notification */
     tiles_midi_channels_song_claim(&ch);
     tiles_midi_channels_song_release(ch);
-    assert(!tiles_midi_channels_zone_size_changed()); /* net zero -- 8 the whole time */
+    assert(!tiles_midi_channels_zone_redeclare_pending()); /* net zero -- 8 the whole time */
     tiles_midi_channels_song_claim(&ch);
-    assert(tiles_midi_channels_zone_size_changed());  /* real change: 8 -> 7 */
-    assert(!tiles_midi_channels_zone_size_changed()); /* doesn't re-fire until it changes again */
+    assert(ch == 8 && tiles_midi_channels_song_holds(8) && !tiles_midi_channels_song_holds(7));
+    assert(tiles_midi_channels_zone_redeclare_pending());  /* real change: 8 -> 7 */
+    assert(tiles_midi_channels_declared_zone_size() == 8); /* still what the receiver was told */
     tiles_midi_channels_song_claim(&ch);
     tiles_midi_channels_song_claim(&ch);
-    assert(tiles_midi_channels_zone_size_changed());  /* two claims since the last poll: still one notification */
-    assert(!tiles_midi_channels_zone_size_changed());
+    assert(tiles_midi_channels_declare_zone() == 5);
+    assert(tiles_midi_channels_declared_zone_size() == 5);
+    assert(!tiles_midi_channels_zone_redeclare_pending());
+    tiles_midi_channels_song_release(8);                    /* the top one: nibbles 7,6 still held below it */
+    assert(!tiles_midi_channels_zone_redeclare_pending());  /* -> zone stays 5, nothing to re-declare */
+    tiles_midi_channels_song_release(6);                    /* the bottom boundary: zone grows to 6 */
+    assert(tiles_midi_channels_zone_redeclare_pending() && tiles_midi_channels_lower_zone_size() == 6);
+    assert(tiles_midi_channels_song_holds(200) == false);   /* outside the pool: never "held" */
 
     /* 8. full round trip: claim all 8, release all 8 (in claim order, i.e. NOT
      * highest-first), zone returns to a clean, contiguous 8 with no residue. */

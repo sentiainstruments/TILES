@@ -359,14 +359,11 @@ int main(void) {
     /* DIN MIDI jacks (IN + OUT) -- real feedback: "are midi plugs
      * working?" / "yes build DIN MIDI". Independent of USB: works with no
      * host at all. A failure here disables DIN only (printed, nothing
-     * else blocked). On success, sends the MPE zone configuration once
-     * now, while only DIN is up -- the USB mount below repeats it for USB.
-     * See midi/din_midi.h. member_channel_count is the Lower Zone's real
-     * size at this exact moment (services/midi_channels.h) -- always 8 this
-     * early (nothing has claimed a Song channel yet), not a hardcoded 15. */
-    if (tiles_din_midi_init()) {
-        tiles_midi_mpe_init(tiles_midi_channels_lower_zone_size());
-    } else {
+     * else blocked). The MPE zone configuration goes out over DIN once the
+     * saved settings are applied (tiles_expression_announce_mpe_zone(),
+     * after tiles_settings_boot() below); the USB mount repeats it for USB.
+     * See midi/din_midi.h. */
+    if (!tiles_din_midi_init()) {
         printf("[main] DIN MIDI unavailable (no free PIO state machine?) -- USB MIDI unaffected\n");
     }
 
@@ -419,6 +416,12 @@ int main(void) {
      * with the settings table and flash saving." */
     tiles_settings_boot();
 
+    /* The MPE zone declaration for the DIN jack (USB repeats it on mount,
+     * below) -- after the settings above, so a saved `expression.mpe_enabled
+     * 0` announces a withdrawn zone instead of a full one. See
+     * tiles_expression_announce_mpe_zone(). */
+    tiles_expression_announce_mpe_zone();
+
     while (true) {
         /* MUST run every iteration: this is what actually services the
          * USB stack (processes control transfers, moves CDC/MIDI data
@@ -457,7 +460,7 @@ int main(void) {
         static bool s_mpe_was_mounted = false;
         bool mpe_mounted_now = tud_midi_mounted();
         if (mpe_mounted_now && !s_mpe_was_mounted) {
-            tiles_midi_mpe_init(tiles_midi_channels_lower_zone_size());
+            tiles_expression_announce_mpe_zone();
         }
         s_mpe_was_mounted = mpe_mounted_now;
 

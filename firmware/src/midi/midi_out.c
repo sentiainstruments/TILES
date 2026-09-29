@@ -117,8 +117,36 @@ void tiles_midi_note_off(uint8_t channel, uint8_t note, uint8_t release_velocity
     send3((uint8_t)(0x80u | channel), note, release_velocity);
 }
 
+/* Last Pitch Bend / Channel Pressure value put on the wire per channel, so
+ * tiles_midi_send_note_setup() only sends what isn't already at its
+ * default -- on DIN every skipped message is ~1 ms less before the Note-On.
+ * UNKNOWN until first sent, and again after every zone declaration (a
+ * receiver resets a channel's controllers when it enters or leaves a zone). */
+#define LAST_BEND_UNKNOWN 0xFFFFu
+#define LAST_PRESSURE_UNKNOWN 0xFFu
+#define PITCH_BEND_CENTER_14BIT 8192u
+static uint16_t s_last_bend[16];
+static uint8_t s_last_pressure[16];
+
+static void forget_channel_state(void) {
+    for (uint8_t i = 0; i < 16u; i++) {
+        s_last_bend[i] = LAST_BEND_UNKNOWN;
+        s_last_pressure[i] = LAST_PRESSURE_UNKNOWN;
+    }
+}
+
 void tiles_midi_send_channel_pressure(uint8_t channel, uint8_t pressure) {
+    s_last_pressure[channel & 0x0Fu] = pressure;
     send2((uint8_t)(0xD0u | channel), pressure);
+}
+
+void tiles_midi_send_note_setup(uint8_t channel) {
+    if (s_last_bend[channel & 0x0Fu] != PITCH_BEND_CENTER_14BIT) {
+        tiles_midi_send_pitch_bend(channel, PITCH_BEND_CENTER_14BIT);
+    }
+    if (s_last_pressure[channel & 0x0Fu] != 0u) {
+        tiles_midi_send_channel_pressure(channel, 0u);
+    }
 }
 
 void tiles_midi_send_cc(uint8_t channel, uint8_t controller, uint8_t value) {
@@ -185,6 +213,7 @@ void tiles_midi_send_panic(void) {
 }
 
 void tiles_midi_send_pitch_bend(uint8_t channel, uint16_t bend_14bit) {
+    s_last_bend[channel & 0x0Fu] = bend_14bit;
     uint8_t lsb = (uint8_t)(bend_14bit & 0x7Fu);
     uint8_t msb = (uint8_t)((bend_14bit >> 7) & 0x7Fu);
     send3((uint8_t)(0xE0u | channel), lsb, msb);
@@ -206,17 +235,17 @@ static void send_rpn(uint8_t channel, uint8_t param_msb, uint8_t param_lsb, uint
     tiles_midi_send_cc(channel, 100u, 127u);
 }
 
-void tiles_midi_send_mpe_zone_size(uint8_t member_channel_count) {
+void tiles_midi_mpe_init(uint8_t member_channel_count) {
     /* MPE Configuration Message: RPN 6 (param MSB=0x00, LSB=0x06), value
      * MSB = number of Member Channels, LSB unused (0). Sent on the Zone
      * Master Channel -- this is the message an MPE-aware receiver uses
      * to recognize this as an MPE Lower Zone at all (0 = none: withdraws
      * the zone -- see this function's own declaration in midi_out.h). */
     send_rpn(TILES_MIDI_MPE_MASTER_CHANNEL, 0x00u, 0x06u, member_channel_count, 0x00u);
-}
-
-void tiles_midi_mpe_init(uint8_t member_channel_count) {
-    tiles_midi_send_mpe_zone_size(member_channel_count);
+    forget_channel_state();
+    if (member_channel_count == 0u) {
+        return; /* zone withdrawn -- no Member Channels to give a bend range */
+    }
 
     /* Pitch Bend Sensitivity: RPN 0 (param MSB=0x00, LSB=0x00), value
      * MSB = semitones, LSB = cents (0 here -- whole-semitone range).
@@ -227,6 +256,11 @@ void tiles_midi_mpe_init(uint8_t member_channel_count) {
      * send wasn't taking effect on whatever was actually receiving
      * pitch bend, which only ever reads it from the Member Channel a
      * note is actually on. */
+    /* Always right after the RPN 6 above, never without it: JUCE-based
+     * receivers (ROLI Equator among them) reset the zone's bend range to
+     * the spec's 48-semitone default on every RPN 6 -- see services/
+     * midi_channels.h's header on the mid-session re-declaration that used
+     * to skip this. */
     send_rpn(TILES_MIDI_MPE_MASTER_CHANNEL, 0x00u, 0x00u, (uint8_t)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES, 0x00u);
     for (uint8_t i = 0; i < member_channel_count; i++) {
         send_rpn((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i), 0x00u, 0x00u,

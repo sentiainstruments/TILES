@@ -3,10 +3,11 @@
 Musical output only — never carries config/calibration traffic (that's
 `usb_vendor/`).
 
-Contents: USB-MIDI + MPE channel allocation (dynamic, 15 lower-zone member
-channels across 24 pads, deterministic voice-steal policy), and DIN MIDI IN
-(GP1 UART, 31,250 baud) / DIN MIDI OUT (polarity-selectable via GP0/GP2, PIO
-UART) with rate limiting for continuous expression data — see Status below.
+Contents: USB-MIDI + the MPE wire protocol (an MPE Lower Zone of up to 8
+Member Channels, 2-9 -- the channel plan is `services/midi_channels.h`, the
+per-note channel choice `services/mpe_alloc.h`), and DIN MIDI IN (GP1 UART,
+31,250 baud) / DIN MIDI OUT (polarity-selectable via GP0/GP2, PIO UART) with
+rate limiting for continuous expression data — see Status below.
 
 ## Status
 
@@ -353,9 +354,9 @@ UART) with rate limiting for continuous expression data — see Status below.
     byte stream, so there's no equivalent saving to make there, and a
     status-less send wouldn't even be a valid USB-MIDI Event Packet.
   - **Not built (raised, not asked for):** MIDI thru/merge (DIN in -> USB
-    out or -> DIN out), and a channel-collapse mode for non-MPE hardware
-    (all 15 member channels are sent as-is, so a single-channel synth only
-    hears the notes that land on its channel).
+    out or -> DIN out). (The channel-collapse gap once listed here is
+    covered by the `expression.mpe_enabled 0` setting since: every note on
+    channel 1.)
 - **Three more items from that same "what's standardized that we haven't
   built" research, all now built:**
   - **Active Sensing on DIN output.** A DIN receiver has no way to know
@@ -411,3 +412,21 @@ UART) with rate limiting for continuous expression data — see Status below.
     forced-sleep gesture specifically (see that file's own entry in
     `services/README.md` for why not the automatic idle-timeout sleep
     too), right before `enter_deep_sleep()`.
+- **MPE sender conformance (standardization round).** Real feedback: "what
+  else does it look like we need to fix for standarization and
+  cokmpatibility" -> "do all". The wire-level half of the change logged in
+  `services/README.md` ("Standardization round: MPE sender conformance"):
+  - New `tiles_midi_send_note_setup(channel)`: pitch bend center + Channel
+    Pressure 0 right before a Note-On (MPE spec 3.3.1/3.3.4), each skipped
+    if the last value this file sent on that channel is already the
+    default. Replaces the old recenter-before-Note-Off, which snapped every
+    release tail. `tiles_midi_send_pitch_bend()`/`_channel_pressure()`
+    record the last value per channel; a zone declaration forgets them (a
+    receiver resets a channel's controllers when it enters or leaves a
+    zone).
+  - `tiles_midi_mpe_init(n)` is now the ONLY way to send RPN 6: `n > 0`
+    always carries the Pitch Bend Sensitivity RPN 0 with it (JUCE-based
+    receivers reset the bend range to 48 on every RPN 6), `n == 0`
+    withdraws the zone. The old RPN-6-only `tiles_midi_send_mpe_zone_size()`
+    is gone -- the mid-session re-declaration that used it is what skipped
+    RPN 0.

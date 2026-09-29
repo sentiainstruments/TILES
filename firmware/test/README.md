@@ -20,9 +20,15 @@ allocation, calibration math, `usb_vendor/` protocol framing.
   per source, one clock owner at a time, loss recovery, SysEx from DIN.
 - `test_midi_channels.c` -- `services/midi_channels.c`, the shared 8-channel pool
   Song mode and the live MPE Lower Zone draw from: claim-highest-first, the
-  contiguous zone-size math, change notification, and the cross-module
-  invariant that Song can never claim a channel a live MPE note is using
-  (and vice versa) even though the two are otherwise independent bookkeeping.
+  contiguous zone-size math, declared-vs-honest zone size (the receiver is
+  only re-told when nothing is sounding), and the cross-module invariant that
+  Song can never claim a channel a live MPE note is using (and vice versa)
+  even though the two are otherwise independent bookkeeping.
+- `test_mpe_alloc.c` -- `services/mpe_alloc.c`, which Member Channel a new MPE
+  note gets (the spec's section 3.2 order: the same note's previous channel,
+  else the one idle longest -- never back onto a channel whose release tail is
+  still ringing while an idler one exists) and which note is stolen when every
+  channel is busy (a pedal-held one first, then the oldest; never a harmonic).
 - `test_identity.c` -- `midi/identity.c`'s Universal MIDI Identity Request/Reply:
   a real request gets the right reply bytes, the request's own device-id byte
   is ignored, every malformed/unrelated frame (including a real Scene Launch
