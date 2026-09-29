@@ -9,9 +9,11 @@ real Electron companion app (companion-app/ -- not built yet).
 Real feedback: "keep cv gate implemented but off rn. we need the
 control software."
 
-Setup:
-    pip install pyusb
-    # macOS also needs a libusb backend: `brew install libusb`
+Setup (see tools/README.md):
+    brew install libusb                      # macOS libusb backend (picotool usually pulls it in)
+    python3 -m venv ~/.venvs/tiles-tools     # Homebrew Python refuses a system-wide pip install
+    ~/.venvs/tiles-tools/bin/pip install pyusb
+    # then run this script as ~/.venvs/tiles-tools/bin/python tools/tiles_control.py ...
     # First run may prompt for the OS's own USB-device access
     # permission for this device/interface -- allow it once.
 

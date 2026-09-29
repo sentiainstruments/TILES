@@ -141,6 +141,44 @@ color feedback is still SysEx, unchanged. See `scene_launch.py`'s own
 module docstring and `shared/protocol/README.md`'s "Scene Launch"
 section for the full wire format.
 
+**Scene Launch CCs renumbered -- re-copy the script after updating
+firmware.** Launch, stop and delete used to be one CC per pad (11-34,
+41-64, 71-94 on channel 1), which claimed three standard performance
+controllers on the instrument's own channel: CC 64 (sustain) was pad 24's
+stop button, CC 11 (expression) pad 1's launch, CC 74 (MPE slide) pad 4's
+delete. With the TILES control surface active, Ableton hands a CC the
+script claims to the script instead of the track, so the sustain pedal
+never reached the instrument in MPE mode -- real feedback that pinned it:
+"equator as strandalone dosnt have the issues wirthg sustain, it wo4rks
+flawlesslyt." They are now one CC each with the pad (1-24) as the value --
+108 launch, 109 stop, 110 delete -- and every TILES -> Ableton CC sits in
+the MIDI spec's undefined 102-119 range. **Firmware and script must
+match**: after flashing firmware from 2026-09-29 on, re-copy the
+`ableton/TILES/` folder (step 1 above) and restart Ableton (or set the
+TILES Control Surface slot to None and back), or Scene Launch pads won't
+act. Real feedback once both were updated: "sustain works now in
+ableton."
+
+## Sustain pedal and MPE
+
+TILES sends the sustain pedal (CC 64) the standard MPE way: on channel 1,
+the zone's Master Channel, only -- a real decision after a long stuck-note
+investigation (`firmware/src/services/README.md`, "SUPERSEDES the two
+sustain entries" and the entries after it). That means **in MPE mode the
+receiving side must actually be set up as MPE**, like any MPE controller:
+
+- Ableton: Preferences -> Link, Tempo & MIDI -> tick **MPE** (and Track)
+  on the SENTIA TILES input; use an MPE-enabled instrument (Serum: its MPE
+  switch on; Equator: MPE by default).
+- Anything not set up for MPE: switch TILES to non-MPE mode (circle+
+  square) -- every note and the pedal go on channel 1, which any synth
+  handles with no setup.
+
+`pedal.sustain_style` (settings shell, `tools/README.md`) chooses who does
+the sustaining: `synth` (default, standard CC 64) or `hold` (TILES keeps
+notes on itself and sends no CC 64 -- lets harmonic plucks ring out
+instead of being held with everything else).
+
 **Debugging**: real feedback found colors weren't showing on first
 try -- root cause was `scene_launch.py` monkey-patching an attribute
 directly onto Ableton's own native `Clip` object, which isn't

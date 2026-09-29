@@ -9016,7 +9016,9 @@ not its code.
   plucks still go on Member Channels even with MPE off (moving them to
   channel 1 would let a pluck's Note-Off collide with a real note of the
   same pitch on the one shared channel -- open question, not changed
-  here). Not hardware-verified yet.
+  here). **Hardware-verified** once the Scene Launch CC collision below
+  was fixed: sustain works in Ableton with MPE, and standalone Equator
+  sustained flawlessly from the same MIDI.
 - **Resolution of the "sustain doesn't work" round, and pedal chatter
   fixed.** After the strict build, real feedback was "no pedal
   functionality" even with MPE enabled in Ableton and every plugin, then
@@ -9127,8 +9129,11 @@ not its code.
     touch never does. A light tap that lifts inside the window still
     plucks.
   The pluck itself moved unchanged into `try_harmonic_pluck()` so both
-  paths share it. Both constants are unmeasured first guesses. Not
-  hardware-verified yet.
+  paths share it. Both constants were unmeasured first guesses.
+  **Hardware-tested**: chords stopped plucking, but light harmonic
+  touches got missed ("harmonics feel not as sensitive any more") --
+  tuned from recorded data in the "Harmonic sensitivity tuned" entry
+  below.
 - **New setting `pedal.sustain_style` (`synth` default, or `hold`) -- so
   harmonics can ring out while the pedal holds the real notes.** Real
   feedback: "well ideally the harmonics dont have sustain thats the

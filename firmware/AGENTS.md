@@ -58,6 +58,33 @@ README.md`): `REBOOT BOOTSEL` (into the bootloader, for reflashing) or
 `REBOOT APP` (a plain warm restart, for testing a fresh boot).
 `tools/tiles_control.py reboot bootsel` / `reboot app`.
 
+**In practice, prefer this over `-f`.** On 2026-09-28/29, `picotool load
+-f` (and `picotool reboot -f -u`) could not find board 2 even while it
+was running the app — every attempt printed "No accessible RP-series
+devices in BOOTSEL mode were found" — cause not investigated. The
+settings-shell reboot worked every time, so the reliable no-button flash
+is (tool setup — a virtualenv with `pyusb` — in `tools/README.md`):
+
+```bash
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py reboot bootsel
+sleep 2 && picotool info -a | grep chipid   # confirm WHICH board is in BOOTSEL
+picotool load -x -v --ignore-partitions firmware/build/src/sentia_tiles_firmware.uf2
+```
+
+Give a freshly booted board a couple of seconds before talking to its
+settings shell.
+
+**Verifying MIDI on real hardware.** When a bug might be in the firmware
+OR the host (DAW, plugin, routing), look at the actual bytes on the
+wire before changing code: a small CoreMIDI monitor on the "SENTIA
+TILES" source (compiled locally against the macOS CoreMIDI framework)
+and a program playing Apple's built-in DLS synth straight from that
+source are what finally separated a host-side bug from the firmware in
+the sustain-pedal investigation (`services/README.md`). Temporary
+`printf()` traces on the USB-CDC console are fine for this too — only
+at rare events, never per scan, with a host `cat` draining the port,
+and removed before committing.
+
 ## Workflow for a real-hardware feedback round
 
 1. Implement the change.
