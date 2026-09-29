@@ -1,7 +1,6 @@
 #include "pedal.h"
 
 #include "board_pins.h"
-#include "midi_channels.h"
 #include "midi_out.h"
 
 #include "hardware/adc.h"
@@ -50,48 +49,29 @@ static bool low_side_means_pressed(void) {
     return s_polarity == TILES_PEDAL_POLARITY_NORMALLY_OPEN;
 }
 
-/* Where a pedal CC (sustain, expression) goes: the Zone Master Channel
- * plus the fixed single-channel parts -- NEVER the shared pool (channels
- * 2-9, the live MPE zone's Member Channels and Song mode's tracks), and
- * never channel 10 (unused, General MIDI percussion).
+/* Where a pedal CC (sustain, expression) goes: every channel -- the Zone
+ * Master Channel AND every Member Channel, via tiles_midi_send_cc_
+ * broadcast().
  *
- * Real feedback: "there is a glitch in pedal release and youre nbot
- * catchingit. look online and also look at the code," then "when i turn
- * mpe off serum alwayys sticks." This used to be tiles_midi_send_cc_
- * broadcast() -- the same CC on all 16 channels. The MPE specification
- * (MMA RP-053 v1.0) is explicit that this is wrong for the zone:
- * section 2.3.1, "certain MIDI messages (for example, Damper Pedal) ...
- * should be sent only on a Zone's Master Channel (not on Member
- * Channels)"; Table 1 lists CC #64 at note level as "Send: Not
- * recommended. Receive: Cannot be expected to respond"; the Appendix
- * says pedals go "on the Master Channel of the affected Zone." Sending
- * it on every Member Channel left each host/synth to invent its own
- * handling of fifteen undefined copies -- one that tracks sustain per
- * Member Channel sees CC64=127 arrive while a note is on that channel,
- * but CC64=0 only after that note's Note-Off has already freed it,
- * leaving that channel's sustain stuck on. Exactly the reported shape,
- * across every round of this bug: "if i lift pedal before note it's
- * fine, if i lift pedal after note it sticks, but if i play a new note
- * it does register as sustain released" -- and synth-independent
- * (Equator AND Serum), which a note-level firmware bug wouldn't be.
- *
- * The Master Channel covers every live note in BOTH modes: in MPE mode
- * it's the zone's Master Channel (the spec's own place for it); with MPE
- * off, every live note is sent on that same channel (see services/
- * expression.c's strike commit), so it's simply the notes' own channel,
- * like any ordinary keyboard. The fixed parts (services/midi_channels.h)
- * sit outside the zone on channels of their own, so each is an ordinary
- * single-channel part there -- kept, so chord mode's live-played chords
- * still sustain under the pedal exactly as before. */
+ * Real feedback: "weve fully lost pedal." A round earlier this was
+ * narrowed to the Master Channel plus the fixed parts, following the MPE
+ * specification's own recommendation (MMA RP-053 v1.0, section 2.3.1 and
+ * Table 1: Damper Pedal belongs on the Zone's Master Channel; at note
+ * level, "Send: Not recommended. Receive: Cannot be expected to
+ * respond") -- and sustain stopped working completely on the real rig
+ * (Ableton + Serum/Equator). So that receiving chain applies CC64 PER
+ * CHANNEL, not zone-wide from the Master Channel: a note on Member
+ * Channel 3 is only sustained by a CC64 that arrives on channel 3. The
+ * spec also requires a compliant MPE receiver to IGNORE Member Channel
+ * copies (section 2.3.1), so broadcasting costs a truly compliant synth
+ * nothing and is the only thing that works for one that isn't -- the
+ * same compatibility trade this file made originally ("already covers a
+ * non-MPE-aware receiver too"), now confirmed on real hardware instead
+ * of assumed. The narrowing was a wrong guess at the cause of a separate,
+ * still-open stuck-note report; services/README.md has the whole
+ * sequence. */
 static void send_pedal_cc(uint8_t controller, uint8_t value) {
-    static const uint8_t k_fixed_part_channels[] = {
-        TILES_MIDI_CH_CHORD,      TILES_MIDI_CH_GAME,       TILES_MIDI_CH_SEQ_LANE_0,
-        TILES_MIDI_CH_SEQ_LANE_1, TILES_MIDI_CH_SEQ_LANE_2, TILES_MIDI_CH_SEQ_LANE_3,
-    };
-    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, controller, value);
-    for (uint8_t i = 0u; i < sizeof(k_fixed_part_channels); i++) {
-        tiles_midi_send_cc(k_fixed_part_channels[i], controller, value);
-    }
+    tiles_midi_send_cc_broadcast(controller, value);
 }
 
 /* Sustain-only: hysteresis + debounce + send. Factored out of
@@ -159,10 +139,9 @@ static void scan_sustain(void) {
     bool pressed = low_side_means_pressed() ? s_debounced_low : !s_debounced_low;
     if (pressed != s_last_sent_sustained) {
         s_last_sent_sustained = pressed;
-        /* Master Channel (plus the fixed parts), not every channel -- under
-         * MPE the Master Channel's CC64 is what holds every note in the
-         * zone at once; see send_pedal_cc()'s own comment for why the old
-         * 16-channel broadcast was the stuck-sustain bug itself. */
+        /* Every channel -- under MPE each held note lives on its own Member
+         * Channel, and the real receiving rig only sustains a note from a
+         * CC64 on that same channel; see send_pedal_cc()'s own comment. */
         send_pedal_cc(MIDI_CC_SUSTAIN, pressed ? 127u : 0u);
     }
 }

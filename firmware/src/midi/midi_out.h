@@ -208,22 +208,20 @@ void tiles_midi_send_cc(uint8_t channel, uint8_t controller, uint8_t value);
  * jack. Added with DIN MIDI OUT for exactly that reason. */
 void tiles_midi_send_daw_cc(uint8_t channel, uint8_t controller, uint8_t value);
 
-/* Same CC on the Zone Master Channel AND every one of channels 2-16 -- now
- * ONLY for tiles_midi_send_panic() below, where hitting every channel
- * regardless of layout is the whole point of a MIDI panic (MPE receivers
- * ignore the Member Channel copies; everything else honors them).
+/* Same CC on the Zone Master Channel AND every one of channels 2-16 --
+ * used by services/pedal.c for sustain (CC64) and expression (CC11), and
+ * by tiles_midi_send_panic() below.
  *
- * NOT for pedals any more. services/pedal.c used this for sustain (CC64)
- * and expression (CC11) until real feedback finally pinned down a long-
- * running stuck-note bug ("there is a glitch in pedal release and youre
- * nbot catchingit. look online and also look at the code") -- the MPE
- * specification (MMA RP-053 v1.0, section 2.3.1 and Table 1) says a
- * Damper Pedal message "should be sent only on a Zone's Master Channel
- * (not on Member Channels)", and lists it at note level as "Send: Not
- * recommended. Receive: Cannot be expected to respond." See pedal.c's
- * send_pedal_cc() for the full reasoning and the channels it uses
- * instead; this file stays deliberately unaware of that layout (see this
- * header's own comment on the module boundary). */
+ * For pedals, deliberately every channel, not just the Master Channel the
+ * MPE spec recommends (MMA RP-053 v1.0 section 2.3.1): a round that
+ * narrowed it to the Master Channel lost sustain completely on the real
+ * rig (real feedback: "weve fully lost pedal") -- that receiving chain
+ * only sustains a note from a CC64 on the note's own channel. A
+ * compliant MPE receiver is required to ignore the Member Channel copies,
+ * so broadcasting costs it nothing. See pedal.c's send_pedal_cc() for the
+ * full history. This file stays deliberately unaware of the channel
+ * layout (see this header's own comment) -- it just always covers the
+ * full range that could ever carry a note. */
 void tiles_midi_send_cc_broadcast(uint8_t controller, uint8_t value);
 
 /* MIDI panic: Sustain off (CC 64), then All Notes Off (CC 123), then All

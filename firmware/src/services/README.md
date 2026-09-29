@@ -8944,5 +8944,52 @@ not its code.
   Known small side effect: with MPE off, harmonic plucks (still sent on
   shared-pool channels) no longer get the pedal's CC64 on their own
   channels. Not hardware-verified yet.
+- **CORRECTION to the entry above -- half 1 reverted: pedal CCs go on
+  every channel again.** Real feedback, first test of that flash: "weve
+  fully lost pedal." Narrowing CC64 to the Master Channel (per the spec's
+  recommendation) killed sustain entirely on the real rig (Ableton +
+  Serum/Equator): that receiving chain only sustains a note from a CC64
+  on the note's OWN channel -- it does not apply the Master Channel's
+  pedal zone-wide. `pedal.c`'s `send_pedal_cc()` is back to `tiles_midi_
+  send_cc_broadcast()`. The spec still says a compliant MPE receiver must
+  ignore Member Channel copies (section 2.3.1), so broadcasting costs one
+  nothing -- the original compatibility trade, now confirmed on hardware
+  rather than assumed. The "per-Member-Channel CC64 asymmetry" theory in
+  the entry above is therefore WRONG as the cause of the stick, and the
+  stick's real cause is still open. Half 2 (Note-Off always sent
+  immediately, no controller-side deferral) STAYS -- it removed a
+  definite firmware bug (two Note-Ons for one Note-Off on a re-struck pad
+  with MPE off) regardless.
+  **Three real bugs found auditing the harmonics feature**, prompted by
+  real feedback: "there also might be a conflict with harmonic feature
+  with pedal. that might be causing part ogf the issue that was already
+  there." Worth taking seriously: harmonics are pedal-gated, so they run
+  ONLY while sustain is held -- exactly the condition every stick report
+  shares -- and board 2, where every stick was reported, is the board
+  harmonics started on.
+  1. **Ghost plucks from capacitive flicker.** `scan_melodic_harmonics()`
+     detected new touches from the RAW capacitive signal, while the main
+     note path bridges brief dropouts (`TOUCH_DROPOUT_GRACE_MS`, 12ms)
+     because they're a known real-hardware behavior here. A resting finger
+     or palm that flickered read as a brand-new touch and fired a pluck: a
+     note the player never struck, possible only with the pedal down,
+     then held by the pedal -- and a flickering pad re-plucks the same
+     note on the same channel repeatedly while it's sustained. Now both
+     paths share one definition, `pad_touch_bridged()`.
+  2. **Channel leak.** A new pluck claimed its channel (marking it in
+     use) BEFORE checking the note was within MIDI range; a fundamental
+     above 96 (+31 passes 127) skipped the pluck without releasing it, and
+     nothing else frees a harmonic channel -- one Member Channel lost
+     until reboot per skip. Range check now happens first.
+  3. **Out-of-bounds write risk.** Harmonic voices mark their channel's
+     `owner_pad` as 0. The reserved range is recomputed from the zone's
+     CURRENT size, so if Song mode released a channel mid-session a
+     ringing harmonic could fall outside it, and `claim_mpe_channel()`'s
+     steal search could pick it and index `s_pads[0 - 1u]`. The steal
+     search now skips `owner_pad == 0`.
+  Next step if sticking persists: A/B with harmonics off (`python3
+  tools/tiles_control.py set features.melodic_harmonics 0`, back on with
+  `1`) to confirm or rule out harmonics as the remaining cause. Not
+  hardware-verified yet.
 - Everything else (per-pad Hall calibration) is not built
   yet.

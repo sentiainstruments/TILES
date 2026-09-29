@@ -1547,6 +1547,16 @@ static uint8_t find_sole_held_pad(void) {
     return found;
 }
 
+/* "Touched," with a brief capacitive dropout bridged -- see TOUCH_DROPOUT_
+ * GRACE_MS. The one definition both the main scan loop and the harmonics
+ * section use; relies on the main loop having already refreshed
+ * last_touched_ms for every pad this scan (it does, first thing, for all
+ * 24, before any state dispatch -- and scan_melodic_harmonics() runs after
+ * it). */
+static bool pad_touch_bridged(const pad_expr_t *s, uint32_t now_ms) {
+    return s->last_touched_valid && (now_ms - s->last_touched_ms) < TOUCH_DROPOUT_GRACE_MS;
+}
+
 static void end_harmonic_voice(uint8_t idx) {
     harmonic_voice_t *v = &s_harmonic_voices[idx];
     if (!v->active) {
@@ -1713,14 +1723,26 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
          * fundamental doesn't read as "just touched" the instant one
          * appears), just never pluck anything. */
         for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-            s_harmonic_prev_touched[pad - 1u] = tiles_touch_is_touched(pad);
+            s_harmonic_prev_touched[pad - 1u] = pad_touch_bridged(&s_pads[pad - 1u], now_ms);
         }
         return;
     }
     uint8_t fundamental_note = s_pads[fundamental - 1u].active_note;
 
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-        bool touched = tiles_touch_is_touched(pad);
+        /* Dropout-bridged, NOT raw tiles_touch_is_touched(). Real bug found
+         * auditing the harmonics/pedal interaction (real feedback: "there
+         * also might be a conflict with harmonic feature with pedal. that
+         * might be causing part ogf the issue that was already there"):
+         * edges here used to come from the raw capacitive signal, while the
+         * main scan loop bridges brief dropouts (TOUCH_DROPOUT_GRACE_MS)
+         * because they're a known real-hardware behavior on this board. So
+         * a resting finger or palm that merely flickered read as a brand-
+         * new touch and fired a pluck -- a ghost note that can ONLY happen
+         * with the pedal down (this whole section is pedal-gated) and is
+         * then held by it, and a flickering pad re-plucks the same note on
+         * the same channel over and over while it's sustained. */
+        bool touched = pad_touch_bridged(&s_pads[pad - 1u], now_ms);
         bool was_touched = s_harmonic_prev_touched[pad - 1u];
         s_harmonic_prev_touched[pad - 1u] = touched;
 
@@ -1739,10 +1761,8 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
                 break;
             }
         }
-        uint8_t channel;
-        if (slot >= 0) {
-            channel = s_harmonic_voices[slot].midi_channel; /* reuse -- still held from the ring in progress */
-        } else {
+        bool reuse = slot >= 0;
+        if (!reuse) {
             for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
                 if (!s_harmonic_voices[i].active) {
                     slot = (int8_t)i;
@@ -1752,14 +1772,28 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
             if (slot < 0) {
                 continue; /* every slot already ringing on some other pad */
             }
+        }
+        /* Range-checked BEFORE claiming a channel, not after. Real bug found
+         * auditing this section for the pedal stick ("there also might be a
+         * conflict with harmonic feature with pedal"): the check used to sit
+         * below claim_harmonic_channel(), so a high enough fundamental (any
+         * note above 96, where +31 passes 127) claimed a channel -- marking
+         * it in_use -- then skipped the pluck without ever releasing it.
+         * Nothing else frees a harmonic channel except end_harmonic_voice(),
+         * which only runs for voices that actually started, so each skip
+         * leaked one Member Channel until reboot. */
+        int note = (int)fundamental_note + (int)HARMONIC_SEMITONES[slot];
+        if (note > 127) {
+            continue; /* out of MIDI range this high -- silently skip, don't clamp into a wrong pitch */
+        }
+        uint8_t channel;
+        if (reuse) {
+            channel = s_harmonic_voices[slot].midi_channel; /* reuse -- still held from the ring in progress */
+        } else {
             channel = claim_harmonic_channel();
             if (channel == 0xFFu) {
                 continue; /* every reserved channel already holds a harmonic */
             }
-        }
-        int note = (int)fundamental_note + (int)HARMONIC_SEMITONES[slot];
-        if (note > 127) {
-            continue; /* out of MIDI range this high -- silently skip, don't clamp into a wrong pitch */
         }
         /* Real feedback found on the sustain pedal ("if i lift pedal
          * after note it sticks... if i play a new note it does register
@@ -2674,6 +2708,17 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
         if (harmonic_channel_is_reserved((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i))) {
             continue;
         }
+        /* owner_pad 0 is a harmonic voice (claim_harmonic_channel()'s own
+         * marker), never a stealable real note. Real bug found auditing the
+         * harmonics/pedal interaction: the reserved-range check above is
+         * computed from the zone's CURRENT size, so if Song mode releases a
+         * channel mid-session the reserved range shifts up and a still-
+         * ringing harmonic can land outside it -- this loop would then pick
+         * it and the code below would index s_pads[0 - 1u], a wild out-of-
+         * bounds write. Harmonic voices end on their own timer instead. */
+        if (s_mpe_channels[i].owner_pad == 0u) {
+            continue;
+        }
         if (oldest_idx == zone_size || s_mpe_channels[i].claim_seq < s_mpe_channels[oldest_idx].claim_seq) {
             oldest_idx = i;
         }
@@ -2762,9 +2807,10 @@ void tiles_expression_scan(void) {
             s->last_touched_valid = true;
         }
         /* See TOUCH_DROPOUT_GRACE_MS's own comment -- bridges a brief
-         * real capacitive dropout so it doesn't read as a full release. */
-        bool touched =
-            raw_touched || (s->last_touched_valid && (now_ms - s->last_touched_ms) < TOUCH_DROPOUT_GRACE_MS);
+         * real capacitive dropout so it doesn't read as a full release.
+         * (raw_touched just refreshed last_touched_ms above, so a raw touch
+         * always reads true here.) */
+        bool touched = pad_touch_bridged(s, now_ms);
 
         if (s->state == PAD_STATE_STOLEN) {
             /* See PAD_STATE_STOLEN's own comment. Deliberately runs no
