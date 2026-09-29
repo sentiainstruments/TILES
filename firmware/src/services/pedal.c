@@ -18,7 +18,28 @@
 #define SUSTAIN_PRESS_THRESHOLD (ADC_MAX / 4u)
 #define SUSTAIN_RELEASE_THRESHOLD (ADC_MAX * 3u / 4u)
 
-#define SUSTAIN_DEBOUNCE_MS 10u /* matches services/buttons.c's default */
+/* Asymmetric debounce: how long the pedal must read steadily in its NEW
+ * state before that state is accepted and CC64 is sent. Real feedback,
+ * once sustain was working again: "lets make sure it works well enough
+ * tho, like full sustain when held." A host-side MIDI capture of a real
+ * playing session (133 pedal edges) showed the pedal reading "up" for
+ * only 24, 36 and 55 ms in the MIDI stream in the middle of holds -- far
+ * too short for a foot, so contact chatter in the pedal or jack that the
+ * old symmetric 10 ms debounce let straight through. Each one sent
+ * CC64=0, which releases EVERY sustained note at once, and the CC64=127
+ * a moment later can't bring them back -- sustain that randomly breaks
+ * while held. (Nothing else touches the ADC -- ruled out.)
+ *   - PRESS stays fast (10 ms, services/buttons.c's default): sustain
+ *     must engage right away, or a note released just after pressing
+ *     slips through un-sustained.
+ *   - RELEASE needs 80 ms of continuous "up": longer than every dropout
+ *     captured (55 ms max), shorter than the quickest deliberate lift in
+ *     the same session (~150 ms), so every real re-pedal still registers.
+ *     The cost is that damping lands up to 80 ms after the foot lifts --
+ *     inaudible next to the chord it protects, and a spurious release can
+ *     never be undone once sent, while a slightly late one is harmless. */
+#define SUSTAIN_PRESS_DEBOUNCE_MS 10u
+#define SUSTAIN_RELEASE_DEBOUNCE_MS 80u
 
 #define MIDI_CC_SUSTAIN 64u
 #define MIDI_CC_EXPRESSION 11u
@@ -102,7 +123,8 @@ static void send_pedal_cc(uint8_t controller, uint8_t value) {
  * against the real hysteresis/debounce math and found nothing wrong on
  * paper -- s_raw_low tracks the current threshold-crossing state
  * immediately (with hysteresis), s_debounced_low only ever catches up
- * to it after SUSTAIN_DEBOUNCE_MS of s_raw_low staying put, a standard
+ * to it after s_raw_low stays put for the debounce time (now asymmetric --
+ * see SUSTAIN_PRESS/_RELEASE_DEBOUNCE_MS), a standard
  * pattern. Also confirmed tiles_pedal_scan() runs unconditionally every
  * single main-loop iteration (main.c), never skipped by any other
  * feature owning control the way some other scans can be -- and pedal.c
@@ -147,10 +169,15 @@ static void scan_sustain(void) {
     }
 
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    /* Which way the pending change would go decides how long it must hold
+     * -- see SUSTAIN_PRESS/_RELEASE_DEBOUNCE_MS. In pressed/released
+     * terms, not low/high, since polarity decides which side is which. */
+    bool candidate_pressed = low_side_means_pressed() ? raw_low : !raw_low;
+    uint32_t required_ms = candidate_pressed ? SUSTAIN_PRESS_DEBOUNCE_MS : SUSTAIN_RELEASE_DEBOUNCE_MS;
     if (raw_low != s_raw_low) {
         s_raw_low = raw_low;
         s_last_change_ms = now_ms;
-    } else if (raw_low != s_debounced_low && (now_ms - s_last_change_ms) >= SUSTAIN_DEBOUNCE_MS) {
+    } else if (raw_low != s_debounced_low && (now_ms - s_last_change_ms) >= required_ms) {
         s_debounced_low = raw_low;
     }
 

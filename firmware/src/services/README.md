@@ -9017,5 +9017,49 @@ not its code.
   channel 1 would let a pluck's Note-Off collide with a real note of the
   same pitch on the one shared channel -- open question, not changed
   here). Not hardware-verified yet.
+- **Resolution of the "sustain doesn't work" round, and pedal chatter
+  fixed.** After the strict build, real feedback was "no pedal
+  functionality" even with MPE enabled in Ableton and every plugin, then
+  "nope sustain pedal does not work in anywhere rn... lets re implement
+  ift from scratch." Two host-side tools settled it without guessing
+  (both scratch programs on the dev Mac, not in the repo): a CoreMIDI
+  monitor on the "SENTIA TILES" port showed the board sending textbook
+  sustain in both modes (non-MPE: ch1 Note-On, ch1 CC64=127, ch1 Note-
+  Off, ch1 CC64=0), and a small program driving Apple's built-in General
+  MIDI synth straight from that port, with no DAW involved, sustained
+  correctly. Real feedback: "i was wrong, sustain is now doing sustain
+  pedal not note hold. thats why the confusion" -- the synth now holds
+  notes through a real sustain pedal (standard behavior) instead of the
+  controller withholding Note-Offs, which just sounds different in some
+  patches. No rewrite needed.
+  Found along the way and still OPEN (needs a decision): the TILES
+  Ableton remote script (`daw-integration/ableton/TILES/scene_launch.py`)
+  claims three standard performance CCs on channel 1 as Scene Launch
+  buttons -- CC 64 (sustain) = stop pad 24 (`CC_STOP_BASE` 40 + 24),
+  CC 11 (expression) = launch pad 1 (`CC_GRID_BASE` 10 + 1), CC 74 (MPE
+  slide) = delete pad 4 (`CC_DELETE_BASE` 70 + 4, calls `delete_clip()`).
+  Ableton hands a script-claimed CC to the script instead of the track,
+  so with the TILES control surface active, sustain on channel 1 never
+  reaches the instrument (pad 24 is column 6, which the stop handler
+  ignores, so no clips were being stopped -- just swallowed). The board
+  never sends CC 74 today, but any future slide feature would delete
+  clips. Recommended fix: move Scene Launch/transport from CCs to SysEx
+  (Ableton->TILES clip state already uses SysEx), or a second USB-MIDI
+  port for DAW control.
+  **Real fix in this round -- asymmetric pedal debounce.** Real feedback:
+  "lets make sure it works well enough tho, like full sustain when
+  held." The same MIDI capture (133 pedal edges) showed the pedal
+  reading "up" for only 24, 36 and 55 ms in the middle of holds --
+  contact chatter in the pedal or jack that the old symmetric 10 ms
+  debounce passed straight through (nothing else touches the ADC; ruled
+  out). Each blip sent CC64=0, which releases every sustained note at
+  once, and the CC64=127 right after can't bring them back. `pedal.c`
+  now engages sustain after 10 ms (unchanged -- engaging late loses the
+  note released just after pressing) but only releases after 80 ms of
+  continuous "up": longer than every dropout captured, shorter than the
+  quickest deliberate lift in the same session (~150 ms). Damping lands
+  up to 80 ms after the foot lifts -- a spurious release can't be undone
+  once sent, a slightly late one is harmless. Not hardware-verified yet;
+  verify by re-running the same capture and counting sub-100 ms flips.
 - Everything else (per-pad Hall calibration) is not built
   yet.
