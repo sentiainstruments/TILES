@@ -43,7 +43,7 @@ regardless of Track/Remote routing, exactly why the transport CCs
 below have always been safe on this same port. Second rewrite moved
 grid-touch/stop-touch off Note-On entirely, onto CC, same as
 everything else here already was -- see NOTE_GRID_BASE's own
-replacement, CC_GRID_BASE, for the current wire format.
+replacement, CC_GRID_TOUCH, for the current wire format.
 
 Both rewrites bind real `ButtonElement`s via `add_value_listener()` --
 the same mechanism TILES.py's own transport buttons (play/stop/record)
@@ -82,12 +82,12 @@ Wire protocol summary:
     Sent ONLY on a PRESSURE CLICK -- a bare capacitive touch sends
     nothing at all (it's haptics-only on the hardware side, see
     op_mode.c's handle_scene_launch_taps()):
-        CC, controller = CC_GRID_BASE + pad (11-34), 127 then 0
+        CC CC_GRID_TOUCH (108), value = pad (1-24) then 0
             click: fire that pad's clip (columns 1-5), launch that
             pad's whole scene (column 6, OP_SCENE_LAUNCH_COL in
             op_mode.c), or -- on an EMPTY slot -- arm the track and
             start recording into it (see _record_new_clip())
-        CC, controller = CC_STOP_BASE + pad (41-64), 127 then 0
+        CC CC_STOP_TOUCH (109), value = pad (1-24) then 0
             click on a clip that's already playing: stop that one clip
             (columns 1-5 only)
         CC CC_MASTER_STOP (105), value 127 then 0        stop all clips
@@ -96,9 +96,15 @@ Wire protocol summary:
         CC CC_END_CAPTURE (107), value 127 then 0        shift+diamond
             during a live capture: end the recording that
             _record_new_clip() started (see _on_end_capture())
-        CC, controller = CC_DELETE_BASE + pad (71-94), 127 then 0
+        CC CC_DELETE_TOUCH (110), value = pad (1-24) then 0
             shift held + pad touched for 3 seconds on a clip: delete
             that clip (columns 1-5 only, see _on_delete_touch())
+
+    Every TILES -> Ableton CC is in the MIDI spec's "undefined" 102-119
+    range. Grid/stop/delete used to be one CC per pad (11-34, 41-64,
+    71-94), which claimed CC 64 (sustain), CC 11 (expression) and CC 74
+    (MPE slide) on the instrument's own channel -- see CC_GRID_TOUCH's
+    own comment.
 
     Ableton -> TILES (SysEx, manufacturer ID 0x7D = MMA-reserved
     "non-commercial/educational use", sub-ID 0x01):
@@ -156,17 +162,23 @@ from _Framework.SessionComponent import SessionComponent
 # imports this module).
 TILES_MASTER_CHANNEL = 0
 
-# Must match op_mode.c's own OP_SCENE_CC_GRID_BASE/_STOP_BASE/
-# _MASTER_STOP/_TRACK_OFFSET -- keep all four in sync with that file
-# if they ever change there. All CC, not Note-On -- see this module's
-# own docstring for why Note-On specifically doesn't work on this
-# port.
-CC_GRID_BASE = 10
-CC_STOP_BASE = 40
+# Must match op_mode.c's own OP_SCENE_CC_* -- keep in sync with that
+# file if they ever change there. All CC, not Note-On -- see this
+# module's own docstring for why Note-On specifically doesn't work on
+# this port. Every one is in the MIDI spec's "undefined" 102-119 range:
+# grid/stop/delete used to be one CC PER PAD (11-34, 41-64, 71-94), which
+# claimed CC 64 (sustain), CC 11 (expression) and CC 74 (MPE slide) on
+# the same channel the instrument plays on -- the sustain pedal never
+# reached the instrument while this script was active. Real feedback that
+# pinned it: "equator as strandalone dosnt have the issues wirthg sustain,
+# it wo4rks flawlesslyt." Now one CC each, with the pad (1-24) as the
+# value -- see _make_pad_event_callback().
 CC_MASTER_STOP = 105
 CC_TRACK_OFFSET = 106
 CC_END_CAPTURE = 107
-CC_DELETE_BASE = 70
+CC_GRID_TOUCH = 108
+CC_STOP_TOUCH = 109
+CC_DELETE_TOUCH = 110
 
 # Must match TILES_NUM_PADS (board_layout.h) -- every pad on the grid,
 # used to build one grid-touch and one stop-touch ButtonElement per
@@ -546,16 +558,18 @@ class SceneLaunch(object):
         # exactly (ButtonElement + add_value_listener), the one
         # reception mechanism with actual confirmed real-hardware
         # delivery on this project. ----
-        for pad in range(1, NUM_GRID_PADS + 1):
-            grid_button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, CC_GRID_BASE + pad)
-            grid_cb = self._make_grid_touch_callback(pad)
-            grid_button.add_value_listener(grid_cb)
-            self._grid_button_listeners.append((grid_button, grid_cb))
-
-            stop_button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, CC_STOP_BASE + pad)
-            stop_cb = self._make_stop_touch_callback(pad)
-            stop_button.add_value_listener(stop_cb)
-            self._stop_button_listeners.append((stop_button, stop_cb))
+        # One CC per action, pad as the value (see CC_GRID_TOUCH's own
+        # comment) -- the same value-carrying ButtonElement shape
+        # _track_offset_button below already uses.
+        for cc, handler, listeners in (
+            (CC_GRID_TOUCH, self._on_grid_touch, self._grid_button_listeners),
+            (CC_STOP_TOUCH, self._on_stop_touch, self._stop_button_listeners),
+            (CC_DELETE_TOUCH, self._on_delete_touch, self._delete_button_listeners),
+        ):
+            button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, cc)
+            callback = self._make_pad_event_callback(handler)
+            button.add_value_listener(callback)
+            listeners.append((button, callback))
 
         self._master_stop_button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, CC_MASTER_STOP)
         self._master_stop_button.add_value_listener(self._on_master_stop)
@@ -565,12 +579,6 @@ class SceneLaunch(object):
 
         self._end_capture_button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, CC_END_CAPTURE)
         self._end_capture_button.add_value_listener(self._on_end_capture)
-
-        for pad in range(1, NUM_GRID_PADS + 1):
-            delete_button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, CC_DELETE_BASE + pad)
-            delete_cb = self._make_delete_touch_callback(pad)
-            delete_button.add_value_listener(delete_cb)
-            self._delete_button_listeners.append((delete_button, delete_cb))
 
     def set_track_offset(self, offset):
         """The single source of truth for "which 5-track window is
@@ -635,11 +643,16 @@ class SceneLaunch(object):
         track_index = self._track_offset + (col - 1)
         return col, track_index, row
 
-    def _make_grid_touch_callback(self, pad):
-        return lambda value: self._on_grid_touch(pad, value)
-
-    def _make_stop_touch_callback(self, pad):
-        return lambda value: self._on_stop_touch(pad, value)
+    def _make_pad_event_callback(self, handler):
+        """Adapts one of the value-carrying pad CCs (CC_GRID_TOUCH/
+        _STOP_TOUCH/_DELETE_TOUCH: value = pad 1..NUM_GRID_PADS, then 0)
+        to handler(pad, value) -- the handlers' existing signature, with
+        127 standing in for the old per-pad CC's press value. The
+        trailing 0 (and anything out of range) is ignored."""
+        def callback(value):
+            if 1 <= value <= NUM_GRID_PADS:
+                handler(value, 127)
+        return callback
 
     def _on_grid_touch(self, pad, value):
         # CC value 127 then immediately 0, same on/off pair convention
@@ -745,9 +758,6 @@ class SceneLaunch(object):
         # that keeps this scoped to Scene Launch mode only).
         self._log("stop_all_clips")
         self._song.stop_all_clips()
-
-    def _make_delete_touch_callback(self, pad):
-        return lambda value: self._on_delete_touch(pad, value)
 
     def _on_delete_touch(self, pad, value):
         """Shift held + pad touched for 3 seconds (the firmware times the

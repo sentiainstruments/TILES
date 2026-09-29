@@ -204,12 +204,12 @@ real-hardware delivery.
 
 | Direction | Transport | Meaning |
 |---|---|---|
-| TILES -> Ableton | CC, controller = `CC_GRID_BASE` (10) + pad, 127 then 0 | Pressure click: fire that pad's clip (track columns 1-5), launch that pad's whole scene (column 6), or -- on an EMPTY slot -- arm the track and record into it |
-| TILES -> Ableton | CC, controller = `CC_STOP_BASE` (40) + pad, 127 then 0 | Pressure click on a clip that's already playing: stop that one clip (track columns 1-5 only) |
+| TILES -> Ableton | CC `CC_GRID_TOUCH` (108), value = pad, then 0 | Pressure click: fire that pad's clip (track columns 1-5), launch that pad's whole scene (column 6), or -- on an EMPTY slot -- arm the track and record into it |
+| TILES -> Ableton | CC `CC_STOP_TOUCH` (109), value = pad, then 0 | Pressure click on a clip that's already playing: stop that one clip (track columns 1-5 only) |
 | TILES -> Ableton | CC `CC_MASTER_STOP` (105), 127 then 0 | Stop all clips (master stop) -- shift+diamond in Scene Launch mode |
 | TILES -> Ableton | CC `CC_TRACK_OFFSET` (106), value = offset | Visible track window changed -- keeps the session-ring overlay and the pad-to-track mapping in sync |
 | TILES -> Ableton | CC `CC_END_CAPTURE` (107), 127 then 0 | Shift+diamond during a live capture (melodic mode opened by a record-a-new-clip click): end that recording; the firmware returns to Scene Launch mode itself |
-| TILES -> Ableton | CC, controller = `CC_DELETE_BASE` (70) + pad, 127 then 0 | Shift held + pad touched 3 seconds on a clip: delete that clip (track columns 1-5 only; the firmware times the hold) |
+| TILES -> Ableton | CC `CC_DELETE_TOUCH` (110), value = pad, then 0 | Shift held + pad touched 3 seconds on a clip: delete that clip (track columns 1-5 only; the firmware times the hold) |
 | Ableton -> TILES | SysEx `F0 7D 01 10 track scene flags r7 g7 b7 F7` | One clip slot's current state |
 | Ableton -> TILES | SysEx `F0 7D 01 11 scene flags r7 g7 b7 F7` | One scene's current state |
 | Ableton -> TILES | SysEx `F0 7D 01 12 F7` | A track was just armed for a new recording -- open melodic mode (firmware waits until every pad is released) |
@@ -218,7 +218,17 @@ A bare capacitive touch sends NOTHING to Ableton -- it's haptics-only on the har
 
 All TILES -> Ableton messages are plain CC on
 `TILES_MIDI_MPE_MASTER_CHANNEL` (channel 1) -- the same channel the
-transport CCs use, deliberately never Note-On (see above). `pad` is
+transport CCs use, deliberately never Note-On (see above) -- and every
+controller number is in the MIDI spec's "undefined" 102-119 range.
+Grid/stop/delete used to be one CC PER PAD (10/40/70 + pad), which put
+three of them on standard performance controllers on this same channel:
+CC 64 (sustain) was pad 24's stop, CC 11 (expression) pad 1's launch,
+CC 74 (MPE slide) pad 4's delete -- with the TILES control surface
+active, Ableton routed the sustain pedal to this script instead of the
+instrument. Real feedback that pinned it: "equator as strandalone dosnt
+have the issues wirthg sustain, it wo4rks flawlesslyt." Now one CC per
+action with the pad as its value; see `op_mode.c`'s
+`OP_SCENE_CC_GRID_TOUCH` comment. `pad` is
 1-24 (`TILES_NUM_PADS`); Ableton-side, `scene_launch.py` derives
 `(column, row)` from `pad` exactly like `op_mode.c`'s own
 `handle_scene_launch_taps()` does, and derives the real track index

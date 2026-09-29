@@ -9061,5 +9061,41 @@ not its code.
   up to 80 ms after the foot lifts -- a spurious release can't be undone
   once sent, a slightly late one is harmless. Not hardware-verified yet;
   verify by re-running the same capture and counting sub-100 ms flips.
+  (Re-capture after flashing: 50 pedal edges, zero under 100 ms --
+  versus 7 of 133 before.)
+- **The actual end of the sustain saga: Scene Launch CCs no longer sit on
+  performance controllers.** After the debounce fix, real feedback:
+  "sustain always fails rn" -- in MPE mode inside Ableton -- then,
+  decisively, "equator as strandalone dosnt have the issues wirthg
+  sustain, it wo4rks flawlesslyt": the same board, same MIDI, sustain
+  perfect with no Ableton in between. Ableton's own `Log.txt` showed the
+  TILES control surface active on the TILES input, and the "OPEN" item
+  above was the cause: `scene_launch.py` bound one ButtonElement per pad
+  -- grid CC 11-34, stop CC 41-64, delete CC 71-94, all on channel 1 --
+  claiming CC 64 (sustain, as pad 24's stop), CC 11 (expression, pad 1's
+  launch) and CC 74 (MPE slide, pad 4's delete). A CC claimed by the
+  script goes to the script, not the track, so the one channel-1 sustain
+  message MPE relies on never reached the instrument. (The script's own
+  docstring had concluded claimed messages ALSO reach the track, from a
+  Note-On experiment -- but that ran while the buttons were never bound,
+  per the `register_components` crash described a few paragraphs later
+  in the same docstring.) Also explains the whole history: with the old
+  16-channel pedal broadcast, only the Member Channel copies got through,
+  and AudioSwift document that in Ableton "sending Sustain to all Member
+  Channels could not work and could cause the notes to hang on" -- the
+  original stuck notes.
+  Fixed on both sides (`op_mode.c`, `scene_launch.py`, `shared/protocol/
+  README.md`): grid/stop/delete are now ONE CC each with the pad (1-24)
+  as the value, then 0 -- `OP_SCENE_CC_GRID_TOUCH`/`_STOP_TOUCH`/
+  `_DELETE_TOUCH` = 108/109/110, the same value-carrying shape `CC_TRACK_
+  OFFSET` (106) already used. Every TILES -> Ableton CC now sits in the
+  MIDI spec's "undefined" 102-119 range, clear of every standard
+  controller; the undefined range has far too few numbers for 72 per-pad
+  CCs, hence pad-as-value. Also dropped the `printf()`s that sat right
+  before the stop/delete sends (the blocking-stdio bug class). **The
+  Ableton script must be reinstalled** (copied into the User Library's
+  `Remote Scripts/TILES`) and the control surface reloaded for this to
+  take effect -- firmware and script must match. Not hardware-verified
+  yet.
 - Everything else (per-pad Hall calibration) is not built
   yet.

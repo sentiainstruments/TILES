@@ -7057,7 +7057,7 @@ static void song_capture_exit(void) {
 /* Ableton -> TILES only now (see this section's own scene_on_sysex()
  * below) -- the TILES -> Ableton direction (fire/launch/stop-all/
  * stop-clip/track-offset) moved off this SysEx sub-protocol onto plain
- * CC messages, see OP_SCENE_CC_GRID_BASE's own comment for why. */
+ * CC messages, see OP_SCENE_CC_GRID_TOUCH's own comment for why. */
 #define OP_SCENE_MSG_CLIP_STATE 0x10u
 #define OP_SCENE_MSG_SCENE_STATE 0x11u
 /* Real feedback: "if were recording a new clip make it open melodic mode
@@ -7269,23 +7269,46 @@ static float scene_playing_pulse_level(uint32_t now_ms) {
  * by moving grid-touch/stop-touch off Note-On entirely, onto CC, same
  * as everything else in this section already was.
  *
- * Grid touch (fire a clip, or launch a whole scene for column 6) is
- * one CC per pad: controller = OP_SCENE_CC_GRID_BASE + pad (11-34).
- * The deep-press stop-one-clip gesture is a separate CC per pad,
- * OP_SCENE_CC_STOP_BASE + pad (41-64), sent only for track columns
- * (1-5). Both sent as the same 127-then-0 on/off pair the transport
- * CCs already use. */
-#define OP_SCENE_CC_GRID_BASE 10u
-#define OP_SCENE_CC_STOP_BASE 40u
+ * Grid touch (fire a clip, or launch a whole scene for column 6), the
+ * deep-press stop-one-clip gesture (track columns 1-5 only), and the
+ * shift+hold delete are each ONE CC whose VALUE is the pad (1-24),
+ * followed by 0 -- OP_SCENE_CC_GRID_TOUCH/_STOP_TOUCH/_DELETE_TOUCH,
+ * 108/109/110, the same value-carrying shape OP_SCENE_CC_TRACK_OFFSET
+ * already uses.
+ *
+ * Real bug, found chasing the sustain pedal (real feedback: "sustain
+ * always fails rn," then "equator as strandalone dosnt have the issues
+ * wirthg sustain, it wo4rks flawlesslyt" -- same MIDI, only Ableton in
+ * between): these used to be one CC PER PAD -- grid 11-34, stop 41-64,
+ * delete 71-94 -- and three of those are standard performance
+ * controllers on this same channel 1: CC 64 (sustain) was pad 24's stop,
+ * CC 11 (expression) was pad 1's launch, CC 74 (MPE slide) was pad 4's
+ * delete. With the TILES control surface active, Ableton hands a script-
+ * claimed CC to the script instead of the track, so the sustain pedal on
+ * channel 1 (the only channel MPE puts it on) never reached the
+ * instrument; and the expression pedal would have launched clips. The
+ * paragraph above concluded CCs can't collide with instrument content --
+ * true for notes, false for CCs like these. The MIDI spec's "undefined"
+ * CCs (3, 9, 14-15, 20-31, 85-90, 102-119) are the only ones with no
+ * performance meaning, far too few for 72 per-pad CCs, hence pad-as-
+ * value -- everything here now sits in 102-110, clear of every standard
+ * controller. */
 #define OP_SCENE_CC_MASTER_STOP 105u
 #define OP_SCENE_CC_TRACK_OFFSET 106u
 #define OP_SCENE_CC_END_CAPTURE 107u
-#define OP_SCENE_CC_DELETE_BASE 70u
+#define OP_SCENE_CC_GRID_TOUCH 108u
+#define OP_SCENE_CC_STOP_TOUCH 109u
+#define OP_SCENE_CC_DELETE_TOUCH 110u
+
+/* One pad event: `cc` with the pad as its value, then 0 -- the 0 keeps two
+ * taps of the same pad from arriving as two identical values in a row. */
+static void scene_send_pad_event(uint8_t cc, uint8_t pad) {
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, pad);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
+}
 
 static void scene_send_grid_touch(uint8_t pad) {
-    uint8_t cc = (uint8_t)(OP_SCENE_CC_GRID_BASE + pad);
-    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
-    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
+    scene_send_pad_event(OP_SCENE_CC_GRID_TOUCH, pad);
 }
 
 /* Real feedback: "a master stop in this app should be shift diamond."
@@ -7298,11 +7321,10 @@ static void scene_send_stop_all(void) {
     tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_MASTER_STOP, 0u);
 }
 
+/* No printf() before the send (it used to sit here) -- the blocking-stdio
+ * bug class services/pedal.c's scan_sustain() header documents. */
 static void scene_send_stop_clip_cc(uint8_t pad) {
-    printf("[op_mode] scene launch: deep press -> stop clip pad=%u\n", pad);
-    uint8_t cc = (uint8_t)(OP_SCENE_CC_STOP_BASE + pad);
-    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
-    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
+    scene_send_pad_event(OP_SCENE_CC_STOP_TOUCH, pad);
 }
 
 /* See OP_SCENE_CC_TRACK_OFFSET's own comment -- keeps Ableton's
@@ -7313,15 +7335,12 @@ static void scene_send_track_offset(uint8_t offset) {
     tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_SCENE_CC_TRACK_OFFSET, offset);
 }
 
-/* Delete that pad's clip (see OP_SCENE_DELETE_HOLD_MS) -- controller =
- * OP_SCENE_CC_DELETE_BASE + pad (71-94), the same on/off pair as every
- * other CC here. Track columns only; the firmware never sends it for
- * column 6. */
+/* Delete that pad's clip (see OP_SCENE_DELETE_HOLD_MS) -- OP_SCENE_CC_
+ * DELETE_TOUCH with the pad as its value. Track columns only; the firmware
+ * never sends it for column 6. (No printf() before the send -- same
+ * reason as scene_send_stop_clip_cc().) */
 static void scene_send_delete_clip(uint8_t pad) {
-    printf("[op_mode] scene launch: shift+pad hold -> delete clip pad=%u\n", pad);
-    uint8_t cc = (uint8_t)(OP_SCENE_CC_DELETE_BASE + pad);
-    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
-    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
+    scene_send_pad_event(OP_SCENE_CC_DELETE_TOUCH, pad);
 }
 
 /* True if ANY tracked track has a clip in this scene row -- not just the
