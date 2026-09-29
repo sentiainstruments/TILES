@@ -27,7 +27,7 @@
  * minor, patch, 0 -- the same firmware version USB reports as bcdDevice,
  * both from midi/product_identity.h. */
 
-static void identity_on_sysex(const uint8_t *data, size_t len) {
+static void identity_on_sysex(tiles_midi_port_t port, const uint8_t *data, size_t len) {
     /* Request payload (the bytes strictly between F0/F7, per midi_in.h's
      * own sysex-callback contract): 7E <device id> 06 01 -- exactly 4
      * bytes. Deliberately doesn't check data[1] (the device id byte) --
@@ -49,7 +49,10 @@ static void identity_on_sysex(const uint8_t *data, size_t len) {
                        TILES_FW_VERSION_MINOR,
                        TILES_FW_VERSION_PATCH,
                        0u};
-    tiles_midi_send_sysex(reply, sizeof(reply));
+    /* Back on the port the request came in on -- a DAW probing either USB
+     * port gets its answer there. A request from DIN gets none (DIN OUT has
+     * no SysEx path; tiles_midi_send_sysex() skips it). */
+    tiles_midi_send_sysex(port, reply, sizeof(reply));
 }
 
 void tiles_midi_identity_init(void) {

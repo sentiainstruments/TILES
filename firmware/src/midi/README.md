@@ -466,3 +466,44 @@ rate limiting for continuous expression data — see Status below.
     interface. Verified on macOS (enumerates as 1209:0001, bcdDevice
     0.1.0, MIDI/console/settings all working after the flash); NOT yet
     tested on Windows.
+- **Two USB MIDI ports: "MIDI" (the instrument) and "DAW" (the Ableton
+  script's).** Real feedback: "do 8 as how standardized stuff works.
+  production ready industry stuff" -- item 8 of the standardization audit
+  being that DAW control shared the instrument's port and channel 1. Every
+  controller that also drives a DAW (Launchkey, Push, KeyLab) gives the
+  DAW's control-surface script its own port; TILES's shared one is how the
+  script ended up owning the sustain pedal (daw-integration/README.md) and
+  how Scene Launch/transport CCs could reach an instrument track.
+  - `midi_ports.h` (new): MAIN = USB cable 0 "MIDI" (notes, MPE, pedals,
+    clock/Start/Stop, Identity; mirrored to DIN), DAW = cable 1 "DAW"
+    (`tiles_midi_send_daw_cc()` out; Scene Launch SysEx and the TILES
+    DISPLAY echo notes in; never DIN).
+  - `usb_descriptors.c`: the MIDI interface declares two cables with
+    named jacks (TinyUSB's per-cable macros; static-asserted lengths).
+    The PRODUCT name is now plain "SENTIA TILES" on every unit, since it
+    names the ports ("SENTIA TILES MIDI"/"SENTIA TILES DAW" on macOS) and
+    is what Ableton matches its script against; the unit label ("were
+    moving to have identifiers") moved to the diagnostics interface's name
+    and the settings shell's `INFO` (`unit=`, plus `firmware=`).
+  - `usb_midi_packet.{h,c}` (new, native tests in `test/
+    test_usb_midi_packet.c`): USB-MIDI 1.0 event packets. Output and input
+    both use whole packets now, not TinyUSB's byte stream -- the stream
+    API merges all cables on read and keeps ONE partial-message state
+    across cables on write, so a message cut short on one port would be
+    finished on the other. A packet is queued whole or not at all.
+  - `midi_in.c`: one parser per port (MAIN, DAW, DIN); SysEx listeners
+    get the port (`tiles_midi_in_sysex_callback_t`). Scene Launch
+    (`op_mode.c`'s `scene_on_sysex()`) ignores clip/scene SysEx from any
+    port but DAW; the Identity Reply goes back on the port the request
+    came in on. Notes from every port still reach the melodic echo -- its
+    notes arrive on DAW, because TILES DISPLAY sends them through the
+    script's output. Tests in `test/test_midi_in.c` (USB input is fed as
+    packets now).
+  - MIDI FIFOs 64 -> 256 bytes each way (64 packets): the zone
+    declaration alone is 60 CCs, and Live's clip-colour burst arrives on
+    the DAW port.
+  - Firmware 0.2.0 (the port layout is a USB interface change).
+  - Ableton side: `daw-integration/ableton/TILES/__init__.py` declares the
+    two ports to Live (`get_capabilities()`, the same layout Ableton's own
+    Launchkey MK3 script declares), with auto-load; setup and the macOS
+    stale-device cleanup are in `daw-integration/README.md`.

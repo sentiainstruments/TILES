@@ -37,11 +37,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "midi_ports.h"
+
 void tiles_midi_in_init(void);
 
-/* Drains and parses every byte currently available from USB MIDI IN,
- * firing registered callbacks for each complete Real-Time byte or SysEx
- * frame found. Call every main-loop iteration, after tud_task() (so
+/* Drains and parses every byte currently available from USB MIDI IN (both
+ * ports -- midi/midi_ports.h) and the DIN jack, firing registered
+ * callbacks for each complete Real-Time byte, SysEx frame or note found. Call every main-loop iteration, after tud_task() (so
  * this iteration's USB RX FIFO is current) and BEFORE
  * tiles_midi_clock_scan() (which no longer reads MIDI itself -- it
  * reacts to this file's own callback instead, so it needs this to have
@@ -61,8 +63,11 @@ typedef void (*tiles_midi_in_realtime_callback_t)(uint8_t realtime_byte, uint32_
  * only for the duration of the callback -- copy out anything needed
  * past that. A frame longer than this file's own internal buffer is
  * silently dropped (never delivered, not truncated-and-delivered) --
- * see midi_in.c's own MIDI_IN_SYSEX_MAX comment. */
-typedef void (*tiles_midi_in_sysex_callback_t)(const uint8_t *data, size_t len);
+ * see midi_in.c's own MIDI_IN_SYSEX_MAX comment. `port` is where the frame
+ * came in (midi/midi_ports.h): Scene Launch only accepts its clip/scene
+ * state from the DAW port, and an Identity Request is answered on the
+ * port it came from. */
+typedef void (*tiles_midi_in_sysex_callback_t)(tiles_midi_port_t port, const uint8_t *data, size_t len);
 
 /* Fired once per complete Note-On or Note-Off, synchronously from within
  * tiles_midi_in_scan(), running-status aware (a sender that omits a
@@ -76,7 +81,10 @@ typedef void (*tiles_midi_in_sysex_callback_t)(const uint8_t *data, size_t len);
  * never have to handle the zero-velocity convention themselves.
  * `velocity` is the raw 0-127 byte either way (0 for every note_on=false
  * case). `now_ms` is captured once per tiles_midi_in_scan() call, same
- * as the Real-Time callback above. */
+ * as the Real-Time callback above. From every port -- the melodic echo's
+ * notes (services/op_mode.c) usually arrive on the DAW port, sent by the
+ * TILES DISPLAY Max device through the control surface script's output;
+ * a MIDI track routed straight to TILES arrives on MAIN. */
 typedef void (*tiles_midi_in_note_callback_t)(uint8_t channel, uint8_t note, uint8_t velocity, bool note_on,
                                                uint32_t now_ms);
 

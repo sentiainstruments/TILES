@@ -47,10 +47,15 @@
 #define CFG_TUD_CDC_TX_BUFSIZE 1024
 #define CFG_TUD_CDC_EP_BUFSIZE 64
 
-/* MIDI FIFO sizes -- full-speed only on RP2350, so the smaller size
- * always applies; matches TinyUSB's own midi_test example default. */
-#define CFG_TUD_MIDI_RX_BUFSIZE 64
-#define CFG_TUD_MIDI_TX_BUFSIZE 64
+/* MIDI FIFO sizes: 256 bytes = 64 USB-MIDI packets each way (the endpoint
+ * itself stays 64 bytes, full speed). Raised from TinyUSB's example default
+ * of 64 (16 packets) in the standardization round, when output moved to
+ * whole packets on two ports (midi/midi_ports.h): the MPE zone declaration
+ * alone is 60 CCs, a panic 48, and Ableton's clip-colour burst on the DAW
+ * port dozens of SysEx packets -- a bigger FIFO lets those queue instead
+ * of stalling the main loop in midi_out.c's retry wait. */
+#define CFG_TUD_MIDI_RX_BUFSIZE 256
+#define CFG_TUD_MIDI_TX_BUFSIZE 256
 
 /* Vendor FIFO sizes -- this protocol is a line at a time (see usb_
  * vendor.c's own header comment), well under 64 bytes per command or

@@ -26,12 +26,19 @@ dropdown) -- not per-button MIDI Learn, and not something that needs
 repeating after restarts, DAW updates, or new projects. See
 daw-integration/README.md for that one-time install step.
 
-Once installed and selected, this script listens on TILES's MPE Zone
-Master Channel (MIDI channel 1) for the three momentary CC triggers
+Once installed and selected, this script listens on TILES's DAW port
+("SENTIA TILES DAW", MIDI channel 1) for the three momentary CC triggers
 op_mode.c's handle_diamond_transport() already sends -- CC 102 (Play),
 103 (Stop), 104 (Record) -- and calls Live's own transport API directly,
 the same kind of translation Ableton's bundled Launchkey script does
 internally for ITS transport buttons. No MIDI Map Mode involved at all.
+
+The DAW port is TILES's second USB MIDI port, used by this script and
+nothing else -- the standard layout (Launchkey, Push, KeyLab all do it);
+see this package's __init__.py (get_capabilities()) and firmware/src/midi/
+midi_ports.h. Before it existed these CCs shared the instrument's own port
+and channel, which is how this script once ended up owning the sustain
+pedal (daw-integration/README.md).
 
 Each trigger arrives as TWO CC messages back to back (value 127, then
 immediately 0 -- see OP_TRANSPORT_PLAY_CC's own comment in op_mode.c for
@@ -45,7 +52,7 @@ can we pull the colors of the scenes from ableton?") -- see
 scene_launch.py's own module docstring for that protocol and this
 class's disconnect() for how it's wired in here. Scene Launch's own
 TILES -> Ableton messages (fire/launch/stop-all/stop-clip) arrive as
-plain Note-On/CC on this same MPE Zone Master Channel, exactly like
+plain CCs on this same DAW port and channel, exactly like
 the three transport CCs above -- SceneLaunch binds its own
 ButtonElements directly (see that file's own _connect()) rather than
 this class needing a handle_sysex() override the way an earlier,

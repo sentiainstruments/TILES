@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include "board/unit_id.h"
+#include "midi_ports.h"
 #include "pico/unique_id.h"
 #include "pico/usb_reset.h"
 #include "product_identity.h"
@@ -97,26 +98,60 @@ enum {
 #define EPNUM_VENDOR_OUT 0x04u
 #define EPNUM_VENDOR_IN 0x84u
 
+/* String indices -- see string_desc_arr below. */
+enum {
+    STRID_LANGID = 0,
+    STRID_MANUFACTURER,
+    STRID_PRODUCT,
+    STRID_SERIAL,
+    STRID_CDC,
+    STRID_MIDI,
+    STRID_VENDOR,
+    STRID_MIDI_PORT_MAIN,
+    STRID_MIDI_PORT_DAW,
+};
+
+/* Two MIDI ports ("virtual cables") on one USB-MIDI interface -- see
+ * midi/midi_ports.h for why. Built from TinyUSB's own per-cable macros
+ * (the same pieces TUD_MIDI_DESCRIPTOR uses for its single cable): one
+ * embedded+external jack pair per cable, each named (the jack string is
+ * what a host shows as the port's name), then each endpoint lists its
+ * embedded jacks in cable order -- that order IS the cable numbering. */
+#define MIDI_NUM_CABLES 2u
+#define TILES_MIDI_DESC_LEN \
+    (TUD_MIDI_DESC_HEAD_LEN + MIDI_NUM_CABLES * TUD_MIDI_DESC_JACK_LEN + 2u * TUD_MIDI_DESC_EP_LEN(MIDI_NUM_CABLES))
+TU_VERIFY_STATIC(MIDI_NUM_CABLES == TILES_USB_MIDI_NUM_CABLES, "descriptor cable count vs midi_ports.h");
+
 #define CONFIG_TOTAL_LEN \
-    (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_MIDI_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_RPI_RESET_DESC_LEN)
+    (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TILES_MIDI_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_RPI_RESET_DESC_LEN)
 
 uint8_t const desc_fs_configuration[] = {
     /* Config number, interface count, string index, total length, attribute, power in mA */
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
 
     /* Interface number, string index, EP notification address + size, EP data (out, in) + size */
-    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 4, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
+    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, STRID_CDC, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
+
+    /* MIDI: cable 0 = MAIN ("MIDI"), cable 1 = DAW ("DAW"). TinyUSB's jack
+     * macros number cables from 1. */
+    TUD_MIDI_DESC_HEAD(ITF_NUM_MIDI, STRID_MIDI, MIDI_NUM_CABLES),
+    TUD_MIDI_DESC_JACK_DESC(1, STRID_MIDI_PORT_MAIN),
+    TUD_MIDI_DESC_JACK_DESC(2, STRID_MIDI_PORT_DAW),
+    TUD_MIDI_DESC_EP(EPNUM_MIDI_OUT, 64, MIDI_NUM_CABLES),
+    TUD_MIDI_JACKID_IN_EMB(1),
+    TUD_MIDI_JACKID_IN_EMB(2),
+    TUD_MIDI_DESC_EP(EPNUM_MIDI_IN, 64, MIDI_NUM_CABLES),
+    TUD_MIDI_JACKID_OUT_EMB(1),
+    TUD_MIDI_JACKID_OUT_EMB(2),
 
     /* Interface number, string index, EP out & in address, EP size */
-    TUD_MIDI_DESCRIPTOR(ITF_NUM_MIDI, 5, EPNUM_MIDI_OUT, EPNUM_MIDI_IN, 64),
-
-    /* Interface number, string index, EP out & in address, EP size */
-    TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 6, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
+    TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, STRID_VENDOR, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
 
     /* Control-transfers-only (no data endpoints, no string) -- see
      * tusb_config.h's own comment on why this interface exists. */
     TUD_RPI_RESET_DESCRIPTOR(ITF_NUM_RESET, 0),
 };
+TU_VERIFY_STATIC(sizeof(desc_fs_configuration) == CONFIG_TOTAL_LEN, "configuration descriptor length");
 
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void)index;
@@ -202,27 +237,34 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
 /* String descriptors                                                    */
 /* -------------------------------------------------------------------- */
 
-enum {
-    STRID_LANGID = 0,
-    STRID_MANUFACTURER,
-    STRID_PRODUCT,
-    STRID_SERIAL,
-    STRID_CDC,
-    STRID_MIDI,
-    STRID_VENDOR,
-};
-
+/* Real feedback on the port names: "do 8 as how standardized stuff works.
+ * production ready industry stuff." The PRODUCT name is what every host
+ * shows as the device -- and, with the jack names below, what DAWs call its
+ * two MIDI ports ("SENTIA TILES MIDI" / "SENTIA TILES DAW" on macOS), and
+ * what Ableton matches its control-surface script against. So it is the
+ * same on every unit, like any shipping product; which physical board this
+ * is comes from the serial number (the chip ID) and the unit label below.
+ *
+ * The unit label ("were moving to have identifiers" -- see board/
+ * unit_id.h) used to BE the product name ("SENTIA TILES (Unit 2/4)"), which
+ * gave every board differently-named MIDI ports: a Live set or MIDI setup
+ * made with one board didn't recognize another. It now rides on the
+ * diagnostics (CDC) interface's name instead -- still visible in the OS's
+ * USB device listing (System Information on macOS) -- and in the settings
+ * shell's INFO (usb_vendor/usb_vendor.c). */
 static char const *string_desc_arr[] = {
     NULL, /* 0: language ID, handled specially below */
     "SENTIA Instruments",
-    NULL, /* 2: product, built from unit_id.h's TILES_UNIT_NUMBER/COUNT below */
-    NULL, /* 3: serial, filled from the RP2350's unique flash ID below */
-    "SENTIA TILES Diagnostics",
+    "SENTIA TILES",
+    NULL, /* 3: serial, filled from the RP2350's unique ID below */
+    NULL, /* 4: diagnostics interface, built with the unit label below */
     "SENTIA TILES MIDI",
     "SENTIA TILES Control",
+    "MIDI", /* MAIN port's jacks -- see midi/midi_ports.h */
+    "DAW",  /* DAW port's jacks */
 };
 
-static uint16_t desc_str[32 + 1];
+static uint16_t desc_str[40 + 1];
 
 uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
     (void)langid;
@@ -234,16 +276,10 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
             chr_count = 1;
             break;
         }
-        case STRID_PRODUCT: {
-            /* Real feedback: "were moving to have identifiers" -- see
-             * unit_id.h's own header for the full reasoning. Built here
-             * (rather than a plain string_desc_arr entry) so this is
-             * visible without a serial terminal: `picotool info -a` and
-             * the host OS's own USB device listing both show the
-             * product string. */
-            char buf[32];
-            int written = snprintf(buf, sizeof(buf), "SENTIA TILES (Unit %u/%u)", (unsigned)TILES_UNIT_NUMBER,
-                                    (unsigned)TILES_UNIT_COUNT);
+        case STRID_CDC: {
+            char buf[40];
+            int written = snprintf(buf, sizeof(buf), "SENTIA TILES Diagnostics (Unit %u/%u)",
+                                   (unsigned)TILES_UNIT_NUMBER, (unsigned)TILES_UNIT_COUNT);
             chr_count = (written > 0) ? (size_t)written : 0u;
             const size_t max_count = sizeof(desc_str) / sizeof(desc_str[0]) - 1u;
             if (chr_count > max_count) {

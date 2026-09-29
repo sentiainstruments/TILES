@@ -7381,8 +7381,14 @@ static void scene_end_capture(void) {
  * else entirely on the same USB MIDI port) could be misread as clip/
  * scene state. Payload lengths are checked exactly, not just a minimum
  * -- a malformed or future/newer-version message with a different
- * shape is silently ignored rather than partially, wrongly applied. */
-static void scene_on_sysex(const uint8_t *data, size_t len) {
+ * shape is silently ignored rather than partially, wrongly applied.
+ * Only from the DAW port (midi/midi_ports.h) -- that's where the TILES
+ * control surface script lives; the same bytes arriving on the MAIN port
+ * or the DIN jack are someone else's. */
+static void scene_on_sysex(tiles_midi_port_t port, const uint8_t *data, size_t len) {
+    if (port != TILES_MIDI_PORT_DAW) {
+        return;
+    }
     if (len < 3u || data[0] != OP_SCENE_SYSEX_MFR_ID || data[1] != OP_SCENE_SYSEX_SUB_ID) {
         return;
     }

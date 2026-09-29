@@ -86,7 +86,8 @@ settings shell.
 **Verifying MIDI on real hardware.** When a bug might be in the firmware
 OR the host (DAW, plugin, routing), look at the actual bytes on the
 wire before changing code: a small CoreMIDI monitor on the "SENTIA
-TILES" source (compiled locally against the macOS CoreMIDI framework)
+TILES MIDI" and "SENTIA TILES DAW" sources (compiled locally against the
+macOS CoreMIDI framework)
 and a program playing Apple's built-in DLS synth straight from that
 source are what finally separated a host-side bug from the firmware in
 the sustain-pedal investigation (`services/README.md`). Temporary

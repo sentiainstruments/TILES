@@ -1,14 +1,13 @@
 #include "midi_out.h"
 
 #include "din_midi.h"
+#include "usb_midi_packet.h"
 
 #include "tusb.h"
 
 #include "pico/time.h"
 
 #include <stdio.h>
-
-#define TILES_MIDI_CABLE_NUM 0u
 
 /* Found investigating real feedback ("something is clashing and
  * causing those crashes only on play" -- Ableton actively playing,
@@ -48,65 +47,71 @@
  * not optional -- it's the only thing that actually drains the TX FIFO
  * to the host at all (see main.c's own loop, which normally does this
  * once per iteration); without calling it again here, waiting alone
- * would never free any room. warn_if_truncated() below still logs
- * anything that couldn't be recovered even after retrying, so a
- * genuinely stalled host remains visible rather than silently eaten. */
+ * would never free any room. A message that still can't be written
+ * after retrying is logged, so a genuinely stalled host remains visible
+ * rather than silently eaten.
+ *
+ * Writes whole USB-MIDI packets (midi/usb_midi_packet.h), not TinyUSB's
+ * byte stream: a packet is either queued complete or not at all, so a
+ * stalled host can drop a message but never split one -- and with two
+ * ports (midi/midi_ports.h), the stream API's single partial-message
+ * state would finish a message cut short on one port on the other. */
 #define MIDI_SEND_RETRY_TIMEOUT_MS 5u
 
-static uint32_t send_with_retry(const uint8_t *msg, uint32_t len) {
-    uint32_t sent = tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg, len);
-    if (sent >= len) {
-        return sent;
-    }
-    uint32_t deadline_ms = to_ms_since_boot(get_absolute_time()) + MIDI_SEND_RETRY_TIMEOUT_MS;
-    while (sent < len && to_ms_since_boot(get_absolute_time()) < deadline_ms) {
-        tud_task();
-        sent += tud_midi_stream_write(TILES_MIDI_CABLE_NUM, msg + sent, len - sent);
-    }
-    return sent;
-}
+/* 32 bytes is generous headroom over this codebase's own actual SysEx
+ * message sizes (see midi/midi_in.h's own MIDI_IN_SYSEX_MAX for the
+ * receive side's matching ceiling) -- callers passing more than fits
+ * (len clamped in tiles_midi_send_sysex()) would indicate a genuine bug in
+ * whatever's building the message, not a real, larger protocol message
+ * this file needs to support. */
+#define SYSEX_SEND_BUF_MAX 32u
 
-static void warn_if_truncated(const char *what, uint32_t sent, uint32_t expected) {
-    if (sent != expected) {
-        printf("[midi_out] %s truncated: wrote %u/%u bytes (host still not draining after %ums retry)\n", what,
-               (unsigned)sent, (unsigned)expected, (unsigned)MIDI_SEND_RETRY_TIMEOUT_MS);
+static void usb_write(uint8_t cable, const char *what, const uint8_t *msg, uint32_t len) {
+    if (!tud_midi_mounted()) {
+        return;
+    }
+    uint8_t packets[TILES_USB_MIDI_MAX_PACKETS][4];
+    size_t count = tiles_usb_midi_pack(cable, msg, len, packets, TILES_USB_MIDI_MAX_PACKETS);
+    uint32_t deadline_ms = to_ms_since_boot(get_absolute_time()) + MIDI_SEND_RETRY_TIMEOUT_MS;
+    for (size_t i = 0; i < count; i++) {
+        while (!tud_midi_n_packet_write(0, packets[i])) {
+            if (to_ms_since_boot(get_absolute_time()) >= deadline_ms) {
+                printf("[midi_out] %s dropped at packet %u/%u (host still not draining after %ums retry)\n", what,
+                       (unsigned)i, (unsigned)count, (unsigned)MIDI_SEND_RETRY_TIMEOUT_MS);
+                return;
+            }
+            tud_task();
+        }
     }
 }
 
 /* Every message the controller performs -- notes, expression, CCs, transport
- * Start/Stop -- goes out on TWO independent sinks: USB (only while a host has
- * the device mounted) and the DIN jack (whenever DIN initialized, host or
- * not -- real feedback: "yes build DIN MIDI"; the hardware handoff's
- * external-power-only mode has no USB host at all, which is the jack's whole
- * point). The DIN send comes FIRST and never waits: it only queues bytes
- * (midi/din_midi_queue.c), while the USB write below can spend up to
- * MIDI_SEND_RETRY_TIMEOUT_MS pumping tud_task() for room. Messages meant for
- * the DAW's remote script rather than for an instrument -- see
- * tiles_midi_send_daw_cc() and tiles_midi_send_sysex() -- use the USB-only
- * path and never touch DIN. */
-static void usb_write(const char *what, const uint8_t *msg, uint32_t len) {
-    if (!tud_midi_mounted()) {
-        return;
-    }
-    warn_if_truncated(what, send_with_retry(msg, len), len);
-}
-
+ * Start/Stop -- goes out on TWO independent sinks: the USB MAIN port (only
+ * while a host has the device mounted) and the DIN jack (whenever DIN
+ * initialized, host or not -- real feedback: "yes build DIN MIDI"; the
+ * hardware handoff's external-power-only mode has no USB host at all, which
+ * is the jack's whole point). The DIN send comes FIRST and never waits: it
+ * only queues bytes (midi/din_midi_queue.c), while the USB write below can
+ * spend up to MIDI_SEND_RETRY_TIMEOUT_MS pumping tud_task() for room.
+ * Messages meant for the DAW's remote script rather than for an instrument
+ * -- tiles_midi_send_daw_cc() -- go to the DAW port only and never touch DIN
+ * (midi/midi_ports.h). */
 static void send1(uint8_t status) {
     uint8_t msg[1] = {status};
     tiles_din_midi_send(msg, sizeof(msg));
-    usb_write("send1", msg, sizeof(msg));
+    usb_write(TILES_USB_MIDI_CABLE_MAIN, "send1", msg, sizeof(msg));
 }
 
 static void send2(uint8_t status, uint8_t data1) {
     uint8_t msg[2] = {status, data1};
     tiles_din_midi_send(msg, sizeof(msg));
-    usb_write("send2", msg, sizeof(msg));
+    usb_write(TILES_USB_MIDI_CABLE_MAIN, "send2", msg, sizeof(msg));
 }
 
 static void send3(uint8_t status, uint8_t data1, uint8_t data2) {
     uint8_t msg[3] = {status, data1, data2};
     tiles_din_midi_send(msg, sizeof(msg));
-    usb_write("send3", msg, sizeof(msg));
+    usb_write(TILES_USB_MIDI_CABLE_MAIN, "send3", msg, sizeof(msg));
 }
 
 void tiles_midi_note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
@@ -155,7 +160,7 @@ void tiles_midi_send_cc(uint8_t channel, uint8_t controller, uint8_t value) {
 
 void tiles_midi_send_daw_cc(uint8_t channel, uint8_t controller, uint8_t value) {
     uint8_t msg[3] = {(uint8_t)(0xB0u | channel), controller, value};
-    usb_write("send_daw_cc", msg, sizeof(msg));
+    usb_write(TILES_USB_MIDI_CABLE_DAW, "send_daw_cc", msg, sizeof(msg));
 }
 
 /* Every channel 2-16 could ever carry -- see this function's own header
@@ -276,19 +281,9 @@ void tiles_midi_send_stop(void) {
     send1(0xFCu);
 }
 
-/* 32 bytes is generous headroom over this codebase's own actual SysEx
- * message sizes (see midi/midi_in.h's own MIDI_IN_SYSEX_MAX for the
- * receive side's matching ceiling) -- callers passing more than fits
- * (len clamped below) would indicate a genuine bug in whatever's
- * building the message, not a real, larger protocol message this
- * function needs to support. */
-#define SYSEX_SEND_BUF_MAX 32u
-
-void tiles_midi_send_sysex(const uint8_t *data, uint32_t len) {
-    /* USB only, like tiles_midi_send_daw_cc(): this is the Ableton remote
-     * script's private protocol, not something to spray at whatever
-     * hardware is on the DIN jack. */
-    if (!tud_midi_mounted()) {
+void tiles_midi_send_sysex(tiles_midi_port_t port, const uint8_t *data, uint32_t len) {
+    /* USB only: DIN OUT has no SysEx path (midi/din_midi_queue.h). */
+    if (port == TILES_MIDI_PORT_DIN) {
         return;
     }
     if (len > SYSEX_SEND_BUF_MAX - 2u) {
@@ -300,6 +295,6 @@ void tiles_midi_send_sysex(const uint8_t *data, uint32_t len) {
         msg[1u + i] = data[i];
     }
     msg[1u + len] = 0xF7u;
-    uint32_t total = len + 2u;
-    warn_if_truncated("send_sysex", send_with_retry(msg, total), total);
+    uint8_t cable = port == TILES_MIDI_PORT_DAW ? TILES_USB_MIDI_CABLE_DAW : TILES_USB_MIDI_CABLE_MAIN;
+    usb_write(cable, "send_sysex", msg, len + 2u);
 }

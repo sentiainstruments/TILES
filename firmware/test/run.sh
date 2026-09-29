@@ -13,8 +13,12 @@ cc -std=c11 -Wall -Wextra -Itest/stubs -Isrc/board -Isrc/services test/test_note
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/midi test/test_din_midi_queue.c src/midi/din_midi_queue.c -o /tmp/sentia_tiles_test_din_midi_queue
 /tmp/sentia_tiles_test_din_midi_queue
 
-cc -std=c11 -Wall -Wextra -Itest/stubs -Isrc/midi test/test_midi_in.c src/midi/midi_in.c -o /tmp/sentia_tiles_test_midi_in
+cc -std=c11 -Wall -Wextra -Itest/stubs -Isrc/midi test/test_midi_in.c src/midi/midi_in.c src/midi/usb_midi_packet.c -o /tmp/sentia_tiles_test_midi_in
 /tmp/sentia_tiles_test_midi_in
+
+# USB-MIDI packets: the per-cable framing both USB ports ride on.
+cc -std=gnu11 -Wall -Wextra -Isrc/midi test/test_usb_midi_packet.c src/midi/usb_midi_packet.c -o /tmp/sentia_tiles_test_usb_midi_packet
+/tmp/sentia_tiles_test_usb_midi_packet
 
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_midi_channels.c src/services/midi_channels.c -o /tmp/sentia_tiles_test_midi_channels
 /tmp/sentia_tiles_test_midi_channels

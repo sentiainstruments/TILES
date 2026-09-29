@@ -1,6 +1,7 @@
 #include "midi_in.h"
 
 #include "din_midi.h"
+#include "usb_midi_packet.h"
 
 #include "tusb.h"
 
@@ -46,16 +47,21 @@ static uint8_t s_note_callback_count;
 /* See tiles_midi_in_activity_count()'s own comment in midi_in.h. */
 static uint32_t s_activity_count;
 
-/* One parser per byte SOURCE -- USB MIDI IN and the DIN jack (real feedback:
+/* One parser per byte SOURCE -- each USB port (midi/midi_ports.h: MAIN and
+ * DAW, two cables on one USB-MIDI interface) and the DIN jack (real feedback:
  * "yes build DIN MIDI"). Each source needs its own SysEx-framing and
  * running-status state: a message can arrive in pieces, and bytes from two
  * different cables interleaving into ONE parser would splice half a
  * Note-On from one onto the data bytes of another. (The only bytes that may
  * legally land in the middle of a message are Real-Time bytes, and those are
- * handled before any of this state is touched -- see feed_byte().) Both
- * parsers fire the SAME callbacks, so everything that reacts to USB MIDI
- * (clock/transport, the melodic echo, Scene Launch SysEx) reacts to DIN
- * identically.
+ * handled before any of this state is touched -- see feed_byte().) Every
+ * parser fires the SAME callbacks, so clock/transport and the melodic echo
+ * react to any port alike -- the echo's own notes normally arrive on the
+ * DAW port, since the TILES DISPLAY Max device sends them through the
+ * control surface script's output (daw-integration/README.md). SysEx
+ * listeners are also told which port a frame came in on (Scene Launch only
+ * accepts it from the DAW port; an Identity Request is answered on the
+ * port it came from).
  *
  * The channel-voice running-status state -- see this file's own header
  * comment. cv_status is the current status byte (0 = none/unknown, e.g.
@@ -81,11 +87,9 @@ typedef struct {
     uint8_t cv_data_count;
 } midi_parser_t;
 
-typedef enum {
-    MIDI_SOURCE_USB = 0,
-    MIDI_SOURCE_DIN = 1,
-    MIDI_SOURCE_COUNT
-} midi_source_t;
+/* Indexed by tiles_midi_port_t. */
+#define MIDI_SOURCE_COUNT 3u
+typedef tiles_midi_port_t midi_source_t;
 
 static midi_parser_t s_parsers[MIDI_SOURCE_COUNT];
 
@@ -155,9 +159,9 @@ static void fire_realtime(uint8_t byte, uint32_t now_ms) {
     }
 }
 
-static void fire_sysex(const uint8_t *data, size_t len) {
+static void fire_sysex(tiles_midi_port_t port, const uint8_t *data, size_t len) {
     for (uint8_t i = 0; i < s_sysex_callback_count; i++) {
-        s_sysex_callbacks[i](data, len);
+        s_sysex_callbacks[i](port, data, len);
     }
 }
 
@@ -287,7 +291,7 @@ static void feed_byte(midi_source_t source, uint8_t byte, uint32_t now_ms) {
 
     if (byte == MIDI_SYSEX_END) {
         if (!p->sysex_overflowed) {
-            fire_sysex(p->sysex_buf, p->sysex_len);
+            fire_sysex(source, p->sysex_buf, p->sysex_len);
         }
         p->in_sysex = false;
         return;
@@ -313,14 +317,22 @@ static void feed_byte(midi_source_t source, uint8_t byte, uint32_t now_ms) {
 void tiles_midi_in_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
-    uint8_t buf[16];
-    uint32_t read;
     /* Loop, not a single read -- same "drain the whole RX FIFO this
      * tick" reasoning services/midi_clock.c's own prior version of this
-     * loop already established. */
-    while ((read = tud_midi_stream_read(buf, sizeof(buf))) > 0u) {
-        for (uint32_t i = 0; i < read; i++) {
-            feed_byte(MIDI_SOURCE_USB, buf[i], now_ms);
+     * loop already established. Whole USB-MIDI packets, not TinyUSB's byte
+     * stream: the stream API merges every cable into one stream, and each
+     * packet's cable number is what says which port it belongs to (midi/
+     * usb_midi_packet.h). A cable this device doesn't have is ignored. */
+    uint8_t packet[4];
+    while (tud_midi_n_packet_read(0, packet)) {
+        uint8_t cable = (uint8_t)(packet[0] >> 4);
+        if (cable >= TILES_USB_MIDI_NUM_CABLES) {
+            continue;
+        }
+        midi_source_t source = cable == TILES_USB_MIDI_CABLE_DAW ? TILES_MIDI_PORT_DAW : TILES_MIDI_PORT_MAIN;
+        uint8_t n = tiles_usb_midi_cin_length(packet[0]);
+        for (uint8_t i = 0; i < n; i++) {
+            feed_byte(source, packet[1u + i], now_ms);
         }
     }
 
@@ -330,10 +342,10 @@ void tiles_midi_in_scan(void) {
      * sent; the next status byte re-syncs. Leftover data bytes from before
      * the gap are then ignored (no running status) rather than misparsed. */
     if (tiles_din_midi_rx_take_loss()) {
-        parser_reset(&s_parsers[MIDI_SOURCE_DIN]);
+        parser_reset(&s_parsers[TILES_MIDI_PORT_DIN]);
     }
     uint8_t din_byte;
     while (tiles_din_midi_rx_read_byte(&din_byte)) {
-        feed_byte(MIDI_SOURCE_DIN, din_byte, now_ms);
+        feed_byte(TILES_MIDI_PORT_DIN, din_byte, now_ms);
     }
 }

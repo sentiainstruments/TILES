@@ -32,7 +32,9 @@
  * mechanism exactly like any other two listeners would, each ignoring
  * frames that aren't theirs.
  *
- * USB only, like tiles_midi_send_sysex() itself (midi/midi_out.h) -- DIN
+ * Answered on the USB port the request came in on (MAIN or DAW -- see
+ * midi/midi_ports.h); never on DIN, like tiles_midi_send_sysex() itself
+ * (midi/midi_out.h) -- DIN
  * MIDI OUT has no SysEx support at all yet (din_midi_queue.c rejects any
  * status byte >= 0xF0 outside the Real-Time range by design; see that
  * file's own header). A device connected to TILES only via the DIN jack,

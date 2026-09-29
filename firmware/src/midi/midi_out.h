@@ -4,11 +4,13 @@
  * MIDI output -- USB and DIN -- MPE (MIDI Polyphonic Expression) Lower Zone.
  *
  * Every function below EXCEPT tiles_midi_send_daw_cc() and
- * tiles_midi_send_sysex() sends on both USB (when a host has the device
- * mounted) and the DIN MIDI OUT jack (whenever DIN initialized, host or not)
- * -- see midi/din_midi.h. Those two are USB-only on purpose: they carry the
- * DAW remote script's private control protocol, which an instrument on the
- * DIN jack must never receive.
+ * tiles_midi_send_sysex() sends on both the USB MAIN port (when a host has
+ * the device mounted) and the DIN MIDI OUT jack (whenever DIN initialized,
+ * host or not) -- see midi/din_midi.h. tiles_midi_send_daw_cc() goes to the
+ * USB DAW port only (midi/midi_ports.h): it's the DAW remote script's
+ * private control protocol, which neither an instrument track nor anything
+ * on the DIN jack must ever receive. tiles_midi_send_sysex() goes to one
+ * USB port, the caller's choice.
  *
  * Real feedback: "we need to make sure we have individual per note
  * pitch bend not just regular all key pitch bend. like the roli
@@ -55,6 +57,8 @@
  */
 
 #include <stdint.h>
+
+#include "midi_ports.h"
 
 #define TILES_MIDI_MPE_MASTER_CHANNEL 0u       /* status-byte channel nibble; 0 = MIDI channel 1 */
 #define TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL 1u /* status-byte channel nibble; 1 = MIDI channel 2 */
@@ -206,13 +210,13 @@ void tiles_midi_send_channel_pressure(uint8_t channel, uint8_t pressure);
  * one specific channel -- USB and DIN. */
 void tiles_midi_send_cc(uint8_t channel, uint8_t controller, uint8_t value);
 
-/* Same message, USB ONLY -- for CCs that steer the DAW's remote script (the
- * transport Play/Stop/Record CCs and every Scene Launch grid/stop/offset/
- * delete/capture CC in services/op_mode.c) rather than an instrument. They
- * ride channel 1 with controller numbers a hardware synth may well have
- * mapped to something, so mirroring them to DIN would have made pressing
- * the transport button or a scene pad twiddle whatever is plugged into the
- * jack. Added with DIN MIDI OUT for exactly that reason. */
+/* Same message, on the USB DAW port ONLY (midi/midi_ports.h) -- for CCs
+ * that steer the DAW's remote script (the transport Play/Stop/Record CCs
+ * and every Scene Launch grid/stop/offset/delete/capture CC in services/
+ * op_mode.c) rather than an instrument. First kept off DIN (added with DIN
+ * MIDI OUT: a hardware synth may well have these controller numbers mapped
+ * to something); since the standardization round also off the MAIN port,
+ * where an instrument track listening on it would get them too. */
 void tiles_midi_send_daw_cc(uint8_t channel, uint8_t controller, uint8_t value);
 
 /* Same CC on the Zone Master Channel AND every one of channels 2-16 -- ONLY
@@ -277,9 +281,9 @@ void tiles_midi_send_stop(void);
  * clip/launch scene) needs a real SysEx sender, this codebase's first;
  * see midi/midi_in.h for the matching incoming half and shared/protocol/
  * README.md's own "Scene Launch" section for the actual message
- * catalog. Wraps `data`/`len` in 0xF0/0xF7 and writes it in one
- * tud_midi_stream_write() call -- `len` is expected to comfortably fit
- * this codebase's own message sizes (well under TUD_MIDI's own 64-byte
- * packet), not a general large-SysEx streaming API. */
-void tiles_midi_send_sysex(const uint8_t *data, uint32_t len);
-/* (USB only -- see the header comment.) */
+ * catalog. Wraps `data`/`len` in 0xF0/0xF7 and sends it on `port` -- a USB
+ * port only (TILES_MIDI_PORT_DIN is a no-op: DIN OUT has no SysEx path).
+ * midi/identity.c replies on whichever port the request came in on. `len`
+ * is expected to comfortably fit this codebase's own message sizes, not a
+ * general large-SysEx streaming API. */
+void tiles_midi_send_sysex(tiles_midi_port_t port, const uint8_t *data, uint32_t len);

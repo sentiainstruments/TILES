@@ -45,6 +45,12 @@ grid-touch/stop-touch off Note-On entirely, onto CC, same as
 everything else here already was -- see NOTE_GRID_BASE's own
 replacement, CC_GRID_TOUCH, for the current wire format.
 
+Since the standardization round none of that sharing exists any more:
+everything in this file travels on TILES's DAW port, its own USB MIDI
+port used by this script alone (__init__.py's get_capabilities(),
+firmware/src/midi/midi_ports.h) -- the layout Launchpad-style grid
+controllers and Launchkey's DAW port use. The CC wire format stays.
+
 Both rewrites bind real `ButtonElement`s via `add_value_listener()` --
 the same mechanism TILES.py's own transport buttons (play/stop/record)
 already use, with actual confirmed delivery on this exact hardware/
@@ -159,7 +165,10 @@ from _Framework.SessionComponent import SessionComponent
 # Must match op_mode.c's own TILES_MIDI_MPE_MASTER_CHANNEL (0 = MIDI
 # channel 1) -- same channel TILES.py's own transport buttons already
 # use; not imported from TILES.py to avoid a circular import (TILES.py
-# imports this module).
+# imports this module). On TILES's DAW port -- its second USB MIDI port,
+# this script's alone (see __init__.py's get_capabilities() and
+# firmware/src/midi/midi_ports.h) -- so channel 1 here is no longer the
+# instrument's channel 1.
 TILES_MASTER_CHANNEL = 0
 
 # Must match op_mode.c's own OP_SCENE_CC_* -- keep in sync with that
@@ -186,6 +195,10 @@ CC_DELETE_TOUCH = 110
 # op_mode.c only ever sends that CC for track columns 1-5).
 NUM_GRID_PADS = 24
 
+# Must match firmware/src/midi/product_identity.h's TILES_SYSEX_MANUFACTURER_ID
+# (0x7D, the MIDI Association's non-commercial/development ID, until SENTIA
+# registers its own -- a registered one is 3 bytes, so the frame layout
+# below changes with it).
 SYSEX_MFR_ID = 0x7D
 SYSEX_SUB_ID = 0x01
 

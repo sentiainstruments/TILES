@@ -16,8 +16,13 @@ allocation, calibration math, `usb_vendor/` protocol framing.
   of DIN MIDI: ordering, coalescing of pitch bend/pressure/expression,
   Real-Time priority, whole-message overflow drops, ring wraparound.
 - `test_midi_in.c` -- the real `midi/midi_in.c` (tusb/pico-time stubbed in
-  `stubs/`): USB and DIN each parse with their own state, running status
-  per source, one clock owner at a time, loss recovery, SysEx from DIN.
+  `stubs/`): USB MAIN, USB DAW and DIN each parse with their own state
+  (USB fed as USB-MIDI packets per cable), running status per source, one
+  clock owner at a time, loss recovery, SysEx tagged with its port.
+- `test_usb_midi_packet.c` -- `midi/usb_midi_packet.c`: USB-MIDI 1.0 event
+  packets (cable number + Code Index Number) for every message kind TILES
+  sends, SysEx chunking, refusal of anything that isn't one whole message,
+  and the receive-side byte count per CIN.
 - `test_midi_channels.c` -- `services/midi_channels.c`, the shared 8-channel pool
   Song mode and the live MPE Lower Zone draw from: claim-highest-first, the
   contiguous zone-size math, declared-vs-honest zone size (the receiver is

@@ -7,15 +7,17 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-typedef void (*sysex_cb_t)(const uint8_t *, size_t);
-static sysex_cb_t g_cb;
-bool tiles_midi_in_register_sysex_callback(sysex_cb_t cb) { g_cb = cb; return true; }
+#include "midi_in.h"
+static tiles_midi_in_sysex_callback_t g_cb;
+bool tiles_midi_in_register_sysex_callback(tiles_midi_in_sysex_callback_t cb) { g_cb = cb; return true; }
 
 static uint8_t g_last_reply[32];
 static uint32_t g_last_len;
 static int g_send_count;
-void tiles_midi_send_sysex(const uint8_t *data, uint32_t len) {
+static tiles_midi_port_t g_last_port;
+void tiles_midi_send_sysex(tiles_midi_port_t port, const uint8_t *data, uint32_t len) {
     assert(len <= sizeof(g_last_reply));
+    g_last_port = port;
     memcpy(g_last_reply, data, len);
     g_last_len = len;
     g_send_count++;
@@ -23,10 +25,11 @@ void tiles_midi_send_sysex(const uint8_t *data, uint32_t len) {
 
 #include "identity.c"
 
-static void request(uint8_t device_id) {
+static void request_on(tiles_midi_port_t port, uint8_t device_id) {
     uint8_t req[4] = {0x7E, device_id, 0x06, 0x01};
-    g_cb(req, sizeof(req));
+    g_cb(port, req, sizeof(req));
 }
+static void request(uint8_t device_id) { request_on(TILES_MIDI_PORT_MAIN, device_id); }
 
 int main(void) {
     tiles_midi_identity_init();
@@ -58,7 +61,7 @@ int main(void) {
     };
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
         g_send_count = 0;
-        g_cb(bad[i].bytes, bad[i].len);
+        g_cb(TILES_MIDI_PORT_MAIN, bad[i].bytes, bad[i].len);
         assert(g_send_count == 0);
     }
 
@@ -66,8 +69,14 @@ int main(void) {
      * ID 0x7E this file owns) never triggers a reply either -- the two protocols coexist. */
     g_send_count = 0;
     uint8_t scene_frame[] = {0x7D, 0x01, 0x10, 0, 0, 0, 0, 0, 0};
-    g_cb(scene_frame, sizeof(scene_frame));
+    g_cb(TILES_MIDI_PORT_DAW, scene_frame, sizeof(scene_frame));
     assert(g_send_count == 0);
+
+    /* 5. the reply goes back on the port the request came in on */
+    request_on(TILES_MIDI_PORT_DAW, 0x7F);
+    assert(g_send_count == 1 && g_last_port == TILES_MIDI_PORT_DAW);
+    request_on(TILES_MIDI_PORT_MAIN, 0x7F);
+    assert(g_send_count == 2 && g_last_port == TILES_MIDI_PORT_MAIN);
 
     printf("identity: all tests pass\n");
     return 0;

@@ -1,5 +1,7 @@
 #include "usb_vendor.h"
 
+#include "board/unit_id.h"
+#include "product_identity.h"
 #include "settings.h"
 #include "settings_persist.h"
 
@@ -128,9 +130,17 @@ static void handle_line(char *line) {
         return;
     }
 
-    /* Flash-store status, for diagnosing "did it save?". */
+    /* Which board and firmware this is, then flash-store status, for
+     * diagnosing "did it save?". The unit label moved here (and to the
+     * diagnostics interface's USB name) when it stopped being part of the
+     * product name -- see midi/usb_descriptors.c's string table. */
     if (strcmp(cmd, "INFO") == 0) {
         tiles_settings_persist_info_t info = tiles_settings_persist_get_info();
+        snprintf(text, sizeof(text), "unit=%u/%u", (unsigned)TILES_UNIT_NUMBER, (unsigned)TILES_UNIT_COUNT);
+        reply(text);
+        snprintf(text, sizeof(text), "firmware=%u.%u.%u", (unsigned)TILES_FW_VERSION_MAJOR,
+                 (unsigned)TILES_FW_VERSION_MINOR, (unsigned)TILES_FW_VERSION_PATCH);
+        reply(text);
         snprintf(text, sizeof(text), "settings=%u", (unsigned)tiles_settings_count());
         reply(text);
         snprintf(text, sizeof(text), "store.loaded=%d", info.loaded ? 1 : 0);

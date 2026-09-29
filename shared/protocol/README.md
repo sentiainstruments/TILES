@@ -47,7 +47,7 @@ SAVE\n                    write unsaved changes to flash now: OK / ERR save-fail
 REBOOT BOOTSEL\n          reboot into the ROM bootloader for reflashing (no reply -- see below)
 REBOOT APP\n              plain warm restart back into this firmware: OK
 SCHEMA\n                  one line per setting describing it, then OK (see below)
-INFO\n                    flash-store status as key=value lines, then OK
+INFO\n                    unit=, firmware=, then flash-store status, as key=value lines, then OK
 ```
 
 `SET`/`RESET` apply **immediately** and are saved to flash **automatically** ~2 s
@@ -172,10 +172,16 @@ USB-device permission prompt the first time).
 
 ## Scene Launch (Ableton Live)
 
-A second, separate protocol over the SAME USB-MIDI port TILES already
-uses for notes/CC/clock -- NOT the vendor-interface settings protocol
-above (this one talks to Ableton Live's own Remote Script, not a host
-control app). Real feedback: "lets implemebt a new mode that triggers
+A second, separate protocol, on TILES's second USB-MIDI port, **"SENTIA
+TILES DAW"** (`firmware/src/midi/midi_ports.h`) -- NOT the vendor-interface
+settings protocol above (this one talks to Ableton Live's own Remote
+Script, not a host control app). It used to share the instrument's port
+("SENTIA TILES MIDI", notes/CC/clock); since the standardization round
+(real feedback: "do 8 as how standardized stuff works. production ready
+industry stuff") everything below travels on the DAW port only, the
+firmware only accepts the clip/scene SysEx from that port, and nothing
+here is ever mirrored to DIN. The history below is from the shared-port
+days. Real feedback: "lets implemebt a new mode that triggers
 scenes in ableton live keep it simple for now... can we pull the colors
 of the scenes from ableton?"
 
@@ -230,7 +236,7 @@ real-hardware delivery.
 
 A bare capacitive touch sends NOTHING to Ableton -- it's haptics-only on the hardware side (a strong "ready" click on a pad with a clip, a continuous buzz while that clip is playing). Only a pressure click (Hall depth past the same 50% "push to select" threshold the mode menu uses) sends the CCs below.
 
-All TILES -> Ableton messages are plain CC on
+All TILES -> Ableton messages are plain CC on the DAW port,
 `TILES_MIDI_MPE_MASTER_CHANNEL` (channel 1) -- the same channel the
 transport CCs use, deliberately never Note-On (see above) -- and every
 controller number is in the MIDI spec's "undefined" 102-119 range.
