@@ -9270,5 +9270,38 @@ not its code.
   their bend through the release -- if a release sounds detuned, the
   bend reading during the finger lift is noisy and the release path
   needs a look (with pitch bend off, the default, nothing changes).
+- **Standardization round, cleanup: printf() can no longer stall the main
+  loop; the dead expression mute is gone.** Same request ("streamlining
+  in our code" -> "do all").
+  - **printf() stalls, fixed at the source.** A `printf()` over USB-CDC
+    waits for buffer room while a terminal holds the port open without
+    reading -- up to pico-sdk's default `PICO_STDIO_USB_STDOUT_TIMEOUT_US`
+    of 500 ms. That one mechanism is behind the haptics-kick freeze, the
+    periodic bring-up dump freeze, and the printf-before-a-send stuck
+    notes (pedal, harmonics, voice steal) logged above, each fixed by
+    deleting whichever print was in the way -- while ~40 other event
+    prints (mode changes, Scene Launch, clock start/stop, standby wake)
+    kept the same exposure. Now `firmware/src/CMakeLists.txt` sets that
+    timeout to 5 ms and `midi/tusb_config.h` gives the CDC TX buffer
+    1 KB instead of 64 bytes: a whole burst of console output fits
+    without waiting, a reading terminal drains a packet every 1 ms frame
+    so it never hits the cap, and one that isn't reading costs at most
+    5 ms once -- after that pico-sdk drops output without waiting until
+    the host reads again. The diagnostics stay; the rule "no printf per
+    scan" still stands (5 ms per scan would still wreck timing).
+  - **Expression mute removed.** Its only gesture (circle+square) was
+    reassigned to the MPE toggle in an earlier round ("replace haptic mute
+    combo to the mpe vs regular mode selector standard is mpe"), but the
+    feature stayed: `tiles_expression_set_muted()`, `tiles_haptics_set_
+    muted()`, `s_mute_active` and the "an in-menu change unmutes" rule,
+    all unreachable, still checked on the pressure and pitch-bend paths.
+    Deleted, with `services/expression_control.h`'s docs rewritten to
+    describe the combo as what it is (MPE on/off). Deep sleep's own
+    haptics silencing (`tiles_haptics_set_sleep_silenced()`) is unchanged.
+  - Stale comments fixed along the way: `midi/midi_out.h` (the Master
+    Channel "never carries note data", pedals "broadcast to every
+    channel"), `midi/din_midi_queue.h` (a 16-channel expression-pedal
+    broadcast -- it's 7 channels, 21 bytes), `midi/README.md` ("15
+    member channels").
 - Everything else (per-pad Hall calibration) is not built
   yet.

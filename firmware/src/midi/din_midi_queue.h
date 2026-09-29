@@ -13,8 +13,9 @@
  * Why the TX side is more than a FIFO. DIN MIDI is 31,250 baud: 3,125
  * bytes/s, about 1 ms per 3-byte message, while USB MIDI is effectively
  * unlimited. This controller streams MPE expression (per-note pitch bend
- * and channel pressure, plus the expression pedal broadcast to 16 channels
- * -- 48 bytes per pedal step), which can easily out-run that wire. So:
+ * and channel pressure, plus the expression pedal on the Master Channel and
+ * each fixed part's channel -- 21 bytes per pedal step), which can easily
+ * out-run that wire. So:
  *
  *   - Note On/Off, sustain and every other CC, Program Change... are
  *     RELIABLE: queued in order, never merged, never dropped unless the

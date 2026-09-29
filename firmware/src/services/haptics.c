@@ -168,9 +168,7 @@ static uint32_t s_next_kick_slot_ms;
  * MIN_KICK_DUTY/MIN_VELOCITY elsewhere in this file, this floor is
  * deliberately 0 -- real feedback: "the lowest setting is off," a real
  * per-user "haptics off" position (services/expression_control.h's
- * sub-menu column 1), distinct from tiles_haptics_set_muted() below
- * (that's a separate, broader kill switch that also silences pitch
- * bend/aftertouch, not this scalar's own minimum). No persistence yet
+ * sub-menu column 1). No persistence yet
  * (services/storage/ is still an empty skeleton) -- resets to full (1.0)
  * on every boot. Only ever set directly (tiles_haptics_set_intensity()
  * below) via services/expression_control.h's column mapping -- there is
@@ -194,36 +192,21 @@ float tiles_haptics_get_intensity(void) {
     return s_haptic_intensity;
 }
 
-/* Expression mute (services/expression_control.h's circle+square 3s
- * combo) -- a hard kill switch for every haptic effect, separate from
- * s_haptic_intensity above (that's "how strong," this is "on at all").
- * Checked at the top of every trigger/update entry point below rather
- * than folded into set_motor_level()'s scalar, so a currently-decaying
- * SUSTAIN's slew state doesn't keep silently computing toward a target
- * that will never actually reach the motor -- muting hard-stops
- * immediately instead. */
-static bool s_haptic_muted;
-/* Separate from s_haptic_muted -- see this flag's own tiles_haptics_set_
- * sleep_silenced() header comment in haptics.h for why deep sleep can't
- * just reuse the user's own mute flag. */
+/* Deep sleep's "haptics off" (tiles_haptics_set_sleep_silenced(), see its
+ * header comment in haptics.h) -- a hard kill switch for every haptic
+ * effect, separate from s_haptic_intensity above (that's "how strong,"
+ * this is "on at all"). Checked at the top of every trigger/update entry
+ * point below rather than folded into set_motor_level()'s scalar, so a
+ * currently-decaying SUSTAIN's slew state doesn't keep silently computing
+ * toward a target that will never actually reach the motor -- silencing
+ * hard-stops immediately instead. (A second, user-facing "expression mute"
+ * flag used to sit next to this one; its only gesture was reassigned to
+ * the MPE toggle and the unreachable flag was removed -- see services/
+ * expression_control.h.) */
 static bool s_haptic_sleep_silenced;
 
 static bool haptics_should_be_silent(void) {
-    return s_haptic_muted || s_haptic_sleep_silenced;
-}
-
-void tiles_haptics_set_muted(bool muted) {
-    s_haptic_muted = muted;
-    if (muted) {
-        /* Immediately cut every currently-active motor -- real feedback's
-         * "hard-stop any currently-active haptics" requirement, not just
-         * "stop triggering new ones." tiles_haptics_stop() is already a
-         * no-op for an IDLE pad, so this is safe to call unconditionally
-         * across all 24. */
-        for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-            tiles_haptics_stop(pad);
-        }
-    }
+    return s_haptic_sleep_silenced;
 }
 
 void tiles_haptics_set_sleep_silenced(bool silenced) {
@@ -366,7 +349,6 @@ void tiles_haptics_init(void) {
         s_pads[i].phase = HAPTIC_PHASE_IDLE;
     }
     s_next_kick_slot_ms = 0u;
-    s_haptic_muted = false;
     s_haptic_sleep_silenced = false;
 }
 

@@ -37,10 +37,9 @@
  * then: "hold shift and sentia together for 3 seconds," lowered 3000
  * -> 2000 after further feedback found 3s "too long" in practice) --
  * reassigned by real feedback: "replace haptic mute combo to the mpe
- * vs regular mode selector standard is mpe." tiles_expression_set_
- * muted() itself is untouched and still fully functional (see its own
- * header comment in expression.h), just no longer reachable from any
- * gesture here -- reusing this exact combo/threshold rather than
+ * vs regular mode selector standard is mpe." (The mute itself, left
+ * unreachable by that change, was removed later -- see expression_
+ * control.h.) Reusing this exact combo/threshold rather than
  * inventing a new hold duration for the new meaning, since nothing
  * about the physical gesture itself needed to change, only what it
  * does on completion. Independent of EXPRESSION_SUBMENU_TOGGLE_HOLD_MS
@@ -68,7 +67,7 @@
  * default/standard state (real feedback: "standard is mpe"), so this
  * only ever shows while the NON-default, single-channel mode is
  * active, the same "ambient reminder you're in a non-default state"
- * role the mute blink this replaces used to play. Same slow-breathing
+ * role the old expression-mute blink used to play. Same slow-breathing
  * shape as services/standby.c's own deep-sleep pulse (DEEP_SLEEP_
  * PULSE_PERIOD_MS/_MIN/_MAX there) and this file's own transport-
  * recording pulse elsewhere in this codebase -- a separate copy, same
@@ -139,10 +138,9 @@ static float submenu_selected_pulse_level(uint32_t now_ms) {
  * after row 1's column 1 was tried on real hardware as merely "weak"
  * rather than truly off: "the lowest setting is off and should be
  * blinking when active in menu to show its off." Faster/plainer than
- * the mute pattern above (a single on/off toggle, not a blink-blink-rest
- * shape) since this marks one row's state within an already-visible
- * menu, not the whole board's mode the way mute's button-LED indicator
- * does. */
+ * the MPE-off pulse above (a single on/off toggle) since this marks one
+ * row's state within an already-visible menu, not the whole board's mode
+ * the way square's LED does. */
 #define OFF_INDICATOR_BLINK_PERIOD_MS 500u
 
 #define EXPRESSION_SUBMENU_NUM_ROWS 4u
@@ -184,14 +182,14 @@ static bool s_prev_pad_touched[TILES_NUM_PADS];
 
 static bool s_circle_was_held;
 static bool s_square_was_held;
-/* True once EITHER a long-hold action (the mute combo, or the sub-menu's
+/* True once EITHER a long-hold action (the MPE combo, or the sub-menu's
  * sticky-lock threshold) has fired at any point during the CURRENT
  * square press (reset only when square transitions from fully released
  * to held) -- suppresses that press's eventual release from also being
  * read as a genuine short click. */
 static bool s_square_press_had_long_action;
 /* Same idea, circle's own press cycle -- suppresses an incidental circle
- * release right after a circle+square mute combo from also being read
+ * release right after a circle+square MPE combo from also being read
  * as the plain click that dismisses a sticky sub-menu (see
  * tiles_expression_control_scan()'s release checks). */
 static bool s_circle_press_had_long_action;
@@ -206,12 +204,6 @@ static bool s_prev_dismiss_btn[4];
 static bool s_combo_was_held;
 static uint32_t s_combo_hold_start_ms;
 static bool s_mpe_toggle_fired;
-/* No longer set by anything in this file (see EXPRESSION_MPE_TOGGLE_
- * HOLD_MS's own comment) -- kept, not removed, since apply_row() below
- * and the plain-click guard further down both still correctly react
- * to it if it's ever true, and tiles_expression_set_muted() itself
- * remains a real, callable feature. Currently permanently false. */
-static bool s_mute_active;
 
 static bool s_square_alone_was_held;
 static uint32_t s_square_alone_hold_start_ms;
@@ -300,15 +292,8 @@ static void apply_row_aftertouch(uint8_t column) {
 /* The single funnel every real edit goes through, whether from a pad tap
  * (handle_submenu_taps()) or square's own "-"/"+" shift
  * (step_haptics_column()) -- see s_row_column's own comment for why that
- * matters for menu/shift continuity. Also the one place that can tell a
- * genuine CHANGE apart from a no-op re-selection or a clamped step, which
- * is what lets an in-menu edit override expression mute without simply
- * opening/viewing the menu also doing so -- real feedback: "changes to
- * the menu should override expression mute and turn it off but if the
- * menu is opened just to check settings and no change is made then mute
- * stays on." */
+ * matters for menu/shift continuity. */
 static void apply_row(submenu_row_t row, uint8_t column) {
-    bool changed = (s_row_column[row] != column);
     s_row_column[row] = column;
     switch (row) {
     case SUBMENU_ROW_HAPTICS:
@@ -325,12 +310,6 @@ static void apply_row(submenu_row_t row, uint8_t column) {
         break;
     }
     printf("[expression_control] row %d column %u selected\n", (int)row, column);
-    if (changed && s_mute_active) {
-        printf("[expression_control] in-menu change while muted -- unmuting\n");
-        s_mute_active = false;
-        tiles_haptics_set_muted(false);
-        tiles_expression_set_muted(false);
-    }
 }
 
 /* Row 1 (haptics), column 1 only -- see apply_row_haptics()'s own
@@ -370,7 +349,6 @@ void tiles_expression_control_init(void) {
     }
     s_combo_was_held = false;
     s_mpe_toggle_fired = false;
-    s_mute_active = false;
     s_square_alone_was_held = false;
     s_submenu_toggle_fired = false;
     tiles_buttons_set_override_active(TILES_SQUARE_BUTTON_ID, true);
@@ -486,10 +464,7 @@ static void render_submenu(uint32_t now_ms) {
 }
 
 /* Square's own "-"/"+" shift input -- only called while square is held
- * alone (see tiles_expression_control_scan()). Works regardless of mute
- * (see the file header's "Available during expression mute" section) --
- * a genuine step through apply_row() will auto-unmute via that
- * function's own change check. Steps the sub-menu's row 1 (haptics)
+ * alone (see tiles_expression_control_scan()). Steps the sub-menu's row 1 (haptics)
  * COLUMN, through the exact same apply_row() path a pad tap uses,
  * rather than haptics.c's intensity scalar directly -- see
  * s_row_column's own comment for why. */
@@ -675,9 +650,7 @@ void tiles_expression_control_scan(void) {
 
     /* Sub-menu sticky-lock threshold + haptics shift: square held ALONE.
      * The alone streak (and its 3s timer) restarts any time circle joins
-     * mid-hold -- see the file header. Both work regardless of mute (see
-     * "Available during expression mute" there); a real edit auto-
-     * unmutes via apply_row() itself. */
+     * mid-hold -- see the file header. */
     if (square_alone_held && !s_square_alone_was_held) {
         s_square_alone_hold_start_ms = now_ms;
         s_submenu_toggle_fired = false;
@@ -698,20 +671,18 @@ void tiles_expression_control_scan(void) {
          * genuine short click. While the sub-menu is sticky, that click
          * closes it instead of toggling pitch bend -- real feedback:
          * "make sure we can exit from menu with single click of
-         * sentia." Works even while muted (unlike the plain pitch-bend
-         * toggle below), since the sub-menu itself is available during
-         * mute and should stay dismissable regardless. */
+         * sentia." */
         if (s_submenu_sticky) {
             s_submenu_sticky = false;
-        } else if (!s_mute_active) {
+        } else {
             tiles_expression_toggle_pitch_bend();
         }
     }
 
     if (!circle_held && s_circle_was_held && !s_circle_press_had_long_action && s_submenu_sticky) {
         /* Circle has no competing short-click action of its own to
-         * protect, so a plain click always closes a sticky sub-menu,
-         * mute or not -- real feedback: "make sure we can exit from
+         * protect, so a plain click always closes a sticky sub-menu --
+         * real feedback: "make sure we can exit from
          * menu with single click of... shift/power as well." */
         s_submenu_sticky = false;
     }

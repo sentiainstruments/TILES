@@ -141,20 +141,6 @@ uint16_t tiles_expression_get_harmonics_confirm_ms(void);
 void tiles_expression_set_harmonics_press_depth(uint16_t depth);
 uint16_t tiles_expression_get_harmonics_press_depth(void);
 
-/* Called by services/expression_control.h when "expression mute"
- * toggles on/off. While muted, pitch bend and poly aftertouch both
- * stop being computed/sent -- if a note currently owns pitch bend,
- * it's reset to center immediately, the same "never leave a note
- * stuck bent" rule tiles_expression_toggle_pitch_bend already follows.
- * Note-on/off and velocity are NOT affected -- basic MIDI keeps
- * working while muted, only the expressive layer stops. The circle+
- * square hold that used to trigger this was reassigned to tiles_
- * expression_set_mpe_enabled()'s own toggle instead (real feedback:
- * "replace haptic mute combo to the mpe vs regular mode selector") --
- * this function itself is unchanged and still fully functional, just
- * currently unreachable from any gesture in expression_control.c. */
-void tiles_expression_set_muted(bool muted);
-
 /* Real feedback: "we have haptics vibration randomly in mini games,
  * that shouldnt happen." Root cause: the PAD_STATE_IDLE fresh-touch
  * gate (see expression.c's own comment there) only ever stops a NEW

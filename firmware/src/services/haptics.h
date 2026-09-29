@@ -170,31 +170,18 @@ void tiles_haptics_stop(uint8_t logical_pad);
  * affect those 4 parameters should always be reflected on the menu").
  * Clamped to [HAPTIC_INTENSITY_MIN, HAPTIC_INTENSITY_MAX] -- 0.0 is a
  * real, legitimate "haptics off" position (column 1), not just a low
- * value; see s_haptic_intensity's own comment in haptics.c for why 0
- * here is different from tiles_haptics_set_muted() below. */
+ * value; see s_haptic_intensity's own comment in haptics.c. */
 void tiles_haptics_set_intensity(float level_0_to_1);
 
 /* Current global intensity scalar (HAPTIC_INTENSITY_MIN-_MAX). For
  * diagnostics/future UI -- not needed by the adjustment path itself. */
 float tiles_haptics_get_intensity(void);
 
-/* Called by services/expression_control.h when "expression mute" (the
- * circle+square 3-second combo hold) toggles on/off. While muted, every
- * haptic trigger (touch pulse, kick, sustain-level update) becomes a
- * no-op and every currently-active motor is immediately cut to 0 -- MIDI
- * note-on/off keep working completely unaffected, only the physical
- * haptic feedback stops. See expression_control.h's own "expression
- * mute" section for the full reasoning. */
-void tiles_haptics_set_muted(bool muted);
-
 /* Called by services/standby.h on entering/leaving deep sleep -- real
- * feedback: "in sleep mode haptics should be off." A SEPARATE flag from
- * tiles_haptics_set_muted() above, not a reuse of it: that one is the
- * user's own deliberate expression-mute toggle (circle+square 3s hold),
- * and standby.c waking from deep sleep must never silently clear a mute
- * the user set on purpose before falling asleep. Haptics are silenced
- * whenever EITHER flag is set (see haptics.c's own
- * haptics_should_be_silent()). Only deep sleep uses this -- regular
+ * feedback: "in sleep mode haptics should be off." Separate from the
+ * intensity scalar above (so waking restores whatever intensity the
+ * player had set) -- see haptics.c's own haptics_should_be_silent().
+ * Only deep sleep uses this -- regular
  * standby/screensaver deliberately leaves haptics (and all of touch/Hall/
  * MIDI) running exactly as normal, matching this file's existing
  * "standby is a lighting-only concept" precedent. */

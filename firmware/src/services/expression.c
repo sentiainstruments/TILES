@@ -1102,7 +1102,7 @@ typedef struct {
      * its own channel (see this file's "Pitch bend from sideways
      * motion" section for the full history of why this used to be a
      * single shared "owner pad"). pitch_bend_active records whether
-     * pitch bend was actually enabled (and not muted) at the moment
+     * pitch bend was actually enabled at the moment
      * THIS note fired -- toggling the feature mid-hold doesn't
      * retroactively add or remove bend from an already-sounding note,
      * matching the original single-owner version's behavior. */
@@ -2091,19 +2091,6 @@ uint16_t tiles_expression_get_harmonics_press_depth(void) {
  * and left at whatever it last was, while s_mpe_enabled is true. */
 static uint8_t s_non_mpe_owner_pad;
 
-/* "Expression mute" -- a hard kill switch for pitch bend and poly
- * aftertouch, deliberately separate from s_pitch_bend_enabled above
- * (that's the player's own on/off preference; this overrides it
- * entirely, on top, without disturbing what it was set to) -- unmuting
- * restores exactly whatever tiles_expression_toggle_pitch_bend() state
- * was already in effect before muting. Note-on/off/velocity are read
- * directly from touch+Hall, never gated by this flag -- see
- * tiles_expression_set_muted()'s own comment for the full history,
- * including why this can no longer actually be triggered by anything
- * in services/expression_control.c as of the MPE-toggle gesture that
- * replaced it. */
-static bool s_expression_muted;
-
 void tiles_expression_init(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_pads[i] = (pad_expr_t){0};
@@ -2121,7 +2108,6 @@ void tiles_expression_init(void) {
     s_non_mpe_owner_pad = 0u;
     s_prev_holding_notes = false; /* s_pads' held_* were just zeroed above */
     s_pitch_bend_enabled = false;
-    s_expression_muted = false;
     for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
         s_harmonic_voices[i] = (harmonic_voice_t){0};
     }
@@ -2512,11 +2498,10 @@ static uint16_t pitch_bend_apply_vibrato(pad_expr_t *s, uint16_t bend, uint32_t 
     return (uint16_t)with_vibrato;
 }
 
-/* Shared by tiles_expression_toggle_pitch_bend() (disabling) and
- * tiles_expression_set_muted() (muting) below -- under the old
- * single-owner design there was at most one bending pad to reset;
- * under MPE every currently-held note can be bending independently at
- * once, so both call sites now need to walk every pad and center
+/* Used by tiles_expression_toggle_pitch_bend() (disabling) below --
+ * under the old single-owner design there was at most one bending pad to
+ * reset; under MPE every currently-held note can be bending independently
+ * at once, so it needs to walk every pad and center
  * whichever ones actually have pitch_bend_active set, rather than
  * resetting one single piece of shared state. */
 static void center_and_deactivate_all_bending_pads(void) {
@@ -2565,18 +2550,6 @@ void tiles_expression_set_aftertouch_sensitivity(uint16_t depth_full_scale) {
 
 uint16_t tiles_expression_get_aftertouch_sensitivity(void) {
     return s_depth_to_aftertouch_full_scale;
-}
-
-void tiles_expression_set_muted(bool muted) {
-    s_expression_muted = muted;
-    printf("[expression] muted=%d\n", (int)s_expression_muted);
-    if (muted) {
-        /* Same "never leave a note stuck bent" rule
-         * tiles_expression_toggle_pitch_bend() already follows -- reset
-         * to center immediately rather than waiting for each note's own
-         * release/retrigger to clear it. */
-        center_and_deactivate_all_bending_pads();
-    }
 }
 
 /* Real feedback: "lets make sure the pitch bend works with non mpe
@@ -2714,14 +2687,14 @@ static uint8_t aftertouch_from_depth(uint16_t depth) {
 
 /* Claims pitch bend ownership for `pad` at the moment its note fires --
  * see this file's "Pitch bend from sideways motion" section. Seeds
- * pitch_bend_active from the player's current enabled/muted state at
- * this exact moment (toggling either mid-hold doesn't retroactively
+ * pitch_bend_active from the player's current enabled state at
+ * this exact moment (toggling it mid-hold doesn't retroactively
  * change an already-sounding note's bend). Does NOT capture the
  * baseline yet -- see PITCH_BEND_SETTLE_MS's own comment for why that's
  * deferred a few ticks, in the NOTE_ON loop below, rather than grabbed
  * from one instantaneous sample right here. */
 static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
-    s->pitch_bend_active = s_pitch_bend_enabled && !s_expression_muted;
+    s->pitch_bend_active = s_pitch_bend_enabled;
     if (!s->pitch_bend_active) {
         return;
     }
@@ -3330,12 +3303,7 @@ void tiles_expression_scan(void) {
         uint8_t at = aftertouch_from_depth((uint16_t)s->smoothed_depth);
         if (at != s->last_sent_aftertouch) {
             s->last_sent_aftertouch = at;
-            /* "Expression mute" (services/expression_control.h) silences
-             * poly aftertouch specifically -- basic note-on/off/velocity
-             * above are unaffected. tiles_haptics_set_sustain_level()
-             * doesn't need a matching guard here: haptics.c's own mute
-             * flag already makes it a no-op (see tiles_haptics_set_muted).
-             * Also gated on non-MPE ownership (s_non_mpe_owner_pad) --
+            /* Gated on non-MPE ownership (s_non_mpe_owner_pad) --
              * while !s_mpe_enabled, every held pad shares this exact
              * channel, so without this check whichever pad's channel
              * pressure happened to change most recently on any given
@@ -3348,7 +3316,7 @@ void tiles_expression_scan(void) {
              * smaller, more cosmetic problem than a note landing at
              * the wrong PITCH, which is the specific failure this
              * feature exists to prevent. */
-            if (!s_expression_muted && (s_mpe_enabled || s_non_mpe_owner_pad == pad)) {
+            if (s_mpe_enabled || s_non_mpe_owner_pad == pad) {
                 tiles_midi_send_channel_pressure(s->midi_channel, at);
             }
             tiles_cv_gate_channel_pressure(s->active_note, at);

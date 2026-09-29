@@ -2,7 +2,9 @@
 
 /*
  * Square (SW5, "sentia")'s function-button role, plus a circle+square
- * combo for expression mute. Real feedback, in order: "when you press
+ * combo that toggles MPE (it was "expression mute" until real feedback
+ * reassigned it -- see the section near the end). Real feedback, in
+ * order: "when you press
  * sentia button once it turns on and off the pitch bend... when you
  * hold and press - or + you can adjust intensity of haptics on device,"
  * then, once corrected to the right button and given a fuller design:
@@ -59,7 +61,7 @@
  * takes priority over its normal pitch-bend toggle whenever the
  * sub-menu is sticky, since dismissing it is the more likely intent in
  * that context; circle's click has no competing action, so it always
- * dismisses a sticky sub-menu, muted or not.) Reaching the 3-second
+ * dismisses a sticky sub-menu.) Reaching the 3-second
  * threshold (or forming the circle+square combo below) suppresses the
  * short-click pitch-bend toggle on that same press's eventual release,
  * the same way services/standby.c's old circle version suppressed its
@@ -71,8 +73,8 @@
  * physically held (alone or as part of the combo below); once released,
  * a persistent glow -- deliberately dimmer than press feedback but "not
  * by a lot" -- while pitch bend is on, dark while off; overridden
- * entirely by the mute blink pattern (see below) whenever mute is
- * active, regardless of hold state.
+ * entirely by a soft pulse whenever MPE is switched off (the non-default
+ * mode -- see the combo below), regardless of hold state.
  *
  * ---- The expression sub-menu --------------------------------------------
  * Whenever visible (per the momentary/sticky rules above), the pad grid
@@ -120,53 +122,28 @@
  * or dismissing a sticky sub-menu) never *also* silently step the
  * octave/transpose key underneath.
  *
- * ---- Available during expression mute, but never silently escapes it --
- * Real feedback, after a first hardware pass made the sub-menu entirely
- * inert while muted: "when mute is on the menu is unavailable and we
- * dont want that." The sub-menu (opening, viewing, and adjusting via
- * either a pad tap or square's own "-"/"+" shift) now works identically
- * whether or not expression mute is active -- merely opening or viewing
- * it never changes mute state. Making an actual CHANGE while muted is
- * different: apply_row() (the single funnel every real edit goes
- * through) compares the incoming column against what that row is
- * already set to, and if -- and only if -- they differ while mute is
- * active, it turns mute back off as a side effect, the same
- * tiles_haptics_set_muted()/tiles_expression_set_muted() calls the
- * circle+square combo's own toggle uses. Real feedback: "changes to the
- * menu should override expression mute and turn it off but if the menu
- * is opened just to check settings and no change is made then mute
- * stays on." Re-tapping an already-selected pad, or stepping "-"/"+"
- * past a column that's already at its 1/6 boundary (a clamped no-op),
- * never counts as a change for this purpose.
- *
- * ---- Circle+square held for 3 seconds: expression mute -----------------
+ * ---- Circle+square held for 2 seconds: MPE on/off ------------------------
  * A separate combo, independent of the sub-menu above: holding SW6
- * (circle) and SW5 (square) together for EXPRESSION_MUTE_HOLD_MS
- * (3000ms, its own edge latch) toggles a sticky "expression mute" that
- * persists until the same 3-second combo hold toggles it off again (or
- * an in-menu change auto-unmutes it, see above) -- real feedback: "a
- * shortcut that disables everything and leaves basic midi... it acts
- * like a mute." Muted: pitch bend and poly aftertouch stop being
- * computed/sent (tiles_expression_set_muted()) and every haptic effect
- * (touch pulse, kick, sustain) stops firing, with every currently-active
- * motor cut immediately (tiles_haptics_set_muted()) -- note-on/off and
- * velocity are completely unaffected, so basic MIDI keeps working
- * exactly as before. Square's own pitch-bend-click and the sub-menu's
- * momentary-preview/sticky-toggle hold gesture (not the sub-menu's
- * *contents*, see above) are suppressed while muted, since square's LED
- * is busy showing the mute indicator instead of its normal toggle-state
- * glow: a blinking two-pulse pattern followed by a rest at medium
- * brightness, repeating -- real feedback: "sentia should become a
- * blinking light with a two blink pattern and rest at medium brightness
- * to indicate expression functions mute."
+ * (circle) and SW5 (square) together for EXPRESSION_MPE_TOGGLE_HOLD_MS
+ * (2000ms, its own edge latch) toggles services/expression.c's MPE mode
+ * (tiles_expression_set_mpe_enabled() -- the same `expression.mpe_enabled`
+ * setting the settings shell edits). MPE on is the default; while it's
+ * off, square's LED soft-pulses as a reminder. This combo used to toggle
+ * an "expression mute" (pitch bend, aftertouch and haptics off, basic
+ * MIDI kept) until real feedback: "replace haptic mute combo to the mpe
+ * vs regular mode selector standard is mpe." With nothing left that could
+ * turn it on, the mute itself (tiles_expression_set_muted(),
+ * tiles_haptics_set_muted() and the in-menu "a change unmutes" rule) was
+ * removed in the standardization round's cleanup rather than kept as
+ * unreachable code.
  *
  * ---- Deferring to game mode -------------------------------------------
  * services/game_mode.h's Pong minigame uses SW5 (square)/SW6 (circle) as
  * its own live right-paddle up/down controls -- see game_mode.c's own
  * header. This module's entire scan bails immediately (keeping only its
  * own press-edge tracking current) whenever tiles_game_mode_is_active()
- * is true, so a paddle press during play never also toggles pitch bend,
- * mutes, or opens the sub-menu underneath; symmetrically, game_mode.c's
+ * is true, so a paddle press during play never also toggles pitch bend or
+ * MPE, or opens the sub-menu underneath; symmetrically, game_mode.c's
  * own 4-button (SW3+SW4+SW5+SW6) entry combo refuses to fire while this
  * module's sub-menu already owns the pad grid (see its gm_combo_held()),
  * so the two features can never both claim the board at once.
@@ -177,7 +154,7 @@
 void tiles_expression_control_init(void);
 
 /* Detects square's press/hold/click, the sub-menu's momentary/sticky
- * hold and its SW1-SW4 dismiss, and the circle+square mute combo; drives
+ * hold and its SW1-SW4 dismiss, and the circle+square MPE combo; drives
  * square's LED; and renders the sub-menu when visible. Call every
  * main-loop iteration, after tiles_buttons_scan() (fresh button state)
  * and tiles_touch_scan() (fresh touch state for the sub-menu's slider

@@ -39,9 +39,12 @@
  * README.md's own framing. */
 #define CFG_TUD_VENDOR 1
 
-/* CDC FIFO/endpoint buffer sizes -- same defaults pico_stdio_usb uses. */
+/* CDC FIFO/endpoint buffer sizes. TX is 1 KB, not pico_stdio_usb's 64
+ * bytes: a whole burst of console output (a mode change, a settings dump)
+ * fits without printf() ever waiting for the host -- see the
+ * PICO_STDIO_USB_STDOUT_TIMEOUT_US note in firmware/src/CMakeLists.txt. */
 #define CFG_TUD_CDC_RX_BUFSIZE 64
-#define CFG_TUD_CDC_TX_BUFSIZE 64
+#define CFG_TUD_CDC_TX_BUFSIZE 1024
 #define CFG_TUD_CDC_EP_BUFSIZE 64
 
 /* MIDI FIFO sizes -- full-speed only on RP2350, so the smaller size
