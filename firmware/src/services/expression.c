@@ -1239,6 +1239,23 @@ typedef struct {
     float pitch_bend_wiggle_energy;
     bool pitch_bend_wiggle_active;
     uint32_t pitch_bend_wiggle_start_ms;
+
+    /* Sustain-defer's own bookkeeping for a note ended on the SHARED
+     * master channel (!s_mpe_enabled) -- see end_held_note()'s own
+     * comment for why this needs a separate per-PAD record instead of
+     * reusing s_mpe_channels[]'s per-CHANNEL sustain_pending. Real
+     * feedback found auditing that architecture after it was reported
+     * still sticking: "sustain peddal is still not working propperly
+     * meaning no good release. no[t]es stick if you release not[e] and
+     * then release pedal after the fact." master_sustain_note/_release_
+     * velocity are captured at the moment of defer, NOT read live from
+     * active_note/depth_fall_rate at flush time -- this same pad can be
+     * struck again (a brand-new note-on, immediately sent, independent
+     * of this deferred one) before the pedal ever releases, which would
+     * silently overwrite active_note out from under a live read. */
+    bool master_sustain_pending;
+    uint8_t master_sustain_note;
+    uint8_t master_sustain_release_velocity;
 } pad_expr_t;
 
 static pad_expr_t s_pads[TILES_NUM_PADS];
@@ -2600,7 +2617,34 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool allow_sustain_defer) 
         s_mpe_channels[idx].sustained_release_velocity = release_velocity; /* carried through to the deferred send */
         return;
     }
-    tiles_midi_note_off(s->midi_channel, s->active_note, release_velocity);
+    /* Real bug found auditing this whole sustain-defer architecture after
+     * real feedback it was STILL sticking: "sustain peddal is still not
+     * working propperly meaning no good release. notes stick if you
+     * release not[e] and then release pedal after the fact." The MPE
+     * branch above defers correctly, but the check that reaches it
+     * explicitly EXCLUDES the shared master channel (`!= TILES_MIDI_MPE_
+     * MASTER_CHANNEL`) -- so every note played with MPE mode OFF
+     * (`!s_mpe_enabled`, every note on TILES_MIDI_MPE_MASTER_CHANNEL by
+     * construction) fell all the way through to an IMMEDIATE note-off on
+     * physical release regardless of the pedal, the exact "trust the
+     * synth to notice CC64 is still held and keep the note ringing on
+     * its own" behavior this whole feature was built to stop relying on
+     * (see this function's own header comment) -- non-MPE mode never
+     * actually got the fix MPE mode got. Deferred here too now, using a
+     * separate per-PAD record (master_sustain_pending, see pad_expr_t's
+     * own comment) since the master channel has no per-channel slot
+     * pool the way Member Channels do -- every currently-held pad shares
+     * this ONE channel, so a per-channel slot can't tell two pads'
+     * deferred notes apart the way per-MPE-channel sustain_pending can. */
+    bool defer_master =
+        allow_sustain_defer && s->midi_channel == TILES_MIDI_MPE_MASTER_CHANNEL && tiles_pedal_is_sustained();
+    if (defer_master) {
+        s->master_sustain_pending = true;
+        s->master_sustain_note = s->active_note;
+        s->master_sustain_release_velocity = release_velocity;
+    } else {
+        tiles_midi_note_off(s->midi_channel, s->active_note, release_velocity);
+    }
     if (s->midi_channel == TILES_MIDI_MPE_MASTER_CHANNEL) {
         /* Real bug this addition itself would otherwise introduce: the
          * MPE-only cleanup below computes idx as midi_channel minus
@@ -2617,7 +2661,11 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool allow_sustain_defer) 
          * touched most recently, and immediately resend ITS actual
          * current bend so the channel reflects that pad's real tilt
          * instead of staying wherever this departing pad (or the
-         * center send just above) left it. */
+         * center send just above) left it. Runs regardless of
+         * defer_master above -- this pad has genuinely stopped playing
+         * either way, only the deferred NOTE's own note-off waits on the
+         * pedal, not who owns the shared channel's continuous
+         * controllers next. */
         if (s_non_mpe_owner_pad == pad) {
             uint8_t next_owner = find_most_recent_held_pad(pad);
             s_non_mpe_owner_pad = next_owner;
@@ -2643,7 +2691,14 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool allow_sustain_defer) 
  * note ringing on a channel this file has otherwise stopped scanning --
  * game_mode.h owns the board once that runs, and this file's own per-
  * scan release-edge flush above never gets another chance to fire until
- * control comes back. */
+ * control comes back.
+ *
+ * Also flushes the shared master channel's own per-PAD deferred notes
+ * (master_sustain_pending, see end_held_note()'s own comment on the real
+ * "non-MPE mode never actually got this fix" bug this closes) -- same
+ * pedal-release trigger, same two callers, just a different, per-pad
+ * record since the master channel has no per-channel slot pool to key
+ * off of. */
 static void flush_sustained_notes(void) {
     for (uint8_t i = 0; i < TILES_MIDI_SHARED_POOL_SIZE; i++) {
         if (s_mpe_channels[i].sustain_pending) {
@@ -2654,6 +2709,13 @@ static void flush_sustained_notes(void) {
                                  s_mpe_channels[i].sustained_release_velocity);
             set_channel_in_use(i, false);
             s_mpe_channels[i].sustain_pending = false;
+        }
+    }
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        if (s_pads[i].master_sustain_pending) {
+            tiles_midi_note_off(TILES_MIDI_MPE_MASTER_CHANNEL, s_pads[i].master_sustain_note,
+                                 s_pads[i].master_sustain_release_velocity);
+            s_pads[i].master_sustain_pending = false;
         }
     }
 }

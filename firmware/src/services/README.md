@@ -8819,5 +8819,53 @@ not its code.
   it"). Not hardware-verified yet -- next pass should confirm a 9+-touch
   press cleanly silences the oldest pad with no stray Note-On/haptic kick,
   and that pad sounds normally again on its next honest press.
+- **Real bug: the sustain-pedal stick fix never actually covered non-MPE
+  ("regular") mode.** Real feedback, after the "Real fix for the
+  sustain-pedal stick" entry above had already shipped: "sustain peddal
+  is still not working propperly meaning no good release. notes stick if
+  you release not[e] and then release pedal after the fact" -- the exact
+  same symptom, precisely reproduced, that entry was supposed to have
+  closed. Root cause, found auditing `end_held_note()`
+  (`services/expression.c`) line by line rather than re-guessing: its
+  sustain-defer check is gated `s->midi_channel != TILES_MIDI_MPE_
+  MASTER_CHANNEL` -- deliberately, at the time, to avoid an array-
+  underflow bug the master channel's lack of a per-channel pool slot
+  would otherwise cause (still correctly guarded, see that code's own
+  comment) -- but that same condition also means every note played with
+  MPE mode OFF (`!s_mpe_enabled`; ALL of them land on the shared master
+  channel by construction, see `midi/midi_out.h`) never deferred at all:
+  physical release always sent an immediate note-off, right back to
+  trusting the receiving synth to notice CC64 is still held and keep the
+  note ringing on its own -- precisely the "not universally reliable"
+  behavior the whole deferred-note-off architecture exists to stop
+  depending on (see the original entry's own research citation). MPE
+  mode (the default) was never affected; only non-MPE/"regular" mode
+  silently kept the old, unreliable behavior the whole time.
+  Fixed by extending the defer to the master channel too, with its own
+  per-PAD record (`pad_expr_t`'s new `master_sustain_pending`/
+  `master_sustain_note`/`master_sustain_release_velocity`) rather than
+  reusing `s_mpe_channels[]`'s per-CHANNEL `sustain_pending` -- the
+  master channel is shared by every currently-held pad at once, so a
+  single per-channel slot can't tell two different pads' deferred notes
+  apart the way a dedicated Member Channel's own slot can. Stores the
+  note number and release velocity at the moment of defer rather than
+  reading them live off the pad later, since the same pad can be struck
+  again (a brand-new, immediately-sent note-on, independent of the still-
+  pending deferred one) before the pedal ever releases -- reading
+  `active_note` live at flush time would then send the note-off for the
+  WRONG note. `flush_sustained_notes()` now drains both records on the
+  same pedal-release edge that already drove the Member Channel side.
+  Not hardware-verified yet -- next pass should specifically retest in
+  non-MPE mode (circle+square toggle) with the exact repro: strike a
+  note, release the note while the pedal is held, then release the
+  pedal, and confirm the note-off actually lands. If the report turns
+  out to have been made in MPE mode (the default) instead, this fix
+  doesn't explain it and the Member Channel path needs its own fresh
+  real-hardware trace -- this session's static review of that path found
+  nothing wrong on paper, the same conclusion the original investigation
+  reached before finally root-causing it to a blocking printf() (see
+  `services/pedal.c`'s own `scan_sustain()` header for that whole
+  history); the next real test should note which mode was active so
+  that ambiguity doesn't recur.
 - Everything else (per-pad Hall calibration) is not built
   yet.
