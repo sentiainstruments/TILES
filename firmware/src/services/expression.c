@@ -1441,6 +1441,37 @@ static const uint8_t HARMONIC_SEMITONES[HARMONIC_MAX_VOICES] = {12u, 19u, 24u, 2
  * first guess, not felt on real hardware yet. */
 #define HARMONIC_PLUCK_DURATION_MS 300u
 
+/* Chord-vs-harmonic separation. Real feedback, once sustain worked in
+ * Ableton: "harmonics also work great but sometimes theres overlap between
+ * the harmonic mode and me just trying to play a chord." A pluck used to
+ * fire the instant a second pad was TOUCHED while one note was held -- but
+ * chord fingers land a few ms apart, so the first finger became the
+ * fundamental and every later finger's touch arrived before its press had
+ * reached strike depth (anywhere from STRIKE_TIME_MAX_VELOCITY_MS to
+ * STRIKE_TIME_MIN_VELOCITY_MS, 10-300 ms): a pluck, then the pedal held it
+ * under the chord. Two separate guards, each for its own timing window:
+ *
+ * HARMONIC_ARM_MS: a session only starts plucking once its fundamental's
+ * NOTE has been held alone this long, measured from that note's own
+ * note_on_ms -- chord fingers land within tens of ms of each other, the
+ * deliberate "hold a note, then touch the others" gesture comes later.
+ * Touch edges inside the window are consumed, never plucked later.
+ * Measured from the note, not the session, so engaging the pedal over an
+ * already-held note still plucks resting pads at once (see scan_melodic_
+ * harmonics()'s own step 0).
+ *
+ * HARMONIC_CONFIRM_MS: once armed, a new touch still waits this long
+ * before plucking, and is cancelled if the key MOVES -- past RETRIGGER_ARM_
+ * DEPTH_DELTA, the band this file already treats as "at rest", or on to a
+ * real strike. That's the "hold a bass note, then play a chord over it"
+ * case: a pressing finger leaves the rest band almost at once even when
+ * its full strike takes far longer; a light harmonic touch never does. A
+ * quick light tap that ends inside the window still plucks.
+ *
+ * Both unmeasured first guesses, like every constant in this section. */
+#define HARMONIC_ARM_MS 150u
+#define HARMONIC_CONFIRM_MS 40u
+
 typedef struct {
     bool active;
     uint8_t pad;          /* 1..TILES_NUM_PADS, valid only while active */
@@ -1460,6 +1491,10 @@ static uint8_t s_harmonic_fundamental_pad;
  * timing would tie a pluck to the real-strike pipeline's own state
  * machine in ways this section has no reason to depend on). */
 static bool s_harmonic_prev_touched[TILES_NUM_PADS];
+/* A touch waiting out HARMONIC_CONFIRM_MS before it may pluck -- see that
+ * constant's own comment. Cleared whenever the session ends. */
+static bool s_harmonic_pending[TILES_NUM_PADS];
+static uint32_t s_harmonic_pending_ms[TILES_NUM_PADS];
 
 /* The top of the CURRENT live MPE zone -- see services/midi_channels.h's own
  * header for why the zone itself is no longer a fixed 15 (it's whatever
@@ -1598,6 +1633,9 @@ static void end_all_harmonic_voices(void) {
     for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
         end_harmonic_voice(i);
     }
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_harmonic_pending[i] = false; /* a pending touch belongs to the session that just ended */
+    }
     s_harmonic_fundamental_pad = 0u;
 }
 
@@ -1665,6 +1703,73 @@ static void fire_harmonic_pluck(uint8_t slot, uint8_t pad, uint8_t note, uint8_t
     tiles_midi_note_on(channel, note, HARMONIC_VELOCITY);
 }
 
+/* True once a pad's current touch has turned into a real press -- a note,
+ * a strike threshold crossing, or just movement past the "at rest" band
+ * (RETRIGGER_ARM_DEPTH_DELTA). peak_depth/threshold_crossed are reset by
+ * begin_awaiting_strike() at the start of every touch, so they describe
+ * this touch only. See HARMONIC_CONFIRM_MS for why movement, not a full
+ * strike, is the cutoff. */
+static bool harmonic_pad_is_pressing(const pad_expr_t *ps) {
+    return ps->state == PAD_STATE_NOTE_ON || ps->threshold_crossed || ps->peak_depth > RETRIGGER_ARM_DEPTH_DELTA;
+}
+
+/* Plucks `pad`'s harmonic over `fundamental_note`: a pad already mid-ring
+ * re-plucks its own slot; a new one takes the first free slot (touch
+ * order, see this section's own header) and a reserved channel. Silently
+ * does nothing if every slot or reserved channel is busy, or the harmonic
+ * would land above MIDI note 127. */
+static void try_harmonic_pluck(uint8_t pad, uint8_t fundamental_note, uint32_t now_ms) {
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
+        if (s_harmonic_voices[i].active && s_harmonic_voices[i].pad == pad) {
+            slot = (int8_t)i; /* already ringing on this pad -- re-pluck in place */
+            break;
+        }
+    }
+    bool reuse = slot >= 0;
+    if (!reuse) {
+        for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
+            if (!s_harmonic_voices[i].active) {
+                slot = (int8_t)i;
+                break;
+            }
+        }
+        if (slot < 0) {
+            return; /* every slot already ringing on some other pad */
+        }
+    }
+    /* Range-checked BEFORE claiming a channel, not after. Real bug found
+     * auditing this section for the pedal stick ("there also might be a
+     * conflict with harmonic feature with pedal"): the check used to sit
+     * below claim_harmonic_channel(), so a high enough fundamental (any
+     * note above 96, where +31 passes 127) claimed a channel -- marking it
+     * in_use -- then skipped the pluck without ever releasing it. Nothing
+     * else frees a harmonic channel except end_harmonic_voice(), which only
+     * runs for voices that actually started, so each skip leaked one Member
+     * Channel until reboot. */
+    int note = (int)fundamental_note + (int)HARMONIC_SEMITONES[slot];
+    if (note > 127) {
+        return; /* out of MIDI range this high -- silently skip, don't clamp into a wrong pitch */
+    }
+    uint8_t channel;
+    if (reuse) {
+        channel = s_harmonic_voices[slot].midi_channel; /* reuse -- still held from the ring in progress */
+    } else {
+        channel = claim_harmonic_channel();
+        if (channel == 0xFFu) {
+            return; /* every reserved channel already holds a harmonic */
+        }
+    }
+    /* Real feedback found on the sustain pedal ("if i lift pedal after note
+     * it sticks... if i play a new note it does register as sustain
+     * released") root-caused to a printf() sitting right before a real-time
+     * MIDI send blocking the main loop for up to 500ms whenever no serial
+     * terminal drains the USB-CDC console -- see services/pedal.c's own
+     * scan_sustain() comment for the full history. A pluck trace used to
+     * sit right here; removed pre-emptively. */
+    fire_harmonic_pluck((uint8_t)slot, pad, (uint8_t)note, channel, now_ms);
+}
+
 /* Called once per scan, after the main per-pad loop below (so every
  * pad's PAD_STATE_NOTE_ON is current for this tick first). Real
  * feedback's full gesture in one pass:
@@ -1688,10 +1793,13 @@ static void fire_harmonic_pluck(uint8_t slot, uint8_t pad, uint8_t note, uint8_t
  *   2. Any voice whose HARMONIC_PLUCK_DURATION_MS has elapsed decays
  *      to silence, touched or not.
  *   3. Every OTHER pad whose touch just began (this scan, not already
- *      touched last scan) plucks a harmonic: a brand-new pad claims
- *      the first free slot (touch order, see this section's own
- *      header); a pad already mid-ring re-plucks its own existing
- *      slot instead of trying to claim a second one.
+ *      touched last scan) plucks a harmonic -- once the session is
+ *      armed (HARMONIC_ARM_MS) and the touch has stayed light for
+ *      HARMONIC_CONFIRM_MS without the key moving (see both constants'
+ *      own comment on keeping chords from plucking): a brand-new pad
+ *      claims the first free slot (touch order, see this section's own
+ *      header); a pad already mid-ring re-plucks its own existing slot
+ *      instead of trying to claim a second one (try_harmonic_pluck()).
  */
 static void scan_melodic_harmonics(uint32_t now_ms) {
     if (!tiles_op_mode_melodic_harmonics_may_play() || !tiles_pedal_is_sustained()) {
@@ -1700,6 +1808,7 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
         }
         for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
             s_harmonic_prev_touched[i] = false;
+            s_harmonic_pending[i] = false;
         }
         return;
     }
@@ -1728,6 +1837,9 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
         return;
     }
     uint8_t fundamental_note = s_pads[fundamental - 1u].active_note;
+    /* See HARMONIC_ARM_MS -- from the fundamental NOTE's own start, so a
+     * chord's later fingers (landing inside this window) never pluck. */
+    bool armed = (now_ms - s_pads[fundamental - 1u].note_on_ms) >= HARMONIC_ARM_MS;
 
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         /* Dropout-bridged, NOT raw tiles_touch_is_touched(). Real bug found
@@ -1745,70 +1857,37 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
         bool touched = pad_touch_bridged(&s_pads[pad - 1u], now_ms);
         bool was_touched = s_harmonic_prev_touched[pad - 1u];
         s_harmonic_prev_touched[pad - 1u] = touched;
-
-        if (pad == fundamental || !touched || was_touched) {
-            continue; /* not an edge, or not eligible at all */
-        }
         pad_expr_t *ps = &s_pads[pad - 1u];
+
+        if (pad == fundamental) {
+            s_harmonic_pending[pad - 1u] = false;
+            continue;
+        }
+
+        /* A touch waiting out HARMONIC_CONFIRM_MS: a press cancels it for
+         * good; a touch that stayed light plucks once the window passes,
+         * and a light tap that already lifted plucks right away. */
+        if (s_harmonic_pending[pad - 1u]) {
+            if (harmonic_pad_is_pressing(ps)) {
+                s_harmonic_pending[pad - 1u] = false; /* a real press -- never pluck under it */
+            } else if (!touched || (now_ms - s_harmonic_pending_ms[pad - 1u]) >= HARMONIC_CONFIRM_MS) {
+                s_harmonic_pending[pad - 1u] = false;
+                try_harmonic_pluck(pad, fundamental_note, now_ms);
+            }
+            continue;
+        }
+
+        if (!touched || was_touched) {
+            continue; /* not a fresh touch */
+        }
         if (ps->state == PAD_STATE_NOTE_ON) {
             continue; /* already a real note -- never pluck under one */
         }
-
-        int8_t slot = -1;
-        for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
-            if (s_harmonic_voices[i].active && s_harmonic_voices[i].pad == pad) {
-                slot = (int8_t)i; /* already ringing on this pad -- re-pluck in place */
-                break;
-            }
+        if (!armed) {
+            continue; /* a chord still landing -- this edge is consumed, never plucked later */
         }
-        bool reuse = slot >= 0;
-        if (!reuse) {
-            for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
-                if (!s_harmonic_voices[i].active) {
-                    slot = (int8_t)i;
-                    break;
-                }
-            }
-            if (slot < 0) {
-                continue; /* every slot already ringing on some other pad */
-            }
-        }
-        /* Range-checked BEFORE claiming a channel, not after. Real bug found
-         * auditing this section for the pedal stick ("there also might be a
-         * conflict with harmonic feature with pedal"): the check used to sit
-         * below claim_harmonic_channel(), so a high enough fundamental (any
-         * note above 96, where +31 passes 127) claimed a channel -- marking
-         * it in_use -- then skipped the pluck without ever releasing it.
-         * Nothing else frees a harmonic channel except end_harmonic_voice(),
-         * which only runs for voices that actually started, so each skip
-         * leaked one Member Channel until reboot. */
-        int note = (int)fundamental_note + (int)HARMONIC_SEMITONES[slot];
-        if (note > 127) {
-            continue; /* out of MIDI range this high -- silently skip, don't clamp into a wrong pitch */
-        }
-        uint8_t channel;
-        if (reuse) {
-            channel = s_harmonic_voices[slot].midi_channel; /* reuse -- still held from the ring in progress */
-        } else {
-            channel = claim_harmonic_channel();
-            if (channel == 0xFFu) {
-                continue; /* every reserved channel already holds a harmonic */
-            }
-        }
-        /* Real feedback found on the sustain pedal ("if i lift pedal
-         * after note it sticks... if i play a new note it does register
-         * as sustain released") root-caused to a printf() sitting right
-         * before a real-time MIDI send blocking the main loop for up to
-         * 500ms whenever no serial terminal drains the USB-CDC console
-         * -- see services/pedal.c's own scan_sustain() comment for the
-         * full history (this exact codebase's third confirmed case of
-         * this bug class). This pluck trace used to sit here, in the
-         * same position relative to fire_harmonic_pluck()'s own MIDI
-         * send, and fires on every OTHER pad touched while a fundamental
-         * is held -- a real per-touch hot path during active play, not
-         * a rare one-off. Removed pre-emptively rather than wait for a
-         * third real-hardware report of the same symptom. */
-        fire_harmonic_pluck((uint8_t)slot, pad, (uint8_t)note, channel, now_ms);
+        s_harmonic_pending[pad - 1u] = true;
+        s_harmonic_pending_ms[pad - 1u] = now_ms;
     }
 }
 
@@ -1892,6 +1971,7 @@ void tiles_expression_init(void) {
     s_harmonic_fundamental_pad = 0u;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_harmonic_prev_touched[i] = false;
+        s_harmonic_pending[i] = false;
     }
 }
 

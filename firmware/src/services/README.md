@@ -9097,5 +9097,37 @@ not its code.
   `Remote Scripts/TILES`) and the control surface reloaded for this to
   take effect -- firmware and script must match. Not hardware-verified
   yet.
+  **Hardware-verified:** real feedback after reinstalling the script and
+  flashing: "sustain works now in ableton."
+- **Harmonics no longer pluck under a chord.** Real feedback, same
+  message: "harmonics also work great but sometimes theres overlap
+  between the harmonic mode and me just trying to play a chord." A pluck
+  fired the instant a second pad was TOUCHED while one note was held --
+  but chord fingers land a few ms apart, so the first finger became the
+  fundamental and each later finger's touch arrived before its press had
+  reached strike depth (anywhere from 10 to 300 ms per `STRIKE_TIME_MAX/
+  MIN_VELOCITY_MS`): a pluck, then the pedal held it under the chord. The
+  original design already said harmonics are for "capacitive touch only"
+  and real notes for "a pad with real pressure"; the timing just didn't
+  enforce it. Two guards in `scan_melodic_harmonics()`, one per timing
+  window:
+  - `HARMONIC_ARM_MS` (150): a session only plucks once its fundamental
+    NOTE has been held alone that long, measured from the note's own
+    `note_on_ms` -- a chord's later fingers land inside the window, and
+    their touch edges are consumed, never plucked later. Measured from
+    the note rather than the session, so engaging the pedal over an
+    already-held note still plucks resting pads immediately, as step 0
+    of that function's own comment documents.
+  - `HARMONIC_CONFIRM_MS` (40): an armed touch waits that long and is
+    cancelled if the key moves past `RETRIGGER_ARM_DEPTH_DELTA` (the band
+    this file already treats as "at rest") or on to a real strike --
+    `harmonic_pad_is_pressing()`. Covers "hold a bass note, then play a
+    chord over it": a pressing finger leaves the rest band almost at
+    once even when its full strike takes far longer, a light harmonic
+    touch never does. A light tap that lifts inside the window still
+    plucks.
+  The pluck itself moved unchanged into `try_harmonic_pluck()` so both
+  paths share it. Both constants are unmeasured first guesses. Not
+  hardware-verified yet.
 - Everything else (per-pad Hall calibration) is not built
   yet.
