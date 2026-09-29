@@ -116,9 +116,21 @@ class Session:
         line, self.buf = self.buf.split(b"\n", 1)
         return line.decode("ascii", errors="replace").strip("\r")
 
+    def drain(self):
+        """Discards whatever an earlier, interrupted run left unread in the device's reply buffer. Found the
+        hard way: a SCHEMA piped through `grep` right after a reboot left ~2 KB queued, the next command read
+        that stale text as its own reply, and the one after that timed out on write (the device won't take
+        a new command while its reply buffer is full)."""
+        while True:
+            try:
+                self.ep_in.read(64, timeout=50)
+            except usb.core.USBError:
+                return
+
     def command(self, line, multi_line=False):
         """Sends one command. multi_line: LIST/SCHEMA/INFO send many lines then a final OK; everything else
         is answered by exactly one line (a value, OK, or ERR ...)."""
+        self.drain()
         self.buf = b""
         self.ep_out.write((line + "\n").encode("ascii"), timeout=TIMEOUT_MS)
         lines = []
