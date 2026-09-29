@@ -37,8 +37,10 @@ int main(void) {
     request(0x7F);
     assert(g_send_count == 1);
     assert(g_last_len == 13);
-    uint8_t expect[13] = {0x7E, 0x7F, 0x06, 0x02, 0x7D, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01};
+    uint8_t expect[13] = {0x7E, 0x7F, 0x06, 0x02, TILES_SYSEX_MANUFACTURER_ID, 0x01, 0x00, 0x00, 0x00,
+                          TILES_FW_VERSION_MAJOR, TILES_FW_VERSION_MINOR, TILES_FW_VERSION_PATCH, 0x00};
     assert(memcmp(g_last_reply, expect, 13) == 0);
+    assert(g_last_reply[4] == 0x7D); /* pre-production: the non-commercial/development ID */
 
     /* 2. the device id byte in the REQUEST is ignored -- reply always uses 0x7F (unaddressed). */
     g_send_count = 0;

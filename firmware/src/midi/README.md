@@ -430,3 +430,39 @@ rate limiting for continuous expression data — see Status below.
     withdraws the zone. The old RPN-6-only `tiles_midi_send_mpe_zone_size()`
     is gone -- the mid-session re-declaration that used it is what skipped
     RPN 0.
+- **Product identity: USB ID, firmware version, SysEx ID in one place
+  (`product_identity.h`), plus Windows driverless access.** Real feedback:
+  "6-7 lets do whatever makes sense rn for a non registered product thats
+  in pre production." Found doing it:
+  - **The USB product ID belonged to someone else.** `0x2E8A:0x100A` was
+    Raspberry Pi's vendor ID with a product ID this project picked itself
+    -- and Raspberry Pi's own allocation list (github.com/raspberrypi/
+    usb-pid) gives `0x100A` to Pimoroni's Plasma 2040. Now the pid.codes
+    TEST ID `0x1209:0x0001`, which exists for exactly this: in-house
+    testing, never on a unit that's given out or sold. The header says how
+    to get the real one (Raspberry Pi hands out free product IDs to
+    commercial RP2350 products). `tools/tiles_control.py` and
+    `tools/flash.sh` still accept the old ID so an older board can be
+    updated.
+  - **`picotool load -f` never finding board 2, solved.** picotool only
+    recognizes a running board by itself when it uses one of Raspberry
+    Pi's stock product IDs; for any other ID it needs `--vid/--pid`, then
+    finds it through the reset interface and follows it across the reboot
+    by serial number. Confirmed on board 2 (`picotool info -f --vid 0x2e8a
+    --pid 0x100a` rebooted it into BOOTSEL and back). `tools/flash.sh`
+    wraps it; `firmware/AGENTS.md` has the details.
+  - **Firmware version** `TILES_FW_VERSION_*` (0.1.0): USB `bcdDevice`
+    (was a fixed 0x0100) and the MIDI Identity Reply's version bytes (were
+    a hand-kept 0.0.0.1).
+  - **SysEx manufacturer ID** `TILES_SYSEX_MANUFACTURER_ID` stays `0x7D`
+    -- the MIDI Association's non-commercial/development ID is the right
+    placeholder until SENTIA registers one -- but is now one constant; the
+    Identity Reply and Scene Launch each had their own copy.
+  - **Windows**: bcdUSB 2.1 with a BOS descriptor and a Microsoft OS 2.0
+    descriptor set, so Windows loads its WinUSB driver for the settings
+    interface (the future companion app's) and the picotool reset
+    interface by itself, instead of showing "unknown device" and needing a
+    Zadig driver install. Same mechanism pico-sdk uses for the reset
+    interface. Verified on macOS (enumerates as 1209:0001, bcdDevice
+    0.1.0, MIDI/console/settings all working after the flash); NOT yet
+    tested on Windows.

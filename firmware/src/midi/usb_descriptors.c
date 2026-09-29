@@ -25,22 +25,21 @@
 #include "board/unit_id.h"
 #include "pico/unique_id.h"
 #include "pico/usb_reset.h"
+#include "product_identity.h"
 #include "tusb.h"
 
 /* Full-speed only: RP2350's USB controller has no high-speed PHY, so
  * there is no separate high-speed descriptor path to maintain here
  * (unlike the TinyUSB examples this is adapted from, which support both). */
 
-/* SENTIA has no registered USB-IF vendor ID of its own yet, so this
- * borrows Raspberry Pi Trading's VID (0x2E8A), same informal practice
- * pico-sdk's own default descriptors use for RP-based boards. The PID
- * is deliberately NOT pico-sdk's reserved single-CDC-only default
- * (0x0009 on non-RP2040 targets) -- this is a different interface
- * layout (composite CDC+MIDI), and reusing that PID risks a host OS
- * reapplying a driver association it cached for the plain-CDC layout. */
-#define USB_VID 0x2E8Au
-#define USB_PID 0x100Au
-#define USB_BCD 0x0200u
+/* VID/PID and firmware version: midi/product_identity.h -- including why
+ * this is no longer Raspberry Pi's VID with a self-picked PID (that PID
+ * belonged to someone else's product).
+ *
+ * USB 2.1 (not 2.0) so Windows asks for the BOS descriptor below, which is
+ * how it learns -- without any driver install -- that the settings and
+ * reset interfaces want Microsoft's generic WinUSB driver. */
+#define USB_BCD 0x0210u
 
 /* -------------------------------------------------------------------- */
 /* Device descriptor                                                     */
@@ -59,9 +58,9 @@ tusb_desc_device_t const desc_device = {
 
     .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
 
-    .idVendor = USB_VID,
-    .idProduct = USB_PID,
-    .bcdDevice = 0x0100u,
+    .idVendor = TILES_USB_VID,
+    .idProduct = TILES_USB_PID,
+    .bcdDevice = TILES_USB_BCD_DEVICE,
 
     .iManufacturer = 0x01u,
     .iProduct = 0x02u,
@@ -122,6 +121,81 @@ uint8_t const desc_fs_configuration[] = {
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void)index;
     return desc_fs_configuration;
+}
+
+/* -------------------------------------------------------------------- */
+/* BOS + Microsoft OS 2.0 descriptors (Windows driverless access)        */
+/* -------------------------------------------------------------------- */
+
+/* Real feedback: "do 8 as how standardized stuff works. production ready
+ * industry stuff" (the standardization round). Windows binds a driver to
+ * every interface of a composite device; it has class drivers for CDC and
+ * MIDI, but NOT for a vendor-specific interface -- without this, the
+ * settings interface (usb_vendor/, the future companion app) and the
+ * picotool reset interface show up as "unknown device" and need a manual
+ * driver install (Zadig). The Microsoft OS 2.0 descriptor set below asks
+ * Windows to load its own WinUSB driver for exactly those two interfaces,
+ * automatically -- the standard way, and the one pico-sdk itself uses for
+ * the reset interface (pico_usb_reset/usb_reset.c, which this mirrors and
+ * extends; that file's own copy is off in this build because this project
+ * provides its own descriptors). macOS and Linux ignore all of this.
+ * NOT hardware-tested on Windows yet. */
+
+#define MS_OS_20_VENDOR_CODE 0x01u
+
+/* Function subset for the settings interface: WinUSB + a device interface
+ * GUID the companion app can look the device up by. Same layout as
+ * pico-sdk's RPI_RESET_MS_OS_20_DESCRIPTOR (and so the same length);
+ * the GUID is this project's own, generated for this interface. */
+#define TILES_CONTROL_MS_OS_20_DESC_LEN (0x08 + 0x14 + 0x80)
+#define TILES_CONTROL_MS_OS_20_DESCRIPTOR(itf_num)                                                                     \
+    U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION), itf_num, 0,                                 \
+        U16_TO_U8S_LE(TILES_CONTROL_MS_OS_20_DESC_LEN), U16_TO_U8S_LE(0x0014),                                         \
+        U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID), 'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00, 0x00, 0x00, 0x00,       \
+        0x00, 0x00, 0x00, 0x00, 0x00, U16_TO_U8S_LE(0x0080), U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),             \
+        U16_TO_U8S_LE(0x0001), U16_TO_U8S_LE(0x0028), 'D', 0, 'e', 0, 'v', 0, 'i', 0, 'c', 0, 'e', 0, 'I', 0, 'n', 0, \
+        't', 0, 'e', 0, 'r', 0, 'f', 0, 'a', 0, 'c', 0, 'e', 0, 'G', 0, 'U', 0, 'I', 0, 'D', 0, 0, 0,                  \
+        U16_TO_U8S_LE(0x004E), /* {8cfdc7ad-aecd-411d-9610-df8c9929713c} */                                            \
+        '{', 0, '8', 0, 'c', 0, 'f', 0, 'd', 0, 'c', 0, '7', 0, 'a', 0, 'd', 0, '-', 0, 'a', 0, 'e', 0, 'c', 0, 'd', 0, \
+        '-', 0, '4', 0, '1', 0, '1', 0, 'd', 0, '-', 0, '9', 0, '6', 0, '1', 0, '0', 0, '-', 0, 'd', 0, 'f', 0, '8', 0, \
+        'c', 0, '9', 0, '9', 0, '2', 0, '9', 0, '7', 0, '1', 0, '3', 0, 'c', 0, '}', 0, 0, 0
+
+#define MS_OS_20_DESC_LEN (0x0A + TILES_CONTROL_MS_OS_20_DESC_LEN + RPI_RESET_MS_OS_20_DESC_LEN)
+
+static uint8_t const desc_ms_os_20[] = {
+    /* Set header: length, type, Windows version (8.1+), total length */
+    U16_TO_U8S_LE(0x000A), U16_TO_U8S_LE(MS_OS_20_SET_HEADER_DESCRIPTOR), U32_TO_U8S_LE(0x06030000),
+    U16_TO_U8S_LE(MS_OS_20_DESC_LEN),
+    TILES_CONTROL_MS_OS_20_DESCRIPTOR(ITF_NUM_VENDOR),
+    RPI_RESET_MS_OS_20_DESCRIPTOR(ITF_NUM_RESET),
+};
+TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == MS_OS_20_DESC_LEN, "MS OS 2.0 descriptor set length");
+
+#define BOS_TOTAL_LEN (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
+
+static uint8_t const desc_bos[] = {
+    TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 1),
+    TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_DESC_LEN, MS_OS_20_VENDOR_CODE),
+};
+TU_VERIFY_STATIC(sizeof(desc_bos) == BOS_TOTAL_LEN, "BOS descriptor length");
+
+uint8_t const *tud_descriptor_bos_cb(void) {
+    return desc_bos;
+}
+
+/* Every vendor-type control request lands here (TinyUSB routes them before
+ * any class driver) -- the only one this device answers is Windows' "get
+ * the MS OS 2.0 descriptor set" (bRequest = the vendor code advertised in
+ * the BOS above, wIndex 7). Anything else stalls. The picotool reset
+ * request is a CLASS request to its interface, so it never comes here. */
+bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
+    if (stage != CONTROL_STAGE_SETUP) {
+        return true;
+    }
+    if (request->bRequest == MS_OS_20_VENDOR_CODE && request->wIndex == 7u) {
+        return tud_control_xfer(rhport, request, (void *)(uintptr_t)desc_ms_os_20, sizeof(desc_ms_os_20));
+    }
+    return false;
 }
 
 /* -------------------------------------------------------------------- */

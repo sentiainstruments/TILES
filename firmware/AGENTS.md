@@ -31,39 +31,48 @@ gives no error, just a board that won't boot). `brew install picotool`
 once, then, with the board **already running the app** (not BOOTSEL):
 
 ```bash
-picotool load -f -x -v --ignore-partitions firmware/build/src/sentia_tiles_firmware.uf2
+tools/flash.sh
+```
+
+which runs (for the current USB ID — see `src/midi/product_identity.h`):
+
+```bash
+picotool load -f --vid 0x1209 --pid 0x0001 -x -v --ignore-partitions firmware/build/src/sentia_tiles_firmware.uf2
 ```
 
 **`-f` reboots the board into BOOTSEL automatically** — no physical
-button. Real feedback: "will we be able to flash updates without
-putting the board in bootloader mode" → "yes add the software reboot
-command." This works because the firmware exposes a standard USB reset
-interface (`midi/usb_descriptors.c`'s `TUD_RPI_RESET_DESCRIPTOR`,
-enabled in `midi/tusb_config.h`) that `picotool` already knows how to
-use — the same mechanism `pico_stdio_usb` sets up by default, added
-here by hand because this project owns its own USB descriptors (see
-`tusb_config.h`'s own header comment on why). One command flashes,
-verifies, and reboots back into the application; confirm with
-`ls /dev/cu.usbmodem*` (present = booted into the app).
+button — flashes, verifies, and reboots back into the application. Real
+feedback: "will we be able to flash updates without putting the board
+in bootloader mode" → "yes add the software reboot command." This works
+because the firmware exposes pico-sdk's standard USB reset interface
+(`midi/usb_descriptors.c`'s `TUD_RPI_RESET_DESCRIPTOR`, enabled in
+`midi/tusb_config.h`), added by hand because this project owns its own
+USB descriptors. Confirm with `ls /dev/cu.usbmodem*` (present = booted
+into the app).
 
-**If `-f` finds no device** (the app crashed, or the board is already in
-BOOTSEL from a manual button press), it's a no-op — drop `-f` and use
-BOOTSEL as before. `picotool info -a` confirms the mode ("No accessible
-RP-series devices in BOOTSEL mode" = it isn't in one).
+**The `--vid/--pid` are required.** Without them `picotool` only looks
+for boards using Raspberry Pi's own stock product IDs and prints "No
+accessible RP-series devices in BOOTSEL mode were found" — the reason
+`-f` "never worked on board 2" (2026-09-28/29), found in the
+standardization round by reading picotool's device matching and then
+confirmed on board 2. With the ID given it reboots the board, follows it
+by USB serial number (the chip ID) and flashes it. `tools/flash.sh` also
+tries the pre-2026-09-29 ID (`0x2e8a 0x100a`) so an older board can
+still be updated, and `TILES_SERIAL=<chip id> tools/flash.sh` picks one
+board when several are connected.
+
+**If no running board is found** (the app crashed, or the board is
+already in BOOTSEL from a manual button press), `tools/flash.sh` flashes
+a board that's in BOOTSEL as is. `picotool info -a` confirms the mode
+("No accessible RP-series devices in BOOTSEL mode" = it isn't in one).
 
 **Software-only reboot**, without `picotool` or a firmware load — e.g.
 from a script or the future companion app — over the settings USB
 vendor interface (`usb_vendor/usb_vendor.c`, `shared/protocol/
 README.md`): `REBOOT BOOTSEL` (into the bootloader, for reflashing) or
 `REBOOT APP` (a plain warm restart, for testing a fresh boot).
-`tools/tiles_control.py reboot bootsel` / `reboot app`.
-
-**In practice, prefer this over `-f`.** On 2026-09-28/29, `picotool load
--f` (and `picotool reboot -f -u`) could not find board 2 even while it
-was running the app — every attempt printed "No accessible RP-series
-devices in BOOTSEL mode were found" — cause not investigated. The
-settings-shell reboot worked every time, so the reliable no-button flash
-is (tool setup — a virtualenv with `pyusb` — in `tools/README.md`):
+`tools/tiles_control.py reboot bootsel` / `reboot app` (tool setup — a
+virtualenv with `pyusb` — in `tools/README.md`). Still a valid fallback:
 
 ```bash
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py reboot bootsel

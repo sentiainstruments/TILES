@@ -17,6 +17,7 @@
 #include "midi_out.h"
 #include "note_map.h"
 #include "octave_control.h"
+#include "product_identity.h"
 #include "standby.h"
 #include "touch.h"
 
@@ -7049,15 +7050,13 @@ static void song_capture_exit(void) {
  * handle_scene_launch_taps()'s own scene-launch branch for what starts
  * the flash, and render_scene_launch_underglow() for what ends it. */
 
-/* MMA-reserved "non-commercial/educational use" manufacturer ID -- the
- * correct, spec-sanctioned choice for DIY hardware with no registered
- * ID of its own (same spirit as usb_descriptors.c's own borrowed-but-
- * documented Raspberry Pi USB VID, except this is an ACTUAL reserved-
- * for-this-situation value, not a borrowed one). Sub-ID scopes this
- * codebase's own messages under it, in case a future feature also
- * wants a SysEx channel under the same manufacturer ID without
+/* The manufacturer ID is midi/product_identity.h's TILES_SYSEX_MANUFACTURER_ID
+ * (the non-commercial/development ID 0x7D until SENTIA registers its own --
+ * see that file); this used to be a second, separate copy of it. Sub-ID
+ * scopes this codebase's own messages under it, in case a future feature
+ * also wants a SysEx channel under the same manufacturer ID without
  * colliding with this one. */
-#define OP_SCENE_SYSEX_MFR_ID 0x7Du
+#define OP_SCENE_SYSEX_MFR_ID TILES_SYSEX_MANUFACTURER_ID
 #define OP_SCENE_SYSEX_SUB_ID 0x01u
 
 /* Ableton -> TILES only now (see this section's own scene_on_sysex()

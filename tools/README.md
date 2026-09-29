@@ -29,6 +29,20 @@ Stop it (Ctrl+C) before deliberately reflashing a board -- it will otherwise
 race with `picotool load`, kicking the board back into the app before the
 flash tool gets to touch it.
 
+## flash.sh
+
+Flashes a board that's running the app -- no BOOTSEL button:
+
+```
+tools/flash.sh                                   # default build output, one board connected
+TILES_SERIAL=F1A60E66E44C9D4B tools/flash.sh     # one of several boards (serial = chip ID)
+```
+
+It's `picotool load -f` with the board's USB ID spelled out (`--vid/--pid`).
+Without the ID, picotool only recognizes boards using Raspberry Pi's stock
+product IDs, which is why a plain `picotool load -f` never found board 2. See
+the script's header and `firmware/AGENTS.md`'s "Flash" section.
+
 ## tiles_control.py
 
 Host-side, not firmware -- exercises the USB vendor control protocol's
@@ -68,12 +82,18 @@ worth knowing about:
   light harmonic touches get missed, lower it if chords leak harmonics;
   see `firmware/src/services/README.md` for the data behind the defaults.
 
-**Rebooting into the bootloader for flashing**, no BOOTSEL button:
+**Rebooting into the bootloader for flashing**, no BOOTSEL button --
+`flash.sh` (below) is the usual way now; this still works as a fallback:
 
 ```
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py reboot bootsel
 sleep 2 && picotool load -x -v --ignore-partitions firmware/build/src/sentia_tiles_firmware.uf2
 ```
+
+The tool finds the board by its USB ID (`firmware/src/midi/product_identity.h`
+-- the pid.codes test ID `1209:0001` while TILES is pre-production) and also
+accepts the ID firmware used before 2026-09-29 (`2E8A:100A`, which turned out
+to belong to another product), so an older board can still be updated.
 
 Each command first discards any reply an earlier, interrupted run left
 queued on the device -- a `schema` piped through `grep` right after a

@@ -16,11 +16,21 @@ investing in the bigger design.
 
 ## Transport
 
-A dedicated USB vendor-class interface (VID `0x2E8A`, PID `0x100A`,
-interface string "SENTIA TILES Control"), separate from both the CDC
-diagnostics console and the MIDI interface -- implemented in
-`../../firmware/src/usb_vendor/usb_vendor.c`. Full-speed bulk endpoints,
-64-byte packets.
+A dedicated USB vendor-class interface (interface string "SENTIA TILES
+Control"), separate from both the CDC diagnostics console and the MIDI
+interface -- implemented in `../../firmware/src/usb_vendor/usb_vendor.c`.
+Full-speed bulk endpoints, 64-byte packets.
+
+The device's USB ID is `firmware/src/midi/product_identity.h`'s: the
+pid.codes TEST ID `0x1209:0x0001` while TILES is pre-production (in-house
+use only -- it must become a real allocated ID before any unit is given
+out; that file says how). Firmware before 2026-09-29 used `0x2E8A:0x100A`,
+a Raspberry Pi product ID that turned out to be allocated to another
+company's board. A host should identify TILES by the interface string, not
+the ID alone. On Windows the interface binds to Microsoft's WinUSB driver
+automatically (Microsoft OS 2.0 descriptors, device interface GUID
+`{8cfdc7ad-aecd-411d-9610-df8c9929713c}`) -- no driver install; not yet
+tested on a Windows machine.
 
 ## Wire format
 
@@ -241,7 +251,10 @@ track that itself now, mirroring `op_mode.c`'s own
 `s_scene_track_offset`).
 
 The Ableton -> TILES SysEx frames are unchanged: manufacturer ID
-`0x7D` (MMA-reserved "non-commercial/educational use"), sub-ID `0x01`,
+`0x7D` (MMA-reserved "non-commercial/educational use" -- the correct
+placeholder for an unregistered, pre-production product; one constant,
+`TILES_SYSEX_MANUFACTURER_ID` in `firmware/src/midi/product_identity.h`,
+shared with the MIDI Identity Reply), sub-ID `0x01`,
 parsed firmware-side by `firmware/src/midi/midi_in.c` and handled by
 `op_mode.c`'s own "Scene Launch mode" section. `track` is 0-based, up
 to 63 (`OP_SCENE_MAX_TRACKS`/`MAX_TRACKS`, firmware/Python

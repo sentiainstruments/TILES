@@ -44,24 +44,34 @@ except ImportError:
     print("pyusb is required: pip install pyusb (and `brew install libusb` on macOS)", file=sys.stderr)
     sys.exit(1)
 
-# Must match firmware/src/midi/usb_descriptors.c's own USB_VID/USB_PID.
-VID = 0x2E8A
-PID = 0x100A
+# Must match firmware/src/midi/product_identity.h's TILES_USB_VID/_PID -- the
+# pid.codes test ID while TILES is pre-production (see that file). Firmware
+# from before 2026-09-29 used 0x2E8A:0x100A, which turned out to be another
+# product's ID; it's still recognized so an older board can be updated.
+USB_IDS = [(0x1209, 0x0001), (0x2E8A, 0x100A)]
 
 # Must match firmware/src/midi/usb_descriptors.c's own vendor interface
-# string ("SENTIA TILES Control") -- used only to pick the right
-# interface out of the device's composite CDC+MIDI+Vendor descriptor
-# set, not sent over the wire.
+# string ("SENTIA TILES Control") -- used to pick the right interface out
+# of the device's composite CDC+MIDI+Vendor descriptor set, and it's what
+# actually identifies a TILES board (the IDs above only narrow the search),
+# so a future change of USB ID doesn't strand this tool.
 VENDOR_INTERFACE_STRING = "SENTIA TILES Control"
 
 TIMEOUT_MS = 2000
 
 
+def find_device():
+    for vid, pid in USB_IDS:
+        device = usb.core.find(idVendor=vid, idProduct=pid)
+        if device is not None:
+            return device
+    ids = ", ".join(f"{vid:04X}:{pid:04X}" for vid, pid in USB_IDS)
+    print(f"No SENTIA TILES device found (looked for USB IDs {ids}). Is it plugged in?", file=sys.stderr)
+    sys.exit(1)
+
+
 def find_vendor_endpoints():
-    device = usb.core.find(idVendor=VID, idProduct=PID)
-    if device is None:
-        print(f"No SENTIA TILES device found (VID=0x{VID:04X} PID=0x{PID:04X}). Is it plugged in?", file=sys.stderr)
-        sys.exit(1)
+    device = find_device()
 
     for cfg in device:
         for interface in cfg:

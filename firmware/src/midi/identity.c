@@ -2,6 +2,7 @@
 
 #include "midi_in.h"
 #include "midi_out.h"
+#include "product_identity.h"
 
 #include <stddef.h>
 
@@ -10,15 +11,6 @@
 #define SUB_ID_IDENTITY_REQUEST 0x01u
 #define SUB_ID_IDENTITY_REPLY 0x02u
 #define DEVICE_ID_UNADDRESSED 0x7Fu
-
-/* MMA-reserved "non-commercial/educational use" manufacturer ID -- the same
- * one daw-integration's own Scene Launch protocol already uses (see this
- * file's own header comment for why that's a different, unrelated use of
- * the same ID), appropriate here for the same reason: SENTIA has no
- * registered manufacturer ID of its own (see midi/usb_descriptors.c's own
- * header comment on borrowing Raspberry Pi Trading's USB VID for the same
- * underlying reason). */
-#define TILES_IDENTITY_MANUFACTURER_ID 0x7Du
 
 /* Family / family-member code: self-assigned, since a non-commercial
  * manufacturer ID has no registry to assign real ones from -- these only
@@ -31,15 +23,9 @@
 #define TILES_IDENTITY_MEMBER_LSB 0x00u /* Rev A0 */
 #define TILES_IDENTITY_MEMBER_MSB 0x00u
 
-/* Software version, 4 bytes -- no real firmware version scheme exists in
- * this codebase yet (nothing else here tracks one), so this is a plain,
- * manually-maintained placeholder rather than new versioning
- * infrastructure invented as a side effect of this one feature. Update by
- * hand if a real scheme is ever built. */
-#define TILES_IDENTITY_VERSION_1 0u
-#define TILES_IDENTITY_VERSION_2 0u
-#define TILES_IDENTITY_VERSION_3 0u
-#define TILES_IDENTITY_VERSION_4 1u
+/* Software version, 4 bytes (format is the manufacturer's choice): major,
+ * minor, patch, 0 -- the same firmware version USB reports as bcdDevice,
+ * both from midi/product_identity.h. */
 
 static void identity_on_sysex(const uint8_t *data, size_t len) {
     /* Request payload (the bytes strictly between F0/F7, per midi_in.h's
@@ -54,15 +40,15 @@ static void identity_on_sysex(const uint8_t *data, size_t len) {
                        DEVICE_ID_UNADDRESSED,
                        SUB_ID_GENERAL_INFO,
                        SUB_ID_IDENTITY_REPLY,
-                       TILES_IDENTITY_MANUFACTURER_ID,
+                       TILES_SYSEX_MANUFACTURER_ID,
                        TILES_IDENTITY_FAMILY_LSB,
                        TILES_IDENTITY_FAMILY_MSB,
                        TILES_IDENTITY_MEMBER_LSB,
                        TILES_IDENTITY_MEMBER_MSB,
-                       TILES_IDENTITY_VERSION_1,
-                       TILES_IDENTITY_VERSION_2,
-                       TILES_IDENTITY_VERSION_3,
-                       TILES_IDENTITY_VERSION_4};
+                       TILES_FW_VERSION_MAJOR,
+                       TILES_FW_VERSION_MINOR,
+                       TILES_FW_VERSION_PATCH,
+                       0u};
     tiles_midi_send_sysex(reply, sizeof(reply));
 }
 
