@@ -102,6 +102,7 @@ refused, not clamped); the default is whatever the owning module boots with --
 |---|---|---|---|---|---|
 | 0x0100 | `pedal.mode` | enum | `sustain`, `expression` | `sustain` | yes |
 | 0x0101 | `pedal.polarity` | enum | `normally_open`, `normally_closed` | `normally_open` | yes |
+| 0x0102 | `pedal.sustain_style` | enum | `synth` (pedal sends CC64, the synth sustains -- standard), `hold` (no CC64; TILES keeps real notes on until the pedal lifts, so harmonic plucks still release) | `synth` | yes |
 | 0x0200 | `expression.mpe_enabled` | bool | | `1` | yes |
 | 0x0201 | `expression.pitch_bend_sensitivity` | float | 0.001 - 1.0 (max cosine deviation) | `0.065` | yes |
 | 0x0202 | `expression.aftertouch_sensitivity` | uint | 1 - 65535 (full-scale depth) | `1450` | yes |

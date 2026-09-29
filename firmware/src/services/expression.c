@@ -1239,6 +1239,19 @@ typedef struct {
     float pitch_bend_wiggle_energy;
     bool pitch_bend_wiggle_active;
     uint32_t pitch_bend_wiggle_start_ms;
+
+    /* pedal.sustain_style HOLD (services/pedal.h): this pad's last note,
+     * released by the finger but kept ON by TILES until the pedal lifts.
+     * At most one per pad -- the pad's next strike closes it first (see
+     * release_held_note()), so the held note and a live note never share a
+     * pad. In MPE mode its channel stays claimed (in_use, owner_pad = this
+     * pad) until then, so no other note is placed on a channel that's
+     * still sounding. held_* are captured at release, not read live later,
+     * since active_note/midi_channel move on with the pad's next note. */
+    bool held;
+    uint8_t held_channel;
+    uint8_t held_note;
+    uint8_t held_release_velocity;
 } pad_expr_t;
 
 static pad_expr_t s_pads[TILES_NUM_PADS];
@@ -1293,6 +1306,70 @@ static void set_channel_in_use(uint8_t index, bool in_use) {
     } else {
         tiles_midi_channels_note_channel_released(channel);
     }
+}
+
+/* ---- pedal.sustain_style HOLD: TILES holds released notes itself ---------
+ * Real feedback: "well ideally the harmonics dont have sustain thats the
+ * thing. can we release those ?" -> "make it a setting, flash it off by
+ * default." MIDI sustain (CC64) holds every note in its channel/MPE zone,
+ * harmonic plucks included, so the only way to sustain real notes but not
+ * harmonics is for TILES to hold the real notes itself -- see services/
+ * pedal.h's tiles_pedal_sustain_style_t. This is the controller-side
+ * deferral an earlier round removed, rebuilt without the bugs that got it
+ * removed (services/README.md, the "SUPERSEDES the two sustain entries"
+ * entry): every end-of-note path holds, not just the rare touch-lift one
+ * (the retrigger path was bypassing it); a pad that strikes again closes
+ * its held note first, like re-striking a piano key, so a held note can
+ * never be left behind by a second Note-On; and it's off by default. */
+
+/* Sends a held note's real Note-Off and frees its MPE channel. No-op if
+ * the pad isn't holding one. */
+static void release_held_note(pad_expr_t *s) {
+    if (!s->held) {
+        return;
+    }
+    s->held = false;
+    tiles_midi_note_off(s->held_channel, s->held_note, s->held_release_velocity);
+    if (s->held_channel != TILES_MIDI_MPE_MASTER_CHANNEL) {
+        uint8_t idx = (uint8_t)(s->held_channel - TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL);
+        if (idx < TILES_MIDI_SHARED_POOL_SIZE) {
+            set_channel_in_use(idx, false);
+        }
+    }
+}
+
+static void release_all_held_notes(void) {
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        release_held_note(&s_pads[i]);
+    }
+}
+
+/* Edge-tracks tiles_pedal_is_holding_notes() so tiles_expression_scan()
+ * releases every held note exactly once, the moment holding stops. */
+static bool s_prev_holding_notes;
+
+/* Closes any held note of this pitch, whichever pad holds it, before the
+ * same pitch sounds again -- with MPE off every note shares one channel,
+ * so a second Note-On for a still-held pitch would leave one of the two
+ * without a Note-Off; with MPE on it would stack identical notes on two
+ * channels, which the MPE spec (section 3.2) warns against. */
+static void release_held_notes_of_pitch(uint8_t note) {
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        if (s_pads[i].held && s_pads[i].held_note == note) {
+            release_held_note(&s_pads[i]);
+        }
+    }
+}
+
+/* True if MPE slot `idx` is a note TILES is holding for the pedal (no
+ * finger on it) rather than a live, played note -- see pad_expr_t's held. */
+static bool slot_is_held_note(uint8_t idx) {
+    uint8_t owner = s_mpe_channels[idx].owner_pad;
+    if (owner == 0u || owner > TILES_NUM_PADS) {
+        return false;
+    }
+    const pad_expr_t *o = &s_pads[owner - 1u];
+    return o->held && o->held_channel == (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + idx);
 }
 
 /* ============================================================================
@@ -1963,6 +2040,7 @@ void tiles_expression_init(void) {
     s_next_mpe_claim_seq = 1u;
     s_mpe_enabled = true;
     s_non_mpe_owner_pad = 0u;
+    s_prev_holding_notes = false; /* s_pads' held_* were just zeroed above */
     s_pitch_bend_enabled = false;
     s_expression_muted = false;
     for (uint8_t i = 0; i < HARMONIC_MAX_VOICES; i++) {
@@ -2434,6 +2512,11 @@ void tiles_expression_set_muted(bool muted) {
  * unconsulted while s_mpe_enabled is true, and the first note struck
  * after switching back to non-MPE will correctly claim it fresh. */
 void tiles_expression_set_mpe_enabled(bool enabled) {
+    /* Close any notes held for the pedal (pedal.sustain_style HOLD) before
+     * the zone changes -- the MPE spec (section 2.1.4) has receivers stop
+     * every note on a zone change anyway, so this just keeps the held
+     * records in step with what the synth is actually doing. */
+    release_all_held_notes();
     s_mpe_enabled = enabled;
     printf("[expression] MPE mode %s\n", enabled ? "enabled" : "disabled (single-channel, standard MIDI)");
     /* Real gap found researching this rework: turning MPE off here used to
@@ -2680,14 +2763,34 @@ static uint8_t find_most_recent_held_pad(uint8_t exclude_pad) {
  * measure, so the only one that sends a real release velocity. Every
  * other caller (a hard reset, a channel steal, a clean retrigger) ends
  * the note for a reason unrelated to how fast a finger moved, so they
- * get 0 ("no release-velocity data"). */
-static void end_held_note(pad_expr_t *s, uint8_t pad, bool player_release) {
+ * get 0 ("no release-velocity data").
+ *
+ * may_hold: with pedal.sustain_style HOLD and the pedal down (tiles_pedal_
+ * is_holding_notes()), the Note-Off is NOT sent -- the note is recorded in
+ * this pad's held_* and stays ON until release_held_note() (pedal up, the
+ * pad striking again, or the same pitch sounding again). True for both
+ * ways a finger lets go -- touch ending AND the retrigger path (depth back
+ * at rest while still touching, what a finger lift usually does first).
+ * False for a steal or a hard reset, which need the note gone now. The
+ * haptic stop, CV/gate note-off and pitch-bend recenter still happen
+ * immediately either way -- the finger really has left; only the synth's
+ * Note-Off waits. With the default SYNTH style this never holds -- the
+ * Note-Off goes out and the synth sustains via CC64, as above. */
+static void end_held_note(pad_expr_t *s, uint8_t pad, bool player_release, bool may_hold) {
     tiles_cv_gate_note_off(s->active_note);
     tiles_haptics_stop(pad);
     tiles_midi_send_pitch_bend(s->midi_channel, PITCH_BEND_CENTER);
     s->pitch_bend_active = false;
     uint8_t release_velocity = player_release ? release_velocity_from_fall_rate(s->depth_fall_rate) : 0u;
-    tiles_midi_note_off(s->midi_channel, s->active_note, release_velocity);
+    bool hold = may_hold && tiles_pedal_is_holding_notes();
+    if (hold) {
+        s->held = true;
+        s->held_channel = s->midi_channel;
+        s->held_note = s->active_note;
+        s->held_release_velocity = release_velocity;
+    } else {
+        tiles_midi_note_off(s->midi_channel, s->active_note, release_velocity);
+    }
     if (s->midi_channel == TILES_MIDI_MPE_MASTER_CHANNEL) {
         /* Real bug this addition itself would otherwise introduce: the
          * MPE-only cleanup below computes idx as midi_channel minus
@@ -2713,7 +2816,8 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool player_release) {
                 tiles_midi_send_pitch_bend(TILES_MIDI_MPE_MASTER_CHANNEL, next->pitch_bend_last_sent);
             }
         }
-    } else {
+    } else if (!hold) {
+        /* A held note keeps its channel claimed until release_held_note(). */
         uint8_t idx = (uint8_t)(s->midi_channel - TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL);
         set_channel_in_use(idx, false);
     }
@@ -2728,16 +2832,20 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool player_release) {
  * needs its state reset -- calling end_held_note() on one of those would
  * send a bogus note-off and free an MPE channel that was never claimed.
  * Passes false for player_release -- a hard reset isn't a finger lifting,
- * so there's no release velocity to report. */
+ * so there's no release velocity to report -- and false for may_hold, and
+ * releases any notes already held for the pedal (pedal.sustain_style HOLD):
+ * game mode owns the board once this returns, so nothing would release
+ * them until control comes back. */
 void tiles_expression_force_release_all(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         uint8_t pad = (uint8_t)(i + 1u);
         pad_expr_t *s = &s_pads[i];
         if (s->state == PAD_STATE_NOTE_ON) {
-            end_held_note(s, pad, false);
+            end_held_note(s, pad, false, false);
         }
         s->state = PAD_STATE_IDLE;
     }
+    release_all_held_notes();
 }
 
 /* MPE Member Channel allocator -- see s_mpe_channels' own comment for
@@ -2799,7 +2907,17 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
         if (s_mpe_channels[i].owner_pad == 0u) {
             continue;
         }
-        if (oldest_idx == zone_size || s_mpe_channels[i].claim_seq < s_mpe_channels[oldest_idx].claim_seq) {
+        /* A note TILES is holding for the pedal (pedal.sustain_style HOLD --
+         * no finger on it) goes before any note being actively played; the
+         * oldest claim wins within each group, as before. */
+        bool better = oldest_idx == zone_size;
+        if (!better) {
+            bool i_held = slot_is_held_note(i);
+            bool best_held = slot_is_held_note(oldest_idx);
+            better = (i_held != best_held) ? i_held
+                                           : s_mpe_channels[i].claim_seq < s_mpe_channels[oldest_idx].claim_seq;
+        }
+        if (better) {
             oldest_idx = i;
         }
     }
@@ -2831,20 +2949,27 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
      * reach ("now the issue happens when i press 8 keys or more"). Removed
      * pre-emptively, same reasoning as the harmonics pluck trace above. */
     pad_expr_t *stolen = &s_pads[stolen_pad - 1u];
-    end_held_note(stolen, stolen_pad, false);
-    /* PAD_STATE_STOLEN, not PAD_STATE_IDLE -- see that state's own
-     * comment. Real feedback: "we need a way to cut that error out even
-     * if its unlikely for people to do it." A pad still physically held
-     * at the instant it's stolen used to go straight back to
-     * PAD_STATE_IDLE, and the main scan loop's PAD_STATE_IDLE branch has
-     * no way to tell "genuinely just touched" from "was already resting
-     * here" -- begin_awaiting_strike() reads whatever depth the pad is
-     * CURRENTLY at as its starting point, so an already-pressed pad read
-     * as an instant, max-velocity strike one scan later: a spurious
-     * Note-On (the reported "glitch") plus the haptic kick that comes
-     * with any real note-on (the reported "retriggering"). Now stays
-     * silent until it's genuinely released and touched again. */
-    stolen->state = PAD_STATE_STOLEN;
+    if (slot_is_held_note(oldest_idx)) {
+        /* A note TILES is holding for the pedal (pedal.sustain_style HOLD):
+         * no finger on it and its pad has moved on, so just close it -- its
+         * Note-Off, channel freed -- without touching the pad's own state. */
+        release_held_note(stolen);
+    } else {
+        end_held_note(stolen, stolen_pad, false, false);
+        /* PAD_STATE_STOLEN, not PAD_STATE_IDLE -- see that state's own
+         * comment. Real feedback: "we need a way to cut that error out even
+         * if its unlikely for people to do it." A pad still physically held
+         * at the instant it's stolen used to go straight back to
+         * PAD_STATE_IDLE, and the main scan loop's PAD_STATE_IDLE branch has
+         * no way to tell "genuinely just touched" from "was already resting
+         * here" -- begin_awaiting_strike() reads whatever depth the pad is
+         * CURRENTLY at as its starting point, so an already-pressed pad read
+         * as an instant, max-velocity strike one scan later: a spurious
+         * Note-On (the reported "glitch") plus the haptic kick that comes
+         * with any real note-on (the reported "retriggering"). Now stays
+         * silent until it's genuinely released and touched again. */
+        stolen->state = PAD_STATE_STOLEN;
+    }
     /* Real bug found reviewing this function, not from real feedback:
      * end_held_note() above sets in_use=false for the stolen channel
      * (freeing its OLD owner), and this steal path hands that same
@@ -2864,6 +2989,17 @@ static uint8_t claim_mpe_channel(uint8_t pad) {
 
 void tiles_expression_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+
+    /* pedal.sustain_style HOLD: the instant holding stops -- pedal up, style
+     * switched to SYNTH, or the jack switched to expression -- every note
+     * TILES was holding gets its real Note-Off. Runs before the per-pad loop
+     * so a channel freed here is already available to a strike this same
+     * scan. Never true in the default SYNTH style. */
+    bool holding = tiles_pedal_is_holding_notes();
+    if (s_prev_holding_notes && !holding) {
+        release_all_held_notes();
+    }
+    s_prev_holding_notes = holding;
 
     /* Keeps the receiver's understanding of the live MPE Lower Zone's size
      * (services/midi_channels.h) from ever going stale as Song mode's own
@@ -3019,6 +3155,14 @@ void tiles_expression_scan(void) {
                  * spending a Member Channel (and its steal-eviction
                  * machinery) on a note that was never going to use it
                  * as an independent channel anyway. */
+                /* pedal.sustain_style HOLD: close this pad's own held note,
+                 * and any held note of the same pitch, BEFORE the new Note-On
+                 * -- re-striking a held key, like a piano. Keeps one Note-Off
+                 * for every Note-On (the bug that got the old deferral
+                 * removed) and frees the held channel before claiming one.
+                 * No-ops in the default SYNTH style (nothing is ever held). */
+                release_held_note(s);
+                release_held_notes_of_pitch(s->active_note);
                 s->midi_channel = s_mpe_enabled ? claim_mpe_channel(pad) : TILES_MIDI_MPE_MASTER_CHANNEL;
                 init_pitch_bend_for_pad(s, pad, now_ms);
                 s->touch_claim_seq = s_next_mpe_claim_seq++;
@@ -3076,7 +3220,7 @@ void tiles_expression_scan(void) {
         if (!touched) {
             /* The one real "player let go" event -- the only call site that
              * passes player_release=true (see end_held_note()'s comment). */
-            end_held_note(s, pad, true);
+            end_held_note(s, pad, true, true);
             s->state = PAD_STATE_IDLE;
             continue;
         }
@@ -3094,7 +3238,10 @@ void tiles_expression_scan(void) {
          * brand-new note-on with its own freshly computed velocity
          * through the exact same path as any other strike. */
         if ((now_ms - s->note_on_ms) >= RETRIGGER_GRACE_MS && raw_depth <= RETRIGGER_ARM_DEPTH_DELTA) {
-            end_held_note(s, pad, false); /* a retrigger, not a finger lift -- no release velocity to report */
+            /* A retrigger, not a finger lift -- no release velocity to report;
+             * but it IS the finger letting go, so it may be held for the pedal
+             * (and the pad's next strike closes it -- see release_held_note()). */
+            end_held_note(s, pad, false, true);
             begin_awaiting_strike(s, pad, now_ms);
             continue;
         }

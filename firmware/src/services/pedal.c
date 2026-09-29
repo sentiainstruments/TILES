@@ -46,12 +46,17 @@
 
 static tiles_pedal_polarity_t s_polarity = TILES_PEDAL_DEFAULT_POLARITY;
 static tiles_pedal_mode_t s_mode = TILES_PEDAL_DEFAULT_MODE;
+static tiles_pedal_sustain_style_t s_sustain_style = TILES_PEDAL_DEFAULT_SUSTAIN_STYLE;
 
 static uint16_t s_raw;
 static bool s_raw_low;       /* most recent sample's side of the hysteresis band */
 static bool s_debounced_low; /* stable-for-N-ms version of the above */
 static uint32_t s_last_change_ms;
-static bool s_last_sent_sustained;
+/* Two separate facts since pedal.sustain_style: whether the pedal is DOWN
+ * (debounced -- what harmonics and HOLD read), and whether the synth has
+ * been TOLD so (CC64 on) -- which only ever happens in SYNTH style. */
+static bool s_sustain_pressed;
+static bool s_cc64_on;
 static uint8_t s_last_sent_expression_cc;
 
 void tiles_pedal_init(void) {
@@ -63,7 +68,8 @@ void tiles_pedal_init(void) {
     s_raw_low = s_raw < SUSTAIN_PRESS_THRESHOLD;
     s_debounced_low = s_raw_low;
     s_last_change_ms = to_ms_since_boot(get_absolute_time());
-    s_last_sent_sustained = false;
+    s_sustain_pressed = false;
+    s_cc64_on = false;
     s_last_sent_expression_cc = 0xFFu; /* out of MIDI CC range -- forces the first real send */
 }
 
@@ -181,13 +187,17 @@ static void scan_sustain(void) {
         s_debounced_low = raw_low;
     }
 
-    bool pressed = low_side_means_pressed() ? s_debounced_low : !s_debounced_low;
-    if (pressed != s_last_sent_sustained) {
-        s_last_sent_sustained = pressed;
+    s_sustain_pressed = low_side_means_pressed() ? s_debounced_low : !s_debounced_low;
+    /* HOLD style never tells the synth -- services/expression.c holds the
+     * notes itself (tiles_pedal_sustain_style_t). Reconciled every scan, so
+     * a style switch with the pedal down lands on the very next scan. */
+    bool cc64_on = s_sustain_pressed && s_sustain_style == TILES_PEDAL_SUSTAIN_SYNTH;
+    if (cc64_on != s_cc64_on) {
+        s_cc64_on = cc64_on;
         /* Master Channel (plus the fixed parts) -- under MPE the Master
          * Channel's CC64 holds every note in the zone at once; see
          * send_pedal_cc()'s own comment. */
-        send_pedal_cc(MIDI_CC_SUSTAIN, pressed ? 127u : 0u);
+        send_pedal_cc(MIDI_CC_SUSTAIN, cc64_on ? 127u : 0u);
     }
 }
 
@@ -246,9 +256,12 @@ void tiles_pedal_set_mode(tiles_pedal_mode_t mode) {
     if (mode == s_mode) {
         return;
     }
-    if (s_mode == TILES_PEDAL_MODE_SUSTAIN && s_last_sent_sustained) {
-        s_last_sent_sustained = false;
-        send_pedal_cc(MIDI_CC_SUSTAIN, 0u);
+    if (s_mode == TILES_PEDAL_MODE_SUSTAIN) {
+        if (s_cc64_on) {
+            s_cc64_on = false;
+            send_pedal_cc(MIDI_CC_SUSTAIN, 0u);
+        }
+        s_sustain_pressed = false; /* also ends any HOLD (see tiles_pedal_is_holding_notes()) */
     } else if (s_mode == TILES_PEDAL_MODE_EXPRESSION) {
         /* 127, not 0 -- the MIDI-spec default for CC11 (and what a
          * synth already assumes before ever receiving one) is FULL
@@ -269,8 +282,20 @@ tiles_pedal_mode_t tiles_pedal_get_mode(void) {
     return s_mode;
 }
 
+void tiles_pedal_set_sustain_style(tiles_pedal_sustain_style_t style) {
+    s_sustain_style = style;
+}
+
+tiles_pedal_sustain_style_t tiles_pedal_get_sustain_style(void) {
+    return s_sustain_style;
+}
+
 bool tiles_pedal_is_sustained(void) {
-    return s_mode == TILES_PEDAL_MODE_SUSTAIN && s_last_sent_sustained;
+    return s_mode == TILES_PEDAL_MODE_SUSTAIN && s_sustain_pressed;
+}
+
+bool tiles_pedal_is_holding_notes(void) {
+    return tiles_pedal_is_sustained() && s_sustain_style == TILES_PEDAL_SUSTAIN_HOLD;
 }
 
 uint16_t tiles_pedal_get_raw(void) {

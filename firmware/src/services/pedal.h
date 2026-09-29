@@ -60,6 +60,26 @@ typedef enum {
 
 #define TILES_PEDAL_DEFAULT_MODE TILES_PEDAL_MODE_SUSTAIN
 
+/* Who does the sustaining (settings key `pedal.sustain_style`). Real
+ * feedback: "well ideally the harmonics dont have sustain thats the thing.
+ * can we release those ?" -> "make it a setting, flash it off by default."
+ *   - SYNTH (default, standard MIDI): the pedal sends CC64 and the synth
+ *     holds released notes. MIDI sustain applies to every note on the
+ *     channel (in MPE, the whole zone) -- there is no per-note exemption,
+ *     so harmonic plucks get held too.
+ *   - HOLD: no CC64 is ever sent; services/expression.c keeps each real
+ *     note ON itself while the pedal is down and sends its Note-Off when
+ *     the pedal lifts (tiles_pedal_is_holding_notes()). Harmonic plucks
+ *     still end after their own pluck time. The synth never sees a pedal
+ *     (no half-pedal/resonance effects, no sustain lane when recording --
+ *     recorded notes are simply longer). */
+typedef enum {
+    TILES_PEDAL_SUSTAIN_SYNTH = 0,
+    TILES_PEDAL_SUSTAIN_HOLD = 1,
+} tiles_pedal_sustain_style_t;
+
+#define TILES_PEDAL_DEFAULT_SUSTAIN_STYLE TILES_PEDAL_SUSTAIN_SYNTH
+
 /* Configures GP26 as an ADC input. Must run after board_init(). */
 void tiles_pedal_init(void);
 
@@ -81,9 +101,22 @@ tiles_pedal_polarity_t tiles_pedal_get_polarity(void);
 void tiles_pedal_set_mode(tiles_pedal_mode_t mode);
 tiles_pedal_mode_t tiles_pedal_get_mode(void);
 
-/* Debounced sustain state, already polarity-corrected. Always false
- * while tiles_pedal_get_mode() != TILES_PEDAL_MODE_SUSTAIN. */
+/* Switches who does the sustaining -- see tiles_pedal_sustain_style_t. Safe
+ * mid-performance: the next scan sends CC64=0 if switching to HOLD with the
+ * pedal down (the synth stops holding), or CC64=127 if switching to SYNTH
+ * with it down; services/expression.c releases its own held notes the
+ * moment tiles_pedal_is_holding_notes() goes false. */
+void tiles_pedal_set_sustain_style(tiles_pedal_sustain_style_t style);
+tiles_pedal_sustain_style_t tiles_pedal_get_sustain_style(void);
+
+/* Debounced sustain state (the physical pedal), already polarity-corrected,
+ * in either sustain style. Always false while tiles_pedal_get_mode() !=
+ * TILES_PEDAL_MODE_SUSTAIN. */
 bool tiles_pedal_is_sustained(void);
+
+/* True while TILES itself must hold released notes: the pedal is down AND
+ * the style is TILES_PEDAL_SUSTAIN_HOLD. */
+bool tiles_pedal_is_holding_notes(void);
 
 /* Latest raw ADC reading (0-4095), for diagnostics. */
 uint16_t tiles_pedal_get_raw(void);

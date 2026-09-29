@@ -9129,5 +9129,42 @@ not its code.
   The pluck itself moved unchanged into `try_harmonic_pluck()` so both
   paths share it. Both constants are unmeasured first guesses. Not
   hardware-verified yet.
+- **New setting `pedal.sustain_style` (`synth` default, or `hold`) -- so
+  harmonics can ring out while the pedal holds the real notes.** Real
+  feedback: "well ideally the harmonics dont have sustain thats the
+  thing. can we release those ?" -> "make it a setting, flash it off by
+  default." Not possible with standard sustain: CC64 holds every note on
+  its channel -- in MPE the whole zone -- and Ableton applies it track-
+  wide, so there's no per-note exemption for harmonic plucks.
+  - `synth` (default, unchanged behavior): the pedal sends CC64 on the
+    Master Channel and the synth sustains.
+  - `hold`: `pedal.c` never sends CC64 (it separates "pedal is down",
+    `s_sustain_pressed`, from "synth was told", `s_cc64_on`, reconciled
+    every scan so a mid-performance switch lands cleanly); `expression.c`
+    keeps each real note ON itself -- `end_held_note()`'s new `may_hold`
+    records it in the pad's `held_*` instead of sending the Note-Off -- and
+    `tiles_expression_scan()` releases them all the moment
+    `tiles_pedal_is_holding_notes()` goes false. Harmonic plucks still send
+    their own Note-Off after `HARMONIC_PLUCK_DURATION_MS`, so they end.
+  This is the controller-side deferral removed earlier this round
+  ("SUPERSEDES the two sustain entries above"), rebuilt without what got
+  it removed: (1) BOTH ways a finger lets go hold -- touch ending and the
+  retrigger path (depth back at rest while still touching, what a lift
+  usually does first), which the old version bypassed; (2) a pad that
+  strikes again closes its own held note first, and any held note of the
+  same pitch -- `release_held_note()`/`release_held_notes_of_pitch()` at
+  the strike commit, like re-striking a piano key -- so every Note-On
+  gets exactly one Note-Off (the old per-pad record lost one on a re-
+  tapped pad with MPE off, and stacked identical notes on two channels
+  with MPE on, which the MPE spec's section 3.2 warns against); (3) off by
+  default. A held note keeps its MPE channel claimed until released, and
+  `claim_mpe_channel()`'s steal now takes a held note (no finger on it,
+  `slot_is_held_note()`) before any note being actively played. Game mode
+  takeover (`tiles_expression_force_release_all()`) and toggling MPE also
+  release every held note. Trade-offs of `hold`, in the setting's own
+  docs: the synth never sees a pedal (no half-pedal or pedal-resonance
+  effects, no sustain lane when recording -- recorded notes are just
+  longer). Settings row 0x0102, added to `shared/protocol/README.md`'s
+  catalog. Not hardware-verified yet.
 - Everything else (per-pad Hall calibration) is not built
   yet.

@@ -38,6 +38,10 @@ static tiles_setting_value_t get_pedal_mode(void) { return U((uint32_t)tiles_ped
 static void set_pedal_mode(tiles_setting_value_t v) { tiles_pedal_set_mode((tiles_pedal_mode_t)v.u); }
 static tiles_setting_value_t get_pedal_polarity(void) { return U((uint32_t)tiles_pedal_get_polarity()); }
 static void set_pedal_polarity(tiles_setting_value_t v) { tiles_pedal_set_polarity((tiles_pedal_polarity_t)v.u); }
+static tiles_setting_value_t get_pedal_sustain_style(void) { return U((uint32_t)tiles_pedal_get_sustain_style()); }
+static void set_pedal_sustain_style(tiles_setting_value_t v) {
+    tiles_pedal_set_sustain_style((tiles_pedal_sustain_style_t)v.u);
+}
 
 /* ---- expression ---- */
 static tiles_setting_value_t get_mpe(void) { return U(tiles_expression_is_mpe_enabled() ? 1u : 0u); }
@@ -100,6 +104,8 @@ static void set_din_type(tiles_setting_value_t v) { tiles_din_midi_set_trs_type(
 
 static const char *const PEDAL_MODE_NAMES[] = {"sustain", "expression"};
 static const char *const PEDAL_POLARITY_NAMES[] = {"normally_open", "normally_closed"};
+/* services/pedal.h's tiles_pedal_sustain_style_t: who holds released notes. */
+static const char *const PEDAL_SUSTAIN_STYLE_NAMES[] = {"synth", "hold"};
 static const char *const DIN_TYPE_NAMES[] = {"a", "b"};
 
 /* THE TABLE. One row per setting. Rules:
@@ -117,6 +123,8 @@ static const tiles_setting_def_t TABLE[] = {
                   set_pedal_mode),
     TILES_SETTING(0x0101, "pedal.polarity", TILES_SETTING_ENUM, {.u = 0}, {.u = 1}, PEDAL_POLARITY_NAMES,
                   get_pedal_polarity, set_pedal_polarity),
+    TILES_SETTING(0x0102, "pedal.sustain_style", TILES_SETTING_ENUM, {.u = 0}, {.u = 1}, PEDAL_SUSTAIN_STYLE_NAMES,
+                  get_pedal_sustain_style, set_pedal_sustain_style),
     /* expression */
     TILES_SETTING(0x0200, "expression.mpe_enabled", TILES_SETTING_BOOL, {.u = 0}, {.u = 1}, NULL, get_mpe, set_mpe),
     TILES_SETTING(0x0201, "expression.pitch_bend_sensitivity", TILES_SETTING_FLOAT, {.f = 0.001f}, {.f = 1.0f}, NULL,
