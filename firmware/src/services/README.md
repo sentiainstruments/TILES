@@ -8867,5 +8867,82 @@ not its code.
   `services/pedal.c`'s own `scan_sustain()` header for that whole
   history); the next real test should note which mode was active so
   that ambiguity doesn't recur.
+- **SUPERSEDES the two sustain entries above ("Real fix for the
+  sustain-pedal stick: the controller now defers..." and "the sustain-
+  pedal stick fix never actually covered non-MPE"): the controller-side
+  Note-Off deferral is REMOVED, and pedal CCs no longer go on MPE Member
+  Channels.** Real feedback, after both of those still stuck on real
+  hardware in Equator AND Serum: "there is a glitch in pedal release and
+  youre nbot catchingit. look online and also look at the code," then
+  "when i turn mpe off serum alwayys sticks." Research this time went to
+  the primary source -- the MPE specification itself (MMA RP-053 v1.0,
+  March 2018) -- plus a real hardware trace of every note-off and pedal
+  edge. Two separate non-standard behaviors, both present through every
+  version that stuck:
+  1. **CC64 (and CC11) was sent on all 16 channels** (`tiles_midi_send_
+     cc_broadcast()`), including every MPE Member Channel. The spec is
+     explicit: section 2.3.1, Damper Pedal "should be sent only on a
+     Zone's Master Channel (not on Member Channels). If an MPE
+     synthesizer receives one of those messages on a Member Channel, it
+     must ignore it"; Table 1, CC #64 at note level: "Send: Not
+     recommended. Receive: Cannot be expected to respond"; Appendix:
+     pedals go "on the Master Channel of the affected Zone." Fifteen
+     undefined copies left each host and synth to improvise -- one that
+     tracks sustain per Member Channel sees CC64=127 arrive while a note
+     sits on that channel but CC64=0 only after that note's Note-Off has
+     already vacated it, so that channel's sustain never clears. This
+     matches the exact shape reported across every round ("if i lift
+     pedal before note it's fine, if i lift pedal after note it sticks,
+     but if i play a new note it does register as sustain released"),
+     and is synth-independent, which no note-level firmware bug could
+     be. Fixed: `pedal.c`'s new `send_pedal_cc()` sends to the Master
+     Channel (the zone's Master Channel with MPE on; every live note's
+     own channel with MPE off) plus the fixed single-channel parts
+     outside the zone (chord, game, the 4 sequencer lanes -- unchanged,
+     so chords still sustain) -- never the shared pool (2-9) or channel
+     10. `tiles_midi_send_cc_broadcast()` remains for the panic only,
+     where hitting every channel is the point.
+  2. **The controller withheld Note-Off while the pedal was down.** The
+     original rationale ("a proper sustain implementation should prevent
+     Note Off messages from being sent while Sustain is held") describes
+     how a synth implements sustain internally, not what a controller
+     transmits. The spec models the opposite: section 1.3's "Released
+     Note" is one whose Note Off "has been delivered" but that "may
+     continue to sound... owing to... the sustain or sostenuto pedal";
+     section 3.3, control ends at Note Off "even to notes that are kept
+     active by a Damper Pedal message." The real hardware trace showed
+     why it never helped and where it hurt: nearly every release went
+     through the retrigger path (Hall depth back at rest while touch is
+     still on -- what an ordinary finger lift does first), which always
+     sent an immediate Note-Off, so real playing already relied on the
+     synth's sustain; and when the deferral DID engage, re-striking the
+     same pad before the pedal released sent a second Note-On with the
+     first Note-Off still withheld -- with MPE off, the per-pad record
+     held one pending Note-Off for two Note-Ons, so the synth's second
+     voice never got one: a hung note every time, i.e. "when i turn mpe
+     off serum alwayys sticks." With MPE on, the withheld channel forced
+     re-strikes onto a new channel, the "stacking and chorusing identical
+     notes" section 3.2 warns against. Fixed: `end_held_note()` always
+     sends the Note-Off immediately (its old `allow_sustain_defer`
+     parameter is now `player_release`, gating only release velocity);
+     `mpe_channel_slot_t`'s sustain fields, `pad_expr_t`'s master-channel
+     sustain fields, `flush_sustained_notes()`, the pedal-release edge
+     tracker, and `claim_mpe_channel()`'s ghost-steal branch are all
+     gone. Same thing every ordinary keyboard and every commercial MPE
+     controller does: Note-Off on release, pedal on the Master Channel,
+     the synth sustains.
+  Also in passing: removed the `printf()` in `claim_mpe_channel()`'s
+  steal path -- it sat directly before `end_held_note()`'s Note-Off
+  send (the blocking-stdio bug class `pedal.c`'s `scan_sustain()` header
+  documents three prior instances of) and fires exactly at the zone's
+  real 8-voice ceiling. Panic now also clears sustain (CC64=0 on every
+  channel) before All Notes Off/All Sound Off, which also clears any
+  per-channel sustain a host latched from the old Member Channel
+  broadcast. **If a plugin still has a stuck sustain from before this
+  flash, one panic (or reloading the plugin) clears it** -- normal pedal
+  use no longer sends the Member Channel CC64=0 that would.
+  Known small side effect: with MPE off, harmonic plucks (still sent on
+  shared-pool channels) no longer get the pedal's CC64 on their own
+  channels. Not hardware-verified yet.
 - Everything else (per-pad Hall calibration) is not built
   yet.

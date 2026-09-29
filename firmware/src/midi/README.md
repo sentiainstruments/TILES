@@ -206,6 +206,16 @@ UART) with rate limiting for continuous expression data — see Status below.
     and `tiles_midi_note_off()` needed no changes themselves; the fix
     is entirely in when `services/expression.c` chooses to call the
     latter.
+  - **Both halves of the above were later reversed** after the stick
+    still reproduced in Equator and Serum ("there is a glitch in pedal
+    release and youre nbot catchingit. look online and also look at the
+    code"): per the MPE spec itself (MMA RP-053 v1.0, sections 1.3,
+    2.3.1, 3.3, Table 1), pedal CCs now go only to the Master Channel
+    (plus the fixed non-zone parts), never Member Channels, and the
+    controller sends Note-Off immediately on release and lets the synth
+    sustain -- the deferral was the misread. `tiles_midi_send_cc_
+    broadcast()` is now panic-only. Full writeup: `services/README.md`'s
+    "SUPERSEDES the two sustain entries above" entry.
 - **`midi_in.c` gained a real, running-status-aware channel-voice
   parser** (Note-On/Off specifically dispatched; every other channel-
   voice type consumed correctly for byte alignment but not dispatched

@@ -178,8 +178,8 @@ void tiles_midi_send_mpe_zone_size(uint8_t member_channel_count);
  * lifted -- see that function's own comment for the full reasoning and
  * why it's an unmeasured first attempt, same as every other sensing-
  * derived curve in that file. Every other caller (chord/sequencer/Song/
- * game mode, harmonics, a sustain-pedal-stolen or steal-evicted channel)
- * has no real release gesture behind its own note-offs and passes 0. */
+ * game mode, harmonics, a retrigger or steal-evicted channel) has no real
+ * release gesture behind its own note-offs and passes 0. */
 void tiles_midi_note_on(uint8_t channel, uint8_t note, uint8_t velocity);
 void tiles_midi_note_off(uint8_t channel, uint8_t note, uint8_t release_velocity);
 
@@ -208,39 +208,37 @@ void tiles_midi_send_cc(uint8_t channel, uint8_t controller, uint8_t value);
  * jack. Added with DIN MIDI OUT for exactly that reason. */
 void tiles_midi_send_daw_cc(uint8_t channel, uint8_t controller, uint8_t value);
 
-/* Same CC on the Zone Master Channel AND every one of channels 2-16 --
- * what services/pedal.c uses for sustain (CC64) and expression (CC11)
- * instead of the single-channel function above. Under MPE there is no
- * single "right" channel for a pedal message: sustain needs to hold
- * EVERY currently-sounding note across however many channels are in use,
- * and unlike a note-specific message there's no per-note channel to
- * target. Broadcasting to the full fixed range (not just currently-
- * active channels) is simpler and safer than every caller having to
- * expose which channels are live right now -- 16 short CC messages on a
- * state change (sustain press/release, or an expression pedal value
- * crossing a MIDI-CC step) is cheap and infrequent.
+/* Same CC on the Zone Master Channel AND every one of channels 2-16 -- now
+ * ONLY for tiles_midi_send_panic() below, where hitting every channel
+ * regardless of layout is the whole point of a MIDI panic (MPE receivers
+ * ignore the Member Channel copies; everything else honors them).
  *
- * Deliberately the FULL 2-16 range, not services/midi_channels.h's own
- * (now dynamic, often much smaller) live MPE zone size: chord mode, game
- * mode, the sequencer's 4 lanes, and Song mode's pool all play real notes
- * outside that zone now, on a receiver's own instrument that may well
- * also honor sustain/expression -- scoping this down to just the live
- * zone would silently stop the pedal from reaching any of them. This
- * file stays deliberately unaware of that layout's specifics (see this
- * header's own comment) -- it just always covers the full channel range
- * that could ever carry a note, the same way it always has. */
+ * NOT for pedals any more. services/pedal.c used this for sustain (CC64)
+ * and expression (CC11) until real feedback finally pinned down a long-
+ * running stuck-note bug ("there is a glitch in pedal release and youre
+ * nbot catchingit. look online and also look at the code") -- the MPE
+ * specification (MMA RP-053 v1.0, section 2.3.1 and Table 1) says a
+ * Damper Pedal message "should be sent only on a Zone's Master Channel
+ * (not on Member Channels)", and lists it at note level as "Send: Not
+ * recommended. Receive: Cannot be expected to respond." See pedal.c's
+ * send_pedal_cc() for the full reasoning and the channels it uses
+ * instead; this file stays deliberately unaware of that layout (see this
+ * header's own comment on the module boundary). */
 void tiles_midi_send_cc_broadcast(uint8_t controller, uint8_t value);
 
-/* MIDI panic: All Notes Off (CC 123) then All Sound Off (CC 120), on every
- * channel this device could ever have a note on -- real feedback: "panic
- * should be forced sleep with shift button. like that action sends a
- * panic note off." services/standby.c calls this from the manual (shift/
- * circle-held) forced-sleep gesture specifically, not the automatic
- * inactivity timeout that reaches the same sleep state -- a panic
- * broadcast is a deliberate player action, not something that should also
- * fire silently every time the board goes idle. See this function's own
- * definition for why CC 123 then CC 120, and why it deliberately doesn't
- * touch this device's own internal note-tracking state at all. */
+/* MIDI panic: Sustain off (CC 64), then All Notes Off (CC 123), then All
+ * Sound Off (CC 120), on every channel this device could ever have a note
+ * on -- real feedback: "panic should be forced sleep with shift button.
+ * like that action sends a panic note off." services/standby.c calls
+ * this from the manual (shift/circle-held) forced-sleep gesture
+ * specifically, not the automatic inactivity timeout that reaches the
+ * same sleep state -- a panic broadcast is a deliberate player action,
+ * not something that should also fire silently every time the board goes
+ * idle. CC 64 was added after a later real-hardware report ("panic
+ * hardware didnt clear it but panic built into the plugin did stop
+ * notes") -- see this function's own definition for the full reasoning
+ * on why sustain is cleared first, and why it deliberately doesn't touch
+ * this device's own internal note-tracking state at all. */
 void tiles_midi_send_panic(void);
 
 /* Sends a Pitch Bend Change (0xE0 | channel, LSB, MSB) on one specific

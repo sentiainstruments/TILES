@@ -1,6 +1,7 @@
 #include "pedal.h"
 
 #include "board_pins.h"
+#include "midi_channels.h"
 #include "midi_out.h"
 
 #include "hardware/adc.h"
@@ -49,7 +50,51 @@ static bool low_side_means_pressed(void) {
     return s_polarity == TILES_PEDAL_POLARITY_NORMALLY_OPEN;
 }
 
-/* Sustain-only: hysteresis + debounce + broadcast. Factored out of
+/* Where a pedal CC (sustain, expression) goes: the Zone Master Channel
+ * plus the fixed single-channel parts -- NEVER the shared pool (channels
+ * 2-9, the live MPE zone's Member Channels and Song mode's tracks), and
+ * never channel 10 (unused, General MIDI percussion).
+ *
+ * Real feedback: "there is a glitch in pedal release and youre nbot
+ * catchingit. look online and also look at the code," then "when i turn
+ * mpe off serum alwayys sticks." This used to be tiles_midi_send_cc_
+ * broadcast() -- the same CC on all 16 channels. The MPE specification
+ * (MMA RP-053 v1.0) is explicit that this is wrong for the zone:
+ * section 2.3.1, "certain MIDI messages (for example, Damper Pedal) ...
+ * should be sent only on a Zone's Master Channel (not on Member
+ * Channels)"; Table 1 lists CC #64 at note level as "Send: Not
+ * recommended. Receive: Cannot be expected to respond"; the Appendix
+ * says pedals go "on the Master Channel of the affected Zone." Sending
+ * it on every Member Channel left each host/synth to invent its own
+ * handling of fifteen undefined copies -- one that tracks sustain per
+ * Member Channel sees CC64=127 arrive while a note is on that channel,
+ * but CC64=0 only after that note's Note-Off has already freed it,
+ * leaving that channel's sustain stuck on. Exactly the reported shape,
+ * across every round of this bug: "if i lift pedal before note it's
+ * fine, if i lift pedal after note it sticks, but if i play a new note
+ * it does register as sustain released" -- and synth-independent
+ * (Equator AND Serum), which a note-level firmware bug wouldn't be.
+ *
+ * The Master Channel covers every live note in BOTH modes: in MPE mode
+ * it's the zone's Master Channel (the spec's own place for it); with MPE
+ * off, every live note is sent on that same channel (see services/
+ * expression.c's strike commit), so it's simply the notes' own channel,
+ * like any ordinary keyboard. The fixed parts (services/midi_channels.h)
+ * sit outside the zone on channels of their own, so each is an ordinary
+ * single-channel part there -- kept, so chord mode's live-played chords
+ * still sustain under the pedal exactly as before. */
+static void send_pedal_cc(uint8_t controller, uint8_t value) {
+    static const uint8_t k_fixed_part_channels[] = {
+        TILES_MIDI_CH_CHORD,      TILES_MIDI_CH_GAME,       TILES_MIDI_CH_SEQ_LANE_0,
+        TILES_MIDI_CH_SEQ_LANE_1, TILES_MIDI_CH_SEQ_LANE_2, TILES_MIDI_CH_SEQ_LANE_3,
+    };
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, controller, value);
+    for (uint8_t i = 0u; i < sizeof(k_fixed_part_channels); i++) {
+        tiles_midi_send_cc(k_fixed_part_channels[i], controller, value);
+    }
+}
+
+/* Sustain-only: hysteresis + debounce + send. Factored out of
  * tiles_pedal_scan() so tiles_pedal_set_mode() can't accidentally drift
  * out of sync with it -- both now read/write the exact same s_raw_low/
  * s_debounced_low/s_last_change_ms state through this one function.
@@ -84,7 +129,7 @@ static bool low_side_means_pressed(void) {
  * output buffer fills faster than the host drains it -- the ordinary
  * case once TILES is plugged into a DAW/synth rig instead of a dev
  * machine with a serial terminal open. The "sustain -> %s" print sat
- * directly BEFORE tiles_midi_send_cc_broadcast() below: a blocked print
+ * directly BEFORE the CC64 send below: a blocked print
  * there delays the ACTUAL release message by up to half a second,
  * easily read as "stuck" by anyone not waiting that long, and exactly
  * explains "playing a new note releases it" -- the earlier, delayed
@@ -114,12 +159,11 @@ static void scan_sustain(void) {
     bool pressed = low_side_means_pressed() ? s_debounced_low : !s_debounced_low;
     if (pressed != s_last_sent_sustained) {
         s_last_sent_sustained = pressed;
-        /* Broadcast, not a single channel -- under MPE (see
-         * midi/midi_out.h) every currently-held note lives on its own
-         * Member Channel, and sustain needs to hold ALL of them, not
-         * just whichever channel happened to be "the" one before MPE
-         * existed. */
-        tiles_midi_send_cc_broadcast(MIDI_CC_SUSTAIN, pressed ? 127u : 0u);
+        /* Master Channel (plus the fixed parts), not every channel -- under
+         * MPE the Master Channel's CC64 is what holds every note in the
+         * zone at once; see send_pedal_cc()'s own comment for why the old
+         * 16-channel broadcast was the stuck-sustain bug itself. */
+        send_pedal_cc(MIDI_CC_SUSTAIN, pressed ? 127u : 0u);
     }
 }
 
@@ -132,7 +176,7 @@ static void scan_expression(void) {
     uint8_t cc = (uint8_t)(((uint32_t)s_raw * 127u) / ADC_MAX);
     if (cc != s_last_sent_expression_cc) {
         s_last_sent_expression_cc = cc;
-        tiles_midi_send_cc_broadcast(MIDI_CC_EXPRESSION, cc);
+        send_pedal_cc(MIDI_CC_EXPRESSION, cc);
     }
 }
 
@@ -180,7 +224,7 @@ void tiles_pedal_set_mode(tiles_pedal_mode_t mode) {
     }
     if (s_mode == TILES_PEDAL_MODE_SUSTAIN && s_last_sent_sustained) {
         s_last_sent_sustained = false;
-        tiles_midi_send_cc_broadcast(MIDI_CC_SUSTAIN, 0u);
+        send_pedal_cc(MIDI_CC_SUSTAIN, 0u);
     } else if (s_mode == TILES_PEDAL_MODE_EXPRESSION) {
         /* 127, not 0 -- the MIDI-spec default for CC11 (and what a
          * synth already assumes before ever receiving one) is FULL
@@ -188,7 +232,7 @@ void tiles_pedal_set_mode(tiles_pedal_mode_t mode) {
          * behind on a mode switch would otherwise quietly cap
          * everything played afterward at whatever level the pedal
          * happened to be sitting at. */
-        tiles_midi_send_cc_broadcast(MIDI_CC_EXPRESSION, 127u);
+        send_pedal_cc(MIDI_CC_EXPRESSION, 127u);
     }
     s_last_sent_expression_cc = 0xFFu; /* out of MIDI CC range -- forces a fresh send next time expression mode is entered */
     s_raw_low = s_raw < SUSTAIN_PRESS_THRESHOLD;

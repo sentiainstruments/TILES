@@ -165,6 +165,21 @@ void tiles_midi_send_cc_broadcast(uint8_t controller, uint8_t value) {
  * only sends note-offs for whatever this file's own state believes is
  * currently held. */
 void tiles_midi_send_panic(void) {
+    /* Real feedback found chasing a still-open "notes stick" report:
+     * "panic hardware didnt clear it but panic built into the plugin did
+     * stop notes." All Notes Off (123)/All Sound Off (120) below are
+     * proven (via real hardware trace, see services/README.md's own
+     * sustain-pedal entries) to leave this board correctly, on every
+     * channel -- but a receiver that ties a note's release to seeing
+     * CC64 (Damper Pedal/Sustain) go low, not just to a Channel Mode
+     * message, can legitimately keep holding a note through 123/120
+     * alone if it still believes the pedal is down. Standard MIDI panic
+     * implementations commonly clear sustain for exactly this reason.
+     * Sent FIRST, before the two below -- if a stuck note really is
+     * being held open by a stale "pedal down" belief, that belief should
+     * be cleared before asking the receiver to also drop the notes
+     * themselves. */
+    tiles_midi_send_cc_broadcast(64u, 0u); /* Damper Pedal (Sustain) off */
     tiles_midi_send_cc_broadcast(123u, 0u); /* All Notes Off */
     tiles_midi_send_cc_broadcast(120u, 0u); /* All Sound Off */
 }
