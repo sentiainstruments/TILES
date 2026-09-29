@@ -32,13 +32,16 @@ unreliable on this hardware (see `AGENTS.md` for why and the full flash
 workflow). `brew install picotool`, then:
 
 ```bash
-picotool load -f -x -v --ignore-partitions build/src/sentia_tiles_firmware.uf2
+../tools/flash.sh
 ```
 
-`-f` reboots a board that's already running the app into BOOTSEL by
-itself — no button press needed (see `AGENTS.md`'s own "Flash" section
-for how). Only fall back to a manual BOOTSEL button press (and drop
-`-f`) if the app isn't running to begin with.
+That's `picotool load -f --vid 0x1209 --pid 0x0001 -x -v --ignore-partitions
+build/src/sentia_tiles_firmware.uf2`: `-f` reboots a board that's already
+running the app into BOOTSEL by itself — no button press needed — and the
+`--vid/--pid` are required, because without them picotool only looks for
+Raspberry Pi's stock product IDs and never finds TILES (see `AGENTS.md`'s
+"Flash" section). Only fall back to a manual BOOTSEL button press if the
+app isn't running to begin with; `flash.sh` then flashes the board as is.
 
 ## Running the pad-table test (no toolchain needed)
 

@@ -54,6 +54,26 @@ has one real, working piece (the Ableton Live Control Surface script).
 `companion-app/`, `shared/`, and `tools/` are still scaffolding:
 placeholder READMEs describing intent, implementation not yet started.
 
+## Before any unit leaves the building
+
+TILES is pre-production and identifies itself with placeholders that are
+only allowed for in-house testing (details, and how to replace each, in
+`firmware/src/midi/product_identity.h`):
+
+- **USB ID `1209:0001`** — pid.codes' shared *test* ID. Its rules forbid it
+  on any device that's given out, sold or manufactured, beta units
+  included. Replace it with a real product ID first: Raspberry Pi gives
+  them out free for RP2350-based products (application form linked from
+  github.com/raspberrypi/usb-pid). The ID lives in `product_identity.h`
+  plus the host copies listed there (settings tool, flash script, Ableton
+  script).
+- **MIDI SysEx ID `0x7D`** — the MIDI Association's non-commercial/
+  development ID. Fine for pre-production; a shipping product should
+  register its own.
+- **Windows** — driverless access to the settings interface (for the
+  companion app) is implemented but has never been tried on a Windows
+  machine.
+
 ## For agents
 
 Start at `AGENTS.md` — it routes to the module-specific doc you actually
