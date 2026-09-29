@@ -52,6 +52,12 @@ static tiles_setting_value_t get_aftertouch(void) { return U(tiles_expression_ge
 static void set_aftertouch(tiles_setting_value_t v) { tiles_expression_set_aftertouch_sensitivity((uint16_t)v.u); }
 static tiles_setting_value_t get_harmonics(void) { return U(tiles_expression_is_melodic_harmonics_enabled() ? 1u : 0u); }
 static void set_harmonics(tiles_setting_value_t v) { tiles_expression_set_melodic_harmonics_enabled(v.u != 0u); }
+static tiles_setting_value_t get_harm_arm(void) { return U(tiles_expression_get_harmonics_arm_ms()); }
+static void set_harm_arm(tiles_setting_value_t v) { tiles_expression_set_harmonics_arm_ms((uint16_t)v.u); }
+static tiles_setting_value_t get_harm_confirm(void) { return U(tiles_expression_get_harmonics_confirm_ms()); }
+static void set_harm_confirm(tiles_setting_value_t v) { tiles_expression_set_harmonics_confirm_ms((uint16_t)v.u); }
+static tiles_setting_value_t get_harm_press(void) { return U(tiles_expression_get_harmonics_press_depth()); }
+static void set_harm_press(tiles_setting_value_t v) { tiles_expression_set_harmonics_press_depth((uint16_t)v.u); }
 
 /* ---- CV / gate ---- */
 static tiles_setting_value_t get_cv_enabled(void) { return U(tiles_cv_gate_is_enabled() ? 1u : 0u); }
@@ -175,6 +181,15 @@ static const tiles_setting_def_t TABLE[] = {
     /* features */
     TILES_SETTING(0x0600, "features.melodic_harmonics", TILES_SETTING_BOOL, {.u = 0}, {.u = 1}, NULL, get_harmonics,
                   set_harmonics),
+    /* Chord-vs-harmonic tuning (services/expression.c HARMONIC_ARM_MS_DEFAULT): ms after a note is struck before
+     * other touches may pluck; ms a touch waits before plucking; raw Hall depth (rest 0, strike 150) that marks a
+     * touch as a real press instead. */
+    TILES_SETTING(0x0601, "features.harmonics.arm_ms", TILES_SETTING_UINT, {.u = 0}, {.u = 1000}, NULL, get_harm_arm,
+                  set_harm_arm),
+    TILES_SETTING(0x0602, "features.harmonics.confirm_ms", TILES_SETTING_UINT, {.u = 0}, {.u = 500}, NULL,
+                  get_harm_confirm, set_harm_confirm),
+    TILES_SETTING(0x0603, "features.harmonics.press_depth", TILES_SETTING_UINT, {.u = 1}, {.u = 1000}, NULL,
+                  get_harm_press, set_harm_press),
 };
 #define TABLE_COUNT (sizeof(TABLE) / sizeof(TABLE[0]))
 

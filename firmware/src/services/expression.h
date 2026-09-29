@@ -119,6 +119,19 @@ uint16_t tiles_expression_get_aftertouch_sensitivity(void);
 void tiles_expression_set_melodic_harmonics_enabled(bool enabled);
 bool tiles_expression_is_melodic_harmonics_enabled(void);
 
+/* Chord-vs-harmonic tuning (settings `features.harmonics.*`) -- see
+ * expression.c's HARMONIC_ARM_MS_DEFAULT comment for what each one does.
+ * Real feedback: "harmonics feel not as sensitive any more, we need to fine
+ * tune the sensitivity of what triggers that mode so we can play chords but
+ * also do harmonics in the same session without interfereing with the
+ * other." Live-tunable so the balance can be found by ear, no reflash. */
+void tiles_expression_set_harmonics_arm_ms(uint16_t ms);
+uint16_t tiles_expression_get_harmonics_arm_ms(void);
+void tiles_expression_set_harmonics_confirm_ms(uint16_t ms);
+uint16_t tiles_expression_get_harmonics_confirm_ms(void);
+void tiles_expression_set_harmonics_press_depth(uint16_t depth);
+uint16_t tiles_expression_get_harmonics_press_depth(void);
+
 /* Called by services/expression_control.h when "expression mute"
  * toggles on/off. While muted, pitch bend and poly aftertouch both
  * stop being computed/sent -- if a note currently owns pitch bend,

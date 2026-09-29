@@ -125,6 +125,9 @@ refused, not clamped); the default is whatever the owning module boots with --
 | 0x0408 | `look.echo_flash_ms` | uint | 0 - 2000 (0 = no flash) | `180` | yes |
 | 0x0500 | `midi.din_trs_type` | enum | `a`, `b` (TRS polarity of DIN MIDI OUT) | `a` | yes |
 | 0x0600 | `features.melodic_harmonics` | bool | | `1` | yes |
+| 0x0601 | `features.harmonics.arm_ms` | uint | 0 - 1000 (ms a struck note is held alone before other touches may pluck) | `150` | yes |
+| 0x0602 | `features.harmonics.confirm_ms` | uint | 0 - 500 (ms a touch waits before plucking) | `40` | yes |
+| 0x0603 | `features.harmonics.press_depth` | uint | 1 - 1000 (Hall depth, rest 0 / strike 150, above which a touch counts as a real press, not a harmonic) | `128` | yes |
 
 The `look.*` values are whole percent of the **fixed** LED brightness ceiling
 (37% USB-only / 90% external power) -- no setting can raise the ceiling itself.

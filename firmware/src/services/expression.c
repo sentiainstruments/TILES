@@ -1528,26 +1528,54 @@ static const uint8_t HARMONIC_SEMITONES[HARMONIC_MAX_VOICES] = {12u, 19u, 24u, 2
  * STRIKE_TIME_MIN_VELOCITY_MS, 10-300 ms): a pluck, then the pedal held it
  * under the chord. Two separate guards, each for its own timing window:
  *
- * HARMONIC_ARM_MS: a session only starts plucking once its fundamental's
- * NOTE has been held alone this long, measured from that note's own
- * note_on_ms -- chord fingers land within tens of ms of each other, the
- * deliberate "hold a note, then touch the others" gesture comes later.
- * Touch edges inside the window are consumed, never plucked later.
+ * ARM (features.harmonics.arm_ms): a session only starts plucking once
+ * its fundamental's NOTE has been held alone this long, measured from that
+ * note's own note_on_ms -- chord fingers land within tens of ms of each
+ * other, the deliberate "hold a note, then touch the others" gesture comes
+ * later. Touch edges inside the window are consumed, never plucked later.
  * Measured from the note, not the session, so engaging the pedal over an
  * already-held note still plucks resting pads at once (see scan_melodic_
  * harmonics()'s own step 0).
  *
- * HARMONIC_CONFIRM_MS: once armed, a new touch still waits this long
- * before plucking, and is cancelled if the key MOVES -- past RETRIGGER_ARM_
- * DEPTH_DELTA, the band this file already treats as "at rest", or on to a
- * real strike. That's the "hold a bass note, then play a chord over it"
- * case: a pressing finger leaves the rest band almost at once even when
- * its full strike takes far longer; a light harmonic touch never does. A
- * quick light tap that ends inside the window still plucks.
+ * CONFIRM (features.harmonics.confirm_ms): once armed, a new touch still
+ * waits this long before plucking, and is cancelled if the key MOVES past
+ * PRESS DEPTH (features.harmonics.press_depth, raw Hall depth units --
+ * rest is 0, a strike is MIN_STRIKE_DEPTH_DELTA) or on to a real strike.
+ * That's the "hold a bass note, then play a chord over it" case: a
+ * pressing finger moves the key almost at once even when its full strike
+ * takes far longer; a light harmonic touch barely does. A quick light tap
+ * that ends inside the window still plucks.
  *
- * Both unmeasured first guesses, like every constant in this section. */
-#define HARMONIC_ARM_MS 150u
-#define HARMONIC_CONFIRM_MS 40u
+ * All three are live settings, because they're a feel balance between two
+ * gestures. Real feedback on the first values (150 ms / 40 ms / 40, the
+ * "at rest" band RETRIGGER_ARM_DEPTH_DELTA): "harmonics feel not as
+ * sensitive any more, we need to fine tune the sensitivity of what
+ * triggers that mode so we can play chords but also do harmonics in the
+ * same session without interfereing with the other," then "some light
+ * harmonic touches felt missed." A temporary trace of a real session (344
+ * candidate touches: 334 that never struck -- harmonic touches -- and 10
+ * chord fingers played over a held note) set the defaults:
+ *   - Light harmonic touches push the key to 47-63 depth (median peak 63,
+ *     90th percentile 96, max 144) without ever striking, so the old 40
+ *     cutoff cancelled 249 of 334. PRESS DEPTH 128 plucks 331/334 (99%).
+ *   - Chord fingers either cross the strike threshold within ~60 ms (the
+ *     threshold check catches them at any depth setting) or press slowly
+ *     (2 of 10, striking at 221/235 ms) and look exactly like a light
+ *     touch for their first 80 ms -- they leak at every depth from 80 up,
+ *     so raising it to 128 cost no extra leaks. A leaked pluck ends the
+ *     moment that finger strikes (the session ends), and with pedal.
+ *     sustain_style HOLD it isn't sustained either.
+ *   - CONFIRM 40 ms: 60/80 ms caught nothing more (only added latency),
+ *     20 ms leaked 5 of 10 instead of 2.
+ *   - ARM 150 ms: only 1 of 334 harmonic touches came that soon after the
+ *     fundamental.
+ * Still a small chord sample; the settings are there to adjust by ear. */
+#define HARMONIC_ARM_MS_DEFAULT 150u
+#define HARMONIC_CONFIRM_MS_DEFAULT 40u
+#define HARMONIC_PRESS_DEPTH_DEFAULT 128u
+static uint16_t s_harmonic_arm_ms = HARMONIC_ARM_MS_DEFAULT;
+static uint16_t s_harmonic_confirm_ms = HARMONIC_CONFIRM_MS_DEFAULT;
+static uint16_t s_harmonic_press_depth = HARMONIC_PRESS_DEPTH_DEFAULT;
 
 typedef struct {
     bool active;
@@ -1568,7 +1596,7 @@ static uint8_t s_harmonic_fundamental_pad;
  * timing would tie a pluck to the real-strike pipeline's own state
  * machine in ways this section has no reason to depend on). */
 static bool s_harmonic_prev_touched[TILES_NUM_PADS];
-/* A touch waiting out HARMONIC_CONFIRM_MS before it may pluck -- see that
+/* A touch waiting out the confirm time before it may pluck -- see HARMONIC_ARM_MS_DEFAULT's
  * constant's own comment. Cleared whenever the session ends. */
 static bool s_harmonic_pending[TILES_NUM_PADS];
 static uint32_t s_harmonic_pending_ms[TILES_NUM_PADS];
@@ -1784,10 +1812,10 @@ static void fire_harmonic_pluck(uint8_t slot, uint8_t pad, uint8_t note, uint8_t
  * a strike threshold crossing, or just movement past the "at rest" band
  * (RETRIGGER_ARM_DEPTH_DELTA). peak_depth/threshold_crossed are reset by
  * begin_awaiting_strike() at the start of every touch, so they describe
- * this touch only. See HARMONIC_CONFIRM_MS for why movement, not a full
+ * this touch only. See HARMONIC_ARM_MS_DEFAULT for why movement, not a full
  * strike, is the cutoff. */
 static bool harmonic_pad_is_pressing(const pad_expr_t *ps) {
-    return ps->state == PAD_STATE_NOTE_ON || ps->threshold_crossed || ps->peak_depth > RETRIGGER_ARM_DEPTH_DELTA;
+    return ps->state == PAD_STATE_NOTE_ON || ps->threshold_crossed || ps->peak_depth > (float)s_harmonic_press_depth;
 }
 
 /* Plucks `pad`'s harmonic over `fundamental_note`: a pad already mid-ring
@@ -1871,8 +1899,8 @@ static void try_harmonic_pluck(uint8_t pad, uint8_t fundamental_note, uint32_t n
  *      to silence, touched or not.
  *   3. Every OTHER pad whose touch just began (this scan, not already
  *      touched last scan) plucks a harmonic -- once the session is
- *      armed (HARMONIC_ARM_MS) and the touch has stayed light for
- *      HARMONIC_CONFIRM_MS without the key moving (see both constants'
+ *      armed (features.harmonics.arm_ms) and the touch has stayed light for
+ *      features.harmonics.confirm_ms without the key moving (see HARMONIC_ARM_MS_DEFAULT's
  *      own comment on keeping chords from plucking): a brand-new pad
  *      claims the first free slot (touch order, see this section's own
  *      header); a pad already mid-ring re-plucks its own existing slot
@@ -1914,9 +1942,9 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
         return;
     }
     uint8_t fundamental_note = s_pads[fundamental - 1u].active_note;
-    /* See HARMONIC_ARM_MS -- from the fundamental NOTE's own start, so a
+    /* See HARMONIC_ARM_MS_DEFAULT -- from the fundamental NOTE's own start, so a
      * chord's later fingers (landing inside this window) never pluck. */
-    bool armed = (now_ms - s_pads[fundamental - 1u].note_on_ms) >= HARMONIC_ARM_MS;
+    bool armed = (now_ms - s_pads[fundamental - 1u].note_on_ms) >= s_harmonic_arm_ms;
 
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         /* Dropout-bridged, NOT raw tiles_touch_is_touched(). Real bug found
@@ -1941,13 +1969,13 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
             continue;
         }
 
-        /* A touch waiting out HARMONIC_CONFIRM_MS: a press cancels it for
+        /* A touch waiting out the confirm time: a press cancels it for
          * good; a touch that stayed light plucks once the window passes,
          * and a light tap that already lifted plucks right away. */
         if (s_harmonic_pending[pad - 1u]) {
             if (harmonic_pad_is_pressing(ps)) {
                 s_harmonic_pending[pad - 1u] = false; /* a real press -- never pluck under it */
-            } else if (!touched || (now_ms - s_harmonic_pending_ms[pad - 1u]) >= HARMONIC_CONFIRM_MS) {
+            } else if (!touched || (now_ms - s_harmonic_pending_ms[pad - 1u]) >= s_harmonic_confirm_ms) {
                 s_harmonic_pending[pad - 1u] = false;
                 try_harmonic_pluck(pad, fundamental_note, now_ms);
             }
@@ -1988,6 +2016,28 @@ void tiles_expression_set_melodic_harmonics_enabled(bool enabled) {
 
 bool tiles_expression_is_melodic_harmonics_enabled(void) {
     return s_harmonics_enabled;
+}
+
+/* features.harmonics.* -- see HARMONIC_ARM_MS_DEFAULT's own comment. Take
+ * effect on the very next scan; a touch already waiting keeps its start
+ * time, it just resolves against the new values. */
+void tiles_expression_set_harmonics_arm_ms(uint16_t ms) {
+    s_harmonic_arm_ms = ms;
+}
+uint16_t tiles_expression_get_harmonics_arm_ms(void) {
+    return s_harmonic_arm_ms;
+}
+void tiles_expression_set_harmonics_confirm_ms(uint16_t ms) {
+    s_harmonic_confirm_ms = ms;
+}
+uint16_t tiles_expression_get_harmonics_confirm_ms(void) {
+    return s_harmonic_confirm_ms;
+}
+void tiles_expression_set_harmonics_press_depth(uint16_t depth) {
+    s_harmonic_press_depth = depth;
+}
+uint16_t tiles_expression_get_harmonics_press_depth(void) {
+    return s_harmonic_press_depth;
 }
 
 

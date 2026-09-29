@@ -9166,5 +9166,33 @@ not its code.
   effects, no sustain lane when recording -- recorded notes are just
   longer). Settings row 0x0102, added to `shared/protocol/README.md`'s
   catalog. Not hardware-verified yet.
+- **Harmonic sensitivity tuned from real data, and made live-tunable.**
+  Real feedback on the chord guards above: "harmonics feel not as
+  sensitive any more, we need to fine tune the sensitivity of what
+  triggers that mode so we can play chords but also do harmonics in the
+  same session without interfereing with the other." The three guard
+  values are now settings -- `features.harmonics.arm_ms` /
+  `.confirm_ms` / `.press_depth` (0x0601-0x0603) -- and a temporary
+  USB-CDC trace (since removed) recorded every candidate touch of a real
+  session: timing since the fundamental, peak depth by +10/20/40/80 ms,
+  overall peak, and whether it went on to strike. Real feedback during it:
+  "some light harmonic touches felt missed." 344 touches: 334 never
+  struck (harmonic touches), 10 were chord fingers over a held note.
+  - The miss was the press cutoff: light harmonic touches push the key to
+    47-63 depth (median peak 63, p90 96, max 144) without striking, so the
+    first cutoff of 40 cancelled 249 of 334. **Default now 128**: 331/334
+    (99%) pluck.
+  - Chord fingers either cross strike depth within ~60 ms (caught by the
+    threshold check regardless of the cutoff) or press slowly -- 2 of 10,
+    striking at 221/235 ms -- and look exactly like a light touch for
+    their first 80 ms, so they leak at every cutoff from 80 up; 128 cost
+    no extra leaks. A leaked pluck ends the moment that finger strikes
+    (the session ends), and isn't sustained with `pedal.sustain_style
+    hold`.
+  - Confirm stays 40 ms (60/80 caught nothing more, only added latency;
+    20 leaked 5/10). Arm stays 150 ms (1/334 harmonic touches came that
+    soon).
+  The chord sample is small; the settings exist to adjust by ear. Not
+  hardware-verified at the new default yet.
 - Everything else (per-pad Hall calibration) is not built
   yet.
