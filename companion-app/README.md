@@ -63,6 +63,11 @@ vendor interface defined in `../shared/protocol/`.
 
 ## Status
 
+**Start with `BRIEF.md`** -- the developer brief: what the app is for, what
+the hardware supports today, the protocol, the suggested code structure,
+and the real settings list (`fixtures/tiles-settings.json`, captured from a
+board, for the fake device the phase-0 prototype runs against).
+
 The app stack (Electron vs. alternatives) and how the app talks to the device -- USB vendor
 interface, settings table with flash saving, layouts as portable files -- are written up in
 `../docs/architecture/control-software.md`. The firmware side of settings (registry, flash store,

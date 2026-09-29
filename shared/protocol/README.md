@@ -94,7 +94,7 @@ hard-codes the list:
 ```
 id=256 key=pedal.mode type=enum values=sustain|expression default=sustain
 id=513 key=expression.pitch_bend_sensitivity type=float min=0.001 max=1 default=0.065000
-id=514 key=expression.aftertouch_sensitivity type=uint min=1 max=65535 default=1450
+id=514 key=expression.aftertouch_sensitivity type=uint min=1 max=65535 default=900
 id=768 key=cv_gate.enabled type=bool default=0 persist=0
 ```
 `type` is `bool|uint|int|float|enum`; `persist=0` marks a setting that is never
@@ -115,7 +115,7 @@ refused, not clamped); the default is whatever the owning module boots with --
 | 0x0102 | `pedal.sustain_style` | enum | `synth` (pedal sends CC64, the synth sustains -- standard), `hold` (no CC64; TILES keeps real notes on until the pedal lifts, so harmonic plucks still release) | `synth` | yes |
 | 0x0200 | `expression.mpe_enabled` | bool | | `1` | yes |
 | 0x0201 | `expression.pitch_bend_sensitivity` | float | 0.001 - 1.0 (max cosine deviation) | `0.065` | yes |
-| 0x0202 | `expression.aftertouch_sensitivity` | uint | 1 - 65535 (full-scale depth) | `1450` | yes |
+| 0x0202 | `expression.aftertouch_sensitivity` | uint | 1 - 65535 (full-scale depth) | `900` | yes |
 | 0x0300 | `cv_gate.enabled` | bool | | `0` | **no** -- boots off, every time |
 | 0x0301 | `cv_gate.pitch.volts_per_semitone` | float | 0.001 - 1.0 | `0.0833333` (1V/oct) | yes |
 | 0x0302 | `cv_gate.pitch.reference_note` | int | 0 - 127 (MIDI note at 0V) | `0` | yes |

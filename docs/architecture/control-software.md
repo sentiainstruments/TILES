@@ -25,7 +25,9 @@ store means downloading from online eventually."
   - `picotool load -f` now works with the board already running the app --
     no BOOTSEL button. A standard, separate USB interface (pico-sdk's own
     `pico_usb_reset`, the same one `pico_stdio_usb` would add automatically)
-    handles it; `picotool` needs no configuration to find it.
+    handles it. picotool needs the board's USB ID spelled out (`--vid/--pid`)
+    because TILES doesn't use a Raspberry Pi stock product ID --
+    `tools/flash.sh` does that (`firmware/AGENTS.md`, "Flash").
   - `REBOOT BOOTSEL` / `REBOOT APP` over the settings shell, for a script or
     the future app to trigger the same thing without shelling out to
     `picotool`.
@@ -68,10 +70,11 @@ store means downloading from online eventually."
    (`shared/protocol/` + `tools/` -- the planned, still unbuilt codegen), which
    also removes today's "must match op_mode.c" duplication of DAW CC numbers and
    channel conventions.
-2. **Driverless on every OS**: add the Microsoft OS 2.0 + WebUSB (BOS)
-   descriptors so Windows binds WinUSB to the vendor interface automatically; macOS
-   needs nothing; Linux needs one udev rule for non-root access. Firmware change
-   only, independent of the app stack.
+2. **Driverless on every OS**: the Microsoft OS 2.0 (BOS) descriptors are done
+   (2026-09-29, untested on Windows) -- Windows should bind WinUSB to the vendor
+   interface automatically; macOS needs nothing; Linux still needs one udev rule
+   for non-root access. A WebUSB descriptor is only worth adding if a browser
+   build of the app happens.
 3. **Layout/profile object** in flash (own region via `storage/`) plus the
    revision counter.
 4. The app.
@@ -92,7 +95,9 @@ transfers -- so the choice is reversible.
 | **Flutter desktop** | One codebase, native-compiled | USB packages are the least mature of the group |
 | **Browser-only web app** | Zero install | WebUSB is Chrome/Edge only (no Safari, no Firefox); not "self-contained" |
 
-**Recommendation: stay with Electron for V1.** The deciding factors are
+**Recommendation: stay with Electron for V1.** (Confirmed 2026-09-29 with
+Vite + React + TypeScript inside it; no database or server until the online
+layout store -- see `companion-app/BRIEF.md`, the developer brief.) The deciding factors are
 WebUSB-in-Chromium (no per-OS native USB build) and web tech for the online layout
 store. Tauri is the credible lighter alternative if installer size becomes a
 priority; a browser-only build of the same UI can be offered later for Chrome/Edge
