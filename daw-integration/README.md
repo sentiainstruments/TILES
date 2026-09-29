@@ -57,13 +57,22 @@ projects.
 2. Restart Ableton Live if it was already open.
 3. Preferences -> Link, Tempo & MIDI -> in a free Control Surface slot,
    choose **TILES** from the dropdown, then set that slot's Input and
-   Output to **SENTIA TILES DAW** (Live may already have done this by
-   itself -- see "Two MIDI ports" below). In the MIDI Ports list:
-   - **SENTIA TILES MIDI** input: Track **On** (and MPE -- see "Sustain
-     pedal and MPE"), Remote on if you MIDI-map anything from TILES.
-     Output: Sync on if TILES's sequencer should follow Live's clock.
-   - **SENTIA TILES DAW** input and output: Track **Off**, Sync off,
-     Remote off -- this port is the TILES script's alone.
+   Output to **SENTIA TILES (DAW)** -- Live's name for the port; other
+   apps call it "SENTIA TILES DAW". Not another controller's DAW port: a
+   first real test had the TILES slot pointed at "Launchkey MK4 61 (DAW
+   Out)" (the only "(DAW)" entries in the list look alike), and the
+   transport button did nothing, because the script never heard TILES.
+   In the MIDI Ports list:
+   - **In: SENTIA TILES (MIDI)**: Track **on**, MPE **on** (see "Sustain
+     pedal and MPE"), Sync **off** (TILES's play button works through
+     the script; Sync here plus Live's EXT button makes a clock loop),
+     Remote on only if you MIDI-map something from TILES.
+   - **Out: SENTIA TILES (MIDI)**: Sync **on** if TILES's sequencer
+     should follow Live's clock.
+   - **In: SENTIA TILES (DAW)**: Track **off** (if the script isn't
+     loaded, the button messages would otherwise record into clips);
+     the other boxes don't matter.
+   - **Out: SENTIA TILES (DAW)**: nothing needed.
 4. Done. Diamond's short click (play/stop) and 2-second-hold-then-
    release (record) now directly drive Ableton's transport -- no MIDI
    Map Mode, no per-button setup, and nothing to repeat next session.
@@ -78,11 +87,12 @@ Real feedback: "do 8 as how standardized stuff works. production ready
 industry stuff." TILES shows up as two MIDI ports, the way Launchkey,
 Push and KeyLab do:
 
-- **SENTIA TILES MIDI** -- the instrument: notes, MPE, pedals, and
-  clock/Start/Stop for sync. This is the one to record from and play
-  synths with. The DIN jack carries the same.
-- **SENTIA TILES DAW** -- the TILES Control Surface script's private
-  port: the transport button and Scene Launch messages go out on it, clip
+- **SENTIA TILES (MIDI)** in Live ("SENTIA TILES MIDI" elsewhere) -- the
+  instrument: notes, MPE, pedals, and clock/Start/Stop for sync. This is
+  the one to record from and play synths with. The DIN jack carries the
+  same.
+- **SENTIA TILES (DAW)** in Live ("SENTIA TILES DAW" elsewhere) -- the
+  TILES Control Surface script's private port: the transport button and Scene Launch messages go out on it, clip
   colours and the TILES DISPLAY melody echo come back on it. Never on
   DIN, and never meant for a track.
 
@@ -91,12 +101,14 @@ controls could reach an instrument track and the script once claimed the
 sustain pedal (see "Scene Launch CCs renumbered" below). The script now
 declares the two ports to Live (`ableton/TILES/__init__.py`,
 `get_capabilities()`, the same declaration Ableton's own Launchkey MK3
-script makes), so once it's installed Live should pick the TILES script
-and set both ports up by itself when TILES is plugged in -- if it
-doesn't, set them by hand as in step 3 above. **Firmware and script must
+script makes). In the first real test Live did NOT set the TILES slot up
+by itself, so set it by hand as in step 3 above. In Live's list, TILES
+looks like any two-port controller -- one Control Surface entry, two
+ports, exactly like a Launchkey ("Launchkey MK4 61 (MIDI Out)" / "(DAW
+Out)"). **Firmware and script must
 match**: firmware from this change on needs the updated script (re-copy
 `ableton/TILES/`, restart Live), and the Control Surface slot moves from
-the old single "SENTIA TILES" port to "SENTIA TILES DAW".
+the old single "SENTIA TILES" port to "SENTIA TILES (DAW)".
 
 **macOS: stale device after a firmware update.** macOS remembers a USB
 MIDI device's ports by its USB ID and the socket it's plugged into, and
@@ -211,7 +223,7 @@ sustain entries" and the entries after it). That means **in MPE mode the
 receiving side must actually be set up as MPE**, like any MPE controller:
 
 - Ableton: Preferences -> Link, Tempo & MIDI -> tick **MPE** (and Track)
-  on the **SENTIA TILES MIDI** input; use an MPE-enabled instrument (Serum: its MPE
+  on the **SENTIA TILES (MIDI)** input; use an MPE-enabled instrument (Serum: its MPE
   switch on; Equator: MPE by default).
 - Anything not set up for MPE: switch TILES to non-MPE mode (circle+
   square) -- every note and the pedal go on channel 1, which any synth
