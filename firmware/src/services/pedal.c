@@ -1,6 +1,7 @@
 #include "pedal.h"
 
 #include "board_pins.h"
+#include "midi_channels.h"
 #include "midi_out.h"
 
 #include "hardware/adc.h"
@@ -49,29 +50,46 @@ static bool low_side_means_pressed(void) {
     return s_polarity == TILES_PEDAL_POLARITY_NORMALLY_OPEN;
 }
 
-/* Where a pedal CC (sustain, expression) goes: every channel -- the Zone
- * Master Channel AND every Member Channel, via tiles_midi_send_cc_
- * broadcast().
+/* Where a pedal CC (sustain, expression) goes -- strict standard MIDI, a
+ * deliberate product decision (real feedback: "yes go strict"):
+ *   - the Zone Master Channel (channel 1): with MPE on, the MPE spec's own
+ *     place for it -- MMA RP-053 v1.0 section 2.3.1, Damper Pedal "should
+ *     be sent only on a Zone's Master Channel (not on Member Channels)";
+ *     Table 1, CC #64 at note level: "Send: Not recommended. Receive:
+ *     Cannot be expected to respond"; Appendix, pedals go "on the Master
+ *     Channel of the affected Zone." With MPE off, every live note is on
+ *     this same channel anyway, so it's simply the notes' own channel,
+ *     like any ordinary keyboard.
+ *   - the fixed single-channel parts (chord, game, the 4 sequencer lanes
+ *     -- services/midi_channels.h), which sit OUTSIDE the zone, each an
+ *     ordinary single-channel part, so chords still sustain.
+ * NEVER the shared pool (channels 2-9: the live zone's Member Channels and
+ * Song mode's tracks) and never channel 10 (unused, GM percussion).
  *
- * Real feedback: "weve fully lost pedal." A round earlier this was
- * narrowed to the Master Channel plus the fixed parts, following the MPE
- * specification's own recommendation (MMA RP-053 v1.0, section 2.3.1 and
- * Table 1: Damper Pedal belongs on the Zone's Master Channel; at note
- * level, "Send: Not recommended. Receive: Cannot be expected to
- * respond") -- and sustain stopped working completely on the real rig
- * (Ableton + Serum/Equator). So that receiving chain applies CC64 PER
- * CHANNEL, not zone-wide from the Master Channel: a note on Member
- * Channel 3 is only sustained by a CC64 that arrives on channel 3. The
- * spec also requires a compliant MPE receiver to IGNORE Member Channel
- * copies (section 2.3.1), so broadcasting costs a truly compliant synth
- * nothing and is the only thing that works for one that isn't -- the
- * same compatibility trade this file made originally ("already covers a
- * non-MPE-aware receiver too"), now confirmed on real hardware instead
- * of assumed. The narrowing was a wrong guess at the cause of a separate,
- * still-open stuck-note report; services/README.md has the whole
- * sequence. */
+ * History, so this doesn't get re-broadened by accident: this was a
+ * 16-channel broadcast for a long time, as a leniency for receivers not
+ * actually set up as MPE. It was narrowed to this once ("there is a
+ * glitch in pedal release and youre nbot catchingit"), then sustain died
+ * completely on the real rig ("weve fully lost pedal") -- which means the
+ * rig wasn't really receiving as MPE (it only sustained a note from a
+ * CC64 on that note's own channel), so the broadcast went back in for one
+ * round. The decision then was to standardize rather than keep papering
+ * over the setup: in MPE mode the host MUST be configured for MPE (in
+ * Ableton: the MPE checkbox on the TILES input in Preferences, plus an
+ * MPE-enabled instrument -- Serum's MPE switch on; Equator is MPE by
+ * default); anything else should use non-MPE mode (circle+square), which
+ * works with any synth with zero setup. A strict mode that loses sustain
+ * on a misconfigured rig surfaces the problem immediately instead of
+ * half-working. services/README.md has the whole sequence. */
 static void send_pedal_cc(uint8_t controller, uint8_t value) {
-    tiles_midi_send_cc_broadcast(controller, value);
+    static const uint8_t k_fixed_part_channels[] = {
+        TILES_MIDI_CH_CHORD,      TILES_MIDI_CH_GAME,       TILES_MIDI_CH_SEQ_LANE_0,
+        TILES_MIDI_CH_SEQ_LANE_1, TILES_MIDI_CH_SEQ_LANE_2, TILES_MIDI_CH_SEQ_LANE_3,
+    };
+    tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, controller, value);
+    for (uint8_t i = 0u; i < sizeof(k_fixed_part_channels); i++) {
+        tiles_midi_send_cc(k_fixed_part_channels[i], controller, value);
+    }
 }
 
 /* Sustain-only: hysteresis + debounce + send. Factored out of
@@ -139,9 +157,9 @@ static void scan_sustain(void) {
     bool pressed = low_side_means_pressed() ? s_debounced_low : !s_debounced_low;
     if (pressed != s_last_sent_sustained) {
         s_last_sent_sustained = pressed;
-        /* Every channel -- under MPE each held note lives on its own Member
-         * Channel, and the real receiving rig only sustains a note from a
-         * CC64 on that same channel; see send_pedal_cc()'s own comment. */
+        /* Master Channel (plus the fixed parts) -- under MPE the Master
+         * Channel's CC64 holds every note in the zone at once; see
+         * send_pedal_cc()'s own comment. */
         send_pedal_cc(MIDI_CC_SUSTAIN, pressed ? 127u : 0u);
     }
 }

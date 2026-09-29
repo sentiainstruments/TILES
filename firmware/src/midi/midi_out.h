@@ -208,20 +208,18 @@ void tiles_midi_send_cc(uint8_t channel, uint8_t controller, uint8_t value);
  * jack. Added with DIN MIDI OUT for exactly that reason. */
 void tiles_midi_send_daw_cc(uint8_t channel, uint8_t controller, uint8_t value);
 
-/* Same CC on the Zone Master Channel AND every one of channels 2-16 --
- * used by services/pedal.c for sustain (CC64) and expression (CC11), and
- * by tiles_midi_send_panic() below.
+/* Same CC on the Zone Master Channel AND every one of channels 2-16 -- ONLY
+ * for tiles_midi_send_panic() below, where reaching every channel no
+ * matter how the receiver is set up is the whole point of a MIDI panic (a
+ * compliant MPE receiver ignores the Member Channel copies).
  *
- * For pedals, deliberately every channel, not just the Master Channel the
- * MPE spec recommends (MMA RP-053 v1.0 section 2.3.1): a round that
- * narrowed it to the Master Channel lost sustain completely on the real
- * rig (real feedback: "weve fully lost pedal") -- that receiving chain
- * only sustains a note from a CC64 on the note's own channel. A
- * compliant MPE receiver is required to ignore the Member Channel copies,
- * so broadcasting costs it nothing. See pedal.c's send_pedal_cc() for the
- * full history. This file stays deliberately unaware of the channel
- * layout (see this header's own comment) -- it just always covers the
- * full range that could ever carry a note. */
+ * Deliberately NOT for pedals: services/pedal.c sends sustain/expression
+ * strictly per the MPE spec (Master Channel only for the zone -- MMA
+ * RP-053 v1.0 section 2.3.1), a standardize-don't-paper-over decision
+ * (real feedback: "yes go strict") -- see its send_pedal_cc() comment for
+ * the full history, including the one round a broadcast went back in.
+ * This file stays deliberately unaware of the channel layout (see this
+ * header's own comment on the module boundary). */
 void tiles_midi_send_cc_broadcast(uint8_t controller, uint8_t value);
 
 /* MIDI panic: Sustain off (CC 64), then All Notes Off (CC 123), then All

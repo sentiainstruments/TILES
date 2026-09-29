@@ -8991,5 +8991,31 @@ not its code.
   tools/tiles_control.py set features.melodic_harmonics 0`, back on with
   `1`) to confirm or rule out harmonics as the remaining cause. Not
   hardware-verified yet.
+- **Decision: standard MIDI, strictly -- pedal CCs on the Master Channel
+  only (plus the fixed non-zone parts), for good.** Asked "wait so should
+  i standardize my functi8onality ?" -- recommended yes, then real
+  feedback: "yes go strict." The round above restored the 16-channel
+  broadcast only because narrowing it had killed sustain on the real rig
+  -- which means that rig wasn't actually receiving as MPE (it sustained
+  a note only from a CC64 on the note's own channel), i.e. the broadcast
+  was papering over a host setup problem, plausibly also behind the
+  still-open stick. Standardizing instead: `pedal.c`'s `send_pedal_cc()`
+  sends to channel 1 (the MPE zone's Master Channel; with MPE off, every
+  live note's own channel) plus chord/game/sequencer-lane channels, never
+  the shared pool (2-9) or channel 10; `tiles_midi_send_cc_broadcast()` is
+  panic-only again. **This makes the host's setup a requirement**, like
+  every other MPE controller (Seaboard, LinnStrument, Osmose): in MPE
+  mode, the receiving DAW must treat TILES as MPE -- in Ableton, the MPE
+  checkbox on the TILES input in Preferences and an MPE-enabled
+  instrument (Serum's MPE switch on; Equator is MPE by default). Any other
+  setup should use non-MPE mode (circle+square), which works with any
+  synth with zero setup. Worth putting in the user manual in exactly
+  those words. Deliberate exceptions left as-is: the MIDI panic still
+  broadcasts (its job is to reach every channel regardless of setup, and
+  a compliant receiver ignores the Member Channel copies); harmonic
+  plucks still go on Member Channels even with MPE off (moving them to
+  channel 1 would let a pluck's Note-Off collide with a real note of the
+  same pitch on the one shared channel -- open question, not changed
+  here). Not hardware-verified yet.
 - Everything else (per-pad Hall calibration) is not built
   yet.

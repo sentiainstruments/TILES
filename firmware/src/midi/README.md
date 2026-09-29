@@ -211,12 +211,14 @@ UART) with rate limiting for continuous expression data — see Status below.
     pedal release and youre nbot catchingit. look online and also look at
     the code"): per the MPE spec (MMA RP-053 v1.0, sections 1.3 and 3.3)
     the controller now sends Note-Off immediately on release and lets the
-    synth sustain -- the deferral was the misread. Pedal CCs were briefly
-    narrowed to the Master Channel too, but that lost sustain entirely on
-    the real rig ("weve fully lost pedal"), so `tiles_midi_send_cc_
-    broadcast()` carries them again. Full writeup: `services/README.md`'s
-    "SUPERSEDES the two sustain entries above" entry and the correction
-    right after it.
+    synth sustain -- the deferral was the misread. Pedal CCs now go on
+    the Master Channel only (plus the fixed non-zone parts) -- strict MPE,
+    a deliberate decision ("yes go strict") after one round showed a rig
+    not actually configured for MPE needs the broadcast to sustain at all
+    ("weve fully lost pedal"); the host must now be set to MPE, or use
+    non-MPE mode. `tiles_midi_send_cc_broadcast()` is panic-only. Full
+    writeup: `services/README.md`'s "SUPERSEDES the two sustain entries
+    above" entry and the two after it.
 - **`midi_in.c` gained a real, running-status-aware channel-voice
   parser** (Note-On/Off specifically dispatched; every other channel-
   voice type consumed correctly for byte alignment but not dispatched
