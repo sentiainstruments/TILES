@@ -244,8 +244,8 @@ These are calibration/characterization tasks, not missing PCB mappings. The firm
 The net mappings were reconstructed from the final 2026-08-01 motherboard and daughterboard flying-probe netlists and reconciled with their BOM/PnP exports. Manufacturer behavior/rating sources to keep with the firmware repository:
 
 - Raspberry Pi Pico 2 datasheet: https://datasheets.raspberrypi.com/pico/pico-2-datasheet.pdf
-- TI TMAG5273 datasheet: local `/Users/matiascevallos/Downloads/tmag5273.pdf`
-- TI TPS2121 datasheet: local `/Users/matiascevallos/Downloads/tps2121.pdf`
+- TI TMAG5273 datasheet: https://www.ti.com/lit/ds/symlink/tmag5273.pdf
+- TI TPS2121 datasheet: https://www.ti.com/lit/ds/symlink/tps2121.pdf
 - NXP MPR121: https://www.nxp.com/docs/en/data-sheet/MPR121.pdf
 - NXP PCA9685: https://www.nxp.com/docs/en/data-sheet/PCA9685.pdf
 - Gateron KS-20UO10B045NW-X14 specification: https://www.gateron.com/u_file/2506/10/file/GATERONDual-railMagneticOrangeSwitchSPEC-KS-20U-005KS-20UO10B045NW-X14.pdf

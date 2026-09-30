@@ -1,8 +1,7 @@
 # protocol/
 
-Real feedback: "keep cv gate implemented but off rn. we need the control
-software." This is the **first, deliberately narrow version** of the USB
-vendor protocol -- a plain-text settings GET/SET, covering only the
+The **first, deliberately narrow version** of the USB vendor protocol --
+a plain-text settings GET/SET, covering only the
 runtime toggles the firmware already built with a companion-app hook in
 mind. It is **not** the fuller protocol `docs/protocol/README.md`'s own
 design notes describe (pad remap, guided per-pad calibration, live 24-pad

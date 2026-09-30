@@ -1,11 +1,10 @@
 # tools/
 
-Codegen and helper scripts. Primary planned job: take
-`shared/board-map/` and `shared/protocol/` as the single authored source
-and generate both the firmware's C headers (`firmware/src/board/pad_config.*`)
-and the companion app's TypeScript types (`companion-app/src/shared/`), so
-the two sides can't drift out of sync. Also home for calibration-jig or
-batch-programming scripts once manufacturing tooling is needed.
+Host-side helper scripts: `flash.sh` (flash a running board),
+`tiles_control.py` (the settings CLI over USB) and
+`bootloader_watchdog.sh`. Planned: codegen from `shared/board-map/` and
+`shared/protocol/` into the firmware's C headers and the companion app's
+TypeScript types, and manufacturing scripts once they're needed.
 
 ## bootloader_watchdog.sh
 
@@ -80,7 +79,7 @@ worth knowing about:
   balance between playing chords and plucking harmonics (defaults 128 /
   40 / 150, set from a recorded playing session). Raise `press_depth` if
   light harmonic touches get missed, lower it if chords leak harmonics;
-  see `firmware/src/services/README.md` for the data behind the defaults.
+  see `firmware/src/services/HISTORY.md` for the data behind the defaults.
 
 **Rebooting into the bootloader for flashing**, no BOOTSEL button --
 `flash.sh` (below) is the usual way now; this still works as a fallback:

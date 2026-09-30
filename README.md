@@ -47,12 +47,18 @@ companion-app UI, diagnostics — hand-rolls its own copy of either.
 
 ## Status
 
-`firmware/` is real, under active iterative development against real
-Rev A0 hardware — see `firmware/README.md`'s own Status section and
-`firmware/src/services/README.md` for the full history. `daw-integration/`
-has one real, working piece (the Ableton Live Control Surface script).
-`companion-app/`, `shared/`, and `tools/` are still scaffolding:
-placeholder READMEs describing intent, implementation not yet started.
+- **`firmware/`** — running on Rev A0 hardware, under active development.
+  Current state: `firmware/README.md`; development history: the
+  `HISTORY.md` files under `firmware/`.
+- **`daw-integration/`** — the Ableton Live Control Surface script and
+  the TILES DISPLAY Max for Live device, both in use.
+- **`tools/`** — flash script, settings CLI (`tiles_control.py`) and the
+  bootloader watchdog. Board-map codegen not started.
+- **`shared/`** — `protocol/` documents the v1 text settings protocol the
+  firmware implements. `board-map/` is not authored yet; the firmware's
+  `board/pad_config.c` is kept by hand against `docs/hardware/`.
+- **`companion-app/`** — planned (brief, package manifest, settings
+  fixture); no app code yet.
 
 ## Before any unit leaves the building
 

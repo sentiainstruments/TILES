@@ -10,12 +10,13 @@ need rather than duplicating that detail here.
 | Path | What it is | Read this when |
 |---|---|---|
 | `firmware/` | Pico 2 (RP2350) firmware, Pico SDK C/C++. Where nearly all active development happens right now. | Touching firmware — start with `firmware/AGENTS.md`, not this file. |
-| `companion-app/` | Electron desktop configurator (remap/calibrate/diagnose over USB). | Touching the desktop app — see `companion-app/README.md`. |
-| `shared/` | Canonical 24-pad board map + USB vendor protocol definition, consumed by both firmware and companion-app. | Changing anything both sides must agree on. |
+| `companion-app/` | Electron desktop configurator (remap/calibrate/diagnose over USB). Planned; no app code yet. | Touching the desktop app — see `companion-app/README.md`. |
+| `daw-integration/` | Ableton Live Control Surface script and the TILES DISPLAY Max for Live device. | Changing how TILES talks to a DAW — see `daw-integration/README.md`. |
+| `shared/` | USB vendor protocol definition (v1 text settings protocol) and, later, the canonical board map. | Changing anything firmware and host tools must agree on. |
 | `docs/hardware/` | Ground truth for GPIO, bus addresses, and the pad routing table for Rev A0. | Anything touching a physical pin, channel, or address. |
 | `docs/architecture/`, `docs/protocol/` | Cross-cutting design notes not owned by one module. | Rare — check before a big structural change. |
 | `docs/reference/legacy-prototype-v1/` | First prototype's Arduino sketch. Behavior reference only, none of it reused. | Looking for prior art on a feature (scale modes, voice stealing, standby animation). |
-| `tools/` | Codegen: board-map JSON -> generated C header + companion-app TS types. | Changing the board map or protocol. |
+| `tools/` | Flash script, settings CLI, bootloader watchdog (codegen planned). | Flashing, or scripting the settings protocol — see `tools/README.md`. |
 
 ## Repo-wide conventions
 

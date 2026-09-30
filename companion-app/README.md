@@ -49,8 +49,8 @@ vendor interface defined in `../shared/protocol/`.
   users from "copy a folder to a hidden path" down to "click one button,
   then pick TILES from a dropdown once," not to zero steps.
 - **Per-lane sequencer output routing**: the firmware's 4-lane sequencer
-  (see `firmware/src/services/README.md`'s own "Sequencer rearchitected"
-  entry) sends every lane out the same USB-MIDI endpoint on its own fixed
+  (see the "Sequencer rearchitected" entry in
+  `firmware/src/services/HISTORY.md`) sends every lane out the same USB-MIDI endpoint on its own fixed
   channel by default. Real feedback, noted for later rather than built
   now: "write down that the control software can send the sequences to
   differetn out ports loke cv gate, or midi" -- i.e. let each of the 4

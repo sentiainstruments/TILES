@@ -218,7 +218,7 @@ ableton."
 
 TILES sends the sustain pedal (CC 64) the standard MPE way: on channel 1,
 the zone's Master Channel, only -- a real decision after a long stuck-note
-investigation (`firmware/src/services/README.md`, "SUPERSEDES the two
+investigation (`firmware/src/services/HISTORY.md`, "SUPERSEDES the two
 sustain entries" and the entries after it). That means **in MPE mode the
 receiving side must actually be set up as MPE**, like any MPE controller:
 
@@ -385,7 +385,7 @@ clears it on the Note-Off.
 
 TILES must be in melodic mode, and a note outside the currently selected
 scale/octave/key has no pad to light (same accepted tradeoffs as the
-firmware entry in `firmware/src/services/README.md`).
+firmware entry in `firmware/src/services/HISTORY.md`).
 
 ### MPE / expression pass-through
 

@@ -4,11 +4,11 @@
   "hardware_revision": "TILES PRE-PRODUCTION Rev A0 / production export 2026-08-01",
   "logical_numbering": "Pads 1-24 are row-major, left-to-right, top-to-bottom in a 6x4 grid.",
   "sources": {
-    "motherboard_bom": "/Users/matiascevallos/Downloads/BOM_Board1_PCB1_2026-08-01.xlsx",
-    "motherboard_pnp": "/Users/matiascevallos/Downloads/PickAndPlace_PCB1_2026_08_01.xlsx",
+    "motherboard_bom": "BOM_Board1_PCB1_2026-08-01.xlsx",
+    "motherboard_pnp": "PickAndPlace_PCB1_2026_08_01.xlsx",
     "motherboard_flying_probe": ".tmp_audit/main_gerber_0801/FlyingProbeTesting.json",
     "daughterboard_flying_probe": ".tmp_audit/daughter_gerber_0801/FlyingProbeTesting.json",
-    "flex_archive": "/Users/matiascevallos/Downloads/flex.zip"
+    "flex_archive": "flex.zip"
   },
   "controller": {
     "module": "Raspberry Pi Pico 2",
