@@ -9310,5 +9310,18 @@ not its code.
   hardware, including how it behaves with the deferred zone re-declaration
   and per-channel setup from the MPE entry above. Flagged in `op_mode.c`'s
   Song section and `firmware/README.md`'s Status.
+- **Game mode: only the 4-button hold exits.** Real feedback: "for game
+  mode lets fix tht the shapes besides -+ are exiting the games rn the only
+  exit for a game besides loosing should be holding the four buttons at
+  once and that should disable the mode again." An earlier round had made
+  every function button an exit ("each othere function button oversides
+  gasme mode, exiting and taking to respective menu" -- triangle/diamond in
+  any game that didn't steer with them, circle/square from the game menu),
+  via `gm_override_button_pressed()` in `game_mode.c`. Removed outright,
+  with its press-edge trackers: a shape button that isn't a control in the
+  current game now does nothing, and the triangle+diamond+square+circle
+  hold (~0.7 s) is the only way out, turning game mode fully off and back
+  to the previous mode. Losing a round still returns to the game menu. Not
+  hardware-verified yet.
 - Everything else (per-pad Hall calibration) is not built
   yet.

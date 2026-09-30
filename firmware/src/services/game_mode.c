@@ -1492,11 +1492,6 @@ static bool gm_combo_held(void) {
            tiles_button_is_pressed(6u);
 }
 
-static bool s_gm_override_prev_triangle;
-static bool s_gm_override_prev_diamond;
-static bool s_gm_override_prev_circle;
-static bool s_gm_override_prev_square;
-
 static void gm_toggle(uint32_t now_ms) {
     if (s_gm_state == GM_STATE_OFF) {
         tiles_lighting_set_standby_active(true);
@@ -1512,22 +1507,6 @@ static void gm_toggle(uint32_t now_ms) {
          * hands are busy holding the combo) no longer keeps running its
          * full strike/haptic pipeline unsupervised through gameplay. */
         tiles_expression_force_release_all();
-        /* Real bug found from real feedback: "game mode wont louch
-         * anymore when 4 function buttons presed at once." All four
-         * override-eligible buttons (triangle/diamond/circle/square) are
-         * BY DEFINITION still physically held right now -- that's what
-         * gm_combo_held() just required to get here. Seeding these
-         * "previous state" trackers to true (matching reality) means
-         * gm_override_button_pressed()'s very first check right after
-         * entry sees no NEW press edge on any of them and doesn't
-         * immediately exit what was just entered. Leaving them at
-         * whatever stale value they last held (most likely false, from
-         * a prior clean exit) would misread this continued hold as a
-         * fresh press and cancel entry on the very same tick. */
-        s_gm_override_prev_triangle = true;
-        s_gm_override_prev_diamond = true;
-        s_gm_override_prev_circle = true;
-        s_gm_override_prev_square = true;
     } else {
         s_gm_state = GM_STATE_OFF;
         tiles_lighting_set_standby_active(false);
@@ -1558,70 +1537,19 @@ static void gm_check_toggle_gesture(uint32_t now_ms) {
     s_gm_combo_was_held = held;
 }
 
-/* Real feedback: "if cicle cliucked in game menu it exxits to previuos
- * mode and each othere function button oversides gasme mode, exiting
- * and taking to respective menu." This function used to claim
- * "Triangle/diamond are never a live control in ANY of the five games"
- * and override unconditionally on that basis -- false: gs_handle_input()
- * (Snake) uses them as up/down steering and gt_handle_input() (Tetris)
- * uses them as rotate/hard-drop, both live, both reachable while
- * actually playing. That false premise meant pressing triangle to
- * steer Snake upward, or diamond to drop a Tetris piece, silently
- * exited game mode instead -- a real bug found reviewing this
- * function, not from real feedback. Fixed the same way circle/square
- * already are just below: excluded from the override while the
- * specific game that uses them live is the one actually in progress
- * (GM_STATE_PLAYING_SNAKE/_TETRIS), not menu-scoped like circle/square
- * -- a blanket menu-only rule would also block triangle/diamond from
- * exiting Pong/BreakoutBlocks/Simon Says mid-game, which never used
- * them live and lost nothing by overriding unconditionally. Circle/
- * square ARE live Pong paddle controls (SW5/SW6, gp_handle_input()),
- * so overriding them mid-game would break Pong itself -- they only
- * override from the menu screen, matching the "circle clicked in game
- * MENU" framing in the feedback itself. This
- * function doesn't need to restore whatever mode was active before
- * game mode -- op_mode.c's own s_active_mode was never touched while
- * game mode ran (the two are already mutually exclusive by design), so
- * simply exiting via gm_toggle() below is all "back to previous mode"
- * needs. The button that triggered the exit doesn't fire its own
- * action on this SAME press -- services/op_mode.c's/services/
- * expression_control.c's own "keep edge-tracking current while
- * suppressed" pattern (a deliberate anti-spurious-click safeguard, see
- * their own comments) means a release-then-press is needed to actually
- * open that button's menu, one extra motion rather than a seamless
- * single press.
- * Fires on a fresh PRESS EDGE of the relevant button(s), not just
- * "currently held" -- real bug found from real feedback: "game mode
- * wont louch anymore when 4 function buttons presed at once." Checking
- * raw held state meant the tail end of the entry combo itself (all four
- * buttons still physically down the instant gm_toggle() just turned
- * game mode ON) immediately satisfied "triangle or diamond is held" on
- * the very next check, canceling the entry it was still in the middle
- * of. gm_toggle()'s own entry branch seeds these four "previous state"
- * trackers to true for exactly this reason -- see its own comment. */
-static bool gm_override_button_pressed(void) {
-    bool triangle = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
-    bool diamond = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
-    bool circle = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
-    bool square = tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
-
-    bool triggered = false;
-    if (s_gm_state != GM_STATE_OFF && s_gm_state != GM_STATE_PLAYING_SNAKE && s_gm_state != GM_STATE_PLAYING_TETRIS) {
-        if ((triangle && !s_gm_override_prev_triangle) || (diamond && !s_gm_override_prev_diamond)) {
-            triggered = true;
-        }
-    }
-    if (s_gm_state == GM_STATE_MENU &&
-        ((circle && !s_gm_override_prev_circle) || (square && !s_gm_override_prev_square))) {
-        triggered = true;
-    }
-
-    s_gm_override_prev_triangle = triangle;
-    s_gm_override_prev_diamond = diamond;
-    s_gm_override_prev_circle = circle;
-    s_gm_override_prev_square = square;
-    return triggered;
-}
+/* No single-button exit. Real feedback, reversing an earlier round ("if
+ * cicle cliucked in game menu it exxits to previuos mode and each othere
+ * function button oversides gasme mode, exiting and taking to respective
+ * menu"): "the shapes besides -+ are exiting the games rn the only exit for
+ * a game besides loosing should be holding the four buttons at once and
+ * that should disable the mode again." So triangle/diamond/square/circle no
+ * longer leave game mode on their own -- in a game or in the game menu --
+ * and the only way out is the same 4-button hold that entered
+ * (gm_check_toggle_gesture() -> gm_toggle()), which turns game mode fully
+ * off and hands back to whatever mode was active before. Losing a round
+ * still returns to the game menu (GM_STATE_ROUND_END / Pong's match end). A
+ * press of a shape button that isn't a control in the current game simply
+ * does nothing. */
 
 void tiles_game_mode_init(void) {
     s_gm_state = GM_STATE_OFF;
@@ -1635,10 +1563,6 @@ void tiles_game_mode_init(void) {
     s_gm_prev_pad4_touched = false;
     s_gm_prev_pad5_touched = false;
     s_gm_melody_active = false;
-    s_gm_override_prev_triangle = false;
-    s_gm_override_prev_diamond = false;
-    s_gm_override_prev_circle = false;
-    s_gm_override_prev_square = false;
 }
 
 void tiles_game_mode_scan(void) {
@@ -1651,11 +1575,6 @@ void tiles_game_mode_scan(void) {
         return;
     }
     gm_melody_update(now_ms);
-
-    if (gm_override_button_pressed()) {
-        gm_toggle(now_ms);
-        return;
-    }
 
     if (s_gm_state == GM_STATE_MENU) {
         gm_handle_menu_selection();

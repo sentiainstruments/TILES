@@ -17,7 +17,11 @@
  * (circle) together for ~0.7s to toggle game mode on/off -- SW1 ("-")
  * and SW2 ("+") are deliberately excluded from this combo since they're
  * reserved as in-game controls (see below). The same hold toggles game
- * mode off again from any state (menu or mid-game).
+ * mode off again from any state (menu or mid-game) -- and it is the ONLY
+ * way out: no single button exits a game or the game menu (real feedback:
+ * "the only exit for a game besides loosing should be holding the four
+ * buttons at once and that should disable the mode again"). Losing a round
+ * returns to the game menu, not out of game mode.
  *
  * Once on: the menu shows pad 1 (green) for Snake, pad 2 (orange) for
  * Brick Breaker, pad 3 (cyan) for Tetris, and pad 4 (blue) for Pong --
