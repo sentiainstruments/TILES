@@ -1,0 +1,588 @@
+<title>TILES Quick Start</title>
+<!--
+  TILES quick start guide -- source file. Edit freely:
+  * Text: plain HTML below, one <section class="sheet"> per page.
+  * Board diagrams: each <div class="board"> is drawn by the script at the bottom from its
+    data- attributes, so you edit a diagram by editing text:
+      data-pads   "PAD COLOR LABEL; PAD COLOR LABEL; ..."  PAD = 1-24 (1 = top-left) or a range like 16-24,
+                  COLOR = off white pink pinksoft peri ink red amber blue yellow teal green cyan purple orange
+                  (add -dim for a faded version, e.g. red-dim), LABEL = text on the pad ("/" = new line).
+      data-fill   colour for every pad not listed (default: off)
+      data-keys   buttons to highlight: minus plus tri dia sq circ
+      data-alt    description for screen readers
+  * Inline button icons: <i class="k tri"></i> (also: minus plus dia sq circ).
+  * Colours live in the :root block right below.
+  Facts come from firmware 0.2.0 (firmware/src/services/op_mode.c, note_map.c, game_mode.h, standby.h,
+  expression_control.h, docs/hardware/). Jack sizes are deliberately not stated -- not documented yet.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;900&family=Figtree:wght@400;500;600;700&family=Martian+Mono:wght@400;500;700&display=swap">
+<style>
+/* Layout: a stack of white "sheets" on SENTIA light blue, like leaflet panels. Each sheet pairs a
+   board diagram (the device's own top view) with a short list of moves. One committed light look. */
+:root {
+  --paper: #ffffff;
+  --mist: #e5e9fd;
+  --pink: #ff00ff;
+  --pink-soft: #ff5cff;
+  --peri: #94abf9;
+  --ink: #171d3a;
+  --ink-2: #4a5078;
+  --line: #d3d9f7;
+  --font-display: "Unbounded", "Arial Black", system-ui, sans-serif;
+  --font-body: "Figtree", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { background: var(--mist); }
+body { background: var(--mist); color: var(--ink); font: 400 15.5px/1.55 var(--font-body); margin: 0; }
+.guide { max-width: 1000px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 64px; }
+img { max-width: 100%; display: block; }
+
+/* ---- cover ---- */
+.cover { background: var(--ink); color: var(--paper); border-radius: 32px; padding: 32px; display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 24px; overflow: hidden; position: relative; }
+.cover .top { display: flex; align-items: center; gap: 12px; }
+.cover .top img { width: 34px; }
+.cover .top span { font: 500 11px/1 var(--font-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--peri); }
+.tiles-logo { width: min(420px, 100%); aspect-ratio: 930 / 227; background: var(--paper); -webkit-mask: url("assets/tiles-logo.png") left center / contain no-repeat; mask: url("assets/tiles-logo.png") left center / contain no-repeat; margin: 44px 0 20px; }
+.cover h1 { font: 900 clamp(26px, 4.6vw, 44px)/1.02 var(--font-display); margin: 0 0 16px; letter-spacing: -0.01em; text-wrap: balance; }
+.cover h1 em { font-style: normal; color: var(--pink); }
+.cover p { color: #c7cdf0; max-width: 44ch; margin: 0 0 22px; }
+.cover .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.cover .chips span { font: 500 11px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; border: 1px solid #39406b; border-radius: 999px; padding: 8px 12px; color: #dfe3ff; }
+.cover .key { display: flex; align-items: center; justify-content: center; min-width: 0; }
+.cover .key img { max-height: 460px; width: auto; mix-blend-mode: screen; }
+
+/* ---- sheets ---- */
+.sheet { background: var(--paper); border-radius: 28px; padding: 28px; margin-top: 18px; border: 1px solid rgba(23, 29, 58, .07); }
+.sheet-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 16px; margin-bottom: 20px; }
+.tag { font: 700 11px/1 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; background: var(--pink); color: var(--paper); padding: 7px 10px; border-radius: 999px; }
+.tag.soon { background: var(--mist); color: var(--ink-2); }
+h2 { font: 700 clamp(22px, 3.4vw, 30px)/1.1 var(--font-display); margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.sheet-head p { flex-basis: 100%; margin: 0; color: var(--ink-2); max-width: 66ch; }
+.split { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+.split.flip { grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); }
+figure { margin: 0; min-width: 0; }
+figcaption { font: 500 11px/1.5 var(--font-mono); letter-spacing: .04em; color: var(--ink-2); margin-top: 10px; text-transform: uppercase; }
+.board { background: linear-gradient(180deg, #ffffff 0%, #f3f5fe 100%); border: 1px solid var(--line); border-radius: 22px; padding: 16px 16px 14px; }
+.board svg { width: 100%; height: auto; display: block; }
+.stack { display: grid; gap: 20px; min-width: 0; }
+
+/* the list of moves: combo on the left, result on the right */
+.moves { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 11px 16px; margin: 0; align-items: baseline; }
+.moves dt { font: 600 13px/1.3 var(--font-body); white-space: nowrap; display: flex; align-items: center; gap: 5px; }
+.moves dd { margin: 0; min-width: 0; }
+.moves dd b { font-weight: 600; }
+h3 { font: 700 13px/1.2 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; margin: 4px 0 12px; color: var(--ink); }
+.note { font-size: 13.5px; color: var(--ink-2); margin: 0; }
+.note b { color: var(--ink); font-weight: 600; }
+
+/* inline button icons */
+.k { display: inline-block; width: 1.05em; height: 1.05em; background: var(--ink); vertical-align: -0.18em; flex: none; }
+.k.tri { clip-path: polygon(50% 4%, 97% 93%, 3% 93%); }
+.k.dia { clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+.k.sq { border-radius: 24%; }
+.k.circ { border-radius: 50%; }
+.k.minus, .k.plus { width: 1.3em; color: var(--paper); font: 700 12px/1.05em var(--font-body); text-align: center; }
+.k.minus { border-radius: 999px 3px 3px 999px; }
+.k.plus { border-radius: 3px 999px 999px 3px; }
+.k.minus::before { content: "\2212"; }
+.k.plus::before { content: "+"; }
+.plus-sign { color: var(--ink-2); font-weight: 400; }
+
+/* legend used on "Meet TILES" */
+.legend { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px 14px; margin: 0; }
+.legend dt { display: flex; gap: 4px; align-items: center; font-size: 18px; }
+.legend dd { margin: 0; }
+.legend dd span { display: block; font-size: 13.5px; color: var(--ink-2); }
+.feel { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 22px; }
+.feel div { background: var(--mist); border-radius: 16px; padding: 14px; min-width: 0; }
+.feel b { display: block; font: 700 12px/1.2 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; margin-bottom: 6px; }
+.feel span { font-size: 13.5px; color: var(--ink-2); }
+
+/* I/O cards */
+.ports { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.port { border: 1px solid var(--line); border-radius: 18px; padding: 16px; min-width: 0; }
+.port .name { font: 700 13px/1.2 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.port .name i { width: 26px; height: 16px; border: 2px solid var(--ink); border-radius: 6px; flex: none; }
+.port .name i.round { width: 18px; height: 18px; border-radius: 50%; }
+.port .name i.pink { border-color: var(--pink); }
+.port p { margin: 0; font-size: 14px; color: var(--ink-2); }
+.port p b { color: var(--ink); font-weight: 600; }
+
+/* shortcuts */
+.cheat { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.cheat > div { background: var(--mist); border-radius: 20px; padding: 18px; min-width: 0; }
+.cheat .moves { gap: 9px 14px; font-size: 14px; }
+.channels { overflow-x: auto; margin-top: 16px; }
+.channels table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 460px; }
+.channels th, .channels td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.channels th { font: 700 11px/1.2 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+
+.soon-card { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; justify-content: space-between; }
+.soon-card p { margin: 0; color: var(--ink-2); max-width: 56ch; }
+footer { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; margin-top: 28px; padding-inline: 8px; }
+footer img { width: 200px; }
+footer span { font: 500 11px/1.5 var(--font-mono); letter-spacing: .06em; color: var(--ink-2); text-transform: uppercase; }
+
+@media (max-width: 760px) {
+  .cover { grid-template-columns: 1fr; padding: 24px; }
+  .cover .key img { max-height: 260px; }
+  .split, .split.flip { grid-template-columns: 1fr; }
+  .sheet { padding: 20px; border-radius: 22px; }
+  .feel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .moves dt { white-space: normal; }
+}
+@media print {
+  html, body { background: #fff; }
+  .sheet, .cover { break-inside: avoid; }
+}
+</style>
+
+<div class="guide">
+
+  <!-- ============ COVER ============ -->
+  <header class="cover">
+    <div>
+      <div class="top"><img src="assets/sentia-icon.png" alt="SENTIA"><span>SENTIA Instruments</span></div>
+      <div class="tiles-logo" role="img" aria-label="TILES"></div>
+      <h1>Quick start <em>guide</em></h1>
+      <p>24 expressive pads, six buttons, one grid for playing, sequencing and launching clips. Here's everything you need to start, on a few pages.</p>
+      <div class="chips"><span>Firmware 0.2.0</span><span>MIDI · MPE · CV</span><span>24 pads</span></div>
+    </div>
+    <div class="key"><img src="assets/key-exploded.jpg" alt="Exploded view of one TILES key: pad cap, housing and magnetic switch"></div>
+  </header>
+
+  <!-- ============ 01 MEET TILES ============ -->
+  <section class="sheet" id="meet">
+    <div class="sheet-head"><span class="tag">01</span><h2>Meet TILES</h2></div>
+    <div class="split">
+      <figure>
+        <div class="board" data-keys="minus plus tri dia sq circ" data-alt="Top view of TILES: six buttons above a grid of 4 by 6 pads"></div>
+        <figcaption>Six buttons · 4 × 6 pads · pad 1 is top-left</figcaption>
+      </figure>
+      <dl class="legend">
+        <dt><i class="k minus"></i><i class="k plus"></i></dt><dd><b>Minus / Plus</b><span>Octave down / up. In other modes: move frets, tracks, start/stop.</span></dd>
+        <dt><i class="k tri"></i></dt><dd><b>Triangle: modes</b><span>Opens the mode menu. With circle: the scale selector.</span></dd>
+        <dt><i class="k dia"></i></dt><dd><b>Diamond: transport</b><span>Play / stop in Ableton. In the sequencer: the pattern bank.</span></dd>
+        <dt><i class="k sq"></i></dt><dd><b>Square: sentia</b><span>Pitch bend on / off. Hold for the expression menu.</span></dd>
+        <dt><i class="k circ"></i></dt><dd><b>Circle: shift / power</b><span>Hold with other buttons for extra functions. Long hold: sleep.</span></dd>
+      </dl>
+    </div>
+    <div class="feel">
+      <div><b>Touch</b><span>Every pad senses your finger, with a small haptic tick.</span></div>
+      <div><b>Strike</b><span>Press to play. How fast you press sets the velocity.</span></div>
+      <div><b>Press</b><span>Keep pushing after the strike for pressure (aftertouch).</span></div>
+      <div><b>Tilt</b><span>Rock the pad sideways to bend the note (turn on with <i class="k sq"></i>).</span></div>
+    </div>
+  </section>
+
+  <!-- ============ 02 PLUG IN ============ -->
+  <section class="sheet" id="io">
+    <div class="sheet-head"><span class="tag">02</span><h2>Plug in</h2><p>TILES runs from USB alone. Add 12 V power for full brightness and the CV outputs.</p></div>
+    <div class="ports">
+      <div class="port"><div class="name"><i class="pink"></i>USB-C</div><p><b>Power and MIDI.</b> Shows up as two MIDI ports: <b>SENTIA TILES MIDI</b> (play and record from this one) and <b>SENTIA TILES DAW</b> (for the Ableton script only).</p></div>
+      <div class="port"><div class="name"><i class="round"></i>12 V power</div><p><b>Full power.</b> Brightest lights and CV/gate outputs. USB MIDI keeps working when both are connected.</p></div>
+      <div class="port"><div class="name"><i class="round"></i>MIDI in / out</div><p><b>TRS MIDI</b> for hardware synths and drum machines. Out sends what USB sends; in follows clock. Type A by default, Type B selectable in settings.</p></div>
+      <div class="port"><div class="name"><i class="round"></i>Pedal</div><p><b>Sustain</b> by default, or an <b>expression</b> pedal. Works with normally-open and normally-closed pedals (settings).</p></div>
+      <div class="port"><div class="name"><i class="round"></i>CV · gate</div><p><b>Pitch CV</b> (1 V/octave), <b>pressure CV</b> (0–10 V) and <b>gate</b>. Only with 12 V power connected.</p></div>
+    </div>
+  </section>
+
+  <!-- ============ 03 MODES ============ -->
+  <section class="sheet" id="modes">
+    <div class="sheet-head"><span class="tag">03</span><h2>Choose a mode</h2></div>
+    <div class="split">
+      <figure>
+        <div class="board" data-keys="tri" data-pads="1 pink MELODIC; 2 red SEQ; 3 amber GUITAR; 4 blue CHORD; 5 yellow SONG; 6 teal ABLETON" data-alt="Mode menu: the top row of pads, one per mode"></div>
+        <figcaption>Mode menu · top row of pads</figcaption>
+      </figure>
+      <div class="stack">
+        <dl class="moves">
+          <dt><i class="k tri"></i></dt><dd>Opens the mode menu. Click again to close it.</dd>
+          <dt>Press a pad</dt><dd>Switches to that mode. The current mode pulses white.</dd>
+        </dl>
+        <p class="note"><b>Melodic</b> magenta · <b>Sequencer</b> red · <b>Guitar</b> amber · <b>Chord</b> blue · <b>Song</b> yellow (coming soon) · <b>Ableton</b> teal.</p>
+        <p class="note">A running sequence keeps playing when you switch modes.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 04 MELODIC ============ -->
+  <section class="sheet" id="melodic">
+    <div class="sheet-head"><span class="tag">04</span><h2>Melodic mode</h2><p>The default. Notes rise left to right, and each row continues from the one below. The lowest note is bottom-left.</p></div>
+    <div class="split">
+      <figure>
+        <div class="board" data-keys="minus plus" data-fill="white" data-pads="1 white F#; 2 peri G; 3 white G#; 4 white A; 5 white A#; 6 white B; 7 pink C; 8 white C#; 9 white D; 10 white D#; 11 white E; 12 white F; 13 white F#; 14 peri G; 15 white G#; 16 white A; 17 white A#; 18 white B; 19 pink C; 20 white C#; 21 white D; 22 white D#; 23 white E; 24 white F" data-alt="Melodic layout in C: C on the bottom-left pad and again two rows up, G in blue"></div>
+        <figcaption>Key of C, chromatic · root <span style="color:var(--pink)">magenta</span> · fifth <span style="color:#5d78e8">blue</span></figcaption>
+      </figure>
+      <div class="stack">
+        <dl class="moves">
+          <dt><i class="k minus"></i> <i class="k plus"></i></dt><dd>Octave down / up, ±3. The button's blink pattern shows how far.</dd>
+          <dt><i class="k minus"></i><span class="plus-sign">+</span><i class="k plus"></i></dt><dd><b>Transpose.</b> Press both together: the key letter shows on the pads. Minus / plus change the key; both again to exit.</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span><i class="k tri"></i></dt><dd>Scale selector (next page).</dd>
+          <dt><i class="k sq"></i></dt><dd>Pitch bend on / off. Tilt a pad to bend.</dd>
+        </dl>
+        <div>
+          <h3>Pedal tricks</h3>
+          <dl class="moves">
+            <dt>Pedal</dt><dd>Sustain, sent the standard way (works with MPE synths).</dd>
+            <dt>Harmonics</dt><dd>Hold the pedal and one note, then lightly touch other pads: each plucks an overtone of the held note.</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 05 SCALES ============ -->
+  <section class="sheet" id="scales">
+    <div class="sheet-head"><span class="tag">05</span><h2>Scales</h2><p>Every playing mode follows the selected scale. The layout keeps its shape: in a scale, the pads only play notes of that scale.</p></div>
+    <div class="split">
+      <figure>
+        <div class="board" data-keys="circ tri" data-pads="1 pinksoft CHROMA; 2 white MAJOR; 3 pinksoft MINOR; 4 pinksoft DORIAN; 5 pinksoft LYDIAN; 6 pinksoft MIXO; 7 pinksoft BLUES/MAJOR; 8 pinksoft BLUES/MINOR; 9 pinksoft ARABIAN; 10 pinksoft DIMIN.; 11 pinksoft PENTA/MAJOR; 12 pinksoft PENTA/MINOR; 13 pinksoft EGYPT; 14 pinksoft WHOLE/TONE; 15 pinksoft JAPAN; 16-24 off CUSTOM" data-alt="Scale selector: one pad per scale, 15 scales on pads 1 to 15, pads 16 to 24 reserved for custom scales"></div>
+        <figcaption>Scale selector · the current scale (here Major) pulses white</figcaption>
+      </figure>
+      <div class="stack">
+        <dl class="moves">
+          <dt><i class="k circ"></i><span class="plus-sign">+</span><i class="k tri"></i></dt><dd>Open the scale selector (hold circle, click triangle).</dd>
+          <dt>Press a pad</dt><dd>Selects that scale.</dd>
+        </dl>
+        <dl class="moves">
+          <dt>Row 1</dt><dd>Chromatic · Major · Minor · Dorian · Lydian · Mixolydian</dd>
+          <dt>Row 2</dt><dd>Blues major · Blues minor · Arabian · Diminished · Pentatonic major · Pentatonic minor</dd>
+          <dt>Row 3</dt><dd>Egyptian · Whole tone · Japanese (Miyako-bushi)</dd>
+          <dt>16–24</dt><dd>Custom scale slots, coming with the companion app.</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 06 CHORD ============ -->
+  <section class="sheet" id="chord">
+    <div class="sheet-head"><span class="tag">06</span><h2>Chord mode</h2><p>Chords on the left two columns, a melody grid on the right four.</p></div>
+    <div class="split">
+      <figure>
+        <div class="board" data-pads="1 blue VII°; 2 blue I; 7 blue V; 8 blue vi; 13 blue iii; 14 blue IV; 19 blue I; 20 blue ii; 3 white A; 4 white B; 5 pink C; 6 white D; 9 white D; 10 white E; 11 white F; 12 white G; 15 white G; 16 white A; 17 white B; 18 pink C; 21 pink C; 22 white D; 23 white E; 24 white F" data-alt="Chord mode in C major: chords I to VII and I again up the left two columns, a 4 by 4 melody grid on the right starting with C"></div>
+        <figcaption>C major · chords climb from the bottom-left</figcaption>
+      </figure>
+      <div class="stack">
+        <dl class="moves">
+          <dt>Columns 1–2</dt><dd><b>8 chords</b> from the current scale, bottom-left up: I, ii, iii, IV, V, vi, vii°, then I an octave higher.</dd>
+          <dt>Strike</dt><dd>A full seventh chord with a bass note. Strike speed sets the loudness.</dd>
+          <dt>Columns 3–6</dt><dd><b>Melody</b>, 4 × 4, starting on the root at the bottom-left of the block.</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span><i class="k tri"></i></dt><dd>Change the scale. Scales without 7 notes use major chords.</dd>
+        </dl>
+        <p class="note">Chords are one octave below the melody and go out on <b>MIDI channel 12</b>, so they can play a different synth.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 07 GUITAR ============ -->
+  <section class="sheet" id="guitar">
+    <div class="sheet-head"><span class="tag">07</span><h2>Guitar mode</h2><p>A bass neck: rows are strings, columns are frets.</p></div>
+    <div class="split">
+      <figure>
+        <div class="board" data-keys="minus plus" data-fill="white" data-pads="1 amber G; 7 amber D; 13 amber A; 19 amber E; 4 amber-dim ·; 6 amber-dim ·; 10 amber-dim ·; 12 amber-dim ·; 16 amber-dim ·; 18 amber-dim ·; 22 amber-dim ·; 24 amber-dim ·" data-alt="Guitar mode: strings G, D, A, E from top to bottom in column 1, fret markers on frets 3 and 5"></div>
+        <figcaption>Strings G D A E · column 1 = open string</figcaption>
+      </figure>
+      <dl class="moves">
+        <dt>Rows</dt><dd>Strings, standard bass tuning: G, D, A, E from top to bottom.</dd>
+        <dt>Columns</dt><dd>Frets. Column 1 starts as the open string.</dd>
+        <dt><i class="k minus"></i> <i class="k plus"></i></dt><dd>Slide along the neck one fret at a time.</dd>
+        <dt>Markers</dt><dd>Glowing pads show the fret dots, like inlays.</dd>
+      </dl>
+    </div>
+  </section>
+
+  <!-- ============ 08 SEQUENCER ============ -->
+  <section class="sheet" id="sequencer">
+    <div class="sheet-head"><span class="tag">08</span><h2>Sequencer</h2><p>24 pads, 24 steps, read like a page: left to right, top to bottom. Four lanes play at once.</p></div>
+    <div class="split">
+      <figure>
+        <div class="board" data-keys="minus plus dia circ" data-pads="1 red-dim 1; 2 off 2; 3 blue 3; 4 off 4; 5 red-dim 5; 6 off 6; 7 red-dim 7; 8 off 8; 9 red-dim 9; 10 off 10; 11 off 11; 12 red-dim 12; 13 red-dim 13; 14 off 14; 15 off 15; 16 red-dim 16; 17 off 17; 18 red-dim 18; 19 red-dim 19; 20 off 20; 21 red-dim 21; 22 off 22; 23 off 23; 24 red-dim 24" data-alt="Sequencer: 24 numbered steps, armed steps in dim red, the playhead in blue on step 3"></div>
+        <figcaption>Armed steps red · playhead blue on an armed step, white otherwise</figcaption>
+      </figure>
+      <div class="stack">
+        <dl class="moves">
+          <dt>Tap a step</dt><dd>On / off.</dd>
+          <dt>Hold a step</dt><dd>Pick its note: tap any pad. Keep holding and press to set the step's <b>probability</b>.</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span>step</dt><dd><b>Ratchet</b>: repeats inside the step.</dd>
+          <dt><i class="k plus"></i> / <i class="k minus"></i></dt><dd>Start / stop.</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span><i class="k minus"></i><i class="k plus"></i></dt><dd>Pattern length, 1–24 steps.</dd>
+          <dt><i class="k circ"></i> ×4</dt><dd><b>Tap tempo</b> when no DAW clock is coming in. Circle blinks on the beat.</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span><i class="k dia"></i></dt><dd><b>Capture</b>: play, and your notes are written into the steps on the beat. Same again to finish.</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="split" style="margin-top:26px">
+      <figure>
+        <div class="board" data-keys="dia" data-pads="1-6 amber-dim A; 7-12 green-dim B; 13-18 blue-dim C; 19-24 purple-dim D; 1 red A1; 8 white B2; 14 white C2; 19 white D1" data-alt="Pattern bank: four rows for four lanes, six patterns per lane"></div>
+        <figcaption>Pattern bank · rows = lanes · columns = patterns</figcaption>
+      </figure>
+      <div class="stack">
+        <h3>Pattern bank <i class="k dia"></i></h3>
+        <dl class="moves">
+          <dt><i class="k dia"></i></dt><dd>Open / close the bank.</dd>
+          <dt>Press a slot</dt><dd>That lane plays that pattern, and it's the one you edit.</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span>tap</dt><dd><b>Save</b> the slot (green flash).</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span>hold 3 s</dt><dd><b>Clear</b> the slot (red flash).</dd>
+        </dl>
+        <p class="note">Lanes 1–4 play on <b>MIDI channels 16, 15, 14, 13</b>. Patterns are saved on the device and follow a DAW's clock when one is running.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 09 ABLETON ============ -->
+  <section class="sheet" id="ableton">
+    <div class="sheet-head"><span class="tag">09</span><h2>Ableton mode</h2><p>Launch clips and scenes in Ableton Live, with Live's own clip colours on the pads.</p></div>
+    <div class="split">
+      <figure>
+        <div class="board" data-keys="minus plus dia circ" data-pads="1 pink; 2 off; 3 cyan; 4 orange; 5 off; 6 white ▶ 1; 7 pink; 8 green; 9 off; 10 orange; 11 purple; 12 white ▶ 2; 13 off; 14 green; 15 cyan; 16 off; 17 purple; 18 white ▶ 3; 19 pink; 20 off; 21 cyan; 22 orange; 23 off; 24 white ▶ 4" data-alt="Ableton mode: rows are scenes 1 to 4, columns 1 to 5 are tracks, column 6 launches the whole scene"></div>
+        <figcaption>Rows = scenes 1–4 · columns 1–5 = tracks · column 6 = launch scene</figcaption>
+      </figure>
+      <div class="stack">
+        <dl class="moves">
+          <dt>Touch</dt><dd>Feel it: a haptic click where there's a clip.</dd>
+          <dt>Press</dt><dd>Launch the clip. Press a playing clip to stop it.</dd>
+          <dt>Press empty</dt><dd>Arms the track and records a new clip. TILES switches to melodic mode so you can play it.</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span><i class="k dia"></i></dt><dd>Stop all clips. While recording a new clip: finish it.</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span>hold 3 s</dt><dd>Delete that clip.</dd>
+          <dt><i class="k minus"></i> <i class="k plus"></i></dt><dd>Move the five-track window left / right.</dd>
+        </dl>
+        <p class="note">Dim = has a clip · pulsing = playing · fast blink = queued.</p>
+      </div>
+    </div>
+    <div class="split" style="margin-top:26px">
+      <div class="stack">
+        <h3>Transport <i class="k dia"></i> (every mode except sequencer)</h3>
+        <dl class="moves">
+          <dt>Click</dt><dd>Play / stop Live.</dd>
+          <dt>Hold 2 s</dt><dd>Release to start recording.</dd>
+        </dl>
+        <h3>TILES DISPLAY</h3>
+        <p class="note">A Max for Live device. Put it before a track's instrument and click <b>VIEW</b>: the notes that track plays light up on TILES in melodic mode. Two tracks can show at once (the second in soft red).</p>
+      </div>
+      <div class="stack">
+        <h3>One-time setup in Live</h3>
+        <dl class="moves">
+          <dt>1</dt><dd>Copy the <b>TILES</b> script folder into Live's User Library → Remote Scripts, then restart Live.</dd>
+          <dt>2</dt><dd>Settings → Link, Tempo &amp; MIDI → Control Surface: <b>TILES</b>, input and output <b>SENTIA TILES (DAW)</b>.</dd>
+          <dt>3</dt><dd>Input <b>SENTIA TILES (MIDI)</b>: Track and MPE on. Output: Sync on for tempo.</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 10 SONG ============ -->
+  <section class="sheet" id="song">
+    <div class="soon-card">
+      <div class="sheet-head" style="margin:0"><span class="tag soon">10</span><h2>Song mode</h2></div>
+      <p><b style="color:var(--ink)">Coming soon.</b> A looper-style mode for building songs from captured patterns. It's on the mode menu (yellow) as a preview.</p>
+    </div>
+  </section>
+
+  <!-- ============ 11 EXPRESSION ============ -->
+  <section class="sheet" id="expression">
+    <div class="sheet-head"><span class="tag">11</span><h2>Expression &amp; feel</h2><p>The square "sentia" button tunes how TILES responds.</p></div>
+    <div class="split">
+      <figure>
+        <div class="board" data-keys="sq" data-pads="1 off OFF; 2-6 off; 4 pink 4; 7-12 off; 10 pink 4; 13-18 off —; 19-24 off; 22 pink 4" data-alt="Expression menu: row 1 haptics, row 2 pitch bend sensitivity, row 3 reserved, row 4 pressure sensitivity, column 4 selected in each"></div>
+        <figcaption>Row 1 haptics · 2 bend · 3 reserved · 4 pressure</figcaption>
+      </figure>
+      <dl class="moves">
+        <dt><i class="k sq"></i></dt><dd>Pitch bend on / off (square glows when on).</dd>
+        <dt>Hold <i class="k sq"></i></dt><dd><b>Expression menu</b>. Each row is a slider: press a column, 1 = least, 6 = most, 4 = default. Haptics column 1 = off.</dd>
+        <dt>Hold <i class="k sq"></i> 2 s</dt><dd>Keeps the menu open. Any button closes it.</dd>
+        <dt><i class="k sq"></i><span class="plus-sign">+</span><i class="k minus"></i><i class="k plus"></i></dt><dd>Haptic strength, without opening anything else.</dd>
+        <dt><i class="k circ"></i><span class="plus-sign">+</span><i class="k sq"></i> 2 s</dt><dd><b>MPE on / off.</b> Off = plain MIDI on channel 1 for any synth; the square breathes to remind you.</dd>
+      </dl>
+    </div>
+  </section>
+
+  <!-- ============ 12 GAMES ============ -->
+  <section class="sheet" id="games">
+    <div class="sheet-head"><span class="tag">12</span><h2>Games</h2><p>Five mini games built in.</p></div>
+    <div class="split">
+      <figure>
+        <div class="board" data-keys="tri dia sq circ" data-pads="1 green SNAKE; 2 orange BRICK; 3 cyan TETRIS; 4 blue PONG; 5 white SIMON" data-alt="Game menu: Snake, Brick Breaker, Tetris, Pong and Simon Says on the first five pads"></div>
+        <figcaption>Hold <span>▲ ◆ ■ ●</span> together to open or close</figcaption>
+      </figure>
+      <div class="stack">
+        <dl class="moves">
+          <dt><i class="k tri"></i><i class="k dia"></i><i class="k sq"></i><i class="k circ"></i></dt><dd>Hold all four for about a second: game menu. Same again to leave.</dd>
+          <dt>Touch a pad</dt><dd>Start that game.</dd>
+        </dl>
+        <dl class="moves">
+          <dt>Snake</dt><dd><i class="k minus"></i> left · <i class="k plus"></i> right · <i class="k tri"></i> up · <i class="k dia"></i> down</dd>
+          <dt>Brick Breaker</dt><dd><i class="k minus"></i> <i class="k plus"></i> move the paddle</dd>
+          <dt>Tetris</dt><dd><i class="k minus"></i> <i class="k plus"></i> move · <i class="k tri"></i> rotate · <i class="k dia"></i> drop</dd>
+          <dt>Pong</dt><dd>Two players. Left: <i class="k minus"></i> up, <i class="k plus"></i> down. Right: <i class="k sq"></i> up, <i class="k circ"></i> down</dd>
+          <dt>Simon Says</dt><dd>Press the pads (touching isn't enough).</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 13 SLEEP ============ -->
+  <section class="sheet" id="power">
+    <div class="sheet-head"><span class="tag">13</span><h2>Sleep &amp; wake</h2></div>
+    <div class="split flip">
+      <dl class="moves">
+        <dt>Idle 1 min</dt><dd>Screensaver animations (20 min in the sequencer).</dd>
+        <dt>Idle 20 min</dt><dd>Deep sleep: everything dark, circle pulses slowly.</dd>
+        <dt>Hold <i class="k circ"></i> 4 s</dt><dd>Screensaver now. <i class="k minus"></i> <i class="k plus"></i> browse animations.</dd>
+        <dt>Hold <i class="k circ"></i> 8 s</dt><dd>Deep sleep now, and a <b>MIDI panic</b>: all notes off, sustain released.</dd>
+        <dt>Wake</dt><dd>Touch a pad or press any button.</dd>
+      </dl>
+      <div class="stack">
+        <p class="note"><b>Stuck note?</b> Hold circle for 8 seconds. It silences every channel, then wake TILES and keep playing.</p>
+        <p class="note"><b>On USB power</b> the lights run dimmer and CV/gate stay off. <b>On 12 V</b> you get full brightness and the CV outputs.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 14 SHORTCUTS ============ -->
+  <section class="sheet" id="shortcuts">
+    <div class="sheet-head"><span class="tag">14</span><h2>Shortcuts</h2><p>Everything on one page.</p></div>
+    <div class="cheat">
+      <div>
+        <h3>Everywhere</h3>
+        <dl class="moves">
+          <dt><i class="k tri"></i></dt><dd>Mode menu</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span><i class="k tri"></i></dt><dd>Scale selector</dd>
+          <dt><i class="k sq"></i></dt><dd>Pitch bend on / off</dd>
+          <dt>Hold <i class="k sq"></i></dt><dd>Expression menu</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span><i class="k sq"></i> 2 s</dt><dd>MPE on / off</dd>
+          <dt><i class="k tri"></i><i class="k dia"></i><i class="k sq"></i><i class="k circ"></i></dt><dd>Games</dd>
+          <dt>Hold <i class="k circ"></i> 8 s</dt><dd>Deep sleep + panic</dd>
+        </dl>
+      </div>
+      <div>
+        <h3>Melodic · chord · guitar</h3>
+        <dl class="moves">
+          <dt><i class="k minus"></i> <i class="k plus"></i></dt><dd>Octave (guitar: frets)</dd>
+          <dt><i class="k minus"></i><span class="plus-sign">+</span><i class="k plus"></i></dt><dd>Transpose</dd>
+          <dt><i class="k dia"></i></dt><dd>Play / stop Live</dd>
+          <dt>Hold <i class="k dia"></i> 2 s</dt><dd>Record in Live</dd>
+          <dt>Pedal + light touch</dt><dd>Harmonics</dd>
+        </dl>
+      </div>
+      <div>
+        <h3>Sequencer</h3>
+        <dl class="moves">
+          <dt><i class="k plus"></i> / <i class="k minus"></i></dt><dd>Start / stop</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span><i class="k minus"></i><i class="k plus"></i></dt><dd>Length</dd>
+          <dt><i class="k circ"></i> ×4</dt><dd>Tap tempo</dd>
+          <dt><i class="k dia"></i></dt><dd>Pattern bank</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span><i class="k dia"></i></dt><dd>Capture</dd>
+          <dt>Hold step</dt><dd>Note, then probability</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span>step</dt><dd>Ratchet</dd>
+        </dl>
+      </div>
+      <div>
+        <h3>Ableton</h3>
+        <dl class="moves">
+          <dt>Press</dt><dd>Launch / stop clip</dd>
+          <dt>Column 6</dt><dd>Launch scene</dd>
+          <dt><i class="k minus"></i> <i class="k plus"></i></dt><dd>Move tracks</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span><i class="k dia"></i></dt><dd>Stop all</dd>
+          <dt><i class="k circ"></i><span class="plus-sign">+</span>hold 3 s</dt><dd>Delete clip</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="channels">
+      <table>
+        <thead><tr><th>MIDI channel</th><th>What plays there</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Pedals (and every note when MPE is off)</td></tr>
+          <tr><td>2–9</td><td>Your notes, one channel per note (MPE)</td></tr>
+          <tr><td>10</td><td>Never used (kept free for drum machines)</td></tr>
+          <tr><td>11</td><td>Games</td></tr>
+          <tr><td>12</td><td>Chord mode chords</td></tr>
+          <tr><td>13–16</td><td>Sequencer lanes 4, 3, 2, 1</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <img src="assets/sentia-wordmark-pink.webp" alt="SENTIA Instruments">
+    <span>TILES quick start · firmware 0.2.0 · companion app coming soon</span>
+  </footer>
+</div>
+
+<script>
+/* Draws every .board from its data- attributes (see the comment at the top of this file).
+   Geometry traced from TILES Core/buttons&pads.ai: -/+ pill top-left, then triangle, diamond,
+   square, circle; 4 rows x 6 columns of pads below. */
+(function () {
+  var NS = "http://www.w3.org/2000/svg";
+  var COLORS = {
+    off: ["#e5e9fd", "#6b7196"], white: ["#ffffff", "#171d3a"], pink: ["#ff00ff", "#ffffff"],
+    pinksoft: ["#ff5cff", "#ffffff"], peri: ["#94abf9", "#171d3a"], ink: ["#171d3a", "#ffffff"],
+    red: ["#ff3b4e", "#ffffff"], amber: ["#ff9a1f", "#171d3a"], blue: ["#2f4bff", "#ffffff"],
+    yellow: ["#ffe14d", "#171d3a"], teal: ["#12a89c", "#ffffff"], green: ["#2ed47a", "#171d3a"],
+    cyan: ["#3fe0f0", "#171d3a"], purple: ["#9b5cff", "#ffffff"], orange: ["#ff7a1a", "#171d3a"]
+  };
+  var PAD_X = [4, 139, 274, 409, 544, 679], PAD_Y = [104, 238, 371, 504];
+
+  function el(name, attrs, parent) {
+    var n = document.createElementNS(NS, name);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function colour(name) {
+    var dim = /-dim$/.test(name), base = name.replace(/-dim$/, "");
+    var c = COLORS[base] || COLORS.off;
+    return { fill: c[0], text: c[1], dim: dim };
+  }
+  function parsePads(spec) {
+    var out = {};
+    (spec || "").split(";").forEach(function (entry) {
+      var parts = entry.trim().split(/\s+/);
+      if (!parts[0]) return;
+      var range = parts[0].split("-"), from = +range[0], to = range[1] ? +range[1] : from;
+      for (var p = from; p <= to; p++) out[p] = { colour: parts[1] || "white", label: parts.slice(2).join(" ") };
+    });
+    return out;
+  }
+  function draw(board) {
+    var pads = parsePads(board.getAttribute("data-pads"));
+    var fill = board.getAttribute("data-fill") || "off";
+    var keys = (board.getAttribute("data-keys") || "").split(/\s+/);
+    var svg = el("svg", { viewBox: "0 -4 792 620", role: "img", "aria-label": board.getAttribute("data-alt") || "TILES" });
+    var on = function (k) { return keys.indexOf(k) >= 0; };
+    var keyStyle = function (k) { return { fill: on(k) ? "#ff00ff" : "#e5e9fd", stroke: on(k) ? "#ff00ff" : "#c3cbf2", "stroke-width": 2 }; };
+    var glyph = function (x, y, t, k) { var n = el("text", { x: x, y: y, "text-anchor": "middle", "dominant-baseline": "central", "font-family": "Figtree, Arial, sans-serif", "font-weight": 700, "font-size": 30, fill: on(k) ? "#ffffff" : "#8a90b5" }, svg); n.textContent = t; };
+    // buttons
+    el("path", Object.assign({ d: "M70 2H120V67H70A32.5 32.5 0 0 1 70 2Z" }, keyStyle("minus")), svg);
+    el("path", Object.assign({ d: "M132 2H183A32.5 32.5 0 0 1 183 67H132Z" }, keyStyle("plus")), svg);
+    glyph(90, 35, "−", "minus"); glyph(160, 35, "+", "plus");
+    el("path", Object.assign({ d: "M443 6L476 64H410Z", "stroke-linejoin": "round" }, keyStyle("tri")), svg);
+    el("path", Object.assign({ d: "M546 2L579 35L546 68L513 35Z", "stroke-linejoin": "round" }, keyStyle("dia")), svg);
+    el("rect", Object.assign({ x: 617, y: 2, width: 67, height: 65, rx: 13 }, keyStyle("sq")), svg);
+    el("circle", Object.assign({ cx: 754, cy: 35, r: 33 }, keyStyle("circ")), svg);
+    // pads
+    for (var r = 0; r < 4; r++) {
+      for (var c = 0; c < 6; c++) {
+        var n = r * 6 + c + 1, spec = pads[n] || { colour: fill, label: "" }, col = colour(spec.colour);
+        var x = PAD_X[c], y = PAD_Y[r];
+        el("rect", { x: x, y: y, width: 108, height: 106, rx: 18, fill: col.fill, "fill-opacity": col.dim ? 0.42 : 1,
+                     stroke: col.fill === "#ffffff" || col.fill === "#e5e9fd" ? "#c3cbf2" : col.fill, "stroke-width": 1.5 }, svg);
+        if (spec.label) {
+          var lines = spec.label.split("/"), size = lines.length > 1 ? 17 : (spec.label.length > 6 ? 17 : 22);
+          var t = el("text", { x: x + 54, y: y + 53 - (lines.length - 1) * size * 0.6, "text-anchor": "middle", "dominant-baseline": "central",
+                               "font-family": "Martian Mono, ui-monospace, monospace", "font-weight": 500, "font-size": size,
+                               fill: col.dim ? "#171d3a" : col.text }, svg);
+          lines.forEach(function (line, i) { var s = el("tspan", { x: x + 54, dy: i ? size * 1.2 : 0 }, t); s.textContent = line; });
+        }
+      }
+    }
+    board.appendChild(svg);
+  }
+  document.querySelectorAll(".board").forEach(draw);
+})();
+</script>
