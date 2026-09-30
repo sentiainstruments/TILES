@@ -3,12 +3,11 @@
 Everything that's *configuration*, not *code*: what the companion app edits
 and downloads, and what survives a reboot.
 
-## Built: the settings table
+## The settings table
 
 One registry of every user-tunable value (`settings.{h,c}`), the table itself
 (`settings_table.c`), and saving it to flash (`settings_persist.{h,c}`, on top
-of `../storage/`). Real feedback: "yes start with the settings table and flash
-saving."
+of `../storage/`).
 
 **A setting is one row** -- `id`, `key`, type, range, and two functions: how to
 read the value from the module that owns it, and how to apply a new one. From

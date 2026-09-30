@@ -137,9 +137,9 @@ static const tiles_setting_def_t TABLE[] = {
                   get_bend, set_bend),
     TILES_SETTING(0x0202, "expression.aftertouch_sensitivity", TILES_SETTING_UINT, {.u = 1}, {.u = 65535}, NULL,
                   get_aftertouch, set_aftertouch),
-    /* CV / gate (calibration values limited to what the jack can actually use).
-     * The enable switch is volatile on purpose: CV/gate stays an explicit, per-session switch that boots OFF ("keep cv
-     * gate implemented but off rn"; services/cv_gate.h) -- the calibration below IS saved, this switch is not. */
+    /* CV / gate (calibration limited to what the jack can use). The enable
+     * switch is volatile: CV/gate boots OFF every time (services/cv_gate.h);
+     * the calibration is saved. */
     TILES_SETTING_V(0x0300, "cv_gate.enabled", TILES_SETTING_BOOL, {.u = 0}, {.u = 1}, NULL, get_cv_enabled,
                     set_cv_enabled),
     TILES_SETTING(0x0301, "cv_gate.pitch.volts_per_semitone", TILES_SETTING_FLOAT, {.f = 0.001f}, {.f = 1.0f}, NULL,
@@ -181,9 +181,9 @@ static const tiles_setting_def_t TABLE[] = {
     /* features */
     TILES_SETTING(0x0600, "features.melodic_harmonics", TILES_SETTING_BOOL, {.u = 0}, {.u = 1}, NULL, get_harmonics,
                   set_harmonics),
-    /* Chord-vs-harmonic tuning (services/expression.c HARMONIC_ARM_MS_DEFAULT): ms after a note is struck before
-     * other touches may pluck; ms a touch waits before plucking; raw Hall depth (rest 0, strike 150) that marks a
-     * touch as a real press instead. */
+    /* Chord-vs-harmonic tuning (services/expression.c HARMONIC_ARM_MS_DEFAULT):
+     * ms after a strike before other touches may pluck; ms a touch waits before
+     * plucking; raw Hall depth (rest 0, strike 150) that makes it a real press. */
     TILES_SETTING(0x0601, "features.harmonics.arm_ms", TILES_SETTING_UINT, {.u = 0}, {.u = 1000}, NULL, get_harm_arm,
                   set_harm_arm),
     TILES_SETTING(0x0602, "features.harmonics.confirm_ms", TILES_SETTING_UINT, {.u = 0}, {.u = 500}, NULL,
@@ -193,7 +193,7 @@ static const tiles_setting_def_t TABLE[] = {
 };
 #define TABLE_COUNT (sizeof(TABLE) / sizeof(TABLE[0]))
 
-/* "Hands off the pads" -- a flash erase stops the whole firmware for tens of milliseconds. */
+/* "Hands off the pads": a flash erase stalls the firmware for tens of ms. */
 static bool pads_idle(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         if (tiles_touch_is_touched(pad)) {

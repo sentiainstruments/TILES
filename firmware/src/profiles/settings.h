@@ -1,41 +1,28 @@
 #pragma once
 
-/*
- * The settings table -- one registry of every user-tunable value, and the
- * single thing both the USB control interface and flash persistence talk to.
+/* The settings table: one registry of every user-tunable value, and the
+ * one thing both the USB control interface and flash persistence talk to.
+ * A setting is ONE row in profiles/settings_table.c (id, key, type, range,
+ * getter, setter) and gets GET/SET/LIST/SCHEMA/RESET over USB, range
+ * checking and saving to flash. Adding a setting never touches the protocol.
  *
- * Real feedback: "yes start with the settings table and flash saving." Before
- * this, usb_vendor.c held a hand-written strcmp() chain (one branch to read
- * and one to write, per key, plus a third list for LIST), nothing survived a
- * reboot, and the values worth tuning by ear -- LED levels, DIN polarity, the
- * melodic-harmonics switch -- were compile-time constants that needed a
- * rebuild and reflash to change. Now a setting is ONE row in
- * profiles/settings_table.c (id, key, type, range, how to read it, how to
- * apply it) and gets, for free: GET/SET/LIST/SCHEMA/RESET over USB, range
- * checking, and saving to flash. Adding a setting never touches the protocol.
+ * Design rules:
+ *  - The MODULES are the source of truth. get()/set() call the owning
+ *    module (pedal, expression, lighting, ...); the table keeps no copy
+ *    that could drift, and on-device changes look the same as app changes.
+ *  - A DEFAULT is captured from the module at boot, before saved values
+ *    are applied, so the schema always reports what the module really
+ *    boots with.
+ *  - Persistence is SPARSE: only non-default values are saved. Blank flash
+ *    means all defaults, and untouched settings follow a new build's
+ *    defaults. (A value explicitly set equal to today's default follows
+ *    future changes too; deliberate, and the safer choice.)
+ *  - IDs are permanent: the id is what flash and a future binary protocol
+ *    use; the key is for humans. Never reuse or renumber; leave a gap.
  *
- * Design choices worth knowing:
- *  - The MODULES stay the source of truth. Each row's get()/set() call the
- *    module that owns the value (pedal, expression, lighting, ...). The table
- *    doesn't hold a second copy that could drift from the real one, and a
- *    change made on the device itself is seen exactly like one made by the app.
- *  - A setting's DEFAULT is captured from the module at boot (before any saved
- *    value is applied), not written a second time in the table. There is
- *    nowhere for a "default" in the table to disagree with what the module
- *    really boots with, and the schema reports the true default.
- *  - Persistence is SPARSE: only values that differ from their default are
- *    saved. A blank store means "all defaults", and a setting the user never
- *    touched follows the firmware's default if a later build changes it. (The
- *    cost: a user who explicitly set a value equal to today's default will
- *    follow it if it changes -- deliberate, and the safer of the two.)
- *  - IDs are permanent. The numeric id is what is written to flash and what a
- *    future binary protocol will use; the text key is for humans and scripts.
- *    Never reuse or renumber an id; retire it by leaving a gap.
- *
- * This file and settings.c are pure logic (no Pico SDK), tested natively --
- * firmware/test/test_settings.c. settings_table.c is the hardware-side
- * binding; settings_persist.c is the debounced save/load on top of storage/.
- */
+ * This file and settings.c are pure logic, tested natively
+ * (firmware/test/test_settings.c). settings_table.c is the hardware
+ * binding; settings_persist.c is the debounced save/load over storage/. */
 
 #include <stdbool.h>
 #include <stddef.h>

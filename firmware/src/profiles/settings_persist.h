@@ -1,23 +1,17 @@
 #pragma once
 
-/*
- * Saving the settings table to flash: load-and-apply at boot, then watch for
- * changes and save them without anyone asking.
+/* Settings in flash: load-and-apply at boot, then save changes on its own.
  *
- * "Watch for changes" is done by DIFFING, not by hooking every setter: every
- * 500 ms the current sparse snapshot (profiles/settings.h) is compared to what
- * flash holds. That means a change made by the app, by a USB script, or by a
- * button on the device itself is all noticed the same way, and a setter can
- * never forget to mark itself dirty. A changed snapshot is only written once it
- * has stopped changing for TILES_SETTINGS_SAVE_DEBOUNCE_MS (dragging a slider
- * in the app doesn't wear the flash) AND nothing is being played (a flash
- * erase stops the whole firmware for tens of milliseconds -- see the pattern
- * bank's own comment in services/op_mode.c -- so it waits for hands off the
- * pads rather than landing in the middle of a phrase).
+ * Changes are found by DIFFING, not by hooking setters: every 500 ms the
+ * sparse snapshot (profiles/settings.h) is compared with what flash holds,
+ * so app, script and on-device changes are all caught and no setter can
+ * forget to mark itself dirty. A changed snapshot is written only after
+ * it has been stable for TILES_SETTINGS_SAVE_DEBOUNCE_MS (dragging a
+ * slider doesn't wear the flash) AND the pads are idle (an erase stalls
+ * the firmware for tens of ms).
  *
- * Pure logic over tiles_kv_ops_t + the registry, so it is tested natively with
- * a simulated flash (firmware/test/test_settings.c).
- */
+ * Pure logic over tiles_kv_ops_t + the registry, tested natively with a
+ * simulated flash (firmware/test/test_settings.c). */
 
 #include "kv_store.h"
 
