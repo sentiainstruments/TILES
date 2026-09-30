@@ -16,180 +16,61 @@
 #include <math.h>
 #include <stdio.h>
 
-/* Real feedback, across several rounds: "make all led brighter its hard
- * to see" (10 -> 25), then "lets standardise led brightnbess, resting led
- * should be brigher always. en its too dim" -- raised again, 25 -> 50, to
- * match OP_SCALE_AVAILABLE_LEVEL (services/op_mode.c) -- this codebase's
- * own already-validated "readable secondary brightness" convention
- * (itself raised 0.35 -> 0.5 for the identical complaint), rather than
- * inventing a third, different "resting" percentage. Standardizing on
- * one shared value for "visible but not the active/selected thing" across
- * melodic idle pads AND menu-available items, instead of two similar-but-
- * different numbers that drifted apart over separate rounds of tuning.
- * Still a fraction of the active brightness ceiling (a power-derived
- * safety cap from tiles_power_get_state(), untouched by this change --
- * see this file's "Pad brightness ceiling" section further below for how
- * that ceiling is picked), so this only spends more of whatever headroom
- * that ceiling already allows on the resting/idle state, not a change to
- * the underlying power budget. */
+/* Shared "visible but not the active thing" level: a pressed pad's floor,
+ * bass frets, the chord strip. 50 matches the menus' available-item level
+ * (OP_SCALE_AVAILABLE_LEVEL), so resting brightness is one standard
+ * (raised 10 -> 25 -> 50 over "too dim" feedback). A fraction of the power
+ * ceiling, like every level here. */
 #define TILES_LIGHTING_IDLE_BASELINE_PERCENT 50u
 
-/* Melodic mode's own regular pad -- a natural (white) key that isn't the
- * root, isn't a reference (perfect fifth), and isn't sounding. Real
- * feedback: "also i think we should lower the relative brightness for the
- * regular pads in melodic mode meaning non playing, non root, non
- * reference." Split off from TILES_LIGHTING_IDLE_BASELINE_PERCENT above on
- * purpose: that one is the shared "visible but not the active thing" level
- * (a pressed pad's floor, guitar frets, the chord strip, menu items -- see
- * its comment) and was raised to 50 by earlier "too dim" feedback; lowering
- * it would dim all of those, and the request was only about this pad. The
- * point is relative: with the natural key at 50 it out-shone the root and
- * fifth landmarks (40) and the echoed melody had less to stand out against,
- * so this drops below both. 30 is a first guess -- low enough to recede,
- * not so low it hits the "too dim to see" wall the 10 -> 25 -> 50 history
- * above ran into; a white pad drives all three dies, so it still reads
- * brighter per percent than the single/dual-die reference colors do.
- * Unmeasured against real hardware; this is the knob. The power ceiling
- * (static_ceiling_level()) is untouched.
- * Then, after seeing 30 on the hardware: "the white pads should be even
- * more dim, dim 30% the white." Read as "take 30% off the white" (30 * 0.7
- * = 21), since 30 was already the current value so "even more dim"
- * can't mean "to 30".
- * Scope, stated by real feedback so it isn't loosened by a later tweak: "but
- * dont dim the reference root and 5th. those stay the same. also pressed
- * pads shouldnt be dimmed more, and midi activated shoudlnt be dimmed. midi
- * activated and pressed should be at 100% of range." This constant is used
- * ONLY by the regular-pad branch of pad_desired_rgb(). The resulting
- * hierarchy, brightest first: a pressed pad (touch.c drives press 1.0, so
- * baseline + (1 - baseline) * 1.0 = 100% white, and that branch is checked
- * before every idle/echo state), then an echoing pad (its lit die(s) at
- * 100% of the ceiling, onset flash to full white), then root and fifth (40),
- * then a regular pad (this constant). */
+/* Melodic mode's plain pad: a natural key that isn't root, fifth or
+ * sounding. Kept separate from the idle baseline so only this pad dims.
+ * Set below root and fifth (40) so the landmarks and the echo stand out
+ * (tried 30, then "dim 30% the white": 21).
+ *
+ * Brightness order, keep it: pressed (100% white) > echoing (100% of its
+ * color, flash to white) > root and fifth (40) > plain pad (this). Root,
+ * fifth, pressed and echo must not be dimmed by changes to this. */
 #define TILES_LIGHTING_NATURAL_BASELINE_PERCENT 21u
 
-/* Idle (untouched) chromatic-play pad coloring by note role -- real
- * feedback: "root should be blue and black keys shouldnt have led this
- * in rest non pressed moment... push should be regular white illumination"
- * (unchanged, see pad_desired_rgb() below, still used whenever a pad
- * IS touched, root or not), then, after a first hardware pass: "make the
- * blue sentia purple for root notes but dim it a bit more than standard
- * non pressed pads." Root now uses Sentia Instruments' own brand
- * magenta/purple (#FF00FF -- the same color services/expression_control.c
- * uses for its sub-menu's selected-pad indicator and
- * services/boot_sequence.c uses for its final pulse phase) instead of
- * plain blue, at TILES_LIGHTING_ROOT_BASELINE_PERCENT -- deliberately
- * LOWER than TILES_LIGHTING_IDLE_BASELINE_PERCENT above (the natural-key
- * baseline), a reversal of this feature's first pass, which had root
- * brighter than naturals to stand out as a landmark; real feedback
- * called for the opposite, a subtler root indicator that reads as dimmer
- * than the surrounding white keys rather than a bright highlight.
- * Unmeasured -- a first attempt at "visibly dimmer than a natural key,
- * not so dim it disappears," not calibrated against real LED
- * brightness/diffusion. Sharp/black keys get no baseline floor at all
- * when idle (true black, see write_pad() below) -- unlike every other
- * idle pad in this file, which is deliberately never allowed to go
- * fully dark (see tiles_lighting_set_pad_press()'s header); this is a
- * narrow, deliberate exception specifically for the natural/sharp
- * readability distinction real feedback asked for.
- * Raised from 6, real feedback: "make root note led also brighter" (part
- * of a broader "make all led brighter its hard to see" -- see
- * TILES_LIGHTING_IDLE_BASELINE_PERCENT above), then raised again, real
- * feedback: "root note as well slightly brighter," then once more
- * alongside the natural-key baseline's own 25 -> 50 standardization
- * (20 -> 40, keeping roughly the same ~80% ratio to the natural-key
- * baseline rather than picking a fresh number). Kept below that
- * constant's own value so root stays visibly dimmer than a natural key
- * at rest, per the same real feedback that made it dimmer in the first
- * place -- just a less extreme gap now that both are brighter in
- * absolute terms. */
+/* Idle melodic coloring by note role: root = Sentia magenta (#FF00FF) at
+ * this level, sharps/black keys dark (see pad_desired_rgb()). A touched
+ * pad is always plain white. Raised with the other levels (6 -> 20 -> 40). */
 #define TILES_LIGHTING_ROOT_BASELINE_PERCENT 40u
 
-/* Real feedback, in order: "i need more references on melodic mode,
- * highlight the 3rd scale degree with the color teal" and "make 5th
- * another color as well within a complementary matching hue but different
- * enough to the 3rd" -- 5th first tried amber/gold, then: "color is
- * gross tho, do a blue not yellow hues," then "perfect fifth is the blue,
- * and major third is teal unless a scale has a minor 3rd then its that
- * one and not teal but teal more towards greenish" (which moved both
- * landmarks from scale-degree position to real interval quality -- see
- * tiles_note_map_is_fifth_pad()'s own comment). Finally: "remove the led
- * color for 3rds just keep root and 5th for references. no thirds from
- * a different color." The third-degree landmark (teal / greenish-teal) is
- * gone entirely; melodic idle coloring is root (magenta), perfect fifth
- * (blue, see below), natural key (white), sharp (dark). Same baseline
- * percent as root, "unmeasured against real hardware" like every first-
- * pass brightness constant in this file.
- * Later: "the color should be a bit more striking like sentia pink?" ->
- * "actually just make it slighly more green so its more distinct" was built
- * as an azure fifth (a little green mixed into the blue), then withdrawn:
- * "ignore the green suggestion." After seeing pure blue on the hardware:
- * "make the blue closer to the sentia pink since its a refernece point but
- * still distinct enough." So the fifth is now a violet -- the same blue
- * with some red mixed in (TILES_LIGHTING_FIFTH_RED_TINT, a fraction of the
- * blue level), moving it along the hue wheel toward the root's magenta
- * (equal red and blue) without reaching it. At 0.35 the hue is ~261 degrees
- * against the root's 300 and pure blue's 240: clearly nearer the root than
- * before, still ~40 degrees away from it. That gap is the "distinct enough"
- * half of the request, and the knob: raise the tint to pull it closer, lower
- * it to push it back toward blue. Unmeasured -- LED diffusion and the red
- * die's efficiency can shift how it reads. */
+/* Perfect fifth: violet, i.e. blue with some red mixed in
+ * (TILES_LIGHTING_FIFTH_RED_TINT), nearer the root's magenta than pure
+ * blue but still distinct (hue ~261 deg vs root 300, blue 240). Raise the
+ * tint to pull it toward magenta. (A third-degree landmark was tried and
+ * removed: root and fifth only.) Unmeasured on the real diffusers. */
 #define TILES_LIGHTING_FIFTH_BASELINE_PERCENT 40u
 #define TILES_LIGHTING_FIFTH_RED_TINT 0.35f
 
-/* Real feedback on the melodic-echo indicator (services/op_mode.c's
- * "Melodic mode: live echo of an incoming melody"): "it needs more
- * brightness tho." The echo color was already full-scale (0, 1, 0) in this
- * file's own 0-1 space, so there was no headroom left to raise it there --
- * the limit is write_pad()'s power-derived ceiling below (37% on USB-only,
- * 90% on external power, see static_ceiling_level()), which exists for a
- * documented safety reason (unmeasured haptics current on a 500mA USB
- * budget) and is deliberately NOT touched here. What CAN change within that
- * same per-pad ceiling is how much light a pad emits at it:
- *   - a pure-green pad drives only the green die; mixing in a little red
- *     and blue (TILES_LIGHTING_ECHO_SUSTAIN_TINT) uses the other two dies
- *     too, reading as a brighter, paler green -- still clearly green, and
- *     nowhere near a pressed pad's plain white;
- *   - an onset flash: the pad starts at full white and eases down to that
- *     sustained green over TILES_LIGHTING_ECHO_FLASH_MS, so every note
- *     lands with a bright hit the eye catches even when the sustained
- *     color is capped. White at the ceiling is what a pressed pad already
- *     shows, so this is within the budget the ceiling was built around
- *     (24 pads all-white at the ceiling), not new headroom.
- * Both unmeasured against real hardware, like every first-pass constant
- * here. */
+/* Melodic echo (op_mode.c "live echo of an incoming melody"). The color is
+ * already full-scale, and the power ceiling isn't raised, so it gets
+ * brighter within the ceiling instead:
+ *   - a little red and blue mixed into the green
+ *     (TILES_LIGHTING_ECHO_SUSTAIN_TINT) uses all three dies: a paler,
+ *     brighter green, still clearly not a pressed pad's white;
+ *   - an onset flash from full white easing to that green over
+ *     TILES_LIGHTING_ECHO_FLASH_MS, so every note lands visibly. White at
+ *     the ceiling is what a pressed pad shows, so it's within budget.
+ * Unmeasured. */
 #define TILES_LIGHTING_ECHO_SUSTAIN_TINT 0.35f
 #define TILES_LIGHTING_ECHO_FLASH_MS 180u
 
-/* Second TILES DISPLAY (MIDI channel 2, echo layer 1). Real feedback:
- * "make the device work on 2 channels at once, if 2 devices are on then the
- * secondary does color red," then "make the secodn device not pure red but
- * more of a soft red aligned witht he pallet but still separete from thern
- * sentia pink." Same onset flash (white easing down over
- * TILES_LIGHTING_ECHO_FLASH_MS) so both layers "hit" the same way, but it
- * settles on a soft, slightly warm red: R full, G and B at these fractions
- * of full. Two separate tints on purpose. Pure red (both 0) was the first
- * version and read harsh; an EQUAL G/B mix reads pink, and pink is the
- * root pad's (and the device's own VIEW button's) color -- so blue is kept
- * well below green, which pulls the hue toward coral, away from the
- * magenta side. Green is the most luminous die, so it also does most of
- * the "soft" (paler, brighter) work; keep it low or the red drifts orange
- * (Song-capture's color). Unmeasured against real hardware, like every
- * color constant here -- these two numbers are the knobs. */
+/* Second TILES DISPLAY (echo layer 1): the same onset flash, settling on a
+ * soft warm red, R full with small G and B. Blue stays below green so it
+ * reads coral, not pink (pink is the root's color); too much green drifts
+ * orange (Song capture's color). Unmeasured; these two are the knobs. */
 #define TILES_LIGHTING_ECHO_SECONDARY_G 0.18f
 #define TILES_LIGHTING_ECHO_SECONDARY_B 0.12f
 
-/* Every "look" constant above is now the DEFAULT of a runtime setting, not a
- * compile-time value. Real feedback, after hours of edit/build/flash rounds
- * tuning exactly these numbers by eye: "yes start with the settings table and
- * flash saving." s_look[] is what pad_desired_rgb() actually reads; the
- * settings table (profiles/settings_table.c) exposes each entry as
- * look.<name> over USB and saves changes to flash (profiles/settings.h), so a
- * level can be tried live from a script or the companion app without a
- * rebuild, and survives a reboot and a reflash. Stored in whole percent (tints
- * as percent of full: 0.35 -> 35) -- the same resolution the constants were
- * ever tuned at. The power ceiling (static_ceiling_level()) is applied AFTER
- * all of this and is NOT settable: every value here is a fraction of it, so
- * no setting can raise LED current above the documented budget. */
+/* The constants above are the DEFAULTS of the look.* settings. s_look[] is
+ * what pad_desired_rgb() reads; settings can change it live over USB and
+ * save it to flash. Stored in whole percent (tints: 0.35 -> 35). The power
+ * ceiling is applied after all of this and is not a setting, so no setting
+ * can raise LED current. */
 #define LOOK_PCT(fraction) ((uint16_t)((fraction) * 100.0f + 0.5f))
 static uint16_t s_look[TILES_LOOK_COUNT] = {
     [TILES_LOOK_IDLE_BASELINE_PERCENT] = TILES_LIGHTING_IDLE_BASELINE_PERCENT,
@@ -221,74 +102,30 @@ void tiles_lighting_set_look(tiles_look_param_t param, uint16_t value) {
     s_look[param] = value > max ? max : value;
 }
 
-/* Underglow's own fixed brightness, out of 255 -- deliberately NOT
- * scaled by the active brightness ceiling/the power state. It used to be
- * a percentage of the active ceiling (65%), which meant it rode down
- * with the USB-only ceiling (37%) to ~24% of full and read as
- * "basically not glowing" on real hardware. Only 4 LEDs are on this
- * chain vs 24 on the pad grid -- even at full raw brightness the
- * current draw is a small fraction of the ~448mA full-grid estimate in
- * docs/architecture/defaults-and-safeguards.md, so there's no power
- * budget reason to hold it down the way the 24-pad grid needs to be.
- * It's a fixed ambient halo, not a per-pad state indicator, so running
- * it bright doesn't compete with touch/press feedback the way raising
- * every pad's baseline would. Its own current draw is still accounted
- * for in the fuller budget breakdown in this file's "Pad brightness
- * ceiling" section below, just not by any code here -- it stays a fixed
- * output regardless. */
+/* Underglow's own fixed brightness (out of 255), NOT scaled by the power
+ * ceiling: at 37% of the USB ceiling it barely glowed. 4 LEDs are a small
+ * share of the budget (included in the accounting below), and a steady
+ * halo doesn't compete with pad feedback. */
 #define TILES_LIGHTING_UNDERGLOW_LEVEL 230u
 
 #define TILES_LIGHTING_NUM_UNDERGLOW_PIXELS 4u
 
-/* ---- Pad brightness ceiling: back to static, deliberately -------------
- * Real feedback: "could we push the led celing a bit more safely?" led to
- * a first attempt (pad_dynamic_scale(), recomputing the ceiling every
- * frame from real projected current draw) -- then, after real hardware
- * feedback: "this led solution might look glitchy like we have unstable
- * power. lets find a solution that doesnt include shifting brightness."
- * Correct call: a ceiling that continuously reacts to how many OTHER
- * pads happen to be lit means the WHOLE board's brightness visibly
- * shifts as notes are struck/released or an animation frame's lit-pixel
- * count changes -- exactly what a real brownout looks like, even though
- * the underlying math was current-safe. Removed entirely; back to a
- * single flat ceiling per pad, chosen once (power mode changes, not
- * every frame) so a given pad's brightness at a given state is always
- * the same fixed value, never drifting with unrelated activity.
+/* ---- Pad brightness ceiling: static, deliberately -------------------------
+ * One flat ceiling from the power mode, never recomputed from how many
+ * pads are lit (a load-aware ceiling made the whole board's brightness
+ * shift with playing, which looks like a brownout).
  *
- * Real feedback then asked to "calculate the safe range again to make
- * sure, acountign for ics lights and haptics and sensors" -- a fuller
- * accounting than the original ~448mA-LEDs-only estimate in
- * docs/architecture/defaults-and-safeguards.md:
- *   - LEDs: solid. 16mA/pixel at full white including ~1mA controller
- *     overhead (board map's own current_model), 28 pixels (24 pad + 4
- *     underglow) -> 448mA worst case, ~28mA idle floor even at zero
- *     brightness. This is the number the existing ceiling was built on.
- *   - MCU + sensors + I2C ICs + function-button LEDs: not measured for
- *     this board, but reasonably estimable from typical datasheet
- *     figures -- RP2350 active (~60mA) + 24x TMAG5273 Hall sensors
- *     (~3mA each, ~72mA) + 2x MPR121 (~4mA) + TCA9554/TCA9548A (~2mA) +
- *     2x PCA9685 IC overhead, not the loads they switch (~2mA) + 6
- *     function-button LEDs at worst case all lit, 150-ohm-from-5V per
- *     the board map (~80mA) -- roughly 220mA of overhead this file's
- *     own ceiling math never subtracted before.
- *   - Haptic motors: genuinely UNMEASURED -- both hardware docs flag
- *     this explicitly ("measure one motor's running and stall/start
- *     current" before trusting the higher-voice profiles). Small ERM
- *     motors typically run ~60-100mA each while spinning; USB-only
- *     allows up to 5 simultaneous voices, so a real worst case could be
- *     300-400mA from haptics ALONE -- potentially the single largest
- *     term in the whole budget, not LEDs.
- * On USB-only (500mA total), 220mA overhead + a genuinely uncertain
- * 300-400mA haptics worst case leaves little to no headroom confirmed
- * safe for LEDs beyond the existing ceiling -- raising it further isn't
- * something this fuller accounting actually supports, so power.c's
- * USB_ONLY/FAULT led_brightness_ceiling_percent stays at 37%, not
- * increased. External power (2500mA) keeps a large margin
- * (~1.8A) even under the same pessimistic haptics assumption, so that
- * ceiling (power.c's led_brightness_ceiling_percent for
- * EXTERNAL_ONLY/USB_AND_EXTERNAL) was raised 75 -> 90 there instead --
- * see power.c's own comment. Haptic motor current is the actual
- * highest-priority unknown to measure here, not anything in this file. */
+ * Budget (worst case):
+ *   - LEDs: 16 mA/pixel at full white incl. ~1 mA controller overhead
+ *     (board map current_model) x 28 pixels = 448 mA; ~28 mA idle floor.
+ *   - MCU + sensors + ICs + button LEDs (datasheet estimates): RP2350
+ *     ~60 mA, 24 x TMAG5273 ~72 mA, MPR121s ~4 mA, muxes/expander ~2 mA,
+ *     PCA9685 ICs ~2 mA, 6 button LEDs ~80 mA: ~220 mA.
+ *   - Haptic motors: UNMEASURED. ~60-100 mA each while spinning, so
+ *     300-400 mA for the USB voice limit: possibly the largest term.
+ * USB-only (500 mA) leaves no confirmed room above 37%. External (2500 mA)
+ * keeps ~1.8 A of margin, so its ceiling is 90% (power.c). Measure motor
+ * current before changing either. */
 static uint8_t static_ceiling_level(void) {
     uint8_t ceiling_percent = tiles_power_get_state().led_brightness_ceiling_percent;
     return (uint8_t)((255u * ceiling_percent) / 100u);
@@ -303,15 +140,14 @@ typedef struct {
 static tiles_sk6805_chain_t s_underglow_chain;
 static tiles_sk6805_chain_t s_pad_chain;
 static tiles_tca9554_t s_led_mux;
-static float s_pad_press[TILES_NUM_PADS]; /* touch-driven, white, baseline-floored -- normal operation only */
-static tiles_rgb01_t s_pad_standby_rgb[TILES_NUM_PADS]; /* standby animation color, no baseline floor */
+static float s_pad_press[TILES_NUM_PADS]; /* touch-driven, white, floored at the idle level */
+static tiles_rgb01_t s_pad_standby_rgb[TILES_NUM_PADS]; /* standby color, no floor */
 static tiles_rgb01_t s_underglow_rgb[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
 static uint8_t s_service_cursor;
 static bool s_initialized;
 static bool s_standby_active;
-/* True while write_crash_underglow()/write_debug_underglow() owned the
- * underglow as of the last tiles_lighting_service() call -- see that
- * function's own comment on the restore-on-dismiss fix this drives. */
+/* Whether a crash/debug/pattern/capture override owned the underglow last
+ * frame (restore on release; see tiles_lighting_service()). */
 static bool s_underglow_override_was_active;
 
 static float clamp01(float v) {
@@ -324,98 +160,55 @@ static float clamp01(float v) {
     return v;
 }
 
-/* Fraction of TILES_LIGHTING_UNDERGLOW_LEVEL -- see that constant's
- * header comment for why underglow doesn't share the pad grid's
- * power-derived ceiling. No baseline floor: unlike pad press (below),
- * underglow (and standby pad color, also below) are allowed to go to
- * true 0 -- there's no "never fully dark" requirement for either of
- * those, and standby animations specifically need real black for
- * contrast. */
+/* Fraction of TILES_LIGHTING_UNDERGLOW_LEVEL. No floor: underglow and
+ * standby colors may be true black (animations need it). */
 static uint8_t underglow_channel_level(float channel_0_to_1) {
     return (uint8_t)((float)TILES_LIGHTING_UNDERGLOW_LEVEL * clamp01(channel_0_to_1));
 }
 
-/* What a pad's r/g/b wants (0.0-1.0 each), independent of the ceiling --
- * the ceiling is applied once, afterward, in write_pad() below. Kept as
- * its own function (rather than inlined into write_pad()) as the single
- * source of truth for "what does this pad look like" in every state. */
+/* What a pad's r/g/b wants (0.0-1.0) in every state, before the ceiling
+ * (applied in write_pad()). The single source of truth for a pad's look. */
 static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
     if (s_standby_active) {
         return s_pad_standby_rgb[pad_index];
     }
     if (s_pad_press[pad_index] > 0.0f) {
-        /* Baseline-floored: 0.0 maps to the idle baseline fraction, not
-         * true black -- this is normal (non-standby) touch-driven
-         * operation's "pads never go fully dark in V1" requirement (see
-         * tiles_lighting_set_pad_press's header). */
+        /* Touched pad: floored at the idle level, never dark. */
         float baseline = look_fraction(TILES_LOOK_IDLE_BASELINE_PERCENT);
         float level = baseline + (1.0f - baseline) * clamp01(s_pad_press[pad_index]);
         return (tiles_rgb01_t){level, level, level};
     }
     uint8_t logical_pad = (uint8_t)(pad_index + 1u);
 
-    /* Real feedback: "im asking for the sequencer to be visible on the
-     * pads on the leds" -- the capture underglow pulse below wasn't
-     * enough on its own; this shows the actual loop playing back by
-     * flashing whichever pad the currently-sounding note would live
-     * on, layered on top of every OTHER mode's own idle coloring (see
-     * tiles_op_mode_song_capture_is_note_sounding()'s own comment).
-     * Checked ahead of guitar/chord-region/melodic idle coloring below
-     * -- a note actually sounding right now is a more time-sensitive
-     * thing to see than any of those static idle looks -- but AFTER the
-     * active-touch check above, so a real live touch always wins over
-     * this ambient hint. Chord-region pads are excluded: they don't
-     * resolve through tiles_note_map_get_note() at all (see that
-     * function's own comment), so checking it there would risk a
-     * coincidental, meaningless match.
-     * Formerly cross-capture's own indicator (a fixed lane on the
-     * regular sequencer); now Song mode's, rewired the same way that
-     * whole feature was -- see op_mode.c's own "Song mode: capture"
-     * section. The OLD "current step pad" marker this file's own
-     * pad_desired_rgb() used to also show here doesn't have an
-     * equivalent yet -- Song mode's 128 steps have no equally natural
-     * single-pad mapping onto melodic/chord/guitar's 24-pad grid the
-     * way the regular sequencer's 24 steps did. Deferred, not
-     * forgotten -- see tiles_op_mode_song_capture_is_note_sounding()'s
-     * own declaration comment in op_mode.h. */
+    /* Song capture running: flash the pad the currently sounding captured note
+     * lives on, over whatever mode is showing. After the live-touch check
+     * (a real touch wins), before the idle looks. Not for chord-strip pads,
+     * whose get_note() isn't a real note. (There is no "current step" marker
+     * for Song's 128 steps yet; see op_mode.h.) */
     if (tiles_op_mode_song_capture_is_active() && !tiles_note_map_is_chord_region_pad(logical_pad) &&
         tiles_op_mode_song_capture_is_note_sounding(tiles_note_map_get_note(logical_pad))) {
         return (tiles_rgb01_t){1.0f, 0.6f, 0.0f};
     }
 
-    /* Real feedback: "in midi melodic mode is there any way we could
-     * read the playing melody of the armed track and display it back on
-     * tiles?" Same "time-sensitive external signal beats static idle
-     * coloring, but a real touch already won above" shape as the Song-
-     * capture indicator just above -- see tiles_op_mode_incoming_note_
-     * is_sounding()'s own comment for the full design (any MIDI channel,
-     * melodic mode only, fed by the TILES DISPLAY Max for Live device --
-     * see daw-integration/README.md -- nothing arrives without it).
-     * Green (with an onset flash to white and a little white mixed into
-     * the sustain -- see TILES_LIGHTING_ECHO_*), not used anywhere else
-     * in this function's own palette (root magenta, fifth blue,
-     * Song-capture orange, natural white), so it reads
-     * as its own distinct "this is playing right now" signal rather than
-     * blending into any of those. */
+    /* Melodic echo: incoming notes (from TILES DISPLAY; see
+     * daw-integration/README.md) light green, a color nothing else here uses.
+     * After the live-touch check, before the idle looks. */
     uint8_t echo_note = tiles_note_map_get_note(logical_pad);
     bool echo_primary = tiles_op_mode_incoming_note_is_sounding(0, echo_note);
     bool echo_secondary = tiles_op_mode_incoming_note_is_sounding(1, echo_note);
     if (echo_primary || echo_secondary) {
-        /* Both devices holding the same pitch at once is rare but real
-         * (two tracks doubling a line): show whichever hit most recently,
-         * so its onset flash isn't hidden behind the other layer's color. */
+        /* Both layers on the same note (rare): show the most recent hit so its
+         * flash isn't hidden. */
         bool secondary = echo_secondary && (!echo_primary || tiles_op_mode_incoming_note_age_ms(1, echo_note) <
                                                               tiles_op_mode_incoming_note_age_ms(0, echo_note));
-        /* See TILES_LIGHTING_ECHO_SUSTAIN_TINT's own comment: white at
-         * onset easing to a lighter green (primary) or a soft red
-         * (secondary, TILES_LIGHTING_ECHO_SECONDARY_G/_B). The channels
-         * that aren't the layer's own hue ease from full white down to
-         * their settled tint; the layer's own channel stays full. */
+        /* White at onset easing to pale green (primary) or soft red (secondary):
+         * the layer's own channel stays full, the others ease from full down to
+         * their settled tint. */
         uint8_t layer = secondary ? 1u : 0u;
         uint32_t age_ms = tiles_op_mode_incoming_note_age_ms(layer, echo_note);
         float settle = 1.0f; /* 0 = just hit, 1 = settled */
         uint32_t flash_ms = s_look[TILES_LOOK_ECHO_FLASH_MS];
-        if (age_ms < flash_ms) { /* flash_ms == 0 disables the onset flash, so this is also the divide guard */
+        if (age_ms < flash_ms) { /* flash_ms == 0 disables the flash (and guards the divide) */
             settle = (float)age_ms / (float)flash_ms;
         }
         if (secondary) {
@@ -426,19 +219,8 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         return (tiles_rgb01_t){mix, 1.0f, mix};
     }
 
-    /* Guitar/bass fret mode: a completely different idle-coloring scheme,
-     * checked before the melodic root/natural logic below (mutually
-     * exclusive -- see services/note_map.h's own header). Real feedback:
-     * "the lights should light up as frets for whatever marking make the
-     * most sence" -- the standard inlay-dot convention every real guitar/
-     * bass neck uses (see tiles_note_map_is_guitar_fret_marker_pad()'s own
-     * comment for the exact fret numbers). Unmarked frets use the SAME
-     * baseline brightness the melodic idle state does (this file's own
-     * "standardize resting brightness" pass), just tinted amber instead
-     * of white so guitar mode still reads as visually distinct at a
-     * glance; marked frets step up from there, octave markers brightest
-     * of all, mirroring how a real neck's double-dot markers stand out
-     * more than the single dots. */
+    /* Bass guitar mode: neck-style coloring. Unmarked frets are amber at the
+     * idle level; inlay frets brighter; octave (double-dot) frets brightest. */
     if (tiles_note_map_is_guitar_mode_active()) {
         bool is_octave = false;
         if (tiles_note_map_is_guitar_fret_marker_pad(logical_pad, &is_octave)) {
@@ -449,38 +231,22 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         return (tiles_rgb01_t){level, level * 0.5f, 0.0f};
     }
 
-    /* Chord mode's chord strip (columns 1-2): one solid color for the
-     * whole region, no per-pad root/natural/sharp distinction -- real
-     * feedback: "leds for chords are color blue all of them together."
-     * Checked before the melody sub-grid's own root/natural/sharp logic
-     * below, which already handles chord mode's melody region (columns
-     * 3-6) correctly on its own -- tiles_note_map_is_root_pad()/
-     * is_natural_pad() are both already chord-mode-aware (see
-     * note_map.c's own chord_mode_degree()), so no separate branch is
-     * needed for that half. */
+    /* Chord mode's chord strip: one solid blue for the whole region. The
+     * melody grid needs no branch (the root/natural checks are chord-aware). */
     if (tiles_note_map_is_chord_region_pad(logical_pad)) {
         float level = look_fraction(TILES_LOOK_IDLE_BASELINE_PERCENT);
         return (tiles_rgb01_t){0.0f, 0.0f, level};
     }
 
-    /* Idle (untouched), normal chromatic play: color by note role -- real
-     * feedback: "root should be blue [later: purple] and black keys
-     * shouldnt have led this in rest non pressed moment." Root checked
-     * first since a root pad can itself be a sharp/black key depending on
-     * the current key offset (see tiles_note_map_is_root_pad()'s own
-     * comment) -- root's color always wins over that. */
+    /* Idle melodic coloring by note role. Root first: a root pad can be a
+     * sharp in some keys, and root wins. */
     if (tiles_note_map_is_root_pad(logical_pad)) {
-        /* Sentia Instruments Magenta (#FF00FF) -- R and B channels only,
-         * G stays 0 -- see TILES_LIGHTING_ROOT_BASELINE_PERCENT's own
-         * comment for the color and brightness reasoning. */
+        /* Sentia magenta: R and B only. */
         float level = look_fraction(TILES_LOOK_ROOT_PERCENT);
         return (tiles_rgb01_t){level, 0.0f, level};
     }
     if (tiles_note_map_is_fifth_pad(logical_pad)) {
-        /* Violet -- blue with some red mixed in, G stays 0 -- see
-         * TILES_LIGHTING_FIFTH_RED_TINT's own comment. Checked after
-         * root for the same "never actually overlaps, but root would
-         * win if it somehow did" reasoning. */
+        /* Violet: blue with a little red (see TILES_LIGHTING_FIFTH_RED_TINT). */
         float level = look_fraction(TILES_LOOK_FIFTH_PERCENT);
         return (tiles_rgb01_t){level * look_fraction(TILES_LOOK_FIFTH_RED_TINT_PERCENT), 0.0f, level};
     }
@@ -488,10 +254,8 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         float level = look_fraction(TILES_LOOK_NATURAL_PERCENT);
         return (tiles_rgb01_t){level, level, level};
     }
-    /* Sharp/black key, idle -- true black, deliberately bypassing this
-     * file's usual "pads never go fully dark" floor (see
-     * TILES_LIGHTING_ROOT_BASELINE_PERCENT's own comment for why this
-     * specific exception exists). */
+    /* Sharp/black key at rest: true black, the one exception to "pads never
+     * go fully dark". */
     return (tiles_rgb01_t){0.0f, 0.0f, 0.0f};
 }
 
@@ -508,57 +272,24 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
     uint8_t b = (uint8_t)((float)ceiling * clamp01(desired.b));
     uint32_t pixel = tiles_sk6805_pack_rgb(r, g, b);
 
-    /* Real feedback chasing a recurring real-hardware freeze whose
-     * crash-report trace ends at 'L' (this whole function) TWICE now:
-     * main.c's own per-stage trace only proves the hang is SOMEWHERE
-     * in tiles_lighting_service(), not which of its two genuinely
-     * different blocking operations -- I2C (the 4 TCA9554 mux calls
-     * below, already timeout-bounded via drivers/i2c_bus.h) or the PIO
-     * SK6805 write (also already timeout-bounded, see drivers/
-     * sk6805.c's own header). Both already have real, working
-     * timeouts, confirmed by reading the actual code, yet the hang
-     * still recurs there -- these two characters exist so the NEXT
-     * occurrence's crash report says which of the two it actually was,
-     * instead of leaving that as the still-open question it currently
-     * is. */
+    /* Crash-recorder marks ('i' before the mux, 'w'/'x' around the pixel
+     * write) so a report shows which blocking step a hang was in. Both steps
+     * are timeout-bounded. */
     tiles_debug_trace('i');
     tiles_tca9554_disable_all_muxes(&s_led_mux);
     tiles_tca9554_set_select(&s_led_mux, cfg->led.mux_channel);
     tiles_tca9554_enable_mux(&s_led_mux, cfg->led.mux_index);
     tiles_debug_trace('w');
     tiles_sk6805_write(&s_pad_chain, &pixel, 1);
-    /* Real hardware finally caught the hang itself, not boot noise --
-     * first genuine crash report since tiles_debug_mode_capture_crash_
-     * snapshot() moved the snapshot copy earlier (see that function's
-     * own comment): trace cut off right after 'w' on TWO boards
-     * independently, at realistic multi-minute uptimes, with nothing
-     * after it for the full watchdog window. But the code right there
-     * -- a 5ms-timeout-bounded PIO push per pixel, then a 300us sleep_
-     * us() -- has no business taking anywhere near 1000ms even in its
-     * worst case (every pixel timing out). This 'x' answers whether
-     * tiles_sk6805_write() actually RETURNED at all: if the next crash
-     * report shows 'w' then 'x', the hang is somewhere AFTER this call
-     * (the mux-disable below, or something entirely outside this
-     * function, e.g. an interrupt context) -- if it still cuts off at
-     * 'w' with no 'x', the hang is genuinely INSIDE tiles_sk6805_write()
-     * despite its own timeout, meaning that timeout isn't actually
-     * bounding the wait the way its own code implies it should. */
+    /* 'x' = tiles_sk6805_write() returned (it once hung inside despite its
+     * timeout; see drivers/sk6805.c). */
     tiles_debug_trace('x');
     tiles_tca9554_disable_all_muxes(&s_led_mux);
 }
 
-/* Real feedback, originally: debug mode "confirmed by the underglow
- * pulsing red steady." Recolored to Sentia Magenta once the crash
- * indicator below ALSO needed a pulsing underglow: "turn debug mode
- * light to sentia magenta instead of red to avoid confusion" -- red is
- * now reserved exclusively for "a crash just happened, unacknowledged"
- * (write_crash_underglow() below), so the two can never be mistaken for
- * each other. Same sine-pulse shape services/op_mode.c's own menu_
- * selected_pulse_level() uses for its own "this is the active/selected
- * thing" language -- not shared code (op_mode.c's own copy is static to
- * that file), just the same established visual convention, so debug
- * mode reads as consistent with everything else that pulses in this
- * firmware rather than inventing a new animation language. */
+/* Debug mode's underglow: a Sentia magenta pulse (red is reserved for the
+ * crash indicator, so the two can't be confused). Same pulse shape as the
+ * menus' selection pulse, as a separate copy. */
 #define DEBUG_UNDERGLOW_PULSE_PERIOD_MS 900.0f
 #define DEBUG_UNDERGLOW_PULSE_MIN 0.35f
 #define DEBUG_UNDERGLOW_PULSE_MAX 1.0f
@@ -570,20 +301,10 @@ static float debug_underglow_pulse_level(uint32_t now_ms) {
     return DEBUG_UNDERGLOW_PULSE_MIN + (DEBUG_UNDERGLOW_PULSE_MAX - DEBUG_UNDERGLOW_PULSE_MIN) * raw;
 }
 
-/* Bypasses s_underglow_rgb[]/s_standby_active entirely -- real feedback
- * specifically wants this indicator visible regardless of whatever mode
- * or sub-view currently owns rendering (melodic, sequencer mid-pattern,
- * a menu, standby's own animation...), and fighting over standby-active
- * ownership to get that is exactly the bug class services/op_mode.c's
- * own README history had to fix twice already this session (search
- * "standby active" there). Writing directly to hardware here, unrelated
- * to whatever s_underglow_rgb[] currently holds, sidesteps that
- * entirely -- the instant debug mode exits, the very next call falls
- * through to this function's normal round-robin/on-change behavior and
- * underglow simply reflects whatever it was already supposed to.
- * R and B both scaled by the same pulse level (G stays 0) so the color
- * stays true Sentia Magenta at every point in the pulse, not just at
- * full brightness. */
+/* Writes straight to the LEDs, bypassing s_underglow_rgb[]/standby
+ * ownership, so it shows whatever mode or menu owns rendering. When debug
+ * mode ends, the normal path takes over again. R and B share the pulse so
+ * the color stays magenta. */
 static void write_debug_underglow(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
     float pulse = debug_underglow_pulse_level(now_ms);
@@ -593,30 +314,15 @@ static void write_debug_underglow(void) {
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
         pixels[i] = pixel;
     }
-    /* Same 'w' used by write_pad()'s own SK6805 write -- see that
-     * function's own comment on why. Sharing one character between
-     * pad and underglow writes trades a little precision (which of
-     * the two) for staying within the trace ring's own small budget;
-     * whether debug/crash mode was active that same instant (see this
-     * function's own callers) narrows it back down if needed. */
+    /* Same 'w'/'x' marks as write_pad() (one character for pad and underglow
+     * writes, to save trace space). */
     tiles_debug_trace('w');
     tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
-    /* See write_pad()'s own 'x' comment -- same bisection, this call
-     * site included since debug mode's own magenta pulse is exactly
-     * what's active during a real debug-mode test session. */
     tiles_debug_trace('x');
 }
 
-/* Real feedback: "we need an indicator for crash now that we skip boot
- * sequence so turn underglow a pulsing red to indicate crash." Same
- * pulse shape as write_debug_underglow() just above, same "bypass
- * standby-active entirely, write straight to hardware" reasoning --
- * see that function's own comment -- kept as a separate copy rather
- * than parameterizing one shared function, matching this file's own
- * established precedent for this exact pulse shape (see the comment
- * above debug_underglow_pulse_level()). Pure red: this is now the one
- * and only thing in this firmware that uses it, on purpose, so it can
- * never be confused with debug mode's magenta. */
+/* Crash indicator: pure red pulse (nothing else uses red). Same shape and
+ * bypass as debug mode's, as a separate copy. */
 #define CRASH_UNDERGLOW_PULSE_PERIOD_MS 900.0f
 #define CRASH_UNDERGLOW_PULSE_MIN 0.35f
 #define CRASH_UNDERGLOW_PULSE_MAX 1.0f
@@ -636,41 +342,18 @@ static void write_crash_underglow(void) {
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
         pixels[i] = pixel;
     }
-    /* Same 'w' used by write_pad()'s own SK6805 write -- see that
-     * function's own comment on why. Sharing one character between
-     * pad and underglow writes trades a little precision (which of
-     * the two) for staying within the trace ring's own small budget;
-     * whether debug/crash mode was active that same instant (see this
-     * function's own callers) narrows it back down if needed. */
+    /* Same 'w'/'x' marks as write_pad(). */
     tiles_debug_trace('w');
     tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
-    /* See write_pad()'s own 'x' comment -- same bisection. */
     tiles_debug_trace('x');
 }
 
-/* Real feedback: "captures from melodic mode or chord mode or any mode
- * into lane 3 sequencer on command... this will make the steps start
- * counting like in sequencer flashing under the current layout and the
- * playing gets saved," later rewired onto Song mode's own pattern
- * library entirely ("song mode as the default capture mode instead of
- * regular sequencer" -- see op_mode.c's own "Song mode: capture"
- * section). Same "bypass standby-active entirely, write straight to
- * hardware" reasoning as write_debug_underglow()/write_crash_
- * underglow() above -- this feature's whole point is that the current
- * mode's own pad grid stays exactly as-is underneath (except while
- * capturing from within Song mode itself, where Song's OWN standby-
- * claimed grid is what's showing instead -- see op_mode.c's own
- * render_song_underglow(), a separate, always-on yellow rather than
- * this ambient pulse), so underglow is the only real estate left for
- * an indicator here, and it has to work regardless of whether standby_
- * active happens to be claimed (melodic/chord/guitar mode never claim
- * it at all -- see set_active_mode()'s own comment in services/
- * op_mode.c). Amber (full R+G, no B): distinct from crash's pure red,
- * debug's magenta, and chord mode's own solid blue strip -- nothing
- * else in this firmware currently uses it. Same 900ms pulse period as
- * the other two for visual consistency, not shared code, matching
- * this file's own established "same convention, separate copy"
- * precedent. */
+/* Song capture indicator: an amber pulse, straight to the LEDs like the
+ * two above, because the mode's own pad grid stays visible underneath
+ * while capturing (melodic/chord/bass don't claim standby), so the
+ * underglow is the only place left. Amber is used by nothing else. Song
+ * mode's own grid shows a steady yellow instead (op_mode.c
+ * render_song_underglow()). */
 #define SONG_CAPTURE_UNDERGLOW_PULSE_PERIOD_MS 900.0f
 #define SONG_CAPTURE_UNDERGLOW_PULSE_MIN 0.35f
 #define SONG_CAPTURE_UNDERGLOW_PULSE_MAX 1.0f
@@ -690,26 +373,15 @@ static void write_song_capture_underglow(void) {
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
         pixels[i] = pixel;
     }
-    /* Same 'w' used by write_pad()'s own SK6805 write -- see that
-     * function's own comment on why. */
+    /* Same 'w'/'x' marks as write_pad(). */
     tiles_debug_trace('w');
     tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
-    /* See write_pad()'s own 'x' comment -- same bisection. */
     tiles_debug_trace('x');
 }
 
-/* Real feedback: "touching the pad with shift is doing the delete and
- * save but the led indication is not working there is no underglow
- * and no pad flash confirmation either." See services/op_mode.h's own
- * tiles_op_mode_pattern_flash_underglow_color() comment for the root
- * cause -- debug mode's own override below was unconditionally
- * swallowing this confirmation the whole time it was armed. Reads the
- * color that function already resolved (same two-blink timing
- * op_mode.c's own render_pattern_bank() shows on the pad, computed
- * once there rather than a second copy here) instead of owning any
- * pulse-shape math of its own, unlike every OTHER function in this
- * priority chain -- this one's timing is inherently tied to a specific
- * pad's own flash cycle, not an independent ambient pulse. */
+/* Pattern save/delete confirmation: the color op_mode.c already resolved
+ * for the pad flash (tiles_op_mode_pattern_flash_underglow_color()), so
+ * pad and underglow blink together. */
 static void write_pattern_flash_underglow(float r, float g, float b) {
     uint8_t level_r = underglow_channel_level(r);
     uint8_t level_g = underglow_channel_level(g);
@@ -731,15 +403,9 @@ static void write_underglow(void) {
         pixels[i] = tiles_sk6805_pack_rgb(underglow_channel_level(c->r), underglow_channel_level(c->g),
                                            underglow_channel_level(c->b));
     }
-    /* Same 'w' used by write_pad()'s own SK6805 write -- see that
-     * function's own comment on why. Sharing one character between
-     * pad and underglow writes trades a little precision (which of
-     * the two) for staying within the trace ring's own small budget;
-     * whether debug/crash mode was active that same instant (see this
-     * function's own callers) narrows it back down if needed. */
+    /* Same 'w'/'x' marks as write_pad(). */
     tiles_debug_trace('w');
     tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
-    /* See write_pad()'s own 'x' comment -- same bisection. */
     tiles_debug_trace('x');
 }
 
@@ -754,13 +420,9 @@ static void set_pad_press_internal(uint8_t logical_pad, float press_0_to_1) {
     }
     s_pad_press[pad_index] = press_0_to_1;
 
-    /* Write immediately rather than waiting for tiles_lighting_service()'s
-     * round-robin to reach this pad -- with 24 pads serviced one per
-     * main-loop iteration, a touch change could otherwise take up to
-     * ~24 loop iterations to actually reach the LED, which reads as
-     * sluggish. The round-robin still runs continuously as a background
-     * "keep everything current" sweep, this just short-circuits the
-     * common case (touch/release) to feel immediate. */
+    /* Write now instead of waiting up to ~24 loop passes for the round-robin,
+     * so touch feels immediate. The round-robin keeps running in the
+     * background. */
     if (s_initialized) {
         write_pad(pad_index);
     }
@@ -815,22 +477,14 @@ void tiles_lighting_service(void) {
         return;
     }
 
-    /* Crash takes priority when both happen to be active at once (debug
-     * mode can survive a crash-recovery reboot via its own
-     * __uninitialized_ram state -- see services/debug_mode.c -- so a
-     * fresh crash indicator and an already-on debug mode CAN genuinely
-     * coexist). The crash is the more urgent, less-expected thing to
-     * see; debug mode being on is something the person already knows,
-     * since they're the one who turned it on. */
+    /* Underglow override priority: crash > pattern flash > debug > Song
+     * capture. Crash first (debug mode can survive a crash reboot, and the
+     * crash is the surprise); the brief pattern confirmation beats the ambient
+     * debug pulse. */
     bool underglow_override_active = false;
     float pattern_flash_r, pattern_flash_g, pattern_flash_b;
-    /* Diagnostic only (real feedback: "still no underglow ... while in
-     * pattern selector menu" -- reported AGAIN after the redundant-
-     * writer fix, so the remaining gap is somewhere in here, not in
-     * render_pattern_bank() anymore). Prints only on a TRANSITION (which
-     * override, if any, currently owns underglow), never once per frame
-     * -- narrows down whether pattern-flash is even being selected at
-     * all, or whether something else is still winning ahead of it. */
+    /* Logs which override owns the underglow, on change only (for debugging
+     * the pattern flash). */
     static uint8_t s_debug_last_override_kind = 0xFFu;
     uint8_t debug_override_kind = 0u;
     if (tiles_crash_indicator_is_active()) {
@@ -838,12 +492,8 @@ void tiles_lighting_service(void) {
         underglow_override_active = true;
         debug_override_kind = 1u;
     } else if (tiles_op_mode_pattern_flash_underglow_color(&pattern_flash_r, &pattern_flash_g, &pattern_flash_b)) {
-        /* Above debug mode specifically -- real feedback found debug
-         * mode's own override (checked just below) was unconditionally
-         * swallowing this confirmation the whole time it was armed,
-         * which is most of this session. A brief (600ms), directly-
-         * caused-by-what-the-person-just-did confirmation outranks an
-         * ambient "recording is on" pulse for that short window. */
+        /* Above debug mode: a 600 ms confirmation of something the player just did
+         * beats an ambient pulse. */
         write_pattern_flash_underglow(pattern_flash_r, pattern_flash_g, pattern_flash_b);
         underglow_override_active = true;
         debug_override_kind = 2u;
@@ -852,13 +502,7 @@ void tiles_lighting_service(void) {
         underglow_override_active = true;
         debug_override_kind = 3u;
     } else if (tiles_op_mode_song_capture_is_active()) {
-        /* Lowest priority of the three -- crash/debug are rarer and
-         * more urgent; this one's own trigger (shift+diamond) is
-         * something the person just did on purpose, same reasoning as
-         * debug mode's own priority below crash. Formerly cross-
-         * capture's own indicator; rewired onto Song mode's own
-         * capture the same way that whole feature was -- see
-         * op_mode.c's own "Song mode: capture" section. */
+        /* Song capture: lowest (the player turned it on on purpose). */
         write_song_capture_underglow();
         underglow_override_active = true;
         debug_override_kind = 4u;
@@ -869,22 +513,10 @@ void tiles_lighting_service(void) {
         s_debug_last_override_kind = debug_override_kind;
     }
 
-    /* Real feedback on the crash indicator's dismiss: "the dismiss
-     * didnt work it just made the red color solid." Root cause: unlike
-     * pads (write_pad()'s round-robin below re-drives every pad every
-     * few frames regardless), underglow has NO other continuous
-     * per-frame driver once neither override above is active -- so the
-     * instant either one stops owning it, nothing ever wrote a fresh
-     * value again, and it just stayed latched at whatever the pulse's
-     * last brightness happened to be, forever. Detects that exact
-     * transition (was overriding last frame, isn't this frame) and
-     * fires write_underglow() once, which pushes s_underglow_rgb[]'s
-     * CURRENT value -- always kept correctly up to date underneath the
-     * override by whatever normally owns it (the plain default, or
-     * standby's own animation via tiles_lighting_set_standby_underglow_
-     * rgb()), regardless of this override having been on top of it --
-     * exactly mirroring tiles_lighting_set_standby_active(false)'s own
-     * explicit restore just below, for the identical reason. */
+    /* Nothing else redraws the underglow every frame (pads have the
+     * round-robin), so when an override stops, push s_underglow_rgb[] once;
+     * otherwise it stays frozen at the pulse's last level (seen: the crash
+     * dismiss left solid red). */
     if (s_underglow_override_was_active && !underglow_override_active) {
         write_underglow();
     }
@@ -898,11 +530,8 @@ void tiles_lighting_set_standby_active(bool active) {
     s_standby_active = active;
 
     if (!active) {
-        /* Pads: no explicit restore needed -- touch.c calls
-         * tiles_lighting_set_pad_press() every main-loop iteration
-         * regardless of standby, so the very next scan (now unguarded)
-         * writes each pad's real state. Underglow has no other
-         * continuous driver, so restore it here explicitly. */
+        /* Pads repaint on their own (touch calls set_pad_press every scan); the
+         * underglow has no other driver, so restore it here. */
         for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
             s_underglow_rgb[i] = (tiles_rgb01_t){1.0f, 1.0f, 1.0f};
         }
@@ -924,9 +553,7 @@ void tiles_lighting_set_standby_pad_rgb(uint8_t logical_pad, float r, float g, f
     }
     *stored = c;
 
-    /* Same immediate-write reasoning as set_pad_press_internal() above --
-     * an animation frame should reach the LED right away, not wait for
-     * the round-robin. */
+    /* Immediate write, as in set_pad_press_internal(). */
     if (s_initialized) {
         write_pad(pad_index);
     }

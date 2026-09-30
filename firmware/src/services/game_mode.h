@@ -1,115 +1,51 @@
 #pragma once
 
-/*
- * Real, player-controlled minigames -- distinct from services/standby.c's
- * autonomous snake/brick-breaker animations, which stay exactly what
- * they were (ambient, self-playing idle art with no player). This
- * module is a genuinely separate feature: a deliberately-invoked
- * interactive mode with real button controls, not another idle-time
- * ambient loop. Kept as its own module rather than folded into
- * standby.c because the two serve different purposes and are likely to
- * evolve independently (control remapping, more games, difficulty
- * tuning) -- sharing state/logic between an AI-driven idle loop and a
- * player-driven game would couple two things that don't need to be
- * coupled.
+/* Player-controlled minigames. Separate from standby's self-playing game
+ * demos (ambient art with no player); the two evolve independently.
  *
- * Entry/exit: hold SW3 (triangle) + SW4 (diamond) + SW5 (square) + SW6
- * (circle) together for ~0.7s to toggle game mode on/off -- SW1 ("-")
- * and SW2 ("+") are deliberately excluded from this combo since they're
- * reserved as in-game controls (see below). The same hold toggles game
- * mode off again from any state (menu or mid-game) -- and it is the ONLY
- * way out: no single button exits a game or the game menu (real feedback:
- * "the only exit for a game besides loosing should be holding the four
- * buttons at once and that should disable the mode again"). Losing a round
- * returns to the game menu, not out of game mode.
+ * Entry/exit: hold triangle + diamond + square + circle for ~0.7 s ("-"
+ * and "+" are left out: they are game controls). The same hold is the ONLY
+ * way out, from the menu or mid-game; no single button exits. Losing a
+ * round returns to the game menu.
  *
- * Once on: the menu shows pad 1 (green) for Snake, pad 2 (orange) for
- * Brick Breaker, pad 3 (cyan) for Tetris, and pad 4 (blue) for Pong --
- * touch any to launch it.
- *   Snake controls: SW1 left, SW2 right, SW3 up, SW4 down (absolute
- *   direction, not relative turning; reversing straight into the
- *   snake's own neck is ignored, the standard snake-game rule). Eats a
- *   food dot to grow; wraps around the grid's edges rather than dying
- *   on a wall hit (friendlier on a board this small); dies only on
- *   self-collision.
- *   Brick Breaker controls: SW1/SW2 move the 3-pad-wide paddle left/
- *   right. Otherwise the same physics as standby.c's autonomous
- *   version, just with the paddle player-controlled instead of AI-
- *   tracked.
- *   Tetris controls: SW1/SW2 move the falling piece left/right, SW3
- *   rotates it (a simplified 2-orientation rotation per piece, not full
- *   4-state SRS -- the board is only 4 rows tall so the extra states
- *   would rarely matter), SW4 hard-drops it. A custom small-piece set,
- *   NOT the standard 7 tetrominoes -- real feedback was that full
- *   tetrominoes (up to 4 wide/tall) were too big for a board this size.
- *   5 pieces instead, smallest to largest: a 1-cell dot, a 2-cell
- *   domino, a 3-cell straight tromino (the "long piece," capped at 3
- *   instead of 4), a 3-cell corner tromino, and a compact 2x2 square.
- *   Line clears shift everything above down (and flash underglow white
- *   -- see below); topping out (a freshly spawned piece has nowhere to
- *   go) ends the round.
- *   Pong controls, two players on one board: column 1 is the left
- *   paddle (SW1 up, SW2 down), column 6 is the right paddle (SW5 up,
- *   SW6 down -- the mirror-image pair to SW1/SW2; unverified against
- *   what the user actually meant by "circle and the other button next
- *   to it"). Both paddles 2 pads tall, white; the ball is a blue dot.
- *   First to 2 points wins. A non-winning miss flashes underglow white
- *   briefly and re-serves immediately -- Pong deliberately doesn't use
- *   the round-end flow below for individual points, since a rally on a
- *   board this small can end in seconds and returning to the menu every
- *   point would be disruptive. The score itself shows on each side's
- *   own movement-control buttons, glowing (a breathing pulse, not
- *   flat-on): 0 points = both dark, 1 = the "up" button glows, 2 (win)
- *   = both glow. Reaching 2 points is different from an ordinary
- *   miss -- real feedback: "don't reset the game immediately, return to
- *   the game menu" -- so the match freezes (ball/paddles stay put,
- *   winner's controls glow) for a couple of seconds, then returns to
- *   the menu, same as every other game's round end.
- * Snake self-collision and brick breaker won/lost flash underglow
- * red/purple for a couple of seconds, then return to the menu; Tetris
- * topping out flashes plain red instead (real feedback: "when game is
- * lost it should flash red," distinct from its own white line-clear
- * flash above). Pong's match-end doesn't route through this shared
- * red/purple flow at all -- see above, its "flash" is the winner's
- * controls glowing, not underglow.
+ * Menu: pad 1 (green) Snake, pad 2 (orange) Brick Breaker, pad 3 (cyan)
+ * Tetris, pad 4 (blue) Pong, pad 5 (white) Simon Says; touch one to start.
+ *   Snake: "-" left, "+" right, triangle up, diamond down (absolute
+ *     directions; reversing into the neck is ignored). Wraps at the edges,
+ *     dies only on self-collision.
+ *   Brick Breaker: "-"/"+" move the 3-pad paddle. Same physics as the
+ *     standby demo, player-controlled.
+ *   Tetris: "-"/"+" move, triangle rotates (2 orientations per piece),
+ *     diamond hard-drops. A small custom piece set for a 4-row board: dot,
+ *     domino, straight tromino, corner tromino, 2x2 square. Line clears
+ *     flash the underglow white; topping out ends the round.
+ *   Pong (two players): left paddle column 1 ("-" up, "+" down), right
+ *     paddle column 6 (square up, circle down). Paddles 2 pads, white; the
+ *     ball is blue. First to 2 wins. A miss flashes the underglow white and
+ *     re-serves. The score glows on each player's buttons (1 point: the
+ *     "up" button; 2: both). A win freezes the board a couple of seconds,
+ *     then returns to the menu.
+ *   Simon Says: a growing pattern of pads flashes, each with a haptic
+ *     and a color; repeat it by pressing (Hall depth, not touch). Each
+ *     round adds one step; a wrong pad ends the game.
+ * Round end: Snake and Brick Breaker flash the underglow red/purple,
+ * Tetris and Simon Says red, then back to the menu.
  *
- * Claims the same standby-active rendering path standby.c's own
- * animations and boot_sequence.c use
- * (tiles_lighting_set_standby_active(), tiles_buttons_set_standby_active(),
- * the RGB pad/underglow/button setters) -- correct and sufficient for
- * *LED writes*: buttons.c's per-button override for SW1/SW2
- * (octave_control.c) already goes transparently inert under that same
- * standby-active flag (see buttons.c), so no changes were needed there
- * for game mode to freely drive SW1/SW2's LEDs too.
- * That inertness only covers LED *writes*, though -- octave_control.c's
- * button *reads* (SW1/SW2 rising edges -> octave/key-offset steps) run
- * unconditionally every scan regardless of standby-active, so without an
- * explicit check there, every left/right press in Snake/Brick
- * Breaker/Tetris would *also* silently step the octave or transpose key
- * underneath the game. octave_control.c now checks
- * tiles_game_mode_is_active() itself and skips all of its own action
- * logic (while keeping its press-edge tracking current) whenever a game
- * owns the buttons -- see its file header.
- * main.c must skip calling tiles_standby_scan() while
- * tiles_game_mode_is_active() is true -- otherwise standby's own idle
- * timer could fire mid-game and standby.c would fight this module over
- * the same rendering path. Both being triggered by real button presses
- * (the entry gesture, and exiting) means standby's idle timer gets a
- * fresh reset at the moment control hands back, so there's no awkward
- * "immediately idle right after leaving a game" edge case from skipping
- * its scan while active.
- */
+ * Rendering uses the standby hooks (tiles_lighting_set_standby_active(),
+ * tiles_buttons_set_standby_active(), the RGB setters). Button READS still
+ * reach other modules, so octave_control.c and expression_control.c check
+ * tiles_game_mode_is_active() and ignore their buttons while a game runs.
+ * main.c skips standby's scan while active; the entry/exit presses reset
+ * standby's idle timer anyway. */
 
 #include <stdbool.h>
 
 void tiles_game_mode_init(void);
 
-/* Call every main-loop iteration, after tiles_buttons_scan() and
- * tiles_touch_scan() (needs fresh state from both -- buttons for the
- * entry/exit gesture and in-game controls, touch for menu selection). */
+/* Call every main-loop pass, after tiles_buttons_scan() and
+ * tiles_touch_scan(). */
 void tiles_game_mode_scan(void);
 
-/* True whenever game mode owns the LED rendering path (menu, playing
- * either game, or the round-end flash) -- main.c uses this to skip
- * calling tiles_standby_scan() while true. */
+/* True whenever game mode owns rendering (menu, a game, or a round-end
+ * flash). main.c skips standby while true. */
 bool tiles_game_mode_is_active(void);

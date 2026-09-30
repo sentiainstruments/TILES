@@ -22,7 +22,7 @@
 
 #define GAME_MODE_PI 3.14159265358979323846f
 
-#define GM_HOLD_MS 700u /* how long the 4-button combo must be held to toggle */
+#define GM_HOLD_MS 700u /* 4-button hold time to toggle */
 #define GM_FRAME_INTERVAL_MS 40u
 #define GM_ROUND_END_FLASH_MS 2200u
 #define GM_ROUND_END_TOGGLE_MS 260u
@@ -44,24 +44,13 @@ static uint32_t s_gm_round_end_ms;
 static bool s_gm_round_end_red_only;
 
 /* ---- Win/lose melodies + menu-select haptic ----------------------------
- * Real feedback: "no haptics except for selecting game, no haptics if
- * game doesnt requeire it. no midi notes grom nimi game unless its
- * slecual effedcs like a short melody for win or a three note melody
- * for loose... but no midi from pads in game mode." The actual bug
- * behind unwanted haptics/notes wasn't in this file at all -- see
- * services/expression.c's own PAD_STATE_IDLE gate, which never checked
- * tiles_game_mode_is_active() and so ran its full normal note+haptic
- * pipeline on every grid touch regardless of what this file was doing
- * with that same touch. This section is the other half: deliberate,
- * game-triggered notes/haptics to replace what that fix removes.
+ * Pads play no notes and no haptics in game mode (expression.c ignores
+ * the grid while a game is active). The only sounds are these short
+ * melodies, and the only haptics are the menu-select kick and Simon Says'
+ * pattern.
  *
- * Permanent, from services/midi_channels.h -- see that header's own
- * comment for the whole-board channel layout this is one piece of. Never
- * through services/expression.c's dynamic per-strike allocator, and (real
- * gap found auditing that whole scheme for "the midi channel asignement
- * is weirtd and not consistent") no longer reachable by it at all, not
- * just conventionally avoided by picking a number next to op_mode.c's
- * own reserved range the way this used to work. */
+ * Game mode's own fixed channel (services/midi_channels.h), outside the
+ * MPE allocator's range. */
 #define GM_MELODY_CHANNEL TILES_MIDI_CH_GAME
 #define GM_MELODY_STEP_MS 130u
 #define GM_MELODY_VELOCITY 100u
@@ -73,9 +62,8 @@ typedef struct {
     uint8_t length;
 } gm_melody_t;
 
-/* Short ascending major arpeggio (C4-E4-G4-C5) for a win; a plain
- * three-note descending line (C4-A3-F3) for a loss, real feedback's own
- * exact phrase: "a three note melody for loose." */
+/* Win: rising C major arpeggio (C4-E4-G4-C5). Loss: three falling notes
+ * (C4-A3-F3). */
 static const gm_melody_t GM_MELODY_WIN = {{60u, 64u, 67u, 72u}, 4u};
 static const gm_melody_t GM_MELODY_LOSE = {{60u, 57u, 53u}, 3u};
 
@@ -87,7 +75,7 @@ static uint8_t s_gm_melody_sounding_note;
 
 static void gm_melody_stop(void) {
     if (s_gm_melody_active) {
-        tiles_midi_note_off(GM_MELODY_CHANNEL, s_gm_melody_sounding_note, 0u); /* a scheduled game melody note, no player release gesture */
+        tiles_midi_note_off(GM_MELODY_CHANNEL, s_gm_melody_sounding_note, 0u); /* scheduled melody note: release velocity 0 */
         tiles_cv_gate_note_off(s_gm_melody_sounding_note);
         s_gm_melody_active = false;
     }
@@ -97,15 +85,12 @@ static void gm_melody_start(const gm_melody_t *melody, uint32_t now_ms) {
     gm_melody_stop();
     s_gm_melody_current = melody;
     s_gm_melody_start_ms = now_ms;
-    s_gm_melody_step = 0xFFu; /* sentinel: no step has sounded yet, forces step 0 to fire below */
+    s_gm_melody_step = 0xFFu; /* sentinel: nothing sounded yet, so step 0 fires */
     s_gm_melody_active = true;
 }
 
-/* Call every scan while game mode owns the board -- advances the
- * currently-playing melody (if any) by elapsed time, same non-blocking
- * "elapsed_ms / STEP_MS" stepping this file's own gsim_update() playback
- * already uses for Simon Says' pattern echo. A no-op once nothing is
- * playing. */
+/* Advances the playing melody by elapsed time (non-blocking). Call every
+ * scan while game mode owns the board; no-op when idle. */
 static void gm_melody_update(uint32_t now_ms) {
     if (!s_gm_melody_active) {
         return;
@@ -117,7 +102,7 @@ static void gm_melody_update(uint32_t now_ms) {
     }
     if (step != s_gm_melody_step) {
         if (s_gm_melody_step != 0xFFu) {
-            tiles_midi_note_off(GM_MELODY_CHANNEL, s_gm_melody_sounding_note, 0u); /* a scheduled game melody note, no player release gesture */
+            tiles_midi_note_off(GM_MELODY_CHANNEL, s_gm_melody_sounding_note, 0u); /* scheduled melody note: release velocity 0 */
             tiles_cv_gate_note_off(s_gm_melody_sounding_note);
         }
         s_gm_melody_step = step;
@@ -131,23 +116,10 @@ static bool s_gm_combo_was_held;
 static bool s_gm_combo_fired;
 static uint32_t s_gm_hold_start_ms;
 
-/* Real feedback: "we need some tolerance fotrht e 4 button press for
- * menu open for game mode its very hard to trigger." gm_combo_held()
- * requires all four buttons simultaneously pressed on the EXACT current
- * scan tick -- four human fingers landing on four separate physical
- * buttons, then holding rock-steady for a full GM_HOLD_MS with zero
- * bounce, is a much harder ask than it looks on paper. The previous
- * version reset s_gm_hold_start_ms to "now" the instant any single
- * button so much as blipped, so one momentary bounce anywhere in the
- * 700ms window threw away all the progress made until then. Bridges
- * brief drops the same way expression.c's own TOUCH_DROPOUT_GRACE_MS
- * already bridges a capacitive touch glitch -- a much longer window
- * here (250ms, not 12ms) since this is smoothing human muscle
- * micro-adjustments across four fingers, not an electrical blip on one
- * sensor. Only bridges drops AFTER all four have been simultaneously
- * down at least once; it doesn't help four fingers land together in the
- * first place, only keeps a hold that already started from being
- * punished by a brief wobble. */
+/* The 4-button hold forgives brief drops: once all four have been down
+ * together, a release shorter than this doesn't restart the 700 ms hold
+ * (four fingers wobble; resetting on every blip made it very hard to
+ * trigger). It doesn't help the four land together in the first place. */
 #define GM_COMBO_DROPOUT_GRACE_MS 250u
 static uint32_t s_gm_combo_last_true_ms;
 static bool s_gm_combo_last_true_valid;
@@ -158,10 +130,8 @@ static bool s_gm_prev_pad3_touched;
 static bool s_gm_prev_pad4_touched;
 static bool s_gm_prev_pad5_touched;
 
-/* ---- Interactive snake ---------------------------------------------------
- * Player-controlled version of standby.c's autonomous snake -- separate
- * state, deliberately not shared with it (see game_mode.h's file
- * header). */
+/* ---- Snake ---------------------------------------------------------------
+ * Separate state from standby's self-playing snake (see game_mode.h). */
 
 #define GS_MAX_LENGTH 20u
 #define GS_STEP_MS 350u
@@ -208,13 +178,10 @@ static void gs_place_food(void) {
 }
 
 static void gs_start(uint32_t now_ms) {
-    /* Real feedback: "check the seed for all games" -- see
-     * gsim_new_game()'s own comment (and standby.c's deeper fix) for why
-     * this matters; every player-started game now reseeds with fresh
-     * hardware entropy right as it begins, not just Simon Says. */
+    /* Reseed from hardware entropy at every game start (see standby.c
+     * tiles_standby_init() for the seeding story). */
     srand((unsigned int)get_rand_32());
-    /* 2, not 3 -- real feedback that 3 felt cramped starting out given
-     * how little space this board actually has (5x6 cells total). */
+    /* Start with length 2: the board is only 5x6. */
     s_gs_length = 2u;
     int8_t start_row = 2;
     int8_t start_col = 3;
@@ -234,16 +201,9 @@ static void gs_start(uint32_t now_ms) {
     s_gs_prev_down = false;
 }
 
-/* red_only: Tetris topping out flashes plain red (real feedback: "when
- * game is lost it should flash red"), while snake/brick breaker keep
- * the original red/purple alternation -- see render_round_end() below.
- * is_win is a SEPARATE axis from red_only -- Tetris/Simon Says are
- * always a loss when they reach this function (red_only=true both
- * times), but snake and brick breaker route BOTH their win and lose
- * outcomes through here with the same red_only=false, so red_only alone
- * can't tell win from lose the way it happens to for the other two.
- * Picks which melody gm_melody_start() plays -- see that section's own
- * header comment. */
+/* red_only: Tetris and Simon Says flash plain red; Snake and Brick Breaker
+ * alternate red/purple. is_win is separate (Snake and Brick Breaker send
+ * both outcomes through here with red_only=false) and picks the melody. */
 static void gm_start_round_end(uint32_t now_ms, bool red_only, bool is_win) {
     s_gm_state = GM_STATE_ROUND_END;
     s_gm_round_end_ms = now_ms;
@@ -252,8 +212,7 @@ static void gm_start_round_end(uint32_t now_ms, bool red_only, bool is_win) {
 }
 
 static void gs_try_set_direction(int8_t dr, int8_t dc) {
-    /* Disallow reversing straight into the current heading -- the
-     * standard "can't turn 180 into your own neck" snake-game rule. */
+    /* Can't reverse straight into your own neck. */
     bool is_reverse = (dr == (int8_t)(-s_gs_dir_row)) && (dc == (int8_t)(-s_gs_dir_col)) &&
                        (s_gs_dir_row != 0 || s_gs_dir_col != 0);
     if (is_reverse) {
@@ -296,8 +255,7 @@ static void gs_step(uint32_t now_ms) {
     int8_t nr = (int8_t)(head.row + s_gs_dir_row);
     int8_t nc = (int8_t)(head.col + s_gs_dir_col);
 
-    /* Wrap around edges -- friendlier than instant death on a wall,
-     * given how small this board is. */
+    /* Wrap at the edges rather than die on a wall (the board is small). */
     if (nr < (int8_t)TILES_GRID_MIN_ROW) {
         nr = (int8_t)TILES_GRID_MAX_ROW;
     }
@@ -319,7 +277,7 @@ static void gs_step(uint32_t now_ms) {
     bool ate = (nr == s_gs_food.row && nc == s_gs_food.col);
     uint8_t new_length = ate ? (uint8_t)(s_gs_length + 1u) : s_gs_length;
     if (new_length > GS_MAX_LENGTH) {
-        /* Board effectively full -- treat it as a win, same flash. */
+        /* Board full: counts as a win. */
         gm_start_round_end(now_ms, false, true);
         return;
     }
@@ -381,11 +339,9 @@ static void render_snake(uint32_t now_ms) {
     }
 }
 
-/* ---- Interactive brick breaker --------------------------------------------
- * Player-controlled version of standby.c's autonomous brick breaker --
- * same ball/brick/wall physics, paddle is player-controlled instead of
- * AI-tracked. Separate state, deliberately not shared with the
- * autonomous version. */
+/* ---- Brick Breaker -------------------------------------------------------
+ * Standby's brick breaker physics with a player-controlled paddle;
+ * separate state. */
 
 #define GB_NUM_COLS 6u
 #define GB_PADDLE_ROW 4u
@@ -402,8 +358,7 @@ static bool s_gb_prev_left;
 static bool s_gb_prev_right;
 
 static void gb_start(uint32_t now_ms) {
-    /* Real feedback: "check the seed for all games" -- see
-     * gs_start()'s own comment. */
+    /* Reseed per game (see gs_start()). */
     srand((unsigned int)get_rand_32());
     for (uint8_t i = 0; i < GB_NUM_COLS; i++) {
         s_gb_brick_alive[i] = true;
@@ -439,34 +394,11 @@ static void gb_handle_input(void) {
     s_gb_prev_right = right;
 }
 
-/* Real feedback: "brickbraker is having a hard time hitting all function
- * button leds, i suspect its because of the alignement" -- correctly
- * diagnosed as an alignment issue, though not a rendering one. Every step
- * used to move row by exactly +/-1 AND col by exactly +/-1 in lockstep (a
- * wall bounce flips dcol's SIGN but a step still always changes col by 1
- * either way), which makes (row + col) mod 2 an exact invariant of the
- * ball's entire trajectory. gb_start() above always starts the ball at
- * row 3, col 3 (paddle_center), an EVEN sum, so the ball could only ever
- * reach row 1 (the brick wall) on the 3 columns sharing that same parity
- * -- the other 3 bricks were mathematically unreachable every single
- * round, not just unlucky.
- *
- * First fix attempt throttled column movement to every OTHER step -- real
- * feedback after flashing it: "now moves weird and still cant reach 3 of
- * the 5 lights." It didn't actually fix reachability: row's own
- * bounce-to-bounce period is ALWAYS an even number of ticks (a fixed
- * function of GB_PADDLE_ROW, independent of column state), so jumping
- * column by a fixed 4 ticks' worth every row-bounce cycle just walks a
- * fixed stride around the column's own reflecting orbit -- landing on
- * only every other reachable column forever, same bug, different
- * numbers -- while also visibly breaking the normal diagonal motion.
- * Real fix, matching standby.c's autonomous version (bb_step()): column
- * advances every step again, but each bounce off the top wall or the
- * paddle now also gets a coin-flip chance to reverse dcol. Row's bounce
- * timing is still perfectly periodic, but column's direction at each
- * bounce is now a genuine random variable instead of a deterministic
- * function of the previous bounce, so there's no fixed relationship left
- * for a parity/stride argument to lock onto. */
+/* Moving row and column by exactly 1 each step keeps (row + col) mod 2
+ * fixed for the whole flight, so from the fixed start (3, 3) half the
+ * bricks were unreachable. Fix (as in standby.c bb_step()): each bounce
+ * off the top wall or paddle gets a coin-flip chance to reverse the
+ * column direction, which breaks the parity lock. */
 static void gb_step(uint32_t now_ms) {
     int8_t new_col = (int8_t)(s_gb_ball_col + s_gb_ball_dcol);
     if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
@@ -526,12 +458,8 @@ static void gb_update(uint32_t now_ms) {
 static void render_brick(uint32_t now_ms) {
     (void)now_ms;
 
-    /* Bricks live at the button row -- buttons are plain monochrome
-     * PWM, not addressable RGB, so an alive brick is just a bright
-     * single-channel level, not the orange used for the pad-grid
-     * versions of "a brick" elsewhere (e.g. standby.c's autonomous
-     * version, which draws bricks on actual RGB pads and can afford
-     * color; here they're on the button row instead). */
+    /* Bricks sit on the button row (monochrome PWM), so an alive brick is a
+     * single bright level, not a color. */
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         uint8_t idx = (uint8_t)(col - TILES_GRID_MIN_COL);
         float level = s_gb_brick_alive[idx] ? GB_BRICK_LEVEL : 0.0f;
@@ -566,32 +494,16 @@ static void render_brick(uint32_t now_ms) {
     }
 }
 
-/* ---- Interactive Tetris ----------------------------------------------------
- * A custom small-piece set falling into a 4-row x 6-col well (the pad
- * grid; function buttons stay off, same as the other two games) --
- * NOT the standard 7 tetrominoes. Real feedback on the original
- * standard set: full tetrominoes (4 cells, up to 4 wide/tall) are too
- * big for a board this size -- a single piece could span the entire
- * width or height, leaving no room to actually play. Replaced with 5
- * smaller pieces of increasing size (GT_PIECES below): a 1-cell dot, a
- * 2-cell domino, a 3-cell straight tromino (the "long piece," capped at
- * 3 instead of 4), a 3-cell corner tromino, and a 2x2 square (4 cells,
- * but compact -- its footprint doesn't sprawl the way a 4-in-a-row
- * piece does, so it stays as the largest piece). Pieces now have a
- * variable cell count (`num_cells`, 1-4) rather than always exactly 4,
- * so every loop over a piece's cells uses that field instead of a
- * hardcoded 4.
+/* ---- Tetris --------------------------------------------------------------
+ * A 4x6 well (the pad grid; buttons off) with a custom small-piece set
+ * (GT_PIECES), since full tetrominoes are too big for 4 rows: dot, domino,
+ * straight tromino, corner tromino, 2x2 square. Pieces have 1-4 cells
+ * (`num_cells`).
  *
- * Only 2 rotation states per piece (not full 4-state SRS -- with only 4
- * rows of height the extra states would rarely change anything) and no
- * wall kicks (a rotation that doesn't fit in place is just rejected).
- * SW1/SW2 move left/right, SW3 rotates, SW4 hard-drops. Gravity also
- * steps the piece down automatically every GT_STEP_MS. Landing locks
- * the piece into the well; full rows shift everything above them down
- * (gt_clear_lines() below, handles multiple simultaneous clears).
- * Topping out -- a freshly spawned piece has nowhere to fit -- ends the
- * round via the same gm_start_round_end() flash every other game
- * uses. */
+ * 2 rotation states per piece and no wall kicks (a rotation that doesn't
+ * fit is rejected). "-"/"+" move, triangle rotates, diamond hard-drops;
+ * gravity every GT_STEP_MS. Full rows collapse (several at once is fine).
+ * Topping out ends the round. */
 
 #define GT_MIN_ROW 1u /* row 0 is buttons, not part of the well */
 #define GT_MAX_ROW TILES_GRID_MAX_ROW
@@ -600,11 +512,11 @@ static void render_brick(uint32_t now_ms) {
 #define GT_ROWS 4u
 #define GT_COLS 6u
 #define GT_STEP_MS 550u
-#define GT_SPAWN_COL 3 /* leaves room either side for every piece's max width (3) */
+#define GT_SPAWN_COL 3 /* room either side for the widest piece (3) */
 #define GT_NUM_PIECE_TYPES 5u
 #define GT_MAX_CELLS 4u
-/* Dramatic white underglow strobe on a line clear -- fast toggle, short
- * total duration, so it reads as a flash rather than a glow. */
+/* White underglow strobe on a line clear: fast and short, a flash not a
+ * glow. */
 #define GT_LINE_CLEAR_FLASH_MS 450u
 #define GT_LINE_CLEAR_TOGGLE_MS 90u
 
@@ -613,9 +525,7 @@ typedef struct {
     int8_t dc;
 } gt_offset_t;
 
-/* Two rotation states per piece; only the first num_cells entries of
- * each are used (1-4, GT_MAX_CELLS) -- see the file comment above for
- * why pieces are no longer always exactly 4 cells. */
+/* Two rotation states; only the first num_cells entries are used. */
 typedef struct {
     uint8_t num_cells;
     gt_offset_t state0[GT_MAX_CELLS];
@@ -623,23 +533,21 @@ typedef struct {
     float r, g, b;
 } gt_piece_def_t;
 
-/* Small custom piece set, smallest to largest -- see the file comment
- * above for why these replace the standard 7 tetrominoes. */
+/* Smallest to largest. */
 static const gt_piece_def_t GT_PIECES[GT_NUM_PIECE_TYPES] = {
-    /* Dot: 1 cell, no real rotation (both states identical). */
+    /* Dot: 1 cell, rotation is a no-op. */
     {1u, {{0, 0}}, {{0, 0}}, 1.0f, 1.0f, 1.0f},
-    /* Domino: 2 cells, horizontal/vertical. */
+    /* Domino: horizontal/vertical. */
     {2u, {{0, 0}, {0, 1}}, {{0, 0}, {1, 0}}, 0.0f, 1.0f, 1.0f},
-    /* Straight tromino ("long piece," capped at 3): horizontal/vertical. */
+    /* Straight tromino: horizontal/vertical. */
     {3u, {{0, 0}, {0, 1}, {0, 2}}, {{0, 0}, {1, 0}, {2, 0}}, 0.0f, 1.0f, 0.0f},
-    /* Corner tromino: two different bends, not a strict rotation pair,
-     * just two distinct 3-cell shapes for variety. */
+    /* Corner tromino: two different bends for variety (not a strict rotation). */
     {3u, {{0, 0}, {1, 0}, {1, 1}}, {{0, 0}, {0, 1}, {1, 0}}, 1.0f, 0.5f, 0.0f},
-    /* Square: 2x2, 4 cells but compact -- rotation is a no-op. */
+    /* Square: 2x2, rotation is a no-op. */
     {4u, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, 1.0f, 1.0f, 0.0f},
 };
 
-/* 0 = empty, else (piece type index + 1) -- indexed [row - GT_MIN_ROW][col - GT_MIN_COL]. */
+/* 0 = empty, else piece type + 1; [row - GT_MIN_ROW][col - GT_MIN_COL]. */
 static uint8_t s_gt_board[GT_ROWS][GT_COLS];
 static uint8_t s_gt_piece_type;
 static uint8_t s_gt_rotation;
@@ -682,13 +590,9 @@ static void gt_spawn(void) {
     s_gt_origin_col = (int8_t)GT_SPAWN_COL;
 }
 
-/* Standard line-clear sweep: bottom-up, a full row shifts everything
- * above it down by one and the top row clears; the same row index is
- * rechecked (not advanced) afterward since it now holds whatever
- * shifted into it -- this is what makes multiple simultaneous clears
- * collapse correctly in one pass. Returns how many rows were cleared,
- * so gt_lock() below can trigger the line-clear flash only when
- * something actually cleared. */
+/* Bottom-up: a full row shifts everything above down and the same row is
+ * checked again, so multiple clears collapse in one pass. Returns rows
+ * cleared (for the flash). */
 static uint8_t gt_clear_lines(void) {
     uint8_t cleared = 0u;
     int8_t row = (int8_t)(GT_ROWS - 1u);
@@ -726,22 +630,18 @@ static void gt_lock(uint32_t now_ms) {
         s_gt_board[r - (int8_t)GT_MIN_ROW][c - (int8_t)GT_MIN_COL] = (uint8_t)(s_gt_piece_type + 1u);
     }
     if (gt_clear_lines() > 0u) {
-        /* Dramatic white underglow strobe -- see render_tetris()'s
-         * underglow loop below. */
+        /* Line-clear strobe (see render_tetris()). */
         s_gt_line_clear_flash_ms = now_ms;
     }
     gt_spawn();
     if (!gt_fits(s_gt_piece_type, s_gt_rotation, s_gt_origin_row, s_gt_origin_col)) {
-        /* Nowhere for the next piece to go -- topped out. Plain red,
-         * not the red/purple every other game's round-end uses -- real
-         * feedback: "when game is lost it should flash red." */
+        /* Topped out: plain red. */
         gm_start_round_end(now_ms, true, false);
     }
 }
 
 static void gt_start(uint32_t now_ms) {
-    /* Real feedback: "check the seed for all games" -- see
-     * gs_start()'s own comment. */
+    /* Reseed per game (see gs_start()). */
     srand((unsigned int)get_rand_32());
     for (uint8_t r = 0; r < GT_ROWS; r++) {
         for (uint8_t c = 0; c < GT_COLS; c++) {
@@ -750,9 +650,7 @@ static void gt_start(uint32_t now_ms) {
     }
     gt_spawn();
     s_gt_last_step_ms = now_ms;
-    /* Set to "already long past" rather than 0 -- 0 could still read as
-     * "within the flash window" if this round starts within
-     * GT_LINE_CLEAR_FLASH_MS of boot. */
+    /* "Long past", not 0, so a round starting right after boot doesn't flash. */
     s_gt_line_clear_flash_ms = now_ms - GT_LINE_CLEAR_FLASH_MS - 1u;
     s_gt_prev_left = false;
     s_gt_prev_right = false;
@@ -828,8 +726,8 @@ static void render_tetris(uint32_t now_ms) {
         }
     }
 
-    /* The falling piece draws on top, at full brightness -- a visible
-     * cue distinguishing it from the already-locked stack. */
+    /* The falling piece draws on top at full brightness, distinct from the
+     * locked stack. */
     const gt_piece_def_t *active = &GT_PIECES[s_gt_piece_type];
     const gt_offset_t *offsets = gt_offsets(s_gt_piece_type, s_gt_rotation);
     for (uint8_t i = 0; i < active->num_cells; i++) {
@@ -854,43 +752,24 @@ static void render_tetris(uint32_t now_ms) {
     }
 }
 
-/* ---- Interactive Pong -------------------------------------------------------
- * Two-player, same board: column 1 is the left paddle, column 6 is the
- * right paddle, both 2 pads tall (white); the ball is a single blue
- * dot bouncing between them. Left paddle: SW1 ("-") up, SW2 ("+") down.
- * Right paddle: SW5 (square) up, SW6 (circle) down -- SW5/SW6 chosen as
- * the mirror-image pair to SW1/SW2 (leftmost two vs. rightmost two of
- * the six buttons); flag this to the user if "square" wasn't the button
- * they meant by "the other one next to circle."
+/* ---- Pong ----------------------------------------------------------------
+ * Two players on one board: left paddle column 1 ("-" up, "+" down), right
+ * paddle column 6 (square up, circle down; the rightmost pair mirrors the
+ * leftmost). Paddles are 2 pads, white; the ball is blue.
  *
- * A miss (real feedback: Pong wasn't tracking who was winning at all)
- * scores the *other* side a point and triggers a short local white
- * underglow flash (gp_point_scored()); first to GP_WIN_SCORE (2) wins
- * the match. A side's score shows on its own movement-control buttons,
- * glowing rather than flat-on: 0 points = both dark, 1 point = the
- * "up" button (SW1 left / SW5 right) glows, 2 points = both glow --
- * "one point one control lit, 2 points both buttons on." SW3/SW4 stay
- * dark, unused by Pong.
- *
- * Individual points still don't go through the shared win/lose
- * round-end machinery every other game here uses -- a rally on a board
- * this small can end in a couple of seconds, so bouncing to the menu
- * on every point would be disruptive -- the ball just re-serves
- * immediately after a non-winning miss. Reaching the winning score is
- * different: real feedback was "don't reset the game immediately,
- * return to the game menu" -- so a match win freezes the board (ball
- * and paddles stop where they are, the winner's controls glow) for
- * GP_MATCH_END_DISPLAY_MS, then returns to GM_STATE_MENU via
- * gm_enter_menu(), the same way every other game's round ends.
- * Handled locally in tiles_game_mode_scan()'s PLAYING_PONG branch
- * (checking s_gp_match_over) rather than through GM_STATE_ROUND_END,
- * since the "flash" here is on the button LEDs, not underglow. */
+ * A miss scores for the other side, flashes the underglow white and
+ * re-serves at once (a point is too short to go back to the menu each
+ * time). First to GP_WIN_SCORE (2) wins. Scores glow on each side's
+ * control buttons: 1 point = the "up" button, 2 = both; triangle and
+ * diamond stay dark. A win freezes the board for GP_MATCH_END_DISPLAY_MS,
+ * then returns to the menu. Handled locally (s_gp_match_over), not via
+ * GM_STATE_ROUND_END, since the "flash" is on the buttons. */
 
 #define GP_MIN_ROW 1u /* row 0 is buttons, not part of the court */
 #define GP_MAX_ROW TILES_GRID_MAX_ROW
 #define GP_PADDLE_COL_LEFT TILES_GRID_MIN_COL
 #define GP_PADDLE_COL_RIGHT TILES_GRID_MAX_COL
-#define GP_PADDLE_TOP_MIN GP_MIN_ROW           /* paddle spans [top, top+1] */
+#define GP_PADDLE_TOP_MIN GP_MIN_ROW           /* paddle covers [top, top+1] */
 #define GP_PADDLE_TOP_MAX (TILES_GRID_MAX_ROW - 1u)
 #define GP_STEP_MS 260u
 #define GP_POINT_FLASH_MS 500u
@@ -899,8 +778,7 @@ static void render_tetris(uint32_t now_ms) {
 #define GP_BALL_LEVEL 1.0f
 #define GP_WIN_SCORE 2u
 #define GP_MATCH_END_DISPLAY_MS 2500u
-/* Breathing pulse for a lit score-indicator button -- "glowing," not
- * flat-on. */
+/* Breathing glow for a lit score button. */
 #define GP_SCORE_GLOW_PERIOD_MS 900.0f
 #define GP_SCORE_GLOW_MIN 0.5f
 #define GP_SCORE_GLOW_MAX 1.0f
@@ -924,15 +802,14 @@ static bool s_gp_prev_right_down;
 
 static void gp_serve(uint32_t now_ms) {
     s_gp_ball_row = (int8_t)(GP_MIN_ROW + (rand() % (GP_MAX_ROW - GP_MIN_ROW + 1u)));
-    s_gp_ball_col = ((rand() % 2) == 0) ? 3 : 4; /* the two middle columns of 1-6 */
+    s_gp_ball_col = ((rand() % 2) == 0) ? 3 : 4; /* one of the two middle columns */
     s_gp_ball_drow = ((rand() % 2) == 0) ? -1 : 1;
     s_gp_ball_dcol = ((rand() % 2) == 0) ? -1 : 1;
     s_gp_last_step_ms = now_ms;
 }
 
 static void gp_start(uint32_t now_ms) {
-    /* Real feedback: "check the seed for all games" -- see
-     * gs_start()'s own comment. */
+    /* Reseed per game (see gs_start()). */
     srand((unsigned int)get_rand_32());
     s_gp_left_paddle_top = 2;
     s_gp_right_paddle_top = 2;
@@ -940,8 +817,7 @@ static void gp_start(uint32_t now_ms) {
     s_gp_right_score = 0u;
     s_gp_match_over = false;
     gp_serve(now_ms);
-    /* "Already long past" rather than 0 -- see the same pattern/reasoning
-     * on Tetris's line-clear flash above. */
+    /* "Long past", as for Tetris's flash. */
     s_gp_point_flash_ms = now_ms - GP_POINT_FLASH_MS - 1u;
     s_gp_prev_left_up = false;
     s_gp_prev_left_down = false;
@@ -975,10 +851,8 @@ static void gp_handle_input(void) {
     s_gp_prev_right_down = right_down;
 }
 
-/* left_missed: true if the ball got past the left paddle (so the right
- * side scores), false if it got past the right paddle (left scores).
- * On reaching GP_WIN_SCORE, freezes the match instead of re-serving --
- * see the file header. */
+/* left_missed: the ball passed the left paddle (right scores), else left
+ * scores. At GP_WIN_SCORE the match freezes instead of re-serving. */
 static void gp_point_scored(uint32_t now_ms, bool left_missed) {
     s_gp_point_flash_ms = now_ms;
     if (left_missed) {
@@ -989,13 +863,8 @@ static void gp_point_scored(uint32_t now_ms, bool left_missed) {
     if (s_gp_left_score >= GP_WIN_SCORE || s_gp_right_score >= GP_WIN_SCORE) {
         s_gp_match_over = true;
         s_gp_match_over_ms = now_ms;
-        /* Pong doesn't route through gm_start_round_end() (see this
-         * file's own header on why -- it freezes/glows locally instead),
-         * so the win melody needs its own direct trigger here. Always
-         * WIN, never LOSE -- local two-player Pong doesn't have a
-         * single "the player" to lose relative to, so a match ending is
-         * treated as a win event regardless of which side reached
-         * GP_WIN_SCORE first. */
+        /* Pong skips gm_start_round_end(), so play the melody here. Always WIN:
+         * two local players, no single loser. */
         gm_melody_start(&GM_MELODY_WIN, now_ms);
         return;
     }
@@ -1040,10 +909,7 @@ static void gp_update(uint32_t now_ms) {
     gp_step(now_ms);
 }
 
-/* Score indicator on each side's own movement-control buttons: 0
- * points = both dark, 1 = the "up" button glows, 2 (win) = both glow --
- * a breathing pulse, not flat-on, so it reads as "glowing." SW3/SW4
- * stay dark, unused by Pong. */
+/* Score on each side's control buttons (see the Pong section). */
 static void render_pong_score_buttons(uint32_t now_ms) {
     float raw = 0.5f + 0.5f * sinf(2.0f * GAME_MODE_PI * (float)now_ms / GP_SCORE_GLOW_PERIOD_MS);
     float glow = GP_SCORE_GLOW_MIN + (GP_SCORE_GLOW_MAX - GP_SCORE_GLOW_MIN) * raw;
@@ -1067,9 +933,7 @@ static void render_pong(uint32_t now_ms) {
             float b = 0.0f;
 
             if ((int8_t)row == s_gp_ball_row && (int8_t)col == s_gp_ball_col) {
-                /* Checked before either paddle so it draws on top during
-                 * a bounce, when they briefly occupy the same cell --
-                 * same precedent as brick breaker's ball. */
+                /* Ball before paddles, so it draws on top when they share a cell. */
                 b = GP_BALL_LEVEL;
             } else if (col == GP_PADDLE_COL_LEFT && (int8_t)row >= s_gp_left_paddle_top &&
                        (int8_t)row <= (int8_t)(s_gp_left_paddle_top + 1)) {
@@ -1098,44 +962,22 @@ static void render_pong(uint32_t now_ms) {
 }
 
 /* ---- Simon Says ------------------------------------------------------------
- * Real feedback: "lets implement another mini game, simon says, so a
- * haptic and led patern appears on the pads and the user has to follow,
- * start with a simple one pad at a time but it gets exponentially longer
- * like the real simon says." Real Simon Says itself grows by exactly one
- * step per round (linear, not exponential) -- "the real simon says" is
- * the actual behavioral anchor here, so that's what this implements;
- * "exponentially" is read as colloquial ("gets longer and longer fast
- * enough to feel hard"), not literal doubling.
- *
- * Any of the 24 pads can appear in the pattern (repeats allowed across
- * different steps, same as real Simon Says -- a longer sequence isn't
- * bounded by pad count), each step ALSO gets its own color from a small
- * fixed palette (real feedback: "the sewqurnce has different colors
- * flashing"), assigned independently of which pad it lands on -- pure
- * visual variety, not a code for anything.
- *
- * "for this mini game touch pads are disabeled but push pads are used
- * for pattern receation" -- unlike every other game/menu in this
- * codebase (all touch-driven), GSIM_PRESS_DEPTH below reads real Hall
- * depth during the player's input phase, the same "an actual push, not
- * a light touch" threshold expression.c's own MIN_STRIKE_DEPTH_DELTA
- * uses for real note strikes. "the haptics play a big part... giving
- * you the vibraions paired with light to indicate the correct light" --
- * every playback step fires both together; "when player plays the
- * colors do come back when pressed" -- a correct press re-flashes that
- * exact pad's own pattern color as confirmation. */
+ * A pattern of pads flashes, each with a haptic kick and its own color
+ * from a small palette; the player repeats it by PRESSING the pads (Hall
+ * depth, GSIM_PRESS_DEPTH; touch is ignored). Like the real game it grows
+ * by one step each round. A correct press re-flashes that pad's color with
+ * a haptic; a wrong pad ends the round (red flash, back to the menu).
+ * Pads may repeat across steps. */
 
 #define GSIM_MAX_LENGTH 32u
 #define GSIM_NUM_COLORS 6u
-#define GSIM_ROUND_START_DELAY_MS 700u /* pause before playback, breathing room between rounds */
-#define GSIM_PLAYBACK_STEP_MS 550u     /* total time budget per pattern step, on + gap */
-#define GSIM_PLAYBACK_FLASH_MS 380u    /* how much of that step is actually lit */
-#define GSIM_PLAYBACK_VELOCITY 110u    /* firm -- this IS the thing the player must remember */
+#define GSIM_ROUND_START_DELAY_MS 700u /* pause before playback */
+#define GSIM_PLAYBACK_STEP_MS 550u     /* per pattern step, lit + gap */
+#define GSIM_PLAYBACK_FLASH_MS 380u    /* lit part of a step */
+#define GSIM_PLAYBACK_VELOCITY 110u    /* firm: this is what the player must remember */
 #define GSIM_FEEDBACK_VELOCITY 90u
-#define GSIM_FEEDBACK_FLASH_MS 220u /* correct-press confirmation flash length */
-/* Mirrors expression.c's MIN_STRIKE_DEPTH_DELTA (300) -- "an actual
- * push," the same real-hardware-calibrated threshold real note strikes
- * use, not a guessed new number. */
+#define GSIM_FEEDBACK_FLASH_MS 220u /* correct-press flash length */
+/* Same as expression.c's MIN_STRIKE_DEPTH_DELTA (300): a real push. */
 #define GSIM_PRESS_DEPTH 300.0f
 
 typedef struct {
@@ -1159,26 +1001,19 @@ typedef enum {
 
 static uint8_t s_gsim_pattern_pad[GSIM_MAX_LENGTH];   /* 1-24 */
 static uint8_t s_gsim_pattern_color[GSIM_MAX_LENGTH]; /* index into GSIM_PALETTE */
-static uint8_t s_gsim_length;                         /* steps active this round */
+static uint8_t s_gsim_length;                         /* steps this round */
 static gsim_phase_t s_gsim_phase;
 static uint32_t s_gsim_phase_start_ms;
-static uint8_t s_gsim_playback_step;      /* which step PLAYBACK is currently showing */
-static uint8_t s_gsim_last_haptic_step;   /* which step's haptic already fired -- 0xFF = none yet this round */
-static uint8_t s_gsim_input_index;        /* how many correct steps reproduced so far this round */
+static uint8_t s_gsim_playback_step;      /* step PLAYBACK is showing */
+static uint8_t s_gsim_last_haptic_step;   /* step whose haptic already fired; 0xFF = none this round */
+static uint8_t s_gsim_input_index;        /* correct steps reproduced so far this round */
 static bool s_gsim_prev_pressed[TILES_NUM_PADS];
-static uint8_t s_gsim_feedback_pad;    /* 0 = no active confirmation flash */
+static uint8_t s_gsim_feedback_pad;    /* 0 = no confirmation flash */
 static uint32_t s_gsim_feedback_start_ms;
 
 static void gsim_new_game(uint32_t now_ms) {
-    /* Real feedback: "is simon says generating unique patterns every
-     * time? it should do that." Reseeds the shared rand()/srand() stream
-     * (see standby.c's own tiles_standby_init() for the deeper fix --
-     * this firmware's ONE seed used to be boot-time-based and could end
-     * up nearly identical across boots) with fresh hardware entropy
-     * right as each new game starts, on top of that fix -- extra
-     * insurance specifically for this feature, directly matching the
-     * question asked, regardless of anything else that happened to
-     * consume rand() calls earlier in the session. */
+    /* Reseed per game so every game gets a new pattern (see standby.c's
+     * seeding fix). */
     srand((unsigned int)get_rand_32());
     s_gsim_length = 1u;
     s_gsim_pattern_pad[0] = (uint8_t)(1u + (uint8_t)(rand() % TILES_NUM_PADS));
@@ -1193,7 +1028,7 @@ static void gsim_new_game(uint32_t now_ms) {
 
 static void gsim_extend_pattern(void) {
     if (s_gsim_length >= GSIM_MAX_LENGTH) {
-        return; /* practical ceiling reached -- keep replaying the max-length pattern rather than overflow */
+        return; /* ceiling reached: keep replaying the longest pattern */
     }
     s_gsim_pattern_pad[s_gsim_length] = (uint8_t)(1u + (uint8_t)(rand() % TILES_NUM_PADS));
     s_gsim_pattern_color[s_gsim_length] = (uint8_t)(rand() % GSIM_NUM_COLORS);
@@ -1217,9 +1052,7 @@ static void gsim_begin_input(uint32_t now_ms) {
     s_gsim_phase_start_ms = now_ms;
     s_gsim_input_index = 0u;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        /* Seed to whatever's currently pressed rather than false -- a
-         * pad already held down the instant input begins must not read
-         * as a fresh press edge. */
+        /* Seed with what's already pressed so a held pad isn't a new press. */
         s_gsim_prev_pressed[i] = (float)tiles_hall_get_depth((uint8_t)(i + 1u)) > GSIM_PRESS_DEPTH;
     }
 }
@@ -1240,26 +1073,19 @@ static void gsim_update(uint32_t now_ms) {
         }
         s_gsim_playback_step = (uint8_t)step;
         if (s_gsim_playback_step != s_gsim_last_haptic_step) {
-            /* Real feedback: "the haptics play a big part on this one
-             * giving you the vibraions paired with light to inditcate
-             * the correct light" -- fires once per step, exactly when
-             * that step's flash window begins. */
+            /* One haptic per step, as its flash starts. */
             s_gsim_last_haptic_step = s_gsim_playback_step;
             tiles_haptics_trigger_kick(s_gsim_pattern_pad[s_gsim_playback_step], GSIM_PLAYBACK_VELOCITY);
         }
         break;
     }
     case GSIM_PHASE_INPUT:
-        /* Advanced by gsim_handle_input() below, not here -- reading
-         * Hall depth is an input concern, kept with the other games'
-         * own gX_handle_input() functions for the same reason. */
+        /* Advanced by gsim_handle_input(), like the other games' input handlers. */
         break;
     }
 }
 
-/* Real feedback: "touch pads are disabeled but push pads are used for
- * pattern receation" -- reads tiles_hall_get_depth() directly, never
- * tiles_touch_is_touched(), for the entire input phase. */
+/* Reads Hall depth only (no touch) for the whole input phase. */
 static void gsim_handle_input(uint32_t now_ms) {
     if (s_gsim_phase != GSIM_PHASE_INPUT) {
         return;
@@ -1274,28 +1100,23 @@ static void gsim_handle_input(uint32_t now_ms) {
 
         uint8_t expected_pad = s_gsim_pattern_pad[s_gsim_input_index];
         if (pad != expected_pad) {
-            /* Wrong pad -- real feedback: "when game is lost it should
-             * flash red" (Tetris's own precedent, same treatment here). */
+            /* Wrong pad: plain red flash, back to the menu. */
             gm_start_round_end(now_ms, true, false);
             return;
         }
 
-        /* Correct -- "when player plays the colors do come back when
-         * pressed": re-flash this exact pad's own pattern color as
-         * confirmation, plus a haptic echo. */
+        /* Correct: re-flash this pad's pattern color, plus a haptic. */
         s_gsim_feedback_pad = pad;
         s_gsim_feedback_start_ms = now_ms;
         tiles_haptics_trigger_kick(pad, GSIM_FEEDBACK_VELOCITY);
 
         s_gsim_input_index++;
         if (s_gsim_input_index >= s_gsim_length) {
-            /* Full pattern reproduced correctly -- next round, staying
-             * in Simon Says (NOT gm_start_round_end(), which always
-             * returns to the menu; only a wrong press does that). */
+            /* Whole pattern right: next round (a round end would leave the game). */
             gsim_extend_pattern();
             gsim_begin_round_start(now_ms);
         }
-        return; /* one input pad per scan is enough -- avoids double-counting a simultaneous multi-pad brush */
+        return; /* one pad per scan, so a brush across two isn't double-counted */
     }
 }
 
@@ -1315,10 +1136,7 @@ static void render_simon(uint32_t now_ms) {
         }
     } else if (s_gsim_phase == GSIM_PHASE_INPUT && s_gsim_feedback_pad != 0u &&
                (now_ms - s_gsim_feedback_start_ms) < GSIM_FEEDBACK_FLASH_MS) {
-        /* Confirmation flash for the most recently correctly-pressed pad
-         * -- uses whichever step it just confirmed, i.e. the step BEFORE
-         * s_gsim_input_index (already advanced past it by the time this
-         * renders). */
+        /* Confirmation flash: the step just confirmed is input_index - 1. */
         uint8_t confirmed_step = (uint8_t)(s_gsim_input_index - 1u);
         const gsim_color_t *c = &GSIM_PALETTE[s_gsim_pattern_color[confirmed_step]];
         tiles_lighting_set_standby_pad_rgb(s_gsim_feedback_pad, c->r, c->g, c->b);
@@ -1343,15 +1161,15 @@ static void render_menu(uint32_t now_ms) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             uint8_t pad = board_pad_for_row_col(row, col);
             if (row == 1u && col == 1u) {
-                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, GS_HEAD_LEVEL, 0.0f); /* snake = green */
+                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, GS_HEAD_LEVEL, 0.0f); /* Snake = green */
             } else if (row == 1u && col == 2u) {
-                tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 0.4f, 0.0f); /* brick breaker = orange */
+                tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 0.4f, 0.0f); /* Brick Breaker = orange */
             } else if (row == 1u && col == 3u) {
-                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 1.0f, 1.0f); /* tetris = cyan */
+                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 1.0f, 1.0f); /* Tetris = cyan */
             } else if (row == 1u && col == 4u) {
-                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 1.0f); /* pong = blue, matches its ball */
+                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 1.0f); /* Pong = blue, like its ball */
             } else if (row == 1u && col == 5u) {
-                tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f); /* simon says = white, its own pattern is the multi-color one */
+                tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f); /* Simon Says = white (its pattern is the colorful part) */
             } else {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
             }
@@ -1367,8 +1185,7 @@ static void render_round_end(uint32_t now_ms) {
     bool on_phase = (toggle % 2u) == 0u;
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
         if (s_gm_round_end_red_only) {
-            /* Tetris: plain red blink, not an alternation -- see
-             * gt_lock()'s comment. */
+            /* Tetris/Simon: plain red blink. */
             if (on_phase) {
                 tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 0.0f, 0.0f);
             } else {
@@ -1380,9 +1197,8 @@ static void render_round_end(uint32_t now_ms) {
             tiles_lighting_set_standby_underglow_rgb(i, 0.6f, 0.0f, 1.0f);
         }
     }
-    /* Pad grid and buttons deliberately left as whatever the game last
-     * drew -- frozen, not re-rendered, so the board still shows the
-     * result (empty bricks, final snake shape) while underglow flashes. */
+    /* Pads and buttons stay frozen as the game left them while the underglow
+     * flashes. */
 }
 
 static void gm_enter_menu(void) {
@@ -1427,10 +1243,7 @@ static void gm_handle_menu_selection(void) {
     bool pad5 = tiles_touch_is_touched(5u);
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
-    /* Real feedback: "no haptics except for selecting game." This is
-     * the ONE deliberate haptic this file fires outside Simon Says' own
-     * gameplay mechanic (see this file's own "Win/lose melodies" section
-     * header) -- a felt confirmation that a game actually launched. */
+    /* The one haptic outside Simon Says: a felt confirmation a game started. */
     if (pad1 && !s_gm_prev_pad1_touched) {
         tiles_haptics_trigger_kick(1u, GM_MENU_SELECT_VELOCITY);
         gm_start_snake(now_ms);
@@ -1456,36 +1269,13 @@ static void gm_handle_menu_selection(void) {
 
 static bool gm_combo_held(void) {
     if (tiles_expression_control_owns_pad_grid() || tiles_op_mode_has_menu_open()) {
-        /* services/expression_control.h's sub-menu (circle+square held)
-         * or one of op_mode.h's own sub-views (mode-select menu, scale
-         * menu, pattern bank, per-step edit, capture mode) already owns
-         * the pad grid -- SW3 (triangle) alone is op_mode.h's own click
-         * trigger (SW4/diamond was, before a later real-feedback swap --
-         * see op_mode.h's own note), and SW5 (square)/SW6 (circle) are
-         * two of THIS combo's four buttons, so without this guard a
-         * player deep in one of those sub-views who also happens to be
-         * resting on the other buttons could accidentally toggle game
-         * mode on underneath it.
-         * Real feedback: "Cant access game mode anymore ... that logic
-         * should be progressive for all combo types not just debug" --
-         * this used to be tiles_op_mode_owns_pad_grid(), which answers
-         * true for the ENTIRE time sequencer is simply the active/
-         * displayed mode, sub-view open or not (unlike debug_mode.c's
-         * own combo, which has no such gate at all and just trusts its
-         * own hold timer -- see services/debug_mode.c's tiles_debug_
-         * mode_scan()). That made this combo permanently untriggerable
-         * for as long as sequencer happened to be the displayed mode,
-         * which given how much of this project's own testing lives
-         * there, was effectively "most of the time." None of this
-         * combo's four buttons collide with anything sequencer's own
-         * plain step-view uses them for on a sustained 700ms hold (only
-         * quick clicks: triangle opens the mode menu, diamond toggles
-         * capture/pattern-bank), so narrowed to tiles_op_mode_has_menu_
-         * open() -- the actual sub-views worth protecting -- instead.
-         * Never true while a game is already active (see expression_
-         * control.c's/op_mode.c's own tiles_game_mode_is_active()
-         * guards, which keep all three features mutually exclusive), so
-         * this only ever blocks a fresh entry, never the OFF toggle. */
+        /* Don't enter while the expression menu or an op_mode sub-view (mode menu,
+         * scale menu, pattern bank, step edit, capture) owns the grid: square and
+         * circle are part of this combo and a player might be resting on them.
+         * Uses tiles_op_mode_has_menu_open(), not owns_pad_grid(), which is true
+         * for the whole time the sequencer is showing and made game mode
+         * unreachable from it. Only blocks entry, never the off toggle (a game
+         * excludes those features anyway). */
         return false;
     }
     return tiles_button_is_pressed(3u) && tiles_button_is_pressed(4u) && tiles_button_is_pressed(5u) &&
@@ -1497,15 +1287,9 @@ static void gm_toggle(uint32_t now_ms) {
         tiles_lighting_set_standby_active(true);
         tiles_buttons_set_standby_active(true);
         gm_enter_menu();
-        /* Real feedback: "we have haptics vibration randomly in mini
-         * games, that shouldnt happen" -- see expression.c's own
-         * tiles_expression_force_release_all() for the full reasoning.
-         * Closes the one gap the touch-gate fix in expression.c's
-         * PAD_STATE_IDLE branch couldn't: a pad already mid-strike or
-         * mid-note the instant the 4-button entry combo fires (almost
-         * certainly incidental contact, not deliberate play, since both
-         * hands are busy holding the combo) no longer keeps running its
-         * full strike/haptic pipeline unsupervised through gameplay. */
+        /* A pad already mid-strike when the combo fires (incidental contact, both
+         * hands are on the buttons) is released, so no note or haptic runs on
+         * unsupervised during play. */
         tiles_expression_force_release_all();
     } else {
         s_gm_state = GM_STATE_OFF;
@@ -1521,8 +1305,7 @@ static void gm_check_toggle_gesture(uint32_t now_ms) {
         s_gm_combo_last_true_ms = now_ms;
         s_gm_combo_last_true_valid = true;
     }
-    /* See GM_COMBO_DROPOUT_GRACE_MS's own comment -- bridges a brief
-     * drop so it doesn't read as a full release and reset the hold. */
+    /* Bridge brief drops (GM_COMBO_DROPOUT_GRACE_MS). */
     bool held =
         raw_held || (s_gm_combo_last_true_valid && (now_ms - s_gm_combo_last_true_ms) < GM_COMBO_DROPOUT_GRACE_MS);
 
@@ -1537,19 +1320,10 @@ static void gm_check_toggle_gesture(uint32_t now_ms) {
     s_gm_combo_was_held = held;
 }
 
-/* No single-button exit. Real feedback, reversing an earlier round ("if
- * cicle cliucked in game menu it exxits to previuos mode and each othere
- * function button oversides gasme mode, exiting and taking to respective
- * menu"): "the shapes besides -+ are exiting the games rn the only exit for
- * a game besides loosing should be holding the four buttons at once and
- * that should disable the mode again." So triangle/diamond/square/circle no
- * longer leave game mode on their own -- in a game or in the game menu --
- * and the only way out is the same 4-button hold that entered
- * (gm_check_toggle_gesture() -> gm_toggle()), which turns game mode fully
- * off and hands back to whatever mode was active before. Losing a round
- * still returns to the game menu (GM_STATE_ROUND_END / Pong's match end). A
- * press of a shape button that isn't a control in the current game simply
- * does nothing. */
+/* No single-button exit: in a game or the game menu, the only way out is
+ * the same 4-button hold, which turns game mode off and returns to the
+ * previous mode. Losing a round returns to the game menu. A shape button
+ * that isn't a control in the current game does nothing. */
 
 void tiles_game_mode_init(void) {
     s_gm_state = GM_STATE_OFF;
@@ -1589,11 +1363,8 @@ void tiles_game_mode_scan(void) {
         gt_update(now_ms);
     } else if (s_gm_state == GM_STATE_PLAYING_PONG) {
         if (s_gp_match_over) {
-            /* Frozen -- ball/paddles stay exactly where the match ended,
-             * winner's controls glow (render_pong_score_buttons()) --
-             * then back to the menu, same as every other game's round
-             * end. See the Pong file header for why this is handled
-             * locally rather than through GM_STATE_ROUND_END. */
+            /* Frozen board, winner's buttons glowing, then back to the menu (see the
+             * Pong section). */
             if (now_ms - s_gp_match_over_ms >= GP_MATCH_END_DISPLAY_MS) {
                 gm_enter_menu();
             }

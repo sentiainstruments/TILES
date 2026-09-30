@@ -3,10 +3,10 @@
 /* Debug mode and crash recorder, for finding real-hardware freezes.
  *
  * Hold diamond+square+circle (triangle UP) for 8 s to toggle. While on,
- * the underglow pulses red (services/lighting.c overrides the underglow
- * regardless of which mode owns rendering) and trace characters stream
- * live over the USB-CDC console: the last character before the stream
- * stops is where it hung.
+ * the underglow pulses Sentia magenta (services/lighting.c overrides it
+ * whatever mode owns rendering; red means a crash, see
+ * crash_indicator.h) and trace characters stream live over the USB-CDC
+ * console: the last character before the stream stops is where it hung.
  *
  * Tracing never uses printf(): a blocked USB-CDC printf was itself the
  * cause of several freezes. tiles_debug_trace()/_str() use tud_cdc_write()
