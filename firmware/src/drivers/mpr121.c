@@ -4,7 +4,7 @@
 
 #include <stddef.h>
 
-/* Register addresses, MPR121 datasheet Rev 4 Sections 5.2-5.13. */
+/* Register addresses, MPR121 datasheet Rev 4, sections 5.2-5.13. */
 #define REG_ELE0_7_TOUCH_STATUS 0x00u
 #define REG_ELE8_PROX_TOUCH_STATUS 0x01u
 
@@ -20,8 +20,7 @@
 #define REG_NCLT 0x34u
 #define REG_FDLT 0x35u
 
-/* Touch threshold for electrode N is 0x41+2N, release threshold is
- * 0x42+2N (Section 5.6). */
+/* Touch threshold for electrode N is 0x41+2N, release 0x42+2N (5.6). */
 #define REG_ELE0_TOUCH_THR 0x41u
 
 #define REG_DEBOUNCE 0x5Bu
@@ -33,29 +32,15 @@
 #define NUM_ELECTRODES 12u
 
 #define TOUCH_THRESHOLD 12u
-/* Narrowed from Freescale's quickstart 6 (a 2:1 touch:release gap) to 9
- * (a tighter 4:3 gap) -- real feedback with the keycap/pad assembly now
- * seated: "release is sticking, lifting and losing contact is not
- * muting the note fast... should release as fast as a keyboard piano."
- * services/expression.c sends MIDI note-off the very same scan tick
- * tiles_touch_is_touched() goes false, with no debounce of its own (see
- * that file), so a sluggish-feeling release traces back to the raw
- * touch/release status itself, not anything downstream -- the electrode
- * signal has to swing all the way back down to within RELEASE_THRESHOLD
- * of baseline before the status bit clears, and requiring it to close
- * half the original touch swing (6 of 12) left more room for a lingering
- * near-threshold signal (residual capacitive coupling through the
- * keycap as a finger lifts) to still read as "touched" than a real piano
- * key's release feels like. Still a real hysteresis band (not equal to
- * the touch threshold), just a smaller one -- unmeasured against actual
- * chatter risk on the real keycap material, revisit if release starts
- * feeling twitchy instead of sticky. */
+/* Release threshold 9 (quickstart value is 6): the smaller hysteresis gap
+ * lets a lifting finger clear touch sooner, so notes stop as fast as a
+ * piano key. expression.c sends Note-Off on the same scan touch clears, so
+ * release feel is set here. Not yet measured for chatter on the final
+ * keycap material; raise it if release gets twitchy. */
 #define RELEASE_THRESHOLD 9u
 
-/* This file's own tiles_mpr121_read_touched() runs every single
- * main-loop scan (touch is polled continuously, unlike most other
- * drivers' occasional writes) -- one of the most exposed call sites to
- * whatever drivers/i2c_bus.h guards against, tiles_i2c_read() included. */
+/* Touch is read every main-loop pass, so this is one of the busiest I2C
+ * users; all access goes through drivers/i2c_bus. */
 
 static bool write_reg(i2c_inst_t *bus, uint8_t addr, uint8_t reg, uint8_t value) {
     uint8_t buf[2] = {reg, value};
@@ -73,22 +58,18 @@ bool tiles_mpr121_init(tiles_mpr121_t *dev, i2c_inst_t *bus, uint8_t addr) {
     dev->bus = bus;
     dev->addr = addr;
 
-    /* Soft reset (Section 5.13: write 0x63 to register 0x80). Register
-     * writes besides this and the ECR/GPIO registers only take effect
-     * in Stop Mode, which soft reset returns the chip to. */
+    /* Soft reset (5.13: write 0x63 to 0x80). Most registers only take writes in
+     * Stop Mode, which reset returns to. */
     if (!write_reg(bus, addr, REG_SOFT_RESET, 0x63u)) {
         return false;
     }
 
-    /* Stop Mode explicitly (ECR=0x00), in case reset behavior ever
-     * changes -- matches the pattern used elsewhere in this codebase of
-     * not depending on implicit post-reset state. */
+    /* Stop Mode explicitly (ECR=0x00) rather than relying on post-reset state. */
     if (!write_reg(bus, addr, REG_ECR, 0x00u)) {
         return false;
     }
 
-    /* Baseline filtering -- Freescale's published quickstart defaults
-     * (rising/falling/touched scenarios, Section 5.5). */
+    /* Baseline filtering: Freescale's quickstart values (5.5). */
     static const struct {
         uint8_t reg;
         uint8_t value;
@@ -103,9 +84,8 @@ bool tiles_mpr121_init(tiles_mpr121_t *dev, i2c_inst_t *bus, uint8_t addr) {
         }
     }
 
-    /* Touch/release thresholds, same starting value for every electrode
-     * -- real per-electrode tuning happens during calibration once the
-     * enclosure/keycaps are assembled, not here. */
+    /* Same thresholds for every electrode; per-electrode tuning belongs to
+     * calibration on the assembled unit. */
     for (uint8_t e = 0; e < NUM_ELECTRODES; e++) {
         uint8_t touch_reg = (uint8_t)(REG_ELE0_TOUCH_THR + 2u * e);
         uint8_t release_reg = (uint8_t)(touch_reg + 1u);
@@ -117,27 +97,16 @@ bool tiles_mpr121_init(tiles_mpr121_t *dev, i2c_inst_t *bus, uint8_t addr) {
         }
     }
 
-    /* No touch/release debounce yet (raw threshold hysteresis only) --
-     * revisit during calibration. */
+    /* No debounce (threshold hysteresis only). */
     if (!write_reg(bus, addr, REG_DEBOUNCE, 0x00u)) {
         return false;
     }
 
-    /* Global charge current/time + filter iteration/sample-interval
-     * settings (Section 5.8). CDC (0x5C) left at the chip's post-reset
-     * default (0x10: FFI=00/6 samples, CDC=16uA) -- FFI=00 is already
-     * the fastest option, nothing to gain there. CDT (0x5D) deviates
-     * from the chip's default (0x24, ESI=100b/16ms) to ESI=000b/1ms --
-     * the touch chip's own internal sample interval is a real latency
-     * floor no amount of firmware polling can beat, and 16ms alone was
-     * a meaningful chunk of end-to-end touch latency. 1ms is safe given
-     * our FFI/CDT settings: actual per-cycle scan time is ~6 samples x
-     * 1us x 12 electrodes = ~72us, comfortably under a 1ms period, so
-     * this genuinely changes the sample rate rather than being silently
-     * overridden by scan time (see the datasheet's own worked example
-     * of that failure mode, Section 5.8). Tradeoff: less noise
-     * averaging than Freescale's quickstart default -- revisit if touch
-     * gets jittery once the real keycap/enclosure assembly exists. */
+    /* Global charge/filter settings (5.8). CDC (0x5C) stays at the reset default
+     * 0x10 (FFI 6 samples, 16 uA). CDT (0x5D) sets ESI to 1 ms instead of the
+     * 16 ms default: the chip's sample interval is a latency floor polling
+     * can't beat. A full scan is ~72 us (6 samples x 1 us x 12 electrodes), well
+     * inside 1 ms. Tradeoff: less noise averaging. */
     if (!write_reg(bus, addr, REG_FILTER_GLOBAL_CDC, 0x10u)) {
         return false;
     }
@@ -145,11 +114,8 @@ bool tiles_mpr121_init(tiles_mpr121_t *dev, i2c_inst_t *bus, uint8_t addr) {
         return false;
     }
 
-    /* Run Mode (Section 5.11): CL=10b (baseline tracking enabled, seed
-     * the initial baseline from the first measured value's 5 high bits
-     * -- shortens the early no-response window right after enabling Run
-     * Mode), ELEPROX_EN=00 (no proximity channel), ELE_EN=1111b (all 12
-     * electrodes enabled) -> 0x8F. */
+    /* Run Mode (5.11): CL=10b (baseline tracking, seeded from the first
+     * reading), no proximity channel, all 12 electrodes -> 0x8F. */
     return write_reg(bus, addr, REG_ECR, 0x8Fu);
 }
 
@@ -162,7 +128,6 @@ uint16_t tiles_mpr121_read_touched(tiles_mpr121_t *dev, bool *ok) {
     if (!success) {
         return 0;
     }
-    /* buf[0] = ELE0-7; buf[1] bits 0-3 = ELE8-11 (bits 4-7 are
-     * EPROX/reserved/OVCF, not electrode touch data). */
+    /* buf[0] = ELE0-7; buf[1] bits 0-3 = ELE8-11 (bits 4-7 are not touch data). */
     return (uint16_t)(buf[0] | ((buf[1] & 0x0Fu) << 8));
 }

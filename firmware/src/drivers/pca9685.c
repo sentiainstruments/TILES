@@ -4,7 +4,7 @@
 
 #include "pico/time.h"
 
-/* Register addresses, PCA9685 datasheet Rev 4 Table 5/6/7. */
+/* Register addresses, PCA9685 datasheet Rev 4, tables 5-7. */
 #define REG_MODE1 0x00u
 #define REG_MODE2 0x01u
 #define REG_LED0_ON_L 0x06u
@@ -15,18 +15,9 @@
 
 #define NUM_CHANNELS 16u
 
-/* Real feedback, origin of this whole file's I2C timeout discipline: a
- * haptic motor was found locked fully on after a freeze, with the main
- * loop otherwise looking stuck -- plain i2c_write_blocking() (no
- * timeout at all) let a single wedged I2C transaction (a real, known
- * failure mode on a shared bus with several devices -- this project's
- * I2C1 alone has two of these PCA9685 chips plus a TCA9554) hang the
- * entire main loop forever, freezing tiles_haptics_scan() mid-KICK with
- * the motor still actively driven. Now delegated to drivers/i2c_bus.h's
- * tiles_i2c_write() (see that file for the two gaps this original
- * per-call timeout alone didn't close: the SDK's own read path ignoring
- * its timeout in one spot, and nothing having ever cleared the
- * underlying wedge itself). */
+/* Every write goes through drivers/i2c_bus (bounded, with bus recovery).
+ * Unbounded writes once let a wedged bus hang the main loop with a haptic
+ * motor stuck on. */
 static bool write_reg(i2c_inst_t *bus, uint8_t addr, uint8_t reg, uint8_t value) {
     uint8_t buf[2] = {reg, value};
     return tiles_i2c_write(bus, addr, buf, 2, false);
@@ -40,28 +31,22 @@ bool tiles_pca9685_init(tiles_pca9685_t *dev, i2c_inst_t *bus, uint8_t addr) {
     dev->bus = bus;
     dev->addr = addr;
 
-    /* Wake: clear SLEEP (bit4). Everything else in MODE1 goes to 0,
-     * including ALLCALL -- this board addresses each chip individually,
-     * no LED-All-Call group writes needed. */
+    /* Wake: clear SLEEP (bit 4). The rest of MODE1 goes to 0, including
+     * ALLCALL (each chip is addressed individually). */
     if (!write_reg(bus, addr, REG_MODE1, 0x00u)) {
         return false;
     }
 
-    /* Datasheet: "It takes 500us max for the oscillator to be up and
-     * running once SLEEP bit has been set to logic 0. Timings on LEDn
-     * outputs are not guaranteed if PWM control registers are accessed
-     * within the 500us window." */
+    /* Datasheet: the oscillator needs up to 500 us after SLEEP clears before
+     * PWM register access is reliable. */
     sleep_us(500);
 
     if (!write_reg(bus, addr, REG_MODE2, MODE2_OUTDRV_BIT)) {
         return false;
     }
 
-    /* Force every channel to "full off" (pin low) via the ALL_LED
-     * shortcut register in one write. Matches the chip's own POR
-     * default, written explicitly so this doesn't depend on that
-     * default surviving a soft reset. See the header for why this
-     * alone is not "every output dark" on this board. */
+    /* Every channel full off (pin low) in one ALL_LED write. That is the POR
+     * default, written explicitly. Not "all dark" on this board; see header. */
     uint8_t all_led_off_h = (uint8_t)(REG_ALL_LED_ON_L + 3u);
     return write_reg(bus, addr, all_led_off_h, LED_H_FULL_BIT);
 }
@@ -76,10 +61,8 @@ bool tiles_pca9685_set_channel_full(tiles_pca9685_t *dev, uint8_t channel, bool 
     uint8_t off_l = (uint8_t)(on_l + 2u);
     uint8_t off_h = (uint8_t)(on_l + 3u);
 
-    /* Datasheet: "If LEDn_ON_H[4] and LEDn_OFF_H[4] are set at the same
-     * time, the LEDn_OFF_H[4] function takes precedence." Always write
-     * both bits explicitly to this call's intent so no stale bit from a
-     * previous call can linger. */
+    /* LEDn_OFF_H[4] wins if both full bits are set, so write both explicitly
+     * and never leave a stale bit. */
     if (!write_reg(dev->bus, dev->addr, on_l, 0x00u)) {
         return false;
     }

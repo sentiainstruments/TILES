@@ -11,41 +11,34 @@
 #define REG_MANUFACTURER_ID_MSB 0x0Fu
 #define REG_X_MSB_RESULT 0x12u
 
-/* Table 8-17/8-18 reset values -- spells "TI" (MSB=0x54='T', LSB=0x49='I'). */
+/* Tables 8-17/8-18 reset values: "TI" (MSB 0x54 'T', LSB 0x49 'I'). */
 #define EXPECTED_MANUFACTURER_ID_LSB 0x49u
 #define EXPECTED_MANUFACTURER_ID_MSB 0x54u
 
-/* DEVICE_CONFIG_1 (Table 8-3): CRC_EN=0, MAG_TEMPCO=0, CONV_AVG=0 (1x,
- * fastest), I2C_RD=0 (standard sequential register read). */
+/* DEVICE_CONFIG_1 (table 8-3): no CRC, no tempco, 1x averaging, standard
+ * sequential reads. */
 #define DEVICE_CONFIG_1_VALUE 0x00u
 
-/* DEVICE_CONFIG_2 (Table 8-4): THR_HYST=0, LP_LN=0 (low active current
- * mode), I2C_GLITCH_FILTER=0 (on), TRIGGER_MODE=0, OPERATING_MODE=2h
- * (continuous measure) -> 0b0000_0010. */
+/* DEVICE_CONFIG_2 (table 8-4): low active-current mode, glitch filter on,
+ * continuous measure -> 0x02. */
 #define DEVICE_CONFIG_2_VALUE 0x02u
 
-/* SENSOR_CONFIG_1 (Table 8-5): MAG_CH_EN=7h (X,Y,Z enabled) in bits
- * 7-4, SLEEPTIME=0 (unused outside wake-up-and-sleep mode) -> 0111_0000. */
+/* SENSOR_CONFIG_1 (table 8-5): X/Y/Z enabled (bits 7-4 = 7h) -> 0x70. */
 #define SENSOR_CONFIG_1_VALUE 0x70u
 
-/* SENSOR_CONFIG_2 (Table 8-6): THRX_COUNT=0, MAG_THR_DIR=0,
- * MAG_GAIN_CH=0, ANGLE_EN=0 (no angle calc), X_Y_RANGE=1, Z_RANGE=1
- * (+/-80mT on every axis) -> 0000_0011. */
+/* SENSOR_CONFIG_2 (table 8-6): no angle calc, +/-80 mT on X/Y and Z -> 0x03. */
 #define SENSOR_CONFIG_2_VALUE 0x03u
 
-/* tiles_tmag5273_read_xyz() runs for every one of 24 pads on every Hall
- * scan -- the highest-volume I2C traffic in this codebase, via 3
- * TCA9548A muxes, and so the single most exposed call site to whatever
- * drivers/i2c_bus.h guards against, tiles_i2c_read() included. */
+/* Read for all 24 pads every Hall scan: the busiest I2C traffic in the
+ * firmware, all through drivers/i2c_bus. */
 
 static bool write_reg(i2c_inst_t *bus, uint8_t addr, uint8_t reg, uint8_t value) {
     uint8_t buf[2] = {reg, value};
     return tiles_i2c_write(bus, addr, buf, 2, false);
 }
 
-/* Standard sequential register read (datasheet Figure 6-9): write the
- * starting register address with no STOP, then repeated-START into a
- * block read of `len` consecutive registers. */
+/* Sequential read (figure 6-9): write the start register without STOP, then
+ * repeated-START and read `len` registers. */
 static bool read_regs(i2c_inst_t *bus, uint8_t addr, uint8_t reg, uint8_t *buf, size_t len) {
     if (!tiles_i2c_write(bus, addr, &reg, 1, true)) {
         return false;

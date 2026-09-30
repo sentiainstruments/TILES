@@ -2,10 +2,8 @@
 
 #include "i2c_bus.h"
 
-/* tiles_tca9548a_select_channel() gates every one of 24 pads' Hall reads
- * (3 of these muxes cover all 24 pads between them) -- one of the
- * highest-volume, most exposed call sites to whatever drivers/i2c_bus.h
- * guards against, tiles_i2c_write() included. */
+/* Gates every Hall read (3 muxes cover all 24 pads); all writes go through
+ * drivers/i2c_bus. */
 
 void tiles_tca9548a_init(tiles_tca9548a_t *dev, i2c_inst_t *bus, uint8_t addr) {
     dev->bus = bus;
