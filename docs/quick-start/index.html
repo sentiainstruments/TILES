@@ -181,13 +181,13 @@ footer span { font: 500 11px/1.5 var(--font-mono); letter-spacing: .06em; color:
 
   <!-- ============ 02 PLUG IN ============ -->
   <section class="sheet" id="io">
-    <div class="sheet-head"><span class="tag">02</span><h2>Plug in</h2><p>TILES runs from USB alone. Add 12 V power for full brightness and the CV outputs.</p></div>
+    <div class="sheet-head"><span class="tag">02</span><h2>Plug in</h2><p>TILES runs from USB alone. Add the 12 V supply for full brightness and the CV outputs.</p></div>
     <div class="ports">
-      <div class="port"><div class="name"><i class="pink"></i>USB-C</div><p><b>Power and MIDI.</b> Shows up as two MIDI ports: <b>SENTIA TILES MIDI</b> (play and record from this one) and <b>SENTIA TILES DAW</b> (for the Ableton script only).</p></div>
-      <div class="port"><div class="name"><i class="round"></i>12 V power</div><p><b>Full power.</b> Brightest lights and CV/gate outputs. USB MIDI keeps working when both are connected.</p></div>
-      <div class="port"><div class="name"><i class="round"></i>MIDI in / out</div><p><b>TRS MIDI</b> for hardware synths and drum machines. Out sends what USB sends; in follows clock. Type A by default, Type B selectable in settings.</p></div>
-      <div class="port"><div class="name"><i class="round"></i>Pedal</div><p><b>Sustain</b> by default, or an <b>expression</b> pedal. Works with normally-open and normally-closed pedals (settings).</p></div>
-      <div class="port"><div class="name"><i class="round"></i>CV · gate</div><p><b>Pitch CV</b> (1 V/octave), <b>pressure CV</b> (0–10 V) and <b>gate</b>. Only with 12 V power connected.</p></div>
+      <div class="port"><div class="name"><i class="pink"></i>USB-C</div><p><b>Power and MIDI</b> over one USB-C cable. Shows up as two MIDI ports: <b>SENTIA TILES MIDI</b> (play and record from this one) and <b>SENTIA TILES DAW</b> (for the Ableton script only).</p></div>
+      <div class="port"><div class="name"><i class="round"></i>12 V power</div><p><b>Barrel jack, centre positive.</b> Use a 12 V, 3 A supply. Brightest lights and the CV/gate outputs; USB MIDI keeps working when both are connected.</p></div>
+      <div class="port"><div class="name"><i class="round"></i>MIDI in / out</div><p><b>1/8" (3.5 mm) TRS</b> for hardware synths and drum machines. Out sends what USB sends; in follows clock. Type A by default, Type B selectable in settings.</p></div>
+      <div class="port"><div class="name"><i class="round"></i>Pedal</div><p><b>1/4" (6.35 mm) jack.</b> Sustain by default, or an expression pedal. Works with normally-open and normally-closed pedals (settings).</p></div>
+      <div class="port"><div class="name"><i class="round"></i>CV · gate</div><p><b>1/8" (3.5 mm) jacks:</b> pitch CV (1 V/octave), pressure CV (0–10 V) and gate. Only with 12 V power connected.</p></div>
     </div>
   </section>
 
@@ -196,7 +196,7 @@ footer span { font: 500 11px/1.5 var(--font-mono); letter-spacing: .06em; color:
     <div class="sheet-head"><span class="tag">03</span><h2>Choose a mode</h2></div>
     <div class="split">
       <figure>
-        <div class="board" data-keys="tri" data-pads="1 pink MELODIC; 2 red SEQ; 3 amber GUITAR; 4 blue CHORD; 5 yellow SONG; 6 teal ABLETON" data-alt="Mode menu: the top row of pads, one per mode"></div>
+        <div class="board" data-keys="tri" data-pads="1 pink MELODIC; 2 red SEQ; 3 amber BASS; 4 blue CHORD; 5 yellow SONG; 6 teal ABLETON" data-alt="Mode menu: the top row of pads, one per mode"></div>
         <figcaption>Mode menu · top row of pads</figcaption>
       </figure>
       <div class="stack">
@@ -204,7 +204,7 @@ footer span { font: 500 11px/1.5 var(--font-mono); letter-spacing: .06em; color:
           <dt><i class="k tri"></i></dt><dd>Opens the mode menu. Click again to close it.</dd>
           <dt>Press a pad</dt><dd>Switches to that mode. The current mode pulses white.</dd>
         </dl>
-        <p class="note"><b>Melodic</b> magenta · <b>Sequencer</b> red · <b>Guitar</b> amber · <b>Chord</b> blue · <b>Song</b> yellow (coming soon) · <b>Ableton</b> teal.</p>
+        <p class="note"><b>Melodic</b> magenta · <b>Sequencer</b> red · <b>Bass guitar</b> amber · <b>Chord</b> blue · <b>Song</b> yellow (coming soon) · <b>Ableton</b> teal.</p>
         <p class="note">A running sequence keeps playing when you switch modes.</p>
       </div>
     </div>
@@ -280,11 +280,11 @@ footer span { font: 500 11px/1.5 var(--font-mono); letter-spacing: .06em; color:
   </section>
 
   <!-- ============ 07 GUITAR ============ -->
-  <section class="sheet" id="guitar">
-    <div class="sheet-head"><span class="tag">07</span><h2>Guitar mode</h2><p>A bass neck: rows are strings, columns are frets.</p></div>
+  <section class="sheet" id="bass">
+    <div class="sheet-head"><span class="tag">07</span><h2>Bass guitar mode</h2><p>A four-string bass neck: rows are strings, columns are frets.</p></div>
     <div class="split">
       <figure>
-        <div class="board" data-keys="minus plus" data-fill="white" data-pads="1 amber G; 7 amber D; 13 amber A; 19 amber E; 4 amber-dim ·; 6 amber-dim ·; 10 amber-dim ·; 12 amber-dim ·; 16 amber-dim ·; 18 amber-dim ·; 22 amber-dim ·; 24 amber-dim ·" data-alt="Guitar mode: strings G, D, A, E from top to bottom in column 1, fret markers on frets 3 and 5"></div>
+        <div class="board" data-keys="minus plus" data-fill="white" data-pads="1 amber G; 7 amber D; 13 amber A; 19 amber E; 4 amber-dim ·; 6 amber-dim ·; 10 amber-dim ·; 12 amber-dim ·; 16 amber-dim ·; 18 amber-dim ·; 22 amber-dim ·; 24 amber-dim ·" data-alt="Bass guitar mode: strings G, D, A, E from top to bottom in column 1, fret markers on frets 3 and 5"></div>
         <figcaption>Strings G D A E · column 1 = open string</figcaption>
       </figure>
       <dl class="moves">
@@ -379,7 +379,7 @@ footer span { font: 500 11px/1.5 var(--font-mono); letter-spacing: .06em; color:
   <section class="sheet" id="song">
     <div class="soon-card">
       <div class="sheet-head" style="margin:0"><span class="tag soon">10</span><h2>Song mode</h2></div>
-      <p><b style="color:var(--ink)">Coming soon.</b> A looper-style mode for building songs from captured patterns. It's on the mode menu (yellow) as a preview.</p>
+      <p><b style="color:var(--ink)">Coming soon.</b></p>
     </div>
   </section>
 
@@ -460,9 +460,9 @@ footer span { font: 500 11px/1.5 var(--font-mono); letter-spacing: .06em; color:
         </dl>
       </div>
       <div>
-        <h3>Melodic · chord · guitar</h3>
+        <h3>Melodic · chord · bass</h3>
         <dl class="moves">
-          <dt><i class="k minus"></i> <i class="k plus"></i></dt><dd>Octave (guitar: frets)</dd>
+          <dt><i class="k minus"></i> <i class="k plus"></i></dt><dd>Octave (bass: frets)</dd>
           <dt><i class="k minus"></i><span class="plus-sign">+</span><i class="k plus"></i></dt><dd>Transpose</dd>
           <dt><i class="k dia"></i></dt><dd>Play / stop Live</dd>
           <dt>Hold <i class="k dia"></i> 2 s</dt><dd>Record in Live</dd>
