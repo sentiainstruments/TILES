@@ -225,10 +225,10 @@ real-hardware delivery.
 |---|---|---|
 | TILES -> Ableton | CC `CC_GRID_TOUCH` (108), value = pad, then 0 | Pressure click: fire that pad's clip (track columns 1-5), launch that pad's whole scene (column 6), or -- on an EMPTY slot -- arm the track and record into it |
 | TILES -> Ableton | CC `CC_STOP_TOUCH` (109), value = pad, then 0 | Pressure click on a clip that's already playing: stop that one clip (track columns 1-5 only) |
-| TILES -> Ableton | CC `CC_MASTER_STOP` (105), 127 then 0 | Stop all clips (master stop) -- shift+diamond in Scene Launch mode |
+| TILES -> Ableton | CC `CC_MASTER_STOP` (105), 127 then 0 | Stop all clips (master stop) -- circle + diamond in Ableton mode |
 | TILES -> Ableton | CC `CC_TRACK_OFFSET` (106), value = offset | Visible track window changed -- keeps the session-ring overlay and the pad-to-track mapping in sync |
-| TILES -> Ableton | CC `CC_END_CAPTURE` (107), 127 then 0 | Shift+diamond during a live capture (melodic mode opened by a record-a-new-clip click): end that recording; the firmware returns to Scene Launch mode itself |
-| TILES -> Ableton | CC `CC_DELETE_TOUCH` (110), value = pad, then 0 | Shift held + pad touched 3 seconds on a clip: delete that clip (track columns 1-5 only; the firmware times the hold) |
+| TILES -> Ableton | CC `CC_END_CAPTURE` (107), 127 then 0 | Circle + diamond during a live capture (melodic mode opened by a record-a-new-clip click): end that recording; the firmware returns to Ableton mode itself |
+| TILES -> Ableton | CC `CC_DELETE_TOUCH` (110), value = pad, then 0 | Circle held + pad touched 3 seconds on a clip: delete that clip (track columns 1-5 only; the firmware times the hold) |
 | Ableton -> TILES | SysEx `F0 7D 01 10 track scene flags r7 g7 b7 F7` | One clip slot's current state |
 | Ableton -> TILES | SysEx `F0 7D 01 11 scene flags r7 g7 b7 F7` | One scene's current state |
 | Ableton -> TILES | SysEx `F0 7D 01 12 F7` | A track was just armed for a new recording -- open melodic mode (firmware waits until every pad is released) |
@@ -261,7 +261,7 @@ placeholder for an unregistered, pre-production product; one constant,
 `TILES_SYSEX_MANUFACTURER_ID` in `firmware/src/midi/product_identity.h`,
 shared with the MIDI Identity Reply), sub-ID `0x01`,
 parsed firmware-side by `firmware/src/midi/midi_in.c` and handled by
-`op_mode.c`'s own "Scene Launch mode" section. `track` is 0-based, up
+`op_mode.c`'s "Scene Launch (Ableton) mode" section. `track` is 0-based, up
 to 63 (`OP_SCENE_MAX_TRACKS`/`MAX_TRACKS`, firmware/Python
 respectively); `scene` is 0-based, up to 3 (only Ableton's first 4
 scenes are ever tracked -- no scene paging in this version). `flags`

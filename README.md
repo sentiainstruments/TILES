@@ -30,13 +30,13 @@ the shared definitions that keep them in sync.
   protocol, ahead of it being formalized in `shared/protocol/`.
 - **`docs/architecture/`** — Cross-cutting system design notes that don't
   belong to firmware or companion-app alone.
-- **`tools/`** — Codegen and build helper scripts (e.g. board-map JSON →
-  generated `PadConfig[24]` C header + companion-app TypeScript types).
-- **`daw-integration/`** — Companion software that runs on the computer to
-  let TILES's transport remote (diamond button) control a DAW's own
-  transport directly, the way a factory-recognized controller does,
-  instead of needing a manual per-button MIDI Map. Currently: an Ableton
-  Live Control Surface script. See `daw-integration/README.md`.
+- **`tools/`** — Host scripts: `flash.sh`, the settings CLI
+  (`tiles_control.py`) and the bootloader watchdog. Board-map codegen is
+  planned. See `tools/README.md`.
+- **`daw-integration/`** — Software on the computer that makes TILES a
+  dedicated controller in Ableton Live: a Control Surface script (diamond
+  transport, the Ableton-mode clip grid with Live's colors) and the TILES
+  DISPLAY Max for Live device. See `daw-integration/README.md`.
 
 ## Core principle
 

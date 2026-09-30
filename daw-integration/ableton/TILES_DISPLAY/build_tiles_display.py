@@ -1,112 +1,66 @@
 #!/usr/bin/env python3
 """
 Builds "TILES DISPLAY.amxd", a Max for Live MIDI Effect that shows the
-notes reaching a track's instrument on TILES's pads.
-
-Real feedback: "ableton instruments send either midi or audio after the
-vst... we need to build a max for live device that slots in between the
-device must have an arm button to display on tiles and if multiple
-instances are on different tracks then it should disarm from previous...
-we have an arm button and its a toggle, we can call it VIEW and make it
-sentia style... the button is sentia pink when armed. the plugin is
-called TILES DISPLAY."
-
-Why a device at all: a track that has an instrument on it outputs AUDIO
-after that instrument, not MIDI, so there is no MIDI output to route to
-TILES (see daw-integration/README.md). A Max for Live MIDI Effect placed
-BEFORE the instrument sees every note that reaches it -- clip playback,
-live input, anything an earlier MIDI effect (arp, chord, ...) produced --
-which is exactly "the melody the track is playing."
-
-How notes reach TILES: the device calls the Live Object Model's
-ControlSurface.send_midi on the TILES control surface, which writes
-straight to that script's MIDI OUTPUT port (the same port
-scene_launch.py already uses for its SysEx feedback) -- confirmed
-against Cycling '74's LOM docs and forum reports of exactly this use
-(e.g. lighting Push pads from a device). No network layer, no extra
-Remote Script code.
-
-Finding the TILES control surface. It is addressed by its position among
-LOADED control surfaces (the SURFACE number), NOT the Preferences slot
-number -- Live's own device bridge skips empty slots (_MxDCore/
-LomTypes.py: get_control_surfaces() is tuple(filter(lambda c: c is not
-None, application.control_surfaces))). That number used to be set by
-hand, and it silently broke whenever the Preferences list changed: real
-feedback, after the control-surface rows were reshuffled for TILES's new
-DAW port, "one thing that broke is the lit up thing with ableton live" --
-every send_midi rejected with "no valid object set" in Live's Log.txt.
--> "yes build the auto-find for tiles display." The device now finds TILES
-itself: each control surface reports its script's class name as the LOM
-property type_name (_MxDCore/ControlSurfaceWrapper.py,
-LocalControlSurfaceWrapper.type_name = the script's class __name__ --
-"TILES", daw-integration/ableton/TILES/TILES.py), so on load and every
-time VIEW is armed it asks each loaded surface for type_name and takes
-the first "TILES" (see the "Auto-find" section in build_patcher()). An
-earlier version of this comment said the LOM exposes no name for a
-control surface; it does. SURFACE stays as the display of what was found
-and a manual fallback (a Live version without type_name, or TILES not
-loaded when the scan ran). The device still flashes pads on TILES
-whenever the route could have just changed (SURFACE edited by hand, VIEW
-turned on), as a visible "connected" signal.
-
-MPE / expression pass-through: the device is a pure tap. The MIDI thru
-is ONE direct patchline, midiin -> midiout, with nothing parsed,
-reformatted, filtered or delayed on it (midiparse/midiformat are known to
-truncate per-note pitch bend to semitones -- deliberately nothing like
-them is on the thru). Everything the tap does (notein -> gate ->
-send_midi to TILES, the route-confirmation flash, the disarm flush) runs
-off to the side and never writes back into the MIDI chain. The one thing
-the thru could not do by itself is declare MPE support: the patcher's
-is_mpe property (see build_patcher()) must be 1 or Live doesn't route the
-per-note MPE stream through the device at all.
-
-Two instances at once. Real feedback: "make the device work on 2 channels
-at once, if 2 devices are on then the secondary does color red." (It began
-life as exclusive -- arming one disarmed the rest -- and this replaces
-that.) Up to two instances are armed together. The first armed is the
-PRIMARY: its notes go out on MIDI channel 1 and light TILES' pads green
-(the firmware's original echo color) and its VIEW button is Sentia pink.
-The second armed is the SECONDARY: channel 2, soft-red pads, soft-red VIEW button
-(firmware: services/op_mode.c echo layers, services/lighting.c). Arming a
-third replaces the secondary (the primary is never bumped); disarming the
-primary promotes the secondary to primary, so a lone armed device is never
-left red.
-
-How the instances agree on who is primary without any shared variable:
-every instance shares Max's global name space (a [send]/[receive] name
-WITHOUT the "---" prefix is global across every Max for Live device in the
-set) and each keeps its own slot (0 = not armed, 1 = primary, 2 =
-secondary). Arming asks the others "who holds slot 1?" on
-tiles_display_who -- a message send is synchronous, so the answer
-(tiles_display_taken) is in before the send returns -- and takes slot 1 if
-nobody answers, else slot 2 (announcing that on tiles_display_bump so a
-previous secondary steps down). Disarming slot 1 announces
-tiles_display_freed so a secondary promotes itself. No stored ids: the
-live instances ARE the state, so a device that was deleted while armed
-(no delete notification exists) can never wedge a slot -- the next arm
-just finds nobody answering.
-
-This file is the source of truth for the device -- the .amxd is generated
-from it, so a change to the device is a change here, then re-run:
+notes reaching a track's instrument on TILES's pads. This file is the
+device's source: change it here, then run
 
     python3 build_tiles_display.py
 
-Not verified inside Live from the machine this was written on (no way to
-drive Live's UI headlessly) -- the generator validates the patcher's
-structure (every connection points at a real inlet/outlet of a real
-object) and the output parses back through the same container reader used
-on Ableton's own factory devices, but the first real proof is loading it
-in Live. See daw-integration/README.md for the exact checklist.
+Why a device: after an instrument a track outputs audio, so there's no
+MIDI to route to TILES. A MIDI Effect placed BEFORE the instrument sees
+every note that reaches it (clip playback, live input, earlier MIDI
+effects).
+
+How notes reach TILES: the Live Object Model's ControlSurface.send_midi
+on the TILES control surface writes to that script's MIDI output (the
+DAW port, which scene_launch.py also uses). No network, no extra script
+code.
+
+Finding TILES: a control surface is addressed by its position among
+LOADED surfaces, not its Preferences row (Live's _MxDCore/LomTypes.py
+get_control_surfaces() filters out empty slots), so a hand-set number
+breaks whenever that list changes. Each surface reports its script's
+class name as the LOM property type_name (_MxDCore/ControlSurfaceWrapper
+.py; "TILES", from TILES.py), so the device scans for the first "TILES"
+on load and on every VIEW arm ("Auto-find" in build_patcher()). SURFACE
+shows the result and is the manual fallback. Pads on TILES flash whenever
+the route could have changed, as a visible "connected" signal.
+
+MPE: the device is a pure tap. The thru is one direct midiin -> midiout
+patchline with nothing parsed or filtered (midiparse/midiformat truncate
+per-note pitch bend to semitones); everything else runs beside the
+chain. The patcher declares is_mpe = 1, without which Live doesn't pass
+the per-note MPE stream through the device at all.
+
+Two instances: up to two can be armed. The first armed is the PRIMARY:
+MIDI channel 1, green pads on TILES, pink VIEW. The second is the
+SECONDARY: channel 2, soft red pads and VIEW (firmware: services/
+op_mode.c echo layers, services/lighting.c). Arming a third replaces the
+secondary; disarming the primary promotes the secondary, so a lone armed
+device is never red.
+
+How instances agree without shared state: all instances share Max's
+global name space (send/receive names without the "---" prefix), and
+each keeps its own slot (0 = not armed, 1 = primary, 2 = secondary).
+Arming asks "who holds slot 1?" on tiles_display_who; a send is
+synchronous, so the answer (tiles_display_taken) is in before it
+returns. No answer -> slot 1, else slot 2, announced on
+tiles_display_bump so the previous secondary steps down. Disarming slot
+1 announces tiles_display_freed so the secondary promotes itself. No
+stored ids: the live instances are the state, so a device deleted while
+armed (Live sends no notification) can never wedge a slot.
+
+Checks here: every connection must point at a real inlet/outlet of a
+real object, and the output must parse back through the container
+reader. The proof in Live is the checklist in daw-integration/README.md.
 """
 
 import json
 import os
 import struct
 
-# ---- Sentia palette (RGBA 0-1) -------------------------------------------
-# Sentia Instruments Magenta (#FF00FF) -- the same brand color the firmware
-# already calls "Sentia magenta" (services/lighting.c root pad, op_mode.c
-# OP_MENU_MELODIC_*).
+# Sentia magenta (#FF00FF), the firmware's brand color (services/lighting.c
+# root pad, op_mode.c OP_MENU_MELODIC_*).
 PINK = [1.0, 0.0, 1.0, 1.0]
 PINK_DIM = [0.55, 0.0, 0.55, 1.0]
 BG = [0.055, 0.055, 0.063, 1.0]
@@ -121,12 +75,9 @@ BUS_WHO = "tiles_display_who"  # "does anyone hold slot 1?"
 BUS_TAKEN = "tiles_display_taken"  # ...yes (sent by the slot-1 holder)
 BUS_BUMP = "tiles_display_bump"  # "I just took slot 2" (previous slot 2 steps down)
 BUS_FREED = "tiles_display_freed"  # "slot 1 just opened up" (slot 2 promotes)
-# The secondary's VIEW color -- a soft, slightly warm red (coral), matching
-# the soft red its pads show on TILES (firmware: services/lighting.c
-# TILES_LIGHTING_ECHO_SECONDARY_G/_B). Real feedback: "make the secodn device
-# not pure red but more of a soft red aligned witht he pallet but still
-# separete from thern sentia pink." Blue stays well under green so it can't
-# drift toward the magenta of PINK.
+# The secondary's VIEW color: a soft warm red (coral) matching its pads on
+# TILES (services/lighting.c TILES_LIGHTING_ECHO_SECONDARY_G/_B). Blue
+# stays well under green so it can't drift toward PINK.
 SOFT_RED = [1.0, 0.36, 0.30, 1.0]
 
 FONT = "Ableton Sans Medium Regular"
@@ -227,11 +178,10 @@ def build_patcher():
     comment("title", "TILES DISPLAY", [600.0, 64.0, 100.0, 20.0], [12.0, 10.0, 136.0, 20.0], 12.0, TEXT_LIGHT, bold=True)
     panel("accent", [600.0, 92.0, 40.0, 10.0], [12.0, 34.0, 136.0, 2.0], PINK, background=False)
 
-    # VIEW: the arm toggle. Sentia pink when armed. mode 1 = toggle.
+    # VIEW: the arm toggle (mode 1), Sentia pink when armed.
     # activebg*/activetext* apply while the device is active (the normal
-    # case); bg*/text* are the deactivated-device look, kept as a dimmer
-    # take on the same colors so a greyed-out device doesn't suddenly
-    # look off-brand.
+    # case); bg*/text* are the deactivated-device look, a dimmer take on
+    # the same colors.
     _add(
         "view",
         {
@@ -276,15 +226,9 @@ def build_patcher():
     )
 
     comment("surface_label", "SURFACE", [600.0, 120.0, 60.0, 16.0], [12.0, 106.0, 70.0, 16.0], 10.0, TEXT_DIM)
-    # SURFACE: which LOADED control surface TILES is (1-based here, 0-based
-    # to the LOM -- see the "- 1" below). NOT the Preferences slot number:
-    # Live's own device bridge (_MxDCore/LomTypes.py get_control_surfaces)
-    # is tuple(filter(lambda c: c is not None, app.control_surfaces)) --
-    # empty slots are skipped, so N counts loaded scripts only. Found from
-    # a real failed first run: the log showed every send_midi rejected with
-    # "no valid object set" because the first version told the player to
-    # enter their slot number (3) when the index among loaded scripts
-    # could be as low as 1. Saved with the set.
+    # SURFACE: which LOADED control surface TILES is, 1-based here (0-based
+    # to the LOM, see the "- 1" below). Not the Preferences row: Live skips
+    # empty slots, so N counts loaded scripts only. Saved with the set.
     _add(
         "surface",
         {
@@ -340,15 +284,13 @@ def build_patcher():
     newobj("notein", "notein", [232.0, 16.0, 50.0, 20.0], 1, 3, ["int", "int", "int"])
     newobj("pack_live", "pack 0 0", [232.0, 96.0, 52.0, 20.0], 2, 1)
     newobj("gate", "gate 1", [232.0, 168.0, 45.0, 20.0], 2, 1)
-    # Everything that sends to TILES -- the note tap, the disarm flush, the
-    # route flash -- lands on status_gate's data inlet as a (pitch velocity)
-    # list; its control inlet picks which Note-On status the send_midi gets:
-    # 1 -> 144 (channel 1, the primary), 2 -> 145 (channel 2, the secondary).
-    # Two fixed prepends and a gate rather than one prepend re-pointed with
-    # "set": a gate is what this patch already trusts, and there's nothing
-    # to get subtly wrong about which status a queued message picked up.
-    # Opens on 1 -- an unarmed instance (whose route flash still fires)
-    # behaves as the primary.
+    # Everything that sends to TILES (the note tap, the disarm flush, the
+    # route flash) lands on status_gate's data inlet as a (pitch velocity)
+    # list; its control inlet picks the Note-On status: 1 -> 144 (channel
+    # 1, the primary), 2 -> 145 (channel 2, the secondary). Two fixed
+    # prepends and a gate rather than one prepend re-pointed with "set", so
+    # a queued message can't pick up the wrong status. Opens on 1: an
+    # unarmed instance (whose route flash still fires) acts as primary.
     newobj("status_gate", "gate 2 1", [232.0, 200.0, 45.0, 20.0], 2, 2, ["", ""])
     newobj("prep_send_a", "prepend call send_midi 144", [232.0, 232.0, 170.0, 20.0], 1, 1)
     newobj("prep_send_b", "prepend call send_midi 145", [420.0, 232.0, 170.0, 20.0], 1, 1)
@@ -362,7 +304,7 @@ def build_patcher():
     conn("prep_send_a", 0, "lobj", 0)
     conn("prep_send_b", 0, "lobj", 0)
 
-    # ---- Which control_surfaces slot is TILES: SURFACE (1-6) -> 0-based
+    # ---- Which control_surfaces slot is TILES: SURFACE (1-7) -> 0-based
     # LOM path -> live.path resolves it to an id -> live.object's right
     # inlet. ----------------------------------------------------------------
     newobj("surface_zero", "- 1", [232.0, 64.0, 32.0, 20.0], 2, 1, ["int"])
@@ -569,15 +511,12 @@ def build_patcher():
 
     # ---- Route confirmation: a brief flash of pads on TILES whenever the
     # route could have just changed (SURFACE edited, or VIEW turned on), so
-    # finding the right SURFACE number is "step it until pads flash" rather
-    # than guesswork -- the LOM gives a device no way to ask a control
-    # surface what script it is. Notes 36-96 all at once (a scale/octave
-    # setting maps only some of them to pads, so a wide run guarantees some
-    # pads light in any scale), held 300 ms, then Note-Off. Bypasses the VIEW
-    # gate on purpose (straight into the same send_midi prepend as the
-    # flush), so it works before VIEW is armed. A load guard swallows the
-    # numbox's own restore-on-load output so a Live set full of instances
-    # doesn't flash TILES on every open. ------------------------------------
+    # setting SURFACE by hand is "step it until pads flash". Notes 36-96 all
+    # at once (any scale maps some of them to pads), held 300 ms, then
+    # Note-Off. Bypasses the VIEW gate on purpose (straight into the status
+    # gate, like the flush), so it works before VIEW is armed. A load guard
+    # swallows the numbox's own restore-on-load output so a set full of
+    # instances doesn't flash TILES on every open. -------------------------
     newobj("load_delay", "delay 1500", [560.0, 40.0, 62.0, 20.0], 2, 1, ["bang"])
     message("msg_one", "1", [560.0, 72.0, 24.0, 20.0])
     newobj("flash_gate", "gate 1", [560.0, 168.0, 45.0, 20.0], 2, 1)
@@ -645,18 +584,11 @@ def build_patcher():
         "lines": _lines,
         "dependency_cache": [],
         "latency": 0,
-        # "Patch Supports MPE" (is_mpe) -- a top-level patcher property, and
-        # the reason this device used to strip MPE even though its thru is
-        # a single direct midiin -> midiout patchline: a Max for Live device
-        # has to DECLARE MPE support, or Live doesn't hand it the per-note
-        # MPE stream (per-note pitch bend, slide/CC74, channel pressure, on
-        # member channels 2-16) in the first place. Max's own help text
-        # (help/m4l/live.push.maxhelp): "To receive MPE, make sure the
-        # 'Patch Supports MPE' (is_mpe) attribute is set to 1 for the
-        # device"; the Cycling '74 forum thread on passing MPE through a
-        # MIDI effect says the same; real devices serialize it right next
-        # to "latency" (checked in an unencrypted Ableton pack device). The
-        # generator left it out, so it defaulted to 0.
+        # "Patch Supports MPE". Without it Live doesn't hand the device the
+        # per-note MPE stream (per-note pitch bend, slide/CC74, channel
+        # pressure on member channels 2-16), however direct the thru is.
+        # Max's help (help/m4l/live.push.maxhelp) says so; real devices
+        # serialize it next to "latency".
         "is_mpe": 1,
         "minimum_live_version": "",
         "minimum_max_version": "",

@@ -4152,8 +4152,8 @@ static void song_capture_exit(void) {
  * s_scene_pending_melodic. */
 #define OP_SCENE_MSG_OPEN_MELODIC 0x12u
 
-/* CLIP_STATE/SCENE_STATE flag bits (one 7-bit byte). Scenes only use bit
- * 0. */
+/* CLIP_STATE/SCENE_STATE flag bits (one 7-bit byte). SCENE_STATE uses
+ * only IS_TRIGGERED (a scene has no playing state of its own). */
 #define OP_SCENE_FLAG_HAS_CLIP 0x01u
 #define OP_SCENE_FLAG_IS_PLAYING 0x02u
 #define OP_SCENE_FLAG_IS_TRIGGERED 0x04u
