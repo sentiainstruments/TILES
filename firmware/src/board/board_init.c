@@ -21,9 +21,8 @@ static void init_input(uint gpio, bool pull_up) {
 }
 
 void board_gpio_init(void) {
-    /* DIN MIDI OUT: both lines high before the MIDI OUT service ever
-     * enables a stream on either one. (midi/din_midi.c later hands ONE of
-     * these to a PIO UART, already high, and keeps the other parked high.) */
+    /* DIN MIDI OUT: both lines high before any stream starts. midi/din_midi.c
+     * later hands one to a PIO UART and keeps the other parked high. */
     init_output(TILES_GPIO_DIN_MIDI_OUT_A, true);
     init_output(TILES_GPIO_DIN_MIDI_OUT_B, true);
 
@@ -31,25 +30,21 @@ void board_gpio_init(void) {
     init_output(TILES_GPIO_PAD_LED_DATA, false);
     init_output(TILES_GPIO_UNDERGLOW_DATA, false);
 
-    /* Gate output: low (no note) until the gate service explicitly
-     * drives it, and only ever with external power confirmed. */
+    /* Gate: low (no note) until the CV/gate service drives it. */
     init_output(TILES_GPIO_GATE_PWM, false);
 
-    /* DAC80502 chip select: active-low, so "high" means deselected. */
+    /* DAC80502 chip select, active low: high = deselected. */
     init_output(TILES_GPIO_DAC_SYNC_N, true);
 
-    /* PCA9685 shared OE (see board_pins.h -- NOT an address strap).
-     * Input/high-Z at boot so both chips' outputs stay disabled until
-     * board_pca9685_enable_outputs() is called once channels are
-     * actually configured. */
+    /* PCA9685 shared OE (see board_pins.h): high-Z at boot, so outputs stay
+     * off until board_pca9685_enable_outputs(). */
     init_input(TILES_GPIO_PCA9685_OE, false);
 
-    /* DIN MIDI IN RX: plain input at boot. midi/din_midi.c reconfigures
-     * this pin's function to UART0 RX when it starts. */
+    /* DIN MIDI IN RX: plain input; midi/din_midi.c switches it to UART0 RX. */
     init_input(TILES_GPIO_DIN_MIDI_IN_RX, false);
 
-    /* Function buttons: active-low, hardware pullups already present;
-     * internal pull-up adds margin, does not fight the hardware pull. */
+    /* Function buttons: active low with hardware pull-ups; the internal
+     * pull-up only adds margin. */
     init_input(TILES_GPIO_SW1_LEFT_CAPSULE, true);
     init_input(TILES_GPIO_SW2_RIGHT_CAPSULE, true);
     init_input(TILES_GPIO_SW3_TRIANGLE, true);
@@ -57,15 +52,13 @@ void board_gpio_init(void) {
     init_input(TILES_GPIO_SW5_SQUARE, true);
     init_input(TILES_GPIO_SW6_CIRCLE, true);
 
-    /* Shared MPR121 interrupt: active-low, open-drain-style output on
-     * the touch controllers; internal pull-up as a safety margin. */
+    /* Shared MPR121 IRQ: active low, open drain; internal pull-up as margin. */
     init_input(TILES_GPIO_TOUCH_IRQ_N, true);
 
     /* TPS2121 ST: push-pull output from the power mux, no pull needed. */
     init_input(TILES_GPIO_POWER_SOURCE_STATUS, false);
 
-    /* Pedal ADC: plain digital input for now. The pedal service calls
-     * adc_gpio_init() on this pin when it starts reading. */
+    /* Pedal: plain input until services/pedal.c calls adc_gpio_init(). */
     init_input(TILES_GPIO_PEDAL_ADC, false);
 
     /* Unused pins: input, no pull, per the board map. */
@@ -73,9 +66,8 @@ void board_gpio_init(void) {
     init_input(TILES_GPIO_UNUSED_27, false);
     init_input(TILES_GPIO_UNUSED_28, false);
 
-    /* SPI (DAC) and I2C pins: leave as plain GPIO here. The DAC driver
-     * claims GP10/GP11 for SPI when it initializes; board_i2c_init()
-     * below claims GP4/GP5/GP6/GP7 for I2C. */
+    /* SPI (DAC) and I2C pins stay plain GPIO here: the DAC driver claims
+     * GP10/GP11, board_i2c_init() claims GP4-GP7. */
 }
 
 void board_i2c_init(void) {
@@ -97,11 +89,8 @@ void board_i2c_set_run_speed(void) {
     i2c_set_baudrate(i2c1, TILES_I2C_RUN_HZ);
 }
 
-/* See board_init.h for the full rationale. Bit-bang recovery timing:
- * 5us per half-period (~100kHz recovery clock) -- not timing-critical
- * since no real data is being transferred, just nudging a stuck slave,
- * so this is deliberately slower/safer than either bus's actual run
- * speed rather than tuned to it. */
+/* Recovery clock: 5 us half-period (~100 kHz). No data moves, so slow and
+ * safe is fine. */
 #define RECOVERY_HALF_PERIOD_US 5u
 #define RECOVERY_MAX_CLOCK_PULSES 9u
 
@@ -111,13 +100,9 @@ void board_i2c_recover_bus(i2c_inst_t *bus) {
 
     gpio_set_function(sda_pin, GPIO_FUNC_SIO);
     gpio_set_function(scl_pin, GPIO_FUNC_SIO);
-    /* Pre-arm the output value both lines will drive once switched to
-     * GPIO_OUT below to false, once, up front -- from here on, "drive"
-     * means gpio_set_dir(..., GPIO_OUT) and "release" means
-     * gpio_set_dir(..., GPIO_IN) (the pull-ups board_i2c_init() already
-     * enabled bring it back high), exactly matching real open-drain I2C
-     * electrical behavior so this can never drive a hard high against
-     * another device. */
+    /* Output value preset low once: from here "drive" = set as output, and
+     * "release" = set as input (the pull-up brings it high), exactly like
+     * open-drain I2C, so a line is never driven hard high. */
     gpio_put(sda_pin, false);
     gpio_put(scl_pin, false);
     gpio_set_dir(sda_pin, GPIO_IN);
@@ -130,9 +115,8 @@ void board_i2c_recover_bus(i2c_inst_t *bus) {
         sleep_us(RECOVERY_HALF_PERIOD_US);
     }
 
-    /* Manual STOP condition regardless of whether SDA ever freed up
-     * above -- SDA released (high) while SCL is high -- so a downstream
-     * device left mid-transaction sees a clean end to it either way. */
+    /* Manual STOP whether or not SDA freed up (SDA rises while SCL is high),
+     * so any device left mid-transaction sees it end. */
     gpio_set_dir(sda_pin, GPIO_OUT);
     sleep_us(RECOVERY_HALF_PERIOD_US);
     gpio_set_dir(scl_pin, GPIO_IN);
@@ -146,10 +130,8 @@ void board_i2c_recover_bus(i2c_inst_t *bus) {
 }
 
 void board_pca9685_enable_outputs(void) {
-    /* Only ever transitions this pin from input to output here, once,
-     * after the caller has already configured every PCA9685 channel.
-     * See board_pins.h for why this is safe: the only other thing on
-     * this net is a 10k pull-up to 3V3_OUT, no other active driver. */
+    /* Input -> output once, after the caller configured every channel. Nothing
+     * else drives this net (board_pins.h). */
     gpio_set_dir(TILES_GPIO_PCA9685_OE, GPIO_OUT);
     gpio_put(TILES_GPIO_PCA9685_OE, false);
 }

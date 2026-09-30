@@ -1,12 +1,10 @@
 #pragma once
 
-/*
- * Pico 2 GPIO map and bus/device addresses for SENTIA TILES Rev A0.
+/* Pico 2 GPIO map and bus/device addresses for SENTIA TILES Rev A0.
  *
  * Source of truth: docs/hardware/sentia_tiles_board_map_v1.json and
- * SENTIA_TILES_FIRMWARE_HANDOFF.md. Do not edit a value here without
- * updating those first — this file is a transcription, not a design.
- */
+ * SENTIA_TILES_FIRMWARE_HANDOFF.md. This file is a transcription: change
+ * those first. */
 
 #include <stdint.h>
 
@@ -52,27 +50,14 @@
 
 /* ---- Hazard / status pins ----------------------------------------------- */
 
-/* CORRECTED 2026-08-21: NOT an A5 address strap, despite the original
- * hardware handoff doc's claim (and this constant's old name --
- * TILES_GPIO_PCA9685_ADDR_STRAP -- kept as a historical note, don't
- * reintroduce it). The real fabricated board's flying-probe netlist
- * (Gerber_PCB1_2026-08-21.zip/FlyingProbeTesting.json) shows this net
- * (NET_25) lands on pin 23 of both PCA9685 chips, which per the real
- * TSSOP-28 datasheet pinout is OE (active-low output enable), not A5
- * (pin 24, tied to GND on both chips per the same netlist -- the real
- * address pins are fixed by hardwired GND/3V3_OUT straps unrelated to
- * this net, giving addresses 0x40/0x41, confirmed against real hardware).
- *
- * NET_25 also has a 10k pull-up to 3V3_OUT (R66) and nothing else on it
- * besides these two OE *inputs* -- so driving this pin low only has to
- * overcome a weak 10k pull (~0.33mA), with no other active driver to
- * contend with. Left as input/high-Z at boot (OE sits disabled, every
- * PCA9685 output on both chips forced off) until
- * board_pca9685_enable_outputs() is called -- only safe to call after
- * every PCA9685 channel has already been configured to its intended
- * state, since enabling OE makes each chip's current register content
- * (or its POR default, LEDn=0/pin-low, if a chip's I2C init failed)
- * immediately live on the physical pins. */
+/* PCA9685 shared OE (pin 23 on both chips, active low), per the fab
+ * flying-probe netlist (NET_25). NOT an address strap, despite the
+ * original handoff doc; don't bring back the old name
+ * TILES_GPIO_PCA9685_ADDR_STRAP. The net has only a 10k pull-up (R66) and
+ * the two OE inputs, so driving it low is uncontended. Left high-Z at boot
+ * (all PCA9685 outputs off) until board_pca9685_enable_outputs(), which
+ * must only run once every channel is configured: OE makes the registers
+ * (or the POR pin-low state, if a chip failed init) live at once. */
 #define TILES_GPIO_PCA9685_OE 20u
 
 #define TILES_GPIO_TOUCH_IRQ_N 21u      /* shared MPR121 IRQ, active low */
@@ -107,12 +92,9 @@
 
 /* ---- I2C1 device addresses (haptics + LED mux control) -------------------- */
 
-/* Corrected from the originally-documented 0x60/0x61. The real fabricated
- * board's flying-probe netlist (docs/hardware/ didn't have this level of
- * detail; see Gerber_PCB1_2026-08-21.zip/FlyingProbeTesting.json) shows
- * both PCA9685 chips' A1-A5 address pins tied to GND and only U_HAPTIC2's
- * A0 tied to 3V3_OUT -- giving 0x40 and 0x41, which is exactly what the
- * real board ACKs at. Confirmed against real hardware on 2026-08-21. */
+/* 0x40/0x41, not the 0x60/0x61 first documented: the flying-probe netlist
+ * shows A1-A5 grounded on both chips and only U_HAPTIC2's A0 high.
+ * Confirmed on hardware 2026-08-21. */
 #define TILES_I2C1_ADDR_HAPTIC_PCA9685_1 0x40u
 #define TILES_I2C1_ADDR_HAPTIC_PCA9685_2 0x41u
 #define TILES_I2C1_ADDR_LED_MUX_TCA9554 0x20u
