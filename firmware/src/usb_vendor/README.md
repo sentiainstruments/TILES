@@ -1,39 +1,28 @@
 # usb_vendor/
 
-A dedicated TinyUSB vendor-class interface (separate from both the CDC
-diagnostics console and the USB-MIDI interface). Eventually the
-companion app's own channel for remapping pads, editing profiles,
-running guided calibration, pulling live sensor/diagnostic streams, and
-pushing firmware/config updates -- see `../../../docs/protocol/README.md`
-for that full design.
+A TinyUSB vendor-class interface, separate from the CDC console and
+USB-MIDI: the companion app's and scripts' channel for settings. It uses
+WinUSB on Windows via the MS OS 2.0 descriptors, so no driver install is
+needed.
 
-**Built so far** (real feedback: "keep cv gate implemented but off rn.
-we need the control software"): `usb_vendor.c` implements a first,
-deliberately simple settings protocol -- plain-text `GET`/`SET`/`LIST`
-lines, one command per line -- covering the runtime toggles this
-codebase already built with a companion-app hook in mind (pedal mode/
-polarity, MPE enabled, pitch-bend/aftertouch sensitivity, CV/gate enable
-+ calibration). Full spec and key catalog: `../../../shared/protocol/
-README.md`. Proven end-to-end with `../../../tools/tiles_control.py`, a
-plain script, not yet the real Electron companion app.
+`usb_vendor.c` speaks a plain-text line protocol (`GET`, `SET`, `LIST`,
+`SCHEMA`, `INFO`, `SAVE`, `RESET`, `REBOOT BOOTSEL|APP`), generic over
+the settings table (`../profiles/`). A new setting needs no change here,
+and changes are saved to flash automatically. Full spec and key list:
+`../../../shared/protocol/README.md`. Reference client:
+`../../../tools/tiles_control.py`.
 
-**Now on the settings table** (`../profiles/`): the strcmp() chain is gone --
-GET/SET/LIST/RESET/SCHEMA are generic over the registry, so a new setting needs
-no change here, and changes are saved to flash (`SAVE` forces it, `INFO` shows
-the store's state). Replies go through a 4 KB output queue drained into the
-64-byte TinyUSB FIFO as it has room, one command at a time: the old code wrote
-each line straight into that FIFO with nothing draining it between lines, so any
-response longer than one packet could silently lose its tail.
+How it works:
 
-`REBOOT BOOTSEL` / `REBOOT APP` reboot the board without any USB tooling --
-the app-scriptable path alongside `picotool load -f`'s own USB reset
-interface (`../midi/README.md`'s "USB reset interface" entry). BOOTSEL is
-handled specially: `reset_usb_boot()` never returns, so this file flushes its
-own reply for up to 50ms (bounded, like `midi/midi_out.c`'s own USB
-backpressure wait) before calling it, rather than trusting a single
-`pump_out()` to have reached the host.
+- Replies go into a 4 KB queue drained into the 64-byte TinyUSB FIFO as
+  room appears, one command at a time, so long replies (SCHEMA ~3 KB)
+  arrive whole.
+- `REBOOT BOOTSEL` flushes its `OK` (bounded wait) before
+  `reset_usb_boot()`, which never returns. `picotool -f` uses the
+  separate standard USB reset interface instead (`../midi/README.md`).
+- It is kept off the MIDI interface on purpose: future live sensor
+  streaming (24 pads × XYZ at ~120 Hz) would compete with note traffic.
 
-Kept off the MIDI interface on purpose: calibration/live-monitor streaming
-(24 pads × XYZ at ~120Hz, not built yet either) is high-bandwidth and
-bursty in a way that would otherwise compete with note/expression MIDI
-traffic.
+Not built yet: the larger protocol in `../../../docs/protocol/README.md`
+(pad remap, guided calibration, live streaming, profiles, firmware
+update).

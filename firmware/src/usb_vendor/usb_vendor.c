@@ -17,13 +17,10 @@
 
 #define USB_VENDOR_LINE_MAX 128u
 
-/* Responses are queued here and drained into the USB IN FIFO as it has room
- * (see pump_out()). Before the settings table, every reply was written straight
- * to a 64-byte TinyUSB FIFO with nothing draining it between lines, so any
- * response longer than one packet could silently lose its tail -- fine for one
- * short line, not for LIST/SCHEMA/INFO, which are dozens of lines. A whole
- * response (SCHEMA is the largest, ~3 KB) always fits: the next command is only
- * read once the previous response has been fully sent. */
+/* Replies are queued here and drained into the 64-byte TinyUSB FIFO as it
+ * has room (pump_out()), so multi-line replies (LIST/SCHEMA/INFO) never
+ * lose their tail. SCHEMA, the largest (~3 KB), fits whole: the next
+ * command is read only once the previous reply is fully sent. */
 #define USB_VENDOR_OUT_MAX 4096u
 
 static char s_rx_line[USB_VENDOR_LINE_MAX];
@@ -36,7 +33,7 @@ static size_t s_out_sent; /* of those, bytes already handed to TinyUSB */
 static void out_append(const char *text) {
     size_t n = strlen(text);
     if (s_out_len + n + 1u > sizeof(s_out)) {
-        return; /* can't happen for any response this file builds; never overruns if it ever did */
+        return; /* never happens for any reply built here; truncates rather than overrun */
     }
     memcpy(&s_out[s_out_len], text, n);
     s_out_len += n;
@@ -103,7 +100,7 @@ static const char *kv_result_name(tiles_kv_result_t r) {
 static void handle_line(char *line) {
     char *cmd = strtok(line, " ");
     if (cmd == NULL) {
-        return; /* blank line -- no response, matches a plain terminal's own "empty Enter does nothing" */
+        return; /* blank line: no reply, like a terminal */
     }
     char text[USB_VENDOR_LINE_MAX];
 
@@ -119,8 +116,8 @@ static void handle_line(char *line) {
         return;
     }
 
-    /* One line per setting: id, key, type, range/values, default -- everything a
-     * UI needs to build a control for it without hard-coding the list. */
+    /* One line per setting (id, key, type, range/values, default): enough for
+     * a UI to build a control without a hard-coded list. */
     if (strcmp(cmd, "SCHEMA") == 0) {
         for (size_t i = 0; i < tiles_settings_count(); i++) {
             tiles_settings_describe(tiles_settings_at(i), text, sizeof(text));
@@ -130,10 +127,7 @@ static void handle_line(char *line) {
         return;
     }
 
-    /* Which board and firmware this is, then flash-store status, for
-     * diagnosing "did it save?". The unit label moved here (and to the
-     * diagnostics interface's USB name) when it stopped being part of the
-     * product name -- see midi/usb_descriptors.c's string table. */
+    /* Unit, firmware version, then flash-store status (for "did it save?"). */
     if (strcmp(cmd, "INFO") == 0) {
         tiles_settings_persist_info_t info = tiles_settings_persist_get_info();
         snprintf(text, sizeof(text), "unit=%u/%u", (unsigned)TILES_UNIT_NUMBER, (unsigned)TILES_UNIT_COUNT);
@@ -165,9 +159,8 @@ static void handle_line(char *line) {
         return;
     }
 
-    /* Writes any unsaved change now instead of waiting for the automatic,
-     * debounced, hands-off-the-pads save. (A flash write pauses the firmware
-     * for tens of milliseconds -- don't send this mid-phrase.) */
+    /* Saves any pending change now instead of waiting for the debounced,
+     * pads-idle save. The write pauses the firmware for tens of ms. */
     if (strcmp(cmd, "SAVE") == 0) {
         tiles_kv_result_t r = tiles_settings_persist_save_now();
         if (r == TILES_KV_OK) {
@@ -179,27 +172,17 @@ static void handle_line(char *line) {
         return;
     }
 
-    /* REBOOT BOOTSEL | APP -- real feedback: "will we be able to flash
-     * updates without putting the board in bootloader mode" -> "yes add the
-     * software reboot command." This is the scriptable/app-side path;
-     * `picotool load -f`/`reboot -u` use a separate, standard USB reset
-     * interface (tusb_config.h) that needs no command at all.
+    /* REBOOT BOOTSEL | APP: the scriptable path. (picotool's -f uses the
+     * standard USB reset interface instead; see tusb_config.h.)
      *
-     * BOOTSEL puts the board in the ROM USB bootloader for reflashing.
-     * reset_usb_boot() never returns (it jumps straight into the ROM), so the
-     * "OK" a normal command's return would send never leaves the endpoint --
-     * flushed by hand first instead, bounded the same way midi_out.c's own
-     * send_with_retry() waits out USB backpressure rather than trusting a
-     * single pump_out() call (which only hands bytes to the peripheral's own
-     * TX FIFO, not necessarily all the way to the host). No activity LED pin
-     * is wired for this on the current board, hence the two 0 arguments.
+     * BOOTSEL enters the ROM USB bootloader. reset_usb_boot() never returns,
+     * so the "OK" is flushed by hand first, with a bounded wait (pump_out()
+     * alone only reaches the peripheral FIFO, not the host). No activity LED
+     * is wired, hence the 0 arguments.
      *
-     * APP is a plain warm restart back into this same firmware -- not a
-     * bootloader entry, just "start over" for testing a fresh boot (does a
-     * saved setting really come back?) or nudging a wedged non-USB subsystem
-     * without unplugging. watchdog_reboot() schedules the reset in hardware
-     * and returns immediately, so the reply below reaches the host during
-     * the delay, same as every other command. */
+     * APP is a warm restart into this firmware (to test a fresh boot, or to
+     * unstick a non-USB subsystem). watchdog_reboot() returns right away, so
+     * the reply goes out during the delay like any other. */
     if (strcmp(cmd, "REBOOT") == 0) {
         char *what = strtok(NULL, " ");
         if (what != NULL && strcmp(what, "BOOTSEL") == 0) {
@@ -254,8 +237,8 @@ static void handle_line(char *line) {
         return;
     }
 
-    /* RESET <key> restores one setting's default; RESET ALL restores every one.
-     * Like SET, it applies immediately and is saved automatically. */
+    /* RESET <key> restores one default; RESET ALL restores all. Applied at
+     * once and saved like SET. */
     if (strcmp(cmd, "RESET") == 0) {
         if (tiles_settings_reset(strcmp(key, "ALL") == 0 ? NULL : key)) {
             reply_ok();
@@ -276,13 +259,13 @@ void tiles_usb_vendor_init(void) {
 
 void tiles_usb_vendor_scan(void) {
     if (!tud_vendor_mounted()) {
-        s_out_len = 0u; /* nobody to send it to; don't hand a stale response to the next host */
+        s_out_len = 0u; /* host gone: drop the reply rather than hand it to the next host */
         s_out_sent = 0u;
         return;
     }
     pump_out();
     if (s_out_len > 0u) {
-        return; /* still sending the previous response: don't start the next command yet */
+        return; /* still sending the previous reply: wait before the next command */
     }
     while (tud_vendor_available()) {
         uint8_t byte;
@@ -295,18 +278,14 @@ void tiles_usb_vendor_scan(void) {
                 handle_line(s_rx_line);
                 s_rx_len = 0u;
                 pump_out();
-                return; /* one command per scan; any further bytes wait in TinyUSB's own FIFO */
+                return; /* one command per scan; the rest waits in TinyUSB's FIFO */
             }
             continue;
         }
         if (s_rx_len < USB_VENDOR_LINE_MAX - 1u) {
             s_rx_line[s_rx_len++] = (char)byte;
         }
-        /* Line too long for USB_VENDOR_LINE_MAX -- silently drops the
-         * overflow bytes until the next newline rather than growing
-         * the buffer or wrapping; no key or value this protocol
-         * defines comes anywhere close to this limit, so a line this
-         * long is already malformed input, not a real command that
-         * got unluckily truncated. */
+        /* Line longer than USB_VENDOR_LINE_MAX: drop bytes until the next
+         * newline. No real command comes close, so it is malformed anyway. */
     }
 }

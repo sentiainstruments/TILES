@@ -5,45 +5,23 @@
 #include "board_pins.h"
 #include "hardware/i2c.h"
 
-/* Deliberately NOT using drivers/i2c_bus.h's tiles_i2c_read() here,
- * unlike every driver in drivers/: this file's own probe() runs once at
- * boot, at TILES_I2C_DETECT_HZ (100kHz) -- BEFORE board_i2c_set_run_
- * speed() raises both buses to their real 400kHz run speed (see
- * main.c's call order). board_i2c_recover_bus() (i2c_bus.c's own
- * failure path) always re-inits at TILES_I2C_RUN_HZ, which would be
- * correct once running but wrong called from here: a recovery mid-scan
- * would jump the bus to run speed before device discovery at the
- * conservative detect speed has even finished, defeating the reason a
- * separate detect speed exists. A plain timeout is still exactly right
- * for this file's own purpose (a wedged device stalling BOOT itself
- * indefinitely, before the main loop -- and its own watchdog-free "just
- * keep going" resilience -- even exists yet), just without the recovery
- * half. */
+/* Plain timeouts, not drivers/i2c_bus: this runs at boot at the 100 kHz
+ * detect speed, and i2c_bus's recovery path re-inits the bus at run speed,
+ * which would defeat discovery at the slower speed. */
 #define TILES_I2C_TIMEOUT_US 5000u
 
-/* Bus-scan technique: a 1-byte read of whatever register a device's
- * internal pointer currently sits on -- non-destructive (no register
- * write), and a real transaction that actually appears on the bus.
- *
- * NOT a zero-length write: the RP2350's I2C hardware cannot perform a
- * 0-byte transfer at all (pico-sdk's own comment: "Synopsys hw accepts
- * start/stop flags alongside data items in the same FIFO word, so no 0
- * byte transfers"), and i2c_write_blocking's len==0 case is only
- * guarded by an assert() that's compiled out in a Release build (this
- * project's default). A zero-length write silently skips the entire
- * bus transaction and returns "success" unconditionally -- it reports
- * every device present regardless of what's actually connected. That
- * was this function's original implementation; caught it because it
- * kept reporting all 8 devices ACKing with the Pico sitting
- * disconnected from the board. */
+/* Probe with a 1-byte read of the device's current register pointer:
+ * non-destructive, and a real bus transaction. NOT a zero-length write:
+ * the RP2350 I2C block can't do 0-byte transfers, and in Release builds
+ * the SDK then skips the transaction and reports success, so every
+ * address looks present (it did, with the Pico disconnected). */
 static bool probe(i2c_inst_t *bus, uint8_t addr) {
     uint8_t dummy = 0;
     int ret = i2c_read_timeout_us(bus, addr, &dummy, 1, false, TILES_I2C_TIMEOUT_US);
     return ret >= 0;
 }
 
-/* Mirrors pico-sdk's internal i2c_reserved_addr() (hardware_i2c/i2c.c) --
- * not exposed publicly, so reproduced here rather than worked around. */
+/* Same as pico-sdk's private i2c_reserved_addr() (hardware_i2c/i2c.c). */
 static bool is_reserved_addr(uint8_t addr) {
     return ((addr & 0x78u) == 0u) || ((addr & 0x78u) == 0x78u);
 }
@@ -68,11 +46,9 @@ bool tiles_diag_i2c_scan_expected_devices(void) {
     all_ok = check_device("Haptic PWM 2 (PCA9685)", i2c1, TILES_I2C1_ADDR_HAPTIC_PCA9685_2) && all_ok;
     all_ok = check_device("LED mux controller (TCA9554)", i2c1, TILES_I2C1_ADDR_LED_MUX_TCA9554) && all_ok;
 
-    /* Hall sensors are not individually probed here: all 24 share address
-     * 0x35 behind their mux channel, so probing that address without
-     * first selecting a mux channel would just find whichever channel
-     * happens to be enabled (or none). Per-sensor presence is confirmed
-     * by drivers/tca9548a + drivers/tmag5273 once those exist. */
+    /* Hall sensors aren't probed here: all 24 share 0x35 behind the muxes, so
+     * the address alone says nothing. services/hall checks each one via its
+     * mux channel. */
 
     printf("[i2c-scan] %s\n", all_ok ? "all expected devices present" : "one or more expected devices missing");
     return all_ok;
