@@ -8,12 +8,12 @@
  * way out, from the menu or mid-game; no single button exits. Losing a
  * round returns to the game menu.
  *
- * Menu: pad 1 (green) Snake, pad 2 (orange) Brick Breaker, pad 3 (cyan)
+ * Menu: pad 1 (green) Snake, pad 2 (orange) Tile Breaker, pad 3 (cyan)
  * Tetris, pad 4 (blue) Pong, pad 5 (white) Simon Says; touch one to start.
  *   Snake: "-" left, "+" right, triangle up, diamond down (absolute
  *     directions; reversing into the neck is ignored). Wraps at the edges,
  *     dies only on self-collision.
- *   Brick Breaker: "-"/"+" move the 3-pad paddle. Same physics as the
+ *   Tile Breaker: "-"/"+" move the 3-pad paddle. Same physics as the
  *     standby demo, player-controlled.
  *   Tetris: "-"/"+" move, triangle rotates (2 orientations per piece),
  *     diamond hard-drops. A small custom piece set for a 4-row board: dot,
@@ -28,7 +28,7 @@
  *   Simon Says: a growing pattern of pads flashes, each with a haptic
  *     and a color; repeat it by pressing (Hall depth, not touch). Each
  *     round adds one step; a wrong pad ends the game.
- * Round end: Snake and Brick Breaker flash the underglow red/purple,
+ * Round end: Snake and Tile Breaker flash the underglow red/purple,
  * Tetris and Simon Says red, then back to the menu.
  *
  * Rendering uses the standby hooks (tiles_lighting_set_standby_active(),

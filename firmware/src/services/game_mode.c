@@ -31,7 +31,7 @@ typedef enum {
     GM_STATE_OFF = 0,
     GM_STATE_MENU,
     GM_STATE_PLAYING_SNAKE,
-    GM_STATE_PLAYING_BRICK,
+    GM_STATE_PLAYING_TILE_BREAKER,
     GM_STATE_PLAYING_TETRIS,
     GM_STATE_PLAYING_PONG,
     GM_STATE_PLAYING_SIMON,
@@ -201,8 +201,8 @@ static void gs_start(uint32_t now_ms) {
     s_gs_prev_down = false;
 }
 
-/* red_only: Tetris and Simon Says flash plain red; Snake and Brick Breaker
- * alternate red/purple. is_win is separate (Snake and Brick Breaker send
+/* red_only: Tetris and Simon Says flash plain red; Snake and Tile Breaker
+ * alternate red/purple. is_win is separate (Snake and Tile Breaker send
  * both outcomes through here with red_only=false) and picks the melody. */
 static void gm_start_round_end(uint32_t now_ms, bool red_only, bool is_win) {
     s_gm_state = GM_STATE_ROUND_END;
@@ -339,15 +339,15 @@ static void render_snake(uint32_t now_ms) {
     }
 }
 
-/* ---- Brick Breaker -------------------------------------------------------
- * Standby's brick breaker physics with a player-controlled paddle;
+/* ---- Tile Breaker -------------------------------------------------------
+ * Standby's tile breaker physics with a player-controlled paddle;
  * separate state. */
 
 #define GB_NUM_COLS 6u
 #define GB_PADDLE_ROW 4u
 #define GB_STEP_MS 300u
 
-static bool s_gb_brick_alive[GB_NUM_COLS];
+static bool s_gb_block_alive[GB_NUM_COLS];
 static int8_t s_gb_ball_row;
 static int8_t s_gb_ball_col;
 static int8_t s_gb_ball_drow;
@@ -361,7 +361,7 @@ static void gb_start(uint32_t now_ms) {
     /* Reseed per game (see gs_start()). */
     srand((unsigned int)get_rand_32());
     for (uint8_t i = 0; i < GB_NUM_COLS; i++) {
-        s_gb_brick_alive[i] = true;
+        s_gb_block_alive[i] = true;
     }
     s_gb_paddle_center = 3;
     s_gb_ball_row = (int8_t)(GB_PADDLE_ROW - 1u);
@@ -396,7 +396,7 @@ static void gb_handle_input(void) {
 
 /* Moving row and column by exactly 1 each step keeps (row + col) mod 2
  * fixed for the whole flight, so from the fixed start (3, 3) half the
- * bricks were unreachable. Fix (as in standby.c bb_step()): each bounce
+ * blocks were unreachable. Fix (as in standby.c tb_step()): each bounce
  * off the top wall or paddle gets a coin-flip chance to reverse the
  * column direction, which breaks the parity lock. */
 static void gb_step(uint32_t now_ms) {
@@ -409,7 +409,7 @@ static void gb_step(uint32_t now_ms) {
 
     if (new_row < 1) {
         uint8_t col_index = (uint8_t)(new_col - TILES_GRID_MIN_COL);
-        s_gb_brick_alive[col_index] = false;
+        s_gb_block_alive[col_index] = false;
         s_gb_ball_drow = 1;
         new_row = 1;
         if ((rand() % 2) == 0) {
@@ -418,7 +418,7 @@ static void gb_step(uint32_t now_ms) {
 
         bool all_dead = true;
         for (uint8_t i = 0; i < GB_NUM_COLS; i++) {
-            if (s_gb_brick_alive[i]) {
+            if (s_gb_block_alive[i]) {
                 all_dead = false;
                 break;
             }
@@ -451,18 +451,18 @@ static void gb_update(uint32_t now_ms) {
     }
 }
 
-#define GB_BRICK_LEVEL 0.85f
+#define GB_BLOCK_LEVEL 0.85f
 #define GB_PADDLE_LEVEL 0.9f
 #define GB_BALL_LEVEL 1.0f
 
-static void render_brick(uint32_t now_ms) {
+static void render_tile_breaker(uint32_t now_ms) {
     (void)now_ms;
 
-    /* Bricks sit on the button row (monochrome PWM), so an alive brick is a
+    /* Blocks sit on the button row (monochrome PWM), so an alive block is a
      * single bright level, not a color. */
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         uint8_t idx = (uint8_t)(col - TILES_GRID_MIN_COL);
-        float level = s_gb_brick_alive[idx] ? GB_BRICK_LEVEL : 0.0f;
+        float level = s_gb_block_alive[idx] ? GB_BLOCK_LEVEL : 0.0f;
         tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
 
@@ -1163,7 +1163,7 @@ static void render_menu(uint32_t now_ms) {
             if (row == 1u && col == 1u) {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, GS_HEAD_LEVEL, 0.0f); /* Snake = green */
             } else if (row == 1u && col == 2u) {
-                tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 0.4f, 0.0f); /* Brick Breaker = orange */
+                tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 0.4f, 0.0f); /* Tile Breaker = orange */
             } else if (row == 1u && col == 3u) {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 1.0f, 1.0f); /* Tetris = cyan */
             } else if (row == 1u && col == 4u) {
@@ -1215,8 +1215,8 @@ static void gm_start_snake(uint32_t now_ms) {
     gs_start(now_ms);
 }
 
-static void gm_start_brick(uint32_t now_ms) {
-    s_gm_state = GM_STATE_PLAYING_BRICK;
+static void gm_start_tile_breaker(uint32_t now_ms) {
+    s_gm_state = GM_STATE_PLAYING_TILE_BREAKER;
     gb_start(now_ms);
 }
 
@@ -1249,7 +1249,7 @@ static void gm_handle_menu_selection(void) {
         gm_start_snake(now_ms);
     } else if (pad2 && !s_gm_prev_pad2_touched) {
         tiles_haptics_trigger_kick(2u, GM_MENU_SELECT_VELOCITY);
-        gm_start_brick(now_ms);
+        gm_start_tile_breaker(now_ms);
     } else if (pad3 && !s_gm_prev_pad3_touched) {
         tiles_haptics_trigger_kick(3u, GM_MENU_SELECT_VELOCITY);
         gm_start_tetris(now_ms);
@@ -1355,7 +1355,7 @@ void tiles_game_mode_scan(void) {
     } else if (s_gm_state == GM_STATE_PLAYING_SNAKE) {
         gs_handle_input();
         gs_update(now_ms);
-    } else if (s_gm_state == GM_STATE_PLAYING_BRICK) {
+    } else if (s_gm_state == GM_STATE_PLAYING_TILE_BREAKER) {
         gb_handle_input();
         gb_update(now_ms);
     } else if (s_gm_state == GM_STATE_PLAYING_TETRIS) {
@@ -1386,8 +1386,8 @@ void tiles_game_mode_scan(void) {
             render_menu(now_ms);
         } else if (s_gm_state == GM_STATE_PLAYING_SNAKE) {
             render_snake(now_ms);
-        } else if (s_gm_state == GM_STATE_PLAYING_BRICK) {
-            render_brick(now_ms);
+        } else if (s_gm_state == GM_STATE_PLAYING_TILE_BREAKER) {
+            render_tile_breaker(now_ms);
         } else if (s_gm_state == GM_STATE_PLAYING_TETRIS) {
             render_tetris(now_ms);
         } else if (s_gm_state == GM_STATE_PLAYING_PONG) {

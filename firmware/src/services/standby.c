@@ -581,164 +581,164 @@ static tiles_standby_color_t circle_underglow(uint8_t pixel_index, uint32_t now_
     return white(v);
 }
 
-/* ---- Animation: brick breaker ------------------------------------------
- * The button row is the brick wall; a 3-pad paddle on the bottom row
- * follows the ball (at most one column per step). When every brick is
+/* ---- Animation: tile breaker ------------------------------------------
+ * The button row is the block wall; a 3-pad paddle on the bottom row
+ * follows the ball (at most one column per step). When every block is
  * broken or the ball gets past, the underglow flashes red/purple for a few
  * seconds and a new round starts. Ball and paddle differ in color so they
- * stay distinct when they overlap. See bb_step() for the reachability fix. */
+ * stay distinct when they overlap. See tb_step() for the reachability fix. */
 
-#define BB_NUM_COLS 6u
-#define BB_PADDLE_ROW 4u
-#define BB_STEP_MS 350u
-#define BB_FLASH_DURATION_MS 2200u
-#define BB_FLASH_TOGGLE_MS 260u
-#define BB_BRICK_LEVEL 0.85f
-#define BB_PADDLE_LEVEL 0.9f
-#define BB_BALL_LEVEL 1.0f
+#define TB_NUM_COLS 6u
+#define TB_PADDLE_ROW 4u
+#define TB_STEP_MS 350u
+#define TB_FLASH_DURATION_MS 2200u
+#define TB_FLASH_TOGGLE_MS 260u
+#define TB_BLOCK_LEVEL 0.85f
+#define TB_PADDLE_LEVEL 0.9f
+#define TB_BALL_LEVEL 1.0f
 
 typedef enum {
-    BB_PHASE_PLAYING = 0,
-    BB_PHASE_ROUND_END,
-} bb_phase_t;
+    TB_PHASE_PLAYING = 0,
+    TB_PHASE_ROUND_END,
+} tb_phase_t;
 
-static bool s_bb_brick_alive[BB_NUM_COLS];
-static int8_t s_bb_ball_row;
-static int8_t s_bb_ball_col;
-static int8_t s_bb_ball_drow;
-static int8_t s_bb_ball_dcol;
-static int8_t s_bb_paddle_center; /* 2-5; the paddle covers center-1..center+1 */
-static bb_phase_t s_bb_phase;
-static uint32_t s_bb_last_step_ms;
-static uint32_t s_bb_round_end_ms;
-static bool s_bb_inited;
+static bool s_tb_block_alive[TB_NUM_COLS];
+static int8_t s_tb_ball_row;
+static int8_t s_tb_ball_col;
+static int8_t s_tb_ball_drow;
+static int8_t s_tb_ball_dcol;
+static int8_t s_tb_paddle_center; /* 2-5; the paddle covers center-1..center+1 */
+static tb_phase_t s_tb_phase;
+static uint32_t s_tb_last_step_ms;
+static uint32_t s_tb_round_end_ms;
+static bool s_tb_inited;
 
-static void bb_new_round(uint32_t now_ms) {
-    for (uint8_t i = 0; i < BB_NUM_COLS; i++) {
-        s_bb_brick_alive[i] = true;
+static void tb_new_round(uint32_t now_ms) {
+    for (uint8_t i = 0; i < TB_NUM_COLS; i++) {
+        s_tb_block_alive[i] = true;
     }
-    s_bb_paddle_center = 3;
-    s_bb_ball_row = (int8_t)(BB_PADDLE_ROW - 1u);
-    s_bb_ball_col = s_bb_paddle_center;
-    s_bb_ball_drow = -1; /* heads toward the bricks first */
-    s_bb_ball_dcol = ((rand() % 2) == 0) ? -1 : 1;
-    s_bb_phase = BB_PHASE_PLAYING;
-    s_bb_last_step_ms = now_ms;
+    s_tb_paddle_center = 3;
+    s_tb_ball_row = (int8_t)(TB_PADDLE_ROW - 1u);
+    s_tb_ball_col = s_tb_paddle_center;
+    s_tb_ball_drow = -1; /* heads toward the blocks first */
+    s_tb_ball_dcol = ((rand() % 2) == 0) ? -1 : 1;
+    s_tb_phase = TB_PHASE_PLAYING;
+    s_tb_last_step_ms = now_ms;
 }
 
 /* Moving row and column by exactly 1 each step keeps (row + col) mod 2
  * fixed for the whole flight, so from the fixed start (3, 3) half the
- * bricks were unreachable. (Throttling the column every other step only
+ * blocks were unreachable. (Throttling the column every other step only
  * changed which half.) Fix: each bounce off the top wall or paddle gets a
  * coin-flip chance to reverse the column direction, so the column does a
  * random walk over all 6. game_mode.c uses the same fix. */
-static void bb_step(uint32_t now_ms) {
-    int8_t new_col = (int8_t)(s_bb_ball_col + s_bb_ball_dcol);
+static void tb_step(uint32_t now_ms) {
+    int8_t new_col = (int8_t)(s_tb_ball_col + s_tb_ball_dcol);
     if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
-        s_bb_ball_dcol = (int8_t)(-s_bb_ball_dcol);
-        new_col = (int8_t)(s_bb_ball_col + s_bb_ball_dcol);
+        s_tb_ball_dcol = (int8_t)(-s_tb_ball_dcol);
+        new_col = (int8_t)(s_tb_ball_col + s_tb_ball_dcol);
     }
-    int8_t new_row = (int8_t)(s_bb_ball_row + s_bb_ball_drow);
+    int8_t new_row = (int8_t)(s_tb_ball_row + s_tb_ball_drow);
 
     if (new_row < 1) {
-        /* Hit the brick wall (row 0): always bounce, brick or not. */
+        /* Hit the block wall (row 0): always bounce, block or not. */
         uint8_t col_index = (uint8_t)(new_col - TILES_GRID_MIN_COL);
-        s_bb_brick_alive[col_index] = false;
-        s_bb_ball_drow = 1;
+        s_tb_block_alive[col_index] = false;
+        s_tb_ball_drow = 1;
         new_row = 1;
         if ((rand() % 2) == 0) {
-            s_bb_ball_dcol = (int8_t)(-s_bb_ball_dcol);
+            s_tb_ball_dcol = (int8_t)(-s_tb_ball_dcol);
         }
 
         bool all_dead = true;
-        for (uint8_t i = 0; i < BB_NUM_COLS; i++) {
-            if (s_bb_brick_alive[i]) {
+        for (uint8_t i = 0; i < TB_NUM_COLS; i++) {
+            if (s_tb_block_alive[i]) {
                 all_dead = false;
                 break;
             }
         }
         if (all_dead) {
-            s_bb_phase = BB_PHASE_ROUND_END;
-            s_bb_round_end_ms = now_ms;
+            s_tb_phase = TB_PHASE_ROUND_END;
+            s_tb_round_end_ms = now_ms;
         }
-    } else if (new_row > (int8_t)BB_PADDLE_ROW) {
-        int8_t paddle_min = (int8_t)(s_bb_paddle_center - 1);
-        int8_t paddle_max = (int8_t)(s_bb_paddle_center + 1);
+    } else if (new_row > (int8_t)TB_PADDLE_ROW) {
+        int8_t paddle_min = (int8_t)(s_tb_paddle_center - 1);
+        int8_t paddle_max = (int8_t)(s_tb_paddle_center + 1);
         if (new_col >= paddle_min && new_col <= paddle_max) {
-            s_bb_ball_drow = -1;
-            new_row = (int8_t)BB_PADDLE_ROW;
+            s_tb_ball_drow = -1;
+            new_row = (int8_t)TB_PADDLE_ROW;
             if ((rand() % 2) == 0) {
-                s_bb_ball_dcol = (int8_t)(-s_bb_ball_dcol);
+                s_tb_ball_dcol = (int8_t)(-s_tb_ball_dcol);
             }
         } else {
             /* Missed: lost. The ball sits just below the paddle row, outside the
              * drawn rows, so it simply disappears. */
-            s_bb_phase = BB_PHASE_ROUND_END;
-            s_bb_round_end_ms = now_ms;
+            s_tb_phase = TB_PHASE_ROUND_END;
+            s_tb_round_end_ms = now_ms;
         }
     }
 
-    s_bb_ball_col = new_col;
-    s_bb_ball_row = new_row;
+    s_tb_ball_col = new_col;
+    s_tb_ball_row = new_row;
 
-    if (s_bb_phase == BB_PHASE_PLAYING) {
-        if (s_bb_paddle_center < s_bb_ball_col) {
-            s_bb_paddle_center++;
-        } else if (s_bb_paddle_center > s_bb_ball_col) {
-            s_bb_paddle_center--;
+    if (s_tb_phase == TB_PHASE_PLAYING) {
+        if (s_tb_paddle_center < s_tb_ball_col) {
+            s_tb_paddle_center++;
+        } else if (s_tb_paddle_center > s_tb_ball_col) {
+            s_tb_paddle_center--;
         }
-        if (s_bb_paddle_center < 2) {
-            s_bb_paddle_center = 2;
+        if (s_tb_paddle_center < 2) {
+            s_tb_paddle_center = 2;
         }
-        if (s_bb_paddle_center > 5) {
-            s_bb_paddle_center = 5;
+        if (s_tb_paddle_center > 5) {
+            s_tb_paddle_center = 5;
         }
     }
 }
 
-static void bb_update(uint32_t now_ms) {
-    if (!s_bb_inited) {
-        bb_new_round(now_ms);
-        s_bb_inited = true;
+static void tb_update(uint32_t now_ms) {
+    if (!s_tb_inited) {
+        tb_new_round(now_ms);
+        s_tb_inited = true;
         return;
     }
-    if (s_bb_phase == BB_PHASE_PLAYING) {
-        if (now_ms - s_bb_last_step_ms >= BB_STEP_MS) {
-            bb_step(now_ms);
-            s_bb_last_step_ms = now_ms;
+    if (s_tb_phase == TB_PHASE_PLAYING) {
+        if (now_ms - s_tb_last_step_ms >= TB_STEP_MS) {
+            tb_step(now_ms);
+            s_tb_last_step_ms = now_ms;
         }
-    } else if (now_ms - s_bb_round_end_ms >= BB_FLASH_DURATION_MS) {
-        bb_new_round(now_ms);
+    } else if (now_ms - s_tb_round_end_ms >= TB_FLASH_DURATION_MS) {
+        tb_new_round(now_ms);
     }
 }
 
-static tiles_standby_color_t anim_brick_breaker(uint8_t row, uint8_t col, uint32_t now_ms) {
-    bb_update(now_ms);
+static tiles_standby_color_t anim_tile_breaker(uint8_t row, uint8_t col, uint32_t now_ms) {
+    tb_update(now_ms);
 
     if (row == 0u) {
         uint8_t idx = (uint8_t)(col - TILES_GRID_MIN_COL);
-        if (s_bb_brick_alive[idx]) {
-            /* Orange bricks. */
-            tiles_standby_color_t c = {1.0f * BB_BRICK_LEVEL, 0.4f * BB_BRICK_LEVEL, 0.0f};
+        if (s_tb_block_alive[idx]) {
+            /* Orange blocks. */
+            tiles_standby_color_t c = {1.0f * TB_BLOCK_LEVEL, 0.4f * TB_BLOCK_LEVEL, 0.0f};
             return c;
         }
         return white(0.0f);
     }
 
-    if (s_bb_ball_row >= 1 && s_bb_ball_row <= (int8_t)BB_PADDLE_ROW && (int8_t)row == s_bb_ball_row &&
-        (int8_t)col == s_bb_ball_col) {
+    if (s_tb_ball_row >= 1 && s_tb_ball_row <= (int8_t)TB_PADDLE_ROW && (int8_t)row == s_tb_ball_row &&
+        (int8_t)col == s_tb_ball_col) {
         /* Warm white ball, drawn before the paddle so it's on top when they
          * share a cell. */
-        tiles_standby_color_t c = {1.0f * BB_BALL_LEVEL, 1.0f * BB_BALL_LEVEL, 0.4f * BB_BALL_LEVEL};
+        tiles_standby_color_t c = {1.0f * TB_BALL_LEVEL, 1.0f * TB_BALL_LEVEL, 0.4f * TB_BALL_LEVEL};
         return c;
     }
 
-    if (row == BB_PADDLE_ROW) {
-        int8_t paddle_min = (int8_t)(s_bb_paddle_center - 1);
-        int8_t paddle_max = (int8_t)(s_bb_paddle_center + 1);
+    if (row == TB_PADDLE_ROW) {
+        int8_t paddle_min = (int8_t)(s_tb_paddle_center - 1);
+        int8_t paddle_max = (int8_t)(s_tb_paddle_center + 1);
         if ((int8_t)col >= paddle_min && (int8_t)col <= paddle_max) {
             /* Cyan paddle. */
-            tiles_standby_color_t c = {0.0f, 0.6f * BB_PADDLE_LEVEL, 1.0f * BB_PADDLE_LEVEL};
+            tiles_standby_color_t c = {0.0f, 0.6f * TB_PADDLE_LEVEL, 1.0f * TB_PADDLE_LEVEL};
             return c;
         }
     }
@@ -746,12 +746,12 @@ static tiles_standby_color_t anim_brick_breaker(uint8_t row, uint8_t col, uint32
     return white(0.0f);
 }
 
-static tiles_standby_color_t bb_underglow(uint8_t pixel_index, uint32_t now_ms) {
+static tiles_standby_color_t tb_underglow(uint8_t pixel_index, uint32_t now_ms) {
     (void)pixel_index;
-    if (s_bb_phase != BB_PHASE_ROUND_END) {
+    if (s_tb_phase != TB_PHASE_ROUND_END) {
         return white(0.0f);
     }
-    uint32_t toggle = (now_ms - s_bb_round_end_ms) / BB_FLASH_TOGGLE_MS;
+    uint32_t toggle = (now_ms - s_tb_round_end_ms) / TB_FLASH_TOGGLE_MS;
     if ((toggle % 2u) == 0u) {
         tiles_standby_color_t red = {1.0f, 0.0f, 0.0f};
         return red;
@@ -1204,7 +1204,7 @@ static void pong_new_round(uint32_t now_ms) {
     s_pong_point_flash_ms = now_ms - PONG_POINT_FLASH_MS - 1u;
 }
 
-/* Moves the paddle at most one row toward the ball (the brick breaker
+/* Moves the paddle at most one row toward the ball (the tile breaker
  * paddle AI). */
 static void pong_ai_track(int8_t *paddle_top) {
     if (s_pong_ball_row < *paddle_top) {
@@ -1516,14 +1516,14 @@ typedef tiles_standby_color_t (*underglow_fn_t)(uint8_t pixel_index, uint32_t no
 static const field_fn_t s_animations[] = {
     anim_wave,           anim_glow,     anim_shooting_stars, anim_snake,
     anim_rgb_showcase,   anim_equalizer, anim_underglow_circle,
-    anim_brick_breaker,  anim_marquee,  anim_bounce, anim_tetris, anim_pong,
+    anim_tile_breaker,  anim_marquee,  anim_bounce, anim_tetris, anim_pong,
     anim_fallingdots,
 };
 /* Parallel to s_animations[]: NULL = underglow samples the pad field at
  * its anchors; non-NULL = the animation draws its own underglow (EQ accent,
- * circular wave, brick breaker/Tetris/Pong flashes, marquee off). */
+ * circular wave, tile breaker/Tetris/Pong flashes, marquee off). */
 static const underglow_fn_t s_animation_underglow_override[] = {
-    NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow, bb_underglow, marquee_underglow, NULL,
+    NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow, tb_underglow, marquee_underglow, NULL,
     tetris_underglow, pong_underglow, NULL,
 };
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
@@ -1540,7 +1540,7 @@ static const uint8_t s_animation_weight[] = {
     ANIM_WEIGHT_REGULAR, /* RGB showcase */
     ANIM_WEIGHT_REGULAR, /* equalizer */
     ANIM_WEIGHT_REGULAR, /* underglow circle */
-    ANIM_WEIGHT_GAME,    /* brick breaker */
+    ANIM_WEIGHT_GAME,    /* tile breaker */
     ANIM_WEIGHT_REGULAR, /* marquee */
     ANIM_WEIGHT_REGULAR, /* bounce */
     ANIM_WEIGHT_GAME,    /* Tetris */
