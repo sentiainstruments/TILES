@@ -1,139 +1,80 @@
 #pragma once
 
-/*
- * Touch + Hall fusion: derives real MIDI velocity from elapsed time to
- * reach a real press (see expression.c's "Velocity: elapsed-time-to-
- * actuation" section for why this isn't acceleration-based), ongoing
- * aftertouch from press depth while held, and optional pitch bend from
- * sideways (Hall X) motion while held (see expression.c's "Pitch bend
- * from sideways motion" section). Touch remains the authoritative gate
- * for note-on/off timing (capacitive contact is more reliable to detect
- * than trying to infer press/release purely from Hall depth); Hall
- * supplies the expressive data layered on top of it -- matches the
- * hardware handoff's own framing: "Touch should be used as a state and
- * intention signal, not as the only pressure measurement. Hall and
- * touch data should be fused."
+/* Touch + Hall fusion: turns pad contact and magnet motion into notes and
+ * expression. Touch is the gate for note timing (contact is more reliable
+ * than inferring press/release from depth); Hall supplies velocity (time
+ * to reach a real press; see expression.c "Velocity"), pressure from depth
+ * while held, and optional pitch bend from sideways tilt. As the hardware
+ * handoff puts it: touch is a state and intention signal, fused with Hall.
  *
  * Per-pad state machine:
- *   IDLE            -- touch rising edge --> AWAITING_STRIKE (+ a light
- *                       touch-only haptic pulse, independent of whether
- *                       this becomes a real press -- see
- *                       services/haptics.h)
- *   AWAITING_STRIKE  -- measured depth crosses the real-press threshold
- *                       --> commit: fire note-on (+ a haptic kick, same
- *                       velocity value -- see services/haptics.h) -->
- *                       NOTE_ON, and claim pitch bend ownership if
- *                       enabled
- *                    -- touch released before committing --> IDLE
- *                       (cancelled -- a light tap that never became a
- *                       real press never sends a note)
- *   NOTE_ON          -- touch falling edge --> note-off (+ haptic hard
- *                       stop, + release pitch bend ownership if held)
- *                       --> IDLE
- *                    -- depth easing back near true rest --> retrigger:
- *                       note-off then straight back into AWAITING_STRIKE
- *                       without touch itself ever going false
- *                    -- while held: poly aftertouch on a meaningful
- *                       depth change (+ the same value drives haptic
- *                       sustain intensity), and pitch bend if this pad
- *                       is the current owner
+ *   IDLE             -- touch starts --> AWAITING_STRIKE (+ a light touch
+ *                       haptic pulse, services/haptics.h)
+ *   AWAITING_STRIKE  -- depth crosses the press threshold --> note-on (+ a
+ *                       haptic kick at the same velocity) --> NOTE_ON
+ *                    -- touch ends first --> IDLE (a light tap never plays)
+ *   NOTE_ON          -- touch ends --> note-off (+ haptic stop) --> IDLE
+ *                    -- depth back near rest while still touched -->
+ *                       retrigger: note-off, then AWAITING_STRIKE again
+ *                    -- while held: pressure on meaningful depth changes
+ *                       (also drives haptic sustain), and pitch bend
  *
- * V1 caveat, stated plainly in expression.c: several constants
- * (aftertouch's depth range, velocity's timing bounds, pitch bend's
- * sensitivity) are first-attempt or real-data-informed estimates, not
- * fully measured against real hardware -- see each section's own notes
- * on what would refine them.
- */
+ * Several constants (pressure range, velocity timing, bend sensitivity)
+ * are estimates informed by captured data, not final measurements; each
+ * section in expression.c says what would refine it. */
 
 #include <stdbool.h>
 #include <stdint.h>
 
 void tiles_expression_init(void);
 
-/* Runs the per-pad state machine described above for every pad. Call
- * every main-loop iteration, after tiles_touch_scan() and
- * tiles_hall_scan() so both have fresh data this iteration. New strikes
- * (IDLE -> AWAITING_STRIKE) are suppressed for as long as
- * services/expression_control.h's sub-menu owns the pad grid (see
- * tiles_expression_control_owns_pad_grid()), so a slider tap there never
- * also fires a MIDI note underneath -- a pad already mid-strike or held
- * when the sub-menu opens is left alone to finish normally rather than
- * being cut off. */
+/* Runs every pad's state machine. Call every main-loop pass, after
+ * tiles_touch_scan() and tiles_hall_scan(). No NEW strikes start while
+ * the expression menu owns the grid
+ * (tiles_expression_control_owns_pad_grid()); notes already sounding
+ * finish normally. */
 void tiles_expression_scan(void);
 
-/* Called by services/expression_control.h on a genuine square ("sentia")
- * short click -- see expression.c's "Pitch bend from sideways motion"
- * section. Turning it off while a note currently owns the bend resets to
- * center immediately rather than leaving that note stuck bent. */
+/* Toggles pitch bend (square click, services/expression_control.h).
+ * Turning it off recenters any note currently bent. */
 void tiles_expression_toggle_pitch_bend(void);
 
-/* Current pitch-bend-enabled state, for services/expression_control.h to
- * drive the square button's persistent toggle-state LED glow. */
+/* For square's pitch-bend LED. */
 bool tiles_expression_is_pitch_bend_enabled(void);
 
-/* Real feedback: "lets make sure the pitch bend works with non mpe
- * layouts meaning pitch bend wheel... look for the max most
- * compatible and standardized version." True (the default) is this
- * file's existing MPE behavior, unchanged: every note claims its own
- * dynamic Member Channel (see claim_mpe_channel()) so pitch bend and
- * channel pressure are genuinely per-note. False switches to the
- * single most standard, universally-supported MIDI layout instead --
- * every note goes out on TILES_MIDI_MPE_MASTER_CHANNEL (MIDI channel
- * 1) like a plain non-MPE synth expects, and pitch bend/channel
- * pressure become the ordinary CHANNEL-WIDE messages a real pitch-
- * bend wheel sends, not per-note ones. Real feedback on multi-pad
- * bend ownership: "most recently touched/bent pad wins" -- whichever
- * held pad was struck most recently drives the shared channel's
- * continuous controllers; see expression.c's own s_non_mpe_owner_pad
- * for the full mechanics, including hand-off back to an older still-
- * held pad when the current owner releases. Toggled live (services/
- * expression_control.h's own circle+square hold, see that file's own
- * history of what that gesture used to do) -- see tiles_expression_
- * set_mpe_enabled()'s own comment for the note/channel-routing
- * consequences of flipping it while notes are already held. */
+/* MPE on (default): each note gets its own Member Channel, so bend and
+ * pressure are per-note. MPE off: the most compatible plain-MIDI layout,
+ * every note on channel 1 with channel-wide bend and pressure like a bend
+ * wheel; the most recently struck held pad drives them, handing back to
+ * an older held pad when it releases (s_non_mpe_owner_pad). Setting
+ * `expression.mpe_enabled`, toggled on the device by holding circle +
+ * square. See the definition for what happens to notes already held. */
 void tiles_expression_set_mpe_enabled(bool enabled);
 bool tiles_expression_is_mpe_enabled(void);
 
-/* Sends the MPE zone declaration that matches the current MPE setting --
- * the full Lower Zone (services/midi_channels.h's current size, plus the
- * pitch-bend range) while MPE is on, or a withdrawn zone (0 Member
- * Channels) while it's off. main.c calls this once at boot, after saved
- * settings are applied, and again every time USB MIDI mounts; tiles_
- * expression_set_mpe_enabled() and the scan's own deferred re-declaration
- * use it too, so nothing else sends an MPE Configuration Message. */
+/* Sends the MPE zone declaration for the current setting: the Lower Zone
+ * at its current size plus the bend range while MPE is on, a withdrawn
+ * zone (0 members) while off. Called at boot after settings load, on every
+ * USB mount, when MPE is toggled, and for the deferred re-declaration in
+ * scan. Nothing else sends an MPE Configuration Message. */
 void tiles_expression_announce_mpe_zone(void);
 
-/* Runtime sensitivity setters for services/expression_control.h's
- * expression sub-menu (rows 2 and 4) -- replace what used to be fixed
- * expression.c compile-time constants (PITCH_BEND_MAX_COSINE_DEVIATION,
- * DEPTH_TO_AFTERTOUCH_FULL_SCALE) so a pad tap in the sub-menu can adjust
- * them live. Both default to exactly their old fixed values (0.15f,
- * 900u) until changed -- see expression.c's own section comments for
- * what each value means and why those particular defaults were chosen.
- * Getters added for firmware/src/usb_vendor.c's own settings protocol
- * (real feedback: "we need the control software") -- a control surface
- * reading back the current value before showing/editing it needs one,
- * even though the on-device sub-menu itself never did (it only ever
- * writes a fresh value on each pad tap, never reads one back). */
+/* Sensitivities, set by the expression menu (rows 2 and 4) and the
+ * settings table. Defaults and meaning: see expression.c. */
 void tiles_expression_set_pitch_bend_sensitivity(float max_cosine_deviation);
 float tiles_expression_get_pitch_bend_sensitivity(void);
 void tiles_expression_set_aftertouch_sensitivity(uint16_t depth_full_scale);
 uint16_t tiles_expression_get_aftertouch_sensitivity(void);
 
-/* Melodic harmonics (a sole held pad + capacitive touches on the others sound
- * that note's harmonics -- see expression.c's "Melodic harmonics" section).
- * A runtime, flash-saved setting (features.melodic_harmonics), default ON;
- * disabling it ends any harmonic voices already sounding. Replaces the old
- * compile-time TILES_MELODIC_HARMONICS_ENABLED flag. */
+/* Melodic harmonics (hold one note, lightly touch other pads to pluck its
+ * harmonics; expression.c "Melodic harmonics"). Setting
+ * `features.melodic_harmonics`, default on; turning it off ends any
+ * harmonic voices sounding. */
 void tiles_expression_set_melodic_harmonics_enabled(bool enabled);
 bool tiles_expression_is_melodic_harmonics_enabled(void);
 
-/* Chord-vs-harmonic tuning (settings `features.harmonics.*`) -- see
- * expression.c's HARMONIC_ARM_MS_DEFAULT comment for what each one does.
- * Real feedback: "harmonics feel not as sensitive any more, we need to fine
- * tune the sensitivity of what triggers that mode so we can play chords but
- * also do harmonics in the same session without interfereing with the
- * other." Live-tunable so the balance can be found by ear, no reflash. */
+/* Chord-vs-harmonic tuning (settings `features.harmonics.*`), so chords
+ * and harmonics can share a session; see HARMONIC_ARM_MS_DEFAULT. */
 void tiles_expression_set_harmonics_arm_ms(uint16_t ms);
 uint16_t tiles_expression_get_harmonics_arm_ms(void);
 void tiles_expression_set_harmonics_confirm_ms(uint16_t ms);
@@ -141,56 +82,23 @@ uint16_t tiles_expression_get_harmonics_confirm_ms(void);
 void tiles_expression_set_harmonics_press_depth(uint16_t depth);
 uint16_t tiles_expression_get_harmonics_press_depth(void);
 
-/* Real feedback: "we have haptics vibration randomly in mini games,
- * that shouldnt happen." Root cause: the PAD_STATE_IDLE fresh-touch
- * gate (see expression.c's own comment there) only ever stops a NEW
- * touch from starting a strike while services/game_mode.h owns the
- * board -- a pad already past IDLE at the exact moment game mode
- * activates (e.g. incidental contact during the 4-button entry hold)
- * was deliberately left alone, same as it is for every other "who owns
- * the grid" case. That's the right call for expression_control's/
- * op_mode's/octave_control's menus, where an in-flight note is probably
- * a deliberate held note worth protecting -- but a pad still mid-strike
- * the instant game mode turns on is essentially never a real musical
- * note (both hands are on the 4 combo buttons to get there), so leaving
- * it alone just means it keeps sampling Hall depth and can still commit
- * a real note+haptic kick mid-game from mechanical vibration through
- * the shared PCB as the player mashes the adjacent buttons. Call once,
- * right when services/game_mode.h transitions into an active state --
- * force-ends any pad already at PAD_STATE_NOTE_ON (real note-off +
- * haptic stop) and resets every pad to PAD_STATE_IDLE regardless of
- * where it was, closing the gap the fresh-touch gate alone couldn't. */
+/* Ends every note and returns every pad to IDLE. Called when game mode
+ * starts: a pad caught mid-strike then is incidental contact (both hands
+ * are on the combo), and left alone it could still commit a note and a
+ * haptic kick mid-game from vibration. Other grid owners (menus) leave
+ * in-flight notes alone because those are usually deliberate. */
 void tiles_expression_force_release_all(void);
 
-/* Exposed for services/op_mode.c's own chord-mode strikes -- real
- * feedback: "lets simplify to velocity sensitive chords." Chord pads
- * are driven directly by op_mode.c, bypassing this file's own per-pad
- * PAD_STATE_AWAITING_STRIKE machinery entirely (same reason chord
- * pads never go through tiles_note_map_get_note() either -- see that
- * function's own chord-region comment), so there's no existing
- * strike-velocity signal for them to read; this lets that file reuse
- * the SAME already-tuned curve (this file's own velocity_from_strike(),
- * "Velocity" section) instead of inventing and separately tuning a
- * second one.
- * `strike_time_ms`: elapsed time from touch-down to the sample where
- * `peak_depth` first reached TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA
- * (below) -- speed of travel to that threshold, not total hold time.
- * `peak_depth`: the highest Hall depth reading seen up to that same
- * moment (a strike can spring back before a reading taken later would
- * still show it past threshold -- see this file's own peak_depth
- * comment for why the PEAK matters, not "whatever depth is showing
- * right now"). Both must be measured against
- * TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA specifically -- this
- * function's own internal scoring is calibrated relative to that exact
- * crossing point, not a generic "how deep" input. */
+/* The velocity curve, shared with op_mode.c's chord pads (which bypass
+ * this file's state machine) so both use one tuned curve.
+ * `strike_time_ms`: time from touch-down to the sample where the depth
+ * first reached TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA (travel speed, not
+ * hold time). `peak_depth`: the highest depth seen up to then (a strike
+ * can spring back). Both must be measured against that threshold; the
+ * curve is calibrated to it. */
 uint8_t tiles_expression_velocity_from_strike(uint32_t strike_time_ms, float peak_depth);
 
-/* The exact threshold tiles_expression_velocity_from_strike() above
- * expects `peak_depth` to be measured against -- see that function's
- * own comment. Single source of truth: this file's own MIN_STRIKE_
- * DEPTH_DELTA (used throughout its "Velocity" section) is defined
- * FROM this constant, not the other way around, specifically so the
- * two can never drift apart -- a caller measuring peak_depth against
- * a different value here would silently miscalibrate the shared
- * curve. */
+/* The strike threshold the velocity curve is calibrated against. The
+ * single source of truth: expression.c's MIN_STRIKE_DEPTH_DELTA is defined
+ * from it. */
 #define TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA 150.0f

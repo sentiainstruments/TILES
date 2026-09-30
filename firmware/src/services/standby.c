@@ -20,86 +20,41 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* Demo defaults per the user's own direction: 1 minute is fine for
- * demo mode even though the real idle timeout will likely change once
- * this isn't just a demo; alternating every "few minutes" is
- * intentionally vague -- 2 minutes is a starting guess, not measured
- * against how it actually feels to watch. */
+/* 1 minute to standby; a new animation every 2 minutes (starting guesses). */
 #define TILES_STANDBY_IDLE_TIMEOUT_MS 60000u
 #define TILES_STANDBY_ANIMATION_CYCLE_MS 120000u
 
-/* Real feedback: "sleep screensaver should be set to 20 minute in
- * sequencer mode since its a more stratic thing so 20 minutes and then
- * screensaver and 10 later sleep." Sequencer mode can legitimately run
- * unattended for a while (a pattern looping on its own) in a way plain
- * melodic idle isn't expected to -- TILES_STANDBY_IDLE_TIMEOUT_MS's 1
- * minute would be far too eager to blank the board while a sequence is
- * simply playing with no hands on it. Checked via
- * tiles_op_mode_is_sequencer_active() (services/op_mode.h) wherever the
- * plain idle timeout above is used -- see enter_standby()'s own call
- * site and current_deep_sleep_timeout_ms() below for the matching "+10
- * more minutes" deep-sleep half. */
+/* Sequencer mode: 20 min to standby, 30 to deep sleep. A pattern can run
+ * unattended; 1 minute would blank the board while it plays. See
+ * enter_standby() and current_deep_sleep_timeout_ms(). */
 #define TILES_STANDBY_SEQUENCER_IDLE_TIMEOUT_MS 1200000u        /* 20 * 60 * 1000 */
-#define TILES_STANDBY_SEQUENCER_DEEP_SLEEP_TIMEOUT_MS 1800000u /* 30 * 60 * 1000 -- 20 (idle) + 10 (extra) */
+#define TILES_STANDBY_SEQUENCER_DEEP_SLEEP_TIMEOUT_MS 1800000u /* 30 * 60 * 1000 (20 idle + 10 more) */
 
-/* After 20 minutes of TOTAL inactivity (same s_last_activity_ms clock
- * that gates entering standby in the first place -- not 20 minutes of
- * animation specifically, 20 minutes since the last real touch/button/
- * pedal event), standby's animations stop and the board drops to deep
- * sleep: everything dark except the circle button pulsing slowly, the
- * one indicator that it's in this state. See enter_deep_sleep() below.
- * This is also the *exact same* state holding circle (SW6) for
- * TILES_CIRCLE_DEEP_SLEEP_HOLD_MS reaches directly -- real feedback:
- * "the sleep mode after 10 secs is the same as the timeout of the
- * animations, not two separate things... rename that to deep sleep."
- * An earlier version had a second, distinct all-the-way-blank state for
- * the 10s hold; this collapses the two into one.
- * Real feedback: "make screensaver 30 min if triggered manually, 20 if
- * auto" -- was 15/20, raised to 20/30 (see
- * TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS further below for the
- * manual half). */
+/* Deep sleep after 20 minutes of TOTAL inactivity (the same
+ * s_last_activity_ms clock that starts standby). Holding circle 8 s
+ * reaches the same state. See enter_deep_sleep(). */
 #define TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS 1200000u /* 20 * 60 * 1000 */
 
-/* ~25fps. Unmeasured against real I2C bus load (every pad write is a
- * mux-select-enable-disable dance, see lighting.c) -- if 24 pads + 6
- * buttons + 4 underglow pixels every frame turns out to compete with
- * anything else on the bus, raise this first. */
+/* ~25 fps. Every pad write is a mux sequence on I2C; if a full frame ever
+ * competes with other bus traffic, raise this first. */
 #define TILES_STANDBY_FRAME_INTERVAL_MS 40u
 
-/* Hall-depth wake fallback: touching a pad during the standby animation
- * was observed to NOT reliably wake it (buttons/pedal woke it fine),
- * pointing at the pad-LED animation itself interfering with capacitive
- * touch sensing -- root cause unconfirmed, see git history for the
- * fuller investigation. Hall (magnetic, not capacitive) isn't subject
- * to whatever that is, so it's meant as an independent second wake
- * path. Checked ONLY while already in standby (hall_depth_wake_triggered()
- * below), never as part of deciding whether to enter standby -- folding
- * it into that check first broke standby from ever entering at all,
- * since hall.c's depth has no drift compensation and can look
- * permanently "active" on its own.
+/* Hall-depth wake: a second wake path, because touch didn't reliably wake
+ * standby while the pad animation ran (cause unconfirmed). Only checked
+ * while already in standby (hall_depth_wake_triggered()), never to decide
+ * whether to enter it: raw depth can look permanently "active" and kept
+ * standby from ever starting.
  *
- * DISABLED for now (TILES_STANDBY_HALL_WAKE_ENABLED 0): the magnets
- * aren't in their final position yet (mid-plate assembly still being
- * printed as of this change), so hall.c's rest baseline and every depth
- * reading right now are against a physically incomplete, unrepresentative
- * setup -- any threshold picked against that data would be meaningless,
- * not just untuned, and was the reason standby kept bouncing right back
- * out even after being moved to wake-only. Re-enable once the magnets
- * are seated and hall.c's baseline/depth can be trusted -- pick
- * TILES_STANDBY_HALL_WAKE_DEPTH from real rest-vs-pressed numbers at
- * that point, not another guess. Until then, standby only wakes via
- * touch/button/pedal (see real_input_active()) -- touch not reliably
- * waking it is still open, tracked separately from this Hall path. */
+ * DISABLED until TILES_STANDBY_HALL_WAKE_DEPTH is set from real
+ * rest-vs-light-press numbers (the earlier guess, taken before the magnets
+ * were seated, made standby bounce straight back out). */
 #define TILES_STANDBY_HALL_WAKE_ENABLED 0
 #define TILES_STANDBY_HALL_WAKE_DEPTH 1000u
 
 #define TILES_STANDBY_PI 3.14159265358979323846f
 
-/* Grid bounds, pad/button/underglow mapping (board_pad_for_row_col(),
- * board_button_for_col(), g_tiles_underglow_anchor[]) now live in
- * board/board_layout.h -- shared with services/boot_sequence.c, which
- * needs the same "board as one 5x6 grid" model for the power-on
- * animation. */
+/* Grid bounds and the pad/button/underglow mapping live in
+ * board/board_layout.h (shared with the boot animation). */
 
 static float clamp01(float v) {
     if (v < 0.0f) {
@@ -115,9 +70,7 @@ static float rand01(void) {
     return (float)rand() / (float)RAND_MAX;
 }
 
-/* Every animation returns full RGB now (0.0-1.0 per channel), not a
- * single brightness scalar -- needed for anim_rgb_showcase (animation
- * 5) below. The white animations (1-4) just return r=g=b=v via white(). */
+/* Animations return RGB (0.0-1.0 per channel); white ones use white(). */
 typedef struct {
     float r;
     float g;
@@ -130,12 +83,10 @@ static tiles_standby_color_t white(float v) {
     return c;
 }
 
-/* ---- Animation 1: wave -------------------------------------------------
- * A traveling diagonal band: phase is a function of (row + col), so
- * constant-phase lines run at 45 degrees across the grid, not
- * horizontally or vertically. WAVE_CONTRAST_GAMMA (>1) biases the curve
- * toward dark, so most of the cycle reads as genuinely off with a
- * brighter band passing through, rather than a smooth 50/50 sine. */
+/* ---- Animation: wave --------------------------------------------------
+ * A diagonal band travelling across the grid (phase depends on row + col).
+ * WAVE_CONTRAST_GAMMA > 1 keeps most of the cycle dark with a brighter
+ * band passing through. */
 
 #define WAVE_LENGTH_DIAG 3.0f
 #define WAVE_PERIOD_MS 3000.0f
@@ -148,11 +99,8 @@ static tiles_standby_color_t anim_wave(uint8_t row, uint8_t col, uint32_t now_ms
     return white(powf(clamp01(raw), WAVE_CONTRAST_GAMMA));
 }
 
-/* ---- Animation 2: glow center-out --------------------------------------
- * A ring pulsing outward from the grid's visual center, repeating.
- * GLOW_RING_WIDTH narrowed and the result squared for a sharper, more
- * dramatic ring against a fully dark background instead of a soft,
- * diffuse glow. */
+/* ---- Animation: glow ------------------------------------------------------
+ * A sharp ring pulsing outward from the grid's center, on dark. */
 
 #define GLOW_CENTER_ROW 2.0f
 #define GLOW_CENTER_COL 3.5f
@@ -170,21 +118,15 @@ static tiles_standby_color_t anim_glow(uint8_t row, uint8_t col, uint32_t now_ms
     return white(clamp01(raw * raw));
 }
 
-/* ---- Animation 3: shooting stars ----------------------------------------
- * Comet-tailed points falling top (above row 0) to bottom (past row 4),
- * each respawning at a random column once it exits. More "complex" than
- * the original version: more concurrent stars, per-star randomized
- * speed and tail length (not identical falls), exponential (not linear)
- * tail decay for a sharper head/softer trail, and a subtle twinkle
- * (brightness jitter) per star. The only stateful animation here -- the
- * others are pure functions of (row, col, time); this one owns a small
- * fixed-size particle array. */
+/* ---- Animation: shooting stars -----------------------------------------
+ * Comet-tailed points falling top to bottom, each respawning at a random
+ * column, with randomized speed and tail length, exponential tail decay
+ * and a slight twinkle. Keeps a small particle array. */
 
 #define NUM_STARS 5u
 #define STAR_TAIL_ROWS_MIN 2.0f
 #define STAR_TAIL_ROWS_MAX 4.5f
-/* Roughly half the original speed (denominators doubled) -- real
- * feedback that the fall read as too fast. */
+/* Slowed to about half the original speed. */
 #define STAR_SPEED_ROWS_PER_MS_MIN (1.0f / 600.0f)
 #define STAR_SPEED_ROWS_PER_MS_MAX (1.0f / 280.0f)
 #define STAR_TWINKLE_PERIOD_MS 90.0f
@@ -214,8 +156,7 @@ static void star_respawn(star_t *star, uint32_t spawn_ms) {
 static tiles_standby_color_t anim_shooting_stars(uint8_t row, uint8_t col, uint32_t now_ms) {
     if (!s_stars_inited) {
         for (uint8_t i = 0; i < NUM_STARS; i++) {
-            /* Stagger initial spawn times so they don't all fall in
-             * lockstep the first time this animation is shown. */
+            /* Stagger the first spawns so the stars don't fall in lockstep. */
             star_respawn(&s_stars[i], now_ms - (uint32_t)i * 700u);
         }
         s_stars_inited = true;
@@ -248,26 +189,15 @@ static tiles_standby_color_t anim_shooting_stars(uint8_t row, uint8_t col, uint3
     return white(clamp01(brightness));
 }
 
-/* ---- Animation 4: snake --------------------------------------------------
- * An actual game of snake, not just a segment crawling a fixed path:
- * a pulsing red food dot appears somewhere on the grid, the snake moves
- * toward it a cell at a time, eats it (grows by one segment, a new dot
- * appears), and keeps going. Movement is greedy-toward-the-food with a
- * randomized perturbation each step (snake_step() below) so the path
- * varies run to run instead of always taking the same route -- and the
- * snake resets to a short length at a randomized start position/
- * direction whenever it grows too long or traps itself with nowhere
- * left to go, so it doesn't settle into one repeating pattern long-term
- * either. Reworked from an earlier version that was just a fixed-length
- * segment ping-ponging a deterministic path -- real feedback was that
- * it didn't feel like an actual game of snake. */
+/* ---- Animation: snake ----------------------------------------------------
+ * A self-playing snake: a pulsing red food dot, the snake steers toward it
+ * greedily with random perturbation (so paths vary), eats it and grows.
+ * It restarts short at a random place when it gets too long or boxed in. */
 
 #define SNAKE_STEP_MS 300u
-#define SNAKE_MAX_LENGTH 14u /* reset threshold -- well under the 30-cell grid */
-/* How strongly a step's direction choice gets perturbed away from the
- * purely greedy (shortest-distance-to-food) choice, in the same units
- * as cell distance -- higher means more wandering/varied paths, lower
- * means more direct pathing to the food. Unmeasured, a starting guess. */
+#define SNAKE_MAX_LENGTH 14u /* reset length, well under the 30-cell grid */
+/* How far each step's choice is nudged away from the greedy direction, in
+ * cell-distance units: higher = more wandering. Starting guess. */
 #define SNAKE_RANDOM_TURN_WEIGHT 1.5f
 
 typedef struct {
@@ -291,11 +221,9 @@ static bool snake_cell_in_body(int8_t row, int8_t col) {
 }
 
 static void snake_place_food(void) {
-    /* Small board (30 cells), snake usually much shorter -- a bounded
-     * rejection-sampling loop finds an empty cell almost immediately in
-     * practice. The fallback after MAX_ATTEMPTS (place it somewhere
-     * regardless of overlap) only matters if the snake is nearly
-     * filling the board, in which case a reset is imminent anyway. */
+    /* Bounded rejection sampling for an empty cell; finds one almost at once.
+     * The fallback only matters when the snake nearly fills the board, and a
+     * reset is imminent then anyway. */
     for (uint8_t attempt = 0; attempt < 50u; attempt++) {
         int8_t r = (int8_t)(TILES_GRID_MIN_ROW + (rand() % (TILES_GRID_MAX_ROW - TILES_GRID_MIN_ROW + 1u)));
         int8_t c = (int8_t)(TILES_GRID_MIN_COL + (rand() % (TILES_GRID_MAX_COL - TILES_GRID_MIN_COL + 1u)));
@@ -309,9 +237,8 @@ static void snake_place_food(void) {
     s_snake_food.col = (int8_t)TILES_GRID_MIN_COL;
 }
 
-/* Randomized start position/direction, short length -- "game over" (too
- * long, or nowhere left to move) and the very first call both land
- * here, so every run starts looking different. */
+/* Random start position and direction, short length. Used for game over
+ * and the first call, so every run looks different. */
 static void snake_reset(uint32_t now_ms) {
     static const int8_t dir_row[4] = {-1, 1, 0, 0};
     static const int8_t dir_col[4] = {0, 0, -1, 1};
@@ -322,11 +249,7 @@ static void snake_reset(uint32_t now_ms) {
     int8_t dr = dir_row[dir_index];
     int8_t dc = dir_col[dir_index];
 
-    /* 2, not 3 -- real feedback (from the interactive version in
-     * game_mode.c, same concern applies here) that 3 felt cramped given
-     * how little space this board actually has, and with a randomized
-     * start position here a longer starting length also meant more
-     * segments could land clamped/bunched at a boundary. */
+    /* Start with length 2 (small board; a longer start bunches at edges). */
     s_snake_length = 2u;
     for (uint8_t i = 0; i < s_snake_length; i++) {
         int8_t r = (int8_t)(start_row - dr * (int8_t)i);
@@ -383,7 +306,7 @@ static void snake_step(uint32_t now_ms) {
     }
 
     if (best_dir < 0) {
-        /* Boxed in with nowhere to go -- "game over", start fresh. */
+        /* Boxed in: start over. */
         snake_reset(now_ms);
         return;
     }
@@ -447,37 +370,24 @@ static tiles_standby_color_t anim_snake(uint8_t row, uint8_t col, uint32_t now_m
     return white(0.0f);
 }
 
-/* ---- Animation 5: blue/purple RGB showcase ------------------------------
- * Shows off both the underglow AND the pad grid's actual RGB capability
- * (every other animation is deliberately white) -- a diagonal value
- * wave, same shape as anim_wave, but hue cycles within the blue-to-
- * violet range instead of brightness alone staying white. Underglow
- * samples this same field at its usual anchor points (see
- * s_animation_underglow_off below, false for this animation), so it
- * shows the same moving color as the pads instead of sitting the
- * animation out. The function-button row is held to a low, constant,
- * non-animated dim glow rather than fully off or full brightness --
- * button LEDs are plain monochrome PWM, not addressable RGB, so they
- * can't show the color itself, but going fully dark read as an
- * unrelated glitch; a low, deliberately non-pulsing glow reads as
- * "quietly present" without competing with the pad color. */
+/* ---- Animation: RGB showcase -------------------------------------------
+ * The one colorful ambient animation: a diagonal wave (like wave) whose
+ * hue moves within blue to violet. Underglow samples the same field. The
+ * button row sits at a low, steady glow (buttons can't show color, and
+ * fully dark looked like a glitch). */
 
 #define RGB_WAVE_LENGTH_DIAG 3.0f
 #define RGB_WAVE_PERIOD_MS 3500.0f
 #define RGB_CONTRAST_GAMMA 1.8f
 #define RGB_HUE_CYCLE_MS 6000.0f
 #define RGB_HUE_MIN_DEG 220.0f /* blue */
-#define RGB_HUE_MAX_DEG 285.0f /* violet/purple */
+#define RGB_HUE_MAX_DEG 285.0f /* violet */
 
-/* Raw luminance returned for the button row -- render_frame() further
- * multiplies every animation's button row by BUTTON_STANDBY_BRIGHTNESS_SCALE
- * (0.35), so the actual final brightness is roughly this times that,
- * not this value directly. Picked to land low/subtle after that scale;
- * unmeasured, adjust directly if it still reads as too bright or too
- * dark once seen lit. */
+/* Button-row level before render_frame()'s
+ * BUTTON_STANDBY_BRIGHTNESS_SCALE (0.35), so the result is low. Unmeasured. */
 #define RGB_SHOWCASE_BUTTON_ROW_LEVEL 0.35f
 
-/* Standard HSV->RGB, s always 1.0 here (fully saturated blue/purple hues). */
+/* Standard HSV -> RGB, full saturation. */
 static tiles_standby_color_t hsv_to_rgb(float h_deg, float v) {
     float h = fmodf(h_deg, 360.0f);
     if (h < 0.0f) {
@@ -532,151 +442,73 @@ static tiles_standby_color_t anim_rgb_showcase(uint8_t row, uint8_t col, uint32_
     return hsv_to_rgb(hue, value);
 }
 
-/* ---- Animation 6: graphic equalizer --------------------------------------
- * Each column is a fake VU/EQ bar lit bottom-up -- rows 3-4 (the bottom
- * two) white, row 2 yellow, row 1 (top) red, like a classic hardware
- * graphic equalizer. Red is now *only* ever the top row's own color,
- * not a separate marker -- see the rework note below. Rows 3-4 were
- * originally blue; real feedback: "make the blue white in vu meter."
+/* ---- Animation: graphic equalizer -------------------------------------
+ * Each column is a VU bar lit bottom-up: rows 3-4 white, row 2 yellow,
+ * row 1 red (red only ever appears as row 1's own color). Tempo-locked to
+ * 90 BPM (EQ_BEAT_MS), each column pair hitting at its own rate, low to
+ * high left to right. Each hit swells up (short attack), holds briefly at
+ * its peak, then decays; some hits are skipped for breathing room. About
+ * 6% of hits redline (row 1 lights). Buttons are off; the underglow is a
+ * steady white accent.
  *
- * Reworked three times from real feedback. First pass slowed everything
- * down and added a long, low-biased "phrase" envelope so columns spent
- * real stretches fully dark -- overshot into "too slow" with "almost no
- * peaks." Second pass replaced that with a percussive, tempo-locked hit
- * envelope (127bpm, instant attack, per-column subdivisions) plus a
- * separate red "peak-hold" marker that could land on any row and slowly
- * fall back down -- but real feedback was that the whole thing was now
- * "too flashy and fast," the falling peak marker read as "dropping red
- * lights" rather than a hold indicator, and at only 4 rows of
- * resolution the effect just looked broken, not like a VU meter. Third
- * pass: the peak-hold marker was removed entirely -- red only ever
- * appears on row 1 because that's that row's own bar color, never as a
- * separate roaming marker. The instant-attack pop was replaced with a
- * short attack ramp (EQ_ATTACK_FRACTION) so each hit swells up rather
- * than flashing on -- closer to a real VU needle's fast-attack/slower-
- * release ballistics. Tempo slowed (127bpm -> ~107bpm, EQ_BEAT_MS) and
- * the busiest columns' subdivision lowered (4/beat -> 3/beat).
- *
- * Fourth pass (current), more real feedback: still "too fast" and
- * "moving too crazy," and row 1 (red, "redline") almost never actually
- * lit -- envelope*velocity needed to land right at 1.0 to clear row 1's
- * threshold, which the old velocity range (0.55-1.0, smoothly varying)
- * essentially never hit exactly. Tempo slowed further to 90bpm
- * (EQ_BEAT_MS), every column's hit-rate subdivision lowered again (the
- * busiest column now 2/beat, not 3), and velocity now deliberately
- * guarantees a real redline: the top ~6% of hits (by the same
- * deterministic golden-angle key already used for velocity variance)
- * jump straight to 1.0 instead of the smooth 0.55-1.0 curve, so row 1
- * genuinely flashes red every so often instead of practically never.
- * Function buttons are fully off; underglow is a simple constant white
- * accent (see eq_underglow below, also originally blue -- same feedback
- * as the bars above) rather than tracking the bars -- doesn't correspond
- * to any one column, so there's nothing meaningful for it to track.
- *
- * Fifth pass (current), more real feedback: "make sure some peaks do
- * redline every once in a while" -- the guaranteed-1.0-velocity mechanism
- * from the fourth pass above was already in place but still essentially
- * never visibly fired, for a DIFFERENT reason than the fourth pass fixed:
- * the envelope only reaches exactly 1.0 for a single infinitesimal
- * instant (the moment the attack ramp ends), and this whole animation is
- * only ever sampled once per ~40ms render frame -- see eq_bar_level()'s
- * own comment on the fix (EQ_PEAK_HOLD_FRACTION, a brief plateau at the
- * peak instead of an instantaneous one). */
+ * Tuned down over several rounds from "too flashy/fast"; a falling red
+ * peak-hold marker was removed because it read as dropping red lights. */
 
 #define EQ_NUM_COLS 6u
 #define EQ_LIT_LEVEL 0.85f
 #define EQ_UNDERGLOW_LEVEL 0.7f
-/* One quarter note at 90bpm (slowed from ~107bpm, itself slowed from an
- * initial 127bpm -- real feedback across two rounds that it was "too
- * fast"/"moving too crazy") -- the shared pulse every column's hit rate
- * subdivides. */
+/* One quarter note at 90 BPM, the pulse every column subdivides. */
 #define EQ_BEAT_MS 667.0f
-/* Fraction of hits that get deterministically dropped to 0 -- "some
- * empty space" without a multi-second silent stretch. */
+/* Fraction of hits dropped to 0: some empty space, never a long silence. */
 #define EQ_MISS_FRACTION 0.12f
-/* Fraction of a hit's window spent rising to full brightness before it
- * starts decaying -- a real VU needle swings up fast, not instantly, so
- * a short ramp (rather than the old instant-attack pop) reads as less
- * of a flash and more like a meter reacting. */
+/* Share of a hit spent rising to full: a meter swings up fast, not
+ * instantly. */
 #define EQ_ATTACK_FRACTION 0.18f
-/* Fraction of a hit's window the envelope holds flat at its peak (1.0)
- * right after the attack ramp, before decay begins -- see eq_bar_level()'s
- * own comment on why an instantaneous peak was never actually visible.
- * 10% of even the busiest column's hit window is still tens of ms of
- * real time, comfortably wider than one TILES_STANDBY_FRAME_INTERVAL_MS
- * frame. */
+/* Share of a hit held at the peak after the attack, so a ~40 ms frame
+ * reliably samples the peak (see eq_bar_level()). */
 #define EQ_PEAK_HOLD_FRACTION 0.10f
-/* Fraction of hits (by velocity_key below) that redline -- jump straight
- * to full velocity (1.0) instead of the smooth 0.55-0.95 curve, so row 1
- * (red) genuinely lights up every so often. Deliberately rare: a real VU
- * meter redlines occasionally, not on every beat. */
+/* Share of hits (by velocity_key) that reach full velocity 1.0, so row 1
+ * lights now and then. Deliberately rare. */
 #define EQ_REDLINE_FRACTION 0.06f
 
-/* Per-column hit rate, in hits per beat -- pairs of columns share a rate
- * (low/low/mid/mid/high/high) so the six bars still read left-to-right
- * as low to high register, like a real EQ's frequency axis. Lowered
- * again (3/beat -> 2/beat busiest) per real feedback that the meter was
- * still moving too fast/chaotically even after the first density cut. */
+/* Hits per beat per column; pairs share a rate so the bars read low to
+ * high like an EQ's frequency axis. */
 static const float s_eq_col_hits_per_beat[EQ_NUM_COLS] = {1.0f, 1.0f, 1.5f, 1.5f, 2.0f, 2.0f};
-/* Per-column decay shape for the percussive envelope -- lower (slower
- * subdivisions / bass) rings out over more of its hit window; higher
- * (faster subdivisions / treble) snaps back almost immediately. */
+/* Decay shape per column: slower (bass) columns ring longer, faster
+ * (treble) ones snap back. */
 static const float s_eq_col_decay_exp[EQ_NUM_COLS] = {1.5f, 1.5f, 1.0f, 1.0f, 0.6f, 0.6f};
 
-/* Deterministic function of (col, time): a short attack ramp into a
- * decay, tempo-locked to that column's own subdivision of EQ_BEAT_MS,
- * plus a deterministic occasional full-miss for some breathing room
- * between hits. No randomness/state needed at all -- unlike the
- * previous version there's no peak-hold to track either. */
+/* Deterministic in (col, time): attack, peak hold, decay, locked to the
+ * column's subdivision, with occasional deterministic misses. No state. */
 static float eq_bar_level(uint8_t col, uint32_t now_ms) {
     uint8_t i = (uint8_t)(col - TILES_GRID_MIN_COL);
     float hit_period = EQ_BEAT_MS / s_eq_col_hits_per_beat[i];
     float hit_index = floorf((float)now_ms / hit_period);
-    float phase = ((float)now_ms - hit_index * hit_period) / hit_period; /* 0 at the hit, ->1 before the next */
+    float phase = ((float)now_ms - hit_index * hit_period) / hit_period; /* 0 at the hit, -> 1 before the next */
 
-    /* Golden-angle stepping keyed on which hit this is -- a cheap,
-     * deterministic stand-in for randomness that still spreads misses
-     * evenly across hits instead of clustering them. */
+    /* Golden-ratio stepping keyed on the hit index: cheap deterministic
+     * "randomness" that spreads misses evenly. */
     float miss_key = fmodf(hit_index * 0.6180339887f + (float)i * 0.37f, 1.0f);
     if (miss_key < EQ_MISS_FRACTION) {
         return 0.0f;
     }
 
-    /* The rise above reaches exactly 1.0 at a single instant (phase ==
-     * EQ_ATTACK_FRACTION) before decay starts falling away from it again
-     * -- with this whole thing rendered at TILES_STANDBY_FRAME_INTERVAL_MS
-     * (~40ms) intervals, that instant is almost never the one a frame
-     * actually samples, so even a genuine EQ_REDLINE_FRACTION hit
-     * (velocity_key below forcing velocity to exactly 1.0) essentially
-     * never produced a RENDERED level of exactly 1.0 -- row 1's threshold
-     * (anim_equalizer() below, row_threshold == 1.0 for row 1) needs
-     * nothing less. Real feedback: "make sure some peaks do redline
-     * every once in a while" -- the redline mechanism was already in
-     * place but this sampling gap meant it essentially never visibly
-     * fired. Fixed with a brief plateau (EQ_PEAK_HOLD_FRACTION) held at
-     * the full envelope value between the attack ramp and the decay,
-     * long enough in real ms (even for the busiest column's shortest hit
-     * window) that a ~40ms-interval render reliably lands inside it at
-     * least once per hit rather than needing to catch one exact instant. */
+    /* Without a plateau the envelope touches 1.0 for only an instant, which a
+     * ~40 ms frame almost never samples, so redlines never showed. The brief
+     * hold (EQ_PEAK_HOLD_FRACTION) is wide enough to be caught every hit. */
     float envelope;
     if (phase < EQ_ATTACK_FRACTION) {
         envelope = phase / EQ_ATTACK_FRACTION; /* linear rise to the peak */
     } else if (phase < EQ_ATTACK_FRACTION + EQ_PEAK_HOLD_FRACTION) {
-        envelope = 1.0f; /* brief plateau at the peak -- see comment above */
+        envelope = 1.0f; /* brief plateau at the peak (see above) */
     } else {
         float decay_phase =
             (phase - EQ_ATTACK_FRACTION - EQ_PEAK_HOLD_FRACTION) / (1.0f - EQ_ATTACK_FRACTION - EQ_PEAK_HOLD_FRACTION);
         envelope = powf(1.0f - decay_phase, s_eq_col_decay_exp[i]);
     }
 
-    /* Per-hit velocity variance (same golden-angle trick, different
-     * offset) so hits that do land aren't all identically full-height --
-     * still real dynamic range without needing every hit to be a peak.
-     * The top EQ_REDLINE_FRACTION of that same key jumps straight to a
-     * guaranteed 1.0 instead of the smooth curve, so envelope*velocity
-     * actually reaches row 1's 1.0 threshold every so often -- see this
-     * animation's file comment on why the old smooth-only curve almost
-     * never redlined. */
+    /* Per-hit velocity (same trick, different offset) so hits vary in height.
+     * The top EQ_REDLINE_FRACTION jump to exactly 1.0 so row 1 lights. */
     float velocity_key = fmodf(hit_index * 0.6180339887f + (float)i * 0.37f + 0.5f, 1.0f);
     float velocity;
     if (velocity_key >= (1.0f - EQ_REDLINE_FRACTION)) {
@@ -696,15 +528,14 @@ static tiles_standby_color_t eq_row_color(uint8_t row) {
         tiles_standby_color_t yellow = {1.0f, 1.0f, 0.0f};
         return yellow;
     }
-    /* Rows 3, 4 -- was blue; real feedback: "make the blue white in vu
-     * meter." */
+    /* Rows 3-4: white. */
     tiles_standby_color_t white_bar = {1.0f, 1.0f, 1.0f};
     return white_bar;
 }
 
 static tiles_standby_color_t anim_equalizer(uint8_t row, uint8_t col, uint32_t now_ms) {
     if (row == 0u) {
-        return white(0.0f); /* function buttons fully off for this animation */
+        return white(0.0f); /* buttons off for this animation */
     }
 
     float level = eq_bar_level(col, now_ms);
@@ -720,19 +551,14 @@ static tiles_standby_color_t anim_equalizer(uint8_t row, uint8_t col, uint32_t n
 static tiles_standby_color_t eq_underglow(uint8_t pixel_index, uint32_t now_ms) {
     (void)pixel_index;
     (void)now_ms;
-    /* Was a blue accent; real feedback: "make the blue white in vu
-     * meter." */
+    /* Steady white accent. */
     return white(EQ_UNDERGLOW_LEVEL);
 }
 
-/* ---- Animation 7: circular underglow wave -------------------------------
- * Only the underglow does anything -- a wave travels around the 4
- * pixels in their actual physical circular order (see
- * g_tiles_underglow_circular_position in board_layout.h), each pixel
- * rising and dimming significantly as the wave passes through, going
- * around and around continuously. Pads and buttons sit at a flat,
- * minimal, non-animated brightness so the underglow motion is the whole
- * focus without the rest of the board going fully dark. */
+/* ---- Animation: circular underglow wave -------------------------------
+ * Only the underglow moves: a wave travels around the 4 pixels in their
+ * physical circular order (g_tiles_underglow_circular_position). Pads and
+ * buttons sit at a flat, dim level. */
 
 #define CIRCLE_PERIOD_MS 2400.0f
 #define CIRCLE_MIN_LEVEL 0.05f
@@ -755,23 +581,12 @@ static tiles_standby_color_t circle_underglow(uint8_t pixel_index, uint32_t now_
     return white(v);
 }
 
-/* ---- Animation 8: brick breaker -------------------------------------------
- * The function-button row is the wall of bricks; a 3-pad-wide paddle
- * (bottom pad row) tracks the ball (simple AI: move at most one column
- * per step toward the ball's current column); the ball bounces around
- * knocking bricks out until either every brick is broken (won) or the
- * ball gets past the paddle (lost) -- either way, underglow flashes red
- * and purple for a few seconds, then a fresh round starts (bricks
- * restored, ball and paddle reset). Ball and paddle are different
- * colors so they read as distinct objects even mid-bounce, when they
- * briefly overlap.
- *
- * See bb_step()'s own comment for a real reachability bug fix: the ball's
- * row/col used to always move in forced 1-for-1 lockstep, which made 3 of
- * the 6 bricks mathematically unreachable every round -- real feedback:
- * "brickbraker is having a hard time hitting all function button leds, i
- * suspect its because of the alignement." services/game_mode.c's
- * player-controlled version had the exact same bug, fixed the same way. */
+/* ---- Animation: brick breaker ------------------------------------------
+ * The button row is the brick wall; a 3-pad paddle on the bottom row
+ * follows the ball (at most one column per step). When every brick is
+ * broken or the ball gets past, the underglow flashes red/purple for a few
+ * seconds and a new round starts. Ball and paddle differ in color so they
+ * stay distinct when they overlap. See bb_step() for the reachability fix. */
 
 #define BB_NUM_COLS 6u
 #define BB_PADDLE_ROW 4u
@@ -792,7 +607,7 @@ static int8_t s_bb_ball_row;
 static int8_t s_bb_ball_col;
 static int8_t s_bb_ball_drow;
 static int8_t s_bb_ball_dcol;
-static int8_t s_bb_paddle_center; /* 2-5 -- paddle spans center-1..center+1 */
+static int8_t s_bb_paddle_center; /* 2-5; the paddle covers center-1..center+1 */
 static bb_phase_t s_bb_phase;
 static uint32_t s_bb_last_step_ms;
 static uint32_t s_bb_round_end_ms;
@@ -805,50 +620,18 @@ static void bb_new_round(uint32_t now_ms) {
     s_bb_paddle_center = 3;
     s_bb_ball_row = (int8_t)(BB_PADDLE_ROW - 1u);
     s_bb_ball_col = s_bb_paddle_center;
-    s_bb_ball_drow = -1; /* heads up toward the bricks first */
+    s_bb_ball_drow = -1; /* heads toward the bricks first */
     s_bb_ball_dcol = ((rand() % 2) == 0) ? -1 : 1;
     s_bb_phase = BB_PHASE_PLAYING;
     s_bb_last_step_ms = now_ms;
 }
 
-/* Real feedback: "brickbraker is having a hard time hitting all function
- * button leds, i suspect its because of the alignement" -- correctly
- * diagnosed as an alignment issue, though not a rendering one. Every step
- * moves row by exactly +/-1 AND col by exactly +/-1; a wall bounce only
- * flips dcol's SIGN, never its magnitude, so col still changes by
- * exactly 1 every step regardless. That makes (row + col) mod 2 an exact
- * invariant of the ball's entire trajectory: it can never change, no
- * matter how many bounces happen, since both terms always move by the
- * same odd amount each step. bb_new_round() above always starts the ball
- * at row 3, col 3 (paddle_center), an EVEN sum, so the ball could only
- * ever reach row 1 (the brick wall) on the 3 columns sharing that same
- * parity -- the other 3 bricks were mathematically unreachable every
- * single round, not just unlucky.
- *
- * First fix attempt throttled column movement to every OTHER step,
- * hoping to decouple it from row's fixed cadence -- real feedback after
- * flashing it: "now moves weird and still cant reach 3 of the 5
- * lights." Both complaints were real: the row:col speed became a fixed
- * 2:1 ratio (visibly "weird," not a normal diagonal bounce), AND it
- * didn't actually fix reachability -- row's own bounce-to-bounce period
- * is ALWAYS an even number of ticks (a fixed function of BB_PADDLE_ROW,
- * independent of column state entirely), so jumping column by a fixed
- * 4 ticks' worth every row-bounce cycle just walks a FIXED STRIDE around
- * the column's own reflecting orbit -- still landing on only every other
- * reachable column forever, the identical structural bug wearing a
- * different set of numbers.
- *
- * Real fix: column advances every step again (restores the normal
- * diagonal look), but each time the ball bounces off the top wall OR the
- * paddle, dcol ALSO gets a coin-flip chance to reverse -- seeded from
- * rand(), same as this round's own initial dcol pick above. Row's own
- * bounce timing is still perfectly periodic, but the column's direction
- * at each of those bounces is now a genuine random variable instead of a
- * deterministic function of the previous bounce -- there is no longer
- * ANY fixed relationship between row-bounce phase and column position
- * for a parity/stride argument to lock onto, so the column at each
- * bounce does an unbiased reflecting random walk across all 6 columns
- * rather than a deterministic cycle through a fixed subset. */
+/* Moving row and column by exactly 1 each step keeps (row + col) mod 2
+ * fixed for the whole flight, so from the fixed start (3, 3) half the
+ * bricks were unreachable. (Throttling the column every other step only
+ * changed which half.) Fix: each bounce off the top wall or paddle gets a
+ * coin-flip chance to reverse the column direction, so the column does a
+ * random walk over all 6. game_mode.c uses the same fix. */
 static void bb_step(uint32_t now_ms) {
     int8_t new_col = (int8_t)(s_bb_ball_col + s_bb_ball_dcol);
     if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
@@ -858,8 +641,7 @@ static void bb_step(uint32_t now_ms) {
     int8_t new_row = (int8_t)(s_bb_ball_row + s_bb_ball_drow);
 
     if (new_row < 1) {
-        /* Hit the brick wall (row 0) -- always bounces here regardless
-         * of whether this column's brick is still alive. */
+        /* Hit the brick wall (row 0): always bounce, brick or not. */
         uint8_t col_index = (uint8_t)(new_col - TILES_GRID_MIN_COL);
         s_bb_brick_alive[col_index] = false;
         s_bb_ball_drow = 1;
@@ -889,9 +671,8 @@ static void bb_step(uint32_t now_ms) {
                 s_bb_ball_dcol = (int8_t)(-s_bb_ball_dcol);
             }
         } else {
-            /* Missed -- lost. Ball is left just past the paddle row, off
-             * the renderable 0-4 range, so it naturally disappears from
-             * view rather than needing an explicit "hide it" case. */
+            /* Missed: lost. The ball sits just below the paddle row, outside the
+             * drawn rows, so it simply disappears. */
             s_bb_phase = BB_PHASE_ROUND_END;
             s_bb_round_end_ms = now_ms;
         }
@@ -937,7 +718,7 @@ static tiles_standby_color_t anim_brick_breaker(uint8_t row, uint8_t col, uint32
     if (row == 0u) {
         uint8_t idx = (uint8_t)(col - TILES_GRID_MIN_COL);
         if (s_bb_brick_alive[idx]) {
-            /* Orange bricks -- distinct from both the ball and paddle. */
+            /* Orange bricks. */
             tiles_standby_color_t c = {1.0f * BB_BRICK_LEVEL, 0.4f * BB_BRICK_LEVEL, 0.0f};
             return c;
         }
@@ -946,9 +727,8 @@ static tiles_standby_color_t anim_brick_breaker(uint8_t row, uint8_t col, uint32
 
     if (s_bb_ball_row >= 1 && s_bb_ball_row <= (int8_t)BB_PADDLE_ROW && (int8_t)row == s_bb_ball_row &&
         (int8_t)col == s_bb_ball_col) {
-        /* Warm white/yellow ball -- checked before the paddle below so
-         * it draws on top during a bounce, when both occupy the same
-         * cell. */
+        /* Warm white ball, drawn before the paddle so it's on top when they
+         * share a cell. */
         tiles_standby_color_t c = {1.0f * BB_BALL_LEVEL, 1.0f * BB_BALL_LEVEL, 0.4f * BB_BALL_LEVEL};
         return c;
     }
@@ -980,45 +760,19 @@ static tiles_standby_color_t bb_underglow(uint8_t pixel_index, uint32_t now_ms) 
     return purple;
 }
 
-/* ---- Animation 9: scrolling marquee ---------------------------------------
- * "TILES - " scrolls across the pad grid using services/pixel_font.h's
- * shared 4-row font -- underglow and function buttons both stay off,
- * keeping the whole thing purely a pad-grid text effect. The message is
- * a sequence of glyphs with a blank spacing column automatically
- * inserted after each one, and the whole thing scrolls by indexing into
- * that sequence at a virtual column offset that advances with time and
- * wraps around (marquee_total_width()), so the message repeats
- * seamlessly.
- *
- * Reworked twice from real feedback. First: the font itself needed
- * fixing (the glyphs used to live here as a one-off, hand-guessed set --
- * moved into pixel_font.h/.c so this and services/octave_control.c's
- * transpose key display share one already-checked font instead of each
- * guessing its own) and the scroll was too fast (slowed via
- * MARQUEE_MS_PER_COLUMN). Second (current): still "not readable" -- the
- * message dropped "SENTIA - " entirely (just "TILES - " now, real
- * feedback: "we can get rid of sentia"), both to shorten it and because
- * a shorter, more repetitive message is easier to lock onto while
- * scrolling. MARQUEE_GLYPH_GAP doubled (1 -> 2 blank columns between
- * letters) so adjacent glyphs that both fill their top/bottom row (e.g.
- * back-to-back full-width bars) read as two distinct letters rather than
- * blurring into one continuous bar across only a single dark column, and
- * the scroll slowed further still (MARQUEE_MS_PER_COLUMN) to give the
- * eye more time to resolve each letter as it crosses the grid -- the
- * individual glyphs themselves (T, I, L, E, S) were re-checked bit by
- * bit against pixel_font.c and are each a clean, unambiguous shape on
- * their own, so the actual readability problem was pacing/separation,
- * not the letterforms. */
+/* ---- Animation: marquee -----------------------------------------------
+ * "TILES - " scrolls across the pads in the shared 4-row font
+ * (services/pixel_font.h). Underglow and buttons off. Glyphs are separated
+ * by MARQUEE_GLYPH_GAP (2) blank columns and the text wraps seamlessly.
+ * Slow scroll and wide gaps are what make it readable at 4 rows. */
 
 #define MARQUEE_NUM_GLYPHS ((uint8_t)(sizeof(s_marquee_message) / sizeof(s_marquee_message[0])))
 #define MARQUEE_GLYPH_GAP 2u
 #define MARQUEE_MS_PER_COLUMN 600u
 #define MARQUEE_LIT_LEVEL 0.9f
 
-/* Pointers, not struct copies -- TILES_GLYPH_* are extern objects
- * defined in pixel_font.c, and an extern object's value (as opposed to
- * its address) isn't a compile-time constant to this translation unit,
- * so a static initializer can't copy the struct by value. */
+/* Pointers: an extern object's value isn't a compile-time constant here,
+ * so a static initializer can't copy the struct. */
 static const tiles_glyph_t *const s_marquee_message[] = {
     &TILES_GLYPH_T, &TILES_GLYPH_I, &TILES_GLYPH_L, &TILES_GLYPH_E, &TILES_GLYPH_S,
     &TILES_GLYPH_SPACE, &TILES_GLYPH_DASH, &TILES_GLYPH_SPACE,
@@ -1046,7 +800,7 @@ static uint8_t marquee_column_bits(uint16_t virtual_col) {
             return s_marquee_message[i]->cols[remaining];
         }
         if (remaining < glyph_span) {
-            return 0u; /* the trailing spacing column */
+            return 0u; /* the spacing columns */
         }
         remaining = (uint16_t)(remaining - glyph_span);
     }
@@ -1080,27 +834,20 @@ static tiles_standby_color_t marquee_underglow(uint8_t pixel_index, uint32_t now
     return white(0.0f);
 }
 
-/* ---- Animation 10: bouncing glow -----------------------------------------
- * A single soft white point bounces diagonally around the pad grid,
- * reflecting off the edges like a screensaver ball -- deliberately the
- * "simple but elegant" one: no particle array, no game state, just a
- * closed-form position (a triangle wave per axis, which is a bounce-off-
- * the-walls reflection with zero bookkeeping) and a soft Gaussian-ish
- * falloff around it. Row and col bounce at different, non-integer-ratio
- * periods so the path slowly traces out a Lissajous-like figure instead
- * of repeating quickly. Function buttons stay off for a clean, minimal
- * look; underglow mirrors the pad field (NULL override below) so the
- * glow naturally spills into it when the point passes near an anchor,
- * same as animations 1-4. */
+/* ---- Animation: bouncing glow ------------------------------------------
+ * One soft white point bouncing around the pad grid. Position is a
+ * closed-form triangle wave per axis (no state); the two axes have periods
+ * in a non-integer ratio, so the path traces a slow Lissajous figure.
+ * Buttons off; underglow samples the field, so it glows as the point
+ * passes. */
 
-#define BOUNCE_ROW_PERIOD_MS 5200.0f /* one full row min->max->min traversal */
-#define BOUNCE_COL_PERIOD_MS 6700.0f /* deliberately not a small-integer ratio of the row period */
+#define BOUNCE_ROW_PERIOD_MS 5200.0f /* one full min->max->min row traversal */
+#define BOUNCE_COL_PERIOD_MS 6700.0f /* not a small-integer ratio of the row period */
 #define BOUNCE_RADIUS_CELLS 1.5f
 #define BOUNCE_PEAK_LEVEL 0.9f
 
-/* Triangle wave 0->1->0 over one period, then scaled/offset into
- * [min_val, max_val] -- a closed-form bounce-off-the-walls reflection,
- * no velocity/state needed. */
+/* Triangle wave 0->1->0 over one period, scaled into [min_val, max_val]: a
+ * wall bounce with no state. */
 static float bounce_axis_position(uint32_t now_ms, float period_ms, float min_val, float max_val) {
     float phase = fmodf((float)now_ms, period_ms) / period_ms;
     float tri = 1.0f - fabsf(2.0f * phase - 1.0f);
@@ -1124,31 +871,13 @@ static tiles_standby_color_t anim_bounce(uint8_t row, uint8_t col, uint32_t now_
     return white(BOUNCE_PEAK_LEVEL * t * t);
 }
 
-/* ---- Animation 11: Tetris --------------------------------------------------
- * A custom small-piece set, AI-placed and AI-played -- the autonomous
- * counterpart to game_mode.c's real, player-controlled Tetris (same
- * piece shapes/colors, deliberately separate state and code, per this
- * file's established precedent of not sharing anything between the
- * idle-loop and player-driven versions of the same game -- see
- * animations 4 and 8 above). NOT the standard 7 tetrominoes -- real
- * feedback was that full tetrominoes (4 cells, up to 4 wide/tall) were
- * too big for a board this size, a single piece able to span the whole
- * width or height. Replaced with 5 smaller pieces (TETRIS_PIECES below,
- * mirroring game_mode.c's gt_ set): a 1-cell dot, a 2-cell domino, a
- * 3-cell straight tromino ("long piece," capped at 3), a 3-cell corner
- * tromino, and a compact 2x2 square. Pieces now carry a variable
- * `num_cells` (1-4) instead of always exactly 4.
- *
- * A lightweight greedy AI picks each new piece's rotation and column
- * immediately at spawn: of every (rotation, column) combination that
- * fits, it simulates the drop and keeps whichever lands the piece's
- * topmost cell deepest (a cheap proxy for "keeps the resulting stack
- * lowest," without real hole-counting). The piece then visibly falls
- * one row at a time toward that chosen landing spot, the same
- * step-throttle pattern as every other stateful animation here.
- * Topping out (nowhere for a freshly spawned piece to fit) triggers the
- * same red/purple round-end flash brick breaker uses, then the well
- * clears and a fresh game starts. Function buttons stay off. */
+/* ---- Animation: Tetris --------------------------------------------------
+ * Self-playing counterpart of game_mode.c's Tetris: the same small piece
+ * set (dot, domino, straight and corner tromino, 2x2 square), separate
+ * code and state. At spawn a greedy AI tries every rotation and column,
+ * simulates the drop, and picks the one landing deepest (a cheap "keep
+ * the stack low" proxy); the piece then falls one row at a time. Topping
+ * out flashes red, then the well clears. Buttons off. */
 
 #define TETRIS_MIN_ROW 1u /* row 0 is buttons, not part of the well */
 #define TETRIS_MAX_ROW TILES_GRID_MAX_ROW
@@ -1156,12 +885,11 @@ static tiles_standby_color_t anim_bounce(uint8_t row, uint8_t col, uint32_t now_
 #define TETRIS_MAX_COL TILES_GRID_MAX_COL
 #define TETRIS_ROWS 4u
 #define TETRIS_COLS 6u
-#define TETRIS_STEP_MS 260u /* faster than the interactive version -- nothing here waits on a player */
+#define TETRIS_STEP_MS 260u /* faster than the game version: nobody is playing */
 #define TETRIS_LOCKED_LEVEL 0.8f
 #define TETRIS_FLASH_DURATION_MS 2200u
 #define TETRIS_FLASH_TOGGLE_MS 260u
-/* Dramatic white underglow strobe on a line clear -- fast toggle, short
- * total duration, so it reads as a flash rather than a glow. */
+/* White underglow strobe on a line clear: fast and short. */
 #define TETRIS_LINE_CLEAR_FLASH_MS 450u
 #define TETRIS_LINE_CLEAR_TOGGLE_MS 90u
 #define TETRIS_NUM_PIECE_TYPES 5u
@@ -1172,9 +900,8 @@ typedef struct {
     int8_t dc;
 } tetris_offset_t;
 
-/* Two rotation states per piece (not full 4-state SRS) -- with only 4
- * rows of height the extra states would rarely matter. Only the first
- * num_cells entries of each state are used. */
+/* Two rotation states per piece; only the first num_cells entries are
+ * used. */
 typedef struct {
     uint8_t num_cells;
     tetris_offset_t state0[TETRIS_MAX_CELLS];
@@ -1182,21 +909,17 @@ typedef struct {
     float r, g, b;
 } tetris_piece_def_t;
 
-/* Small custom piece set, smallest to largest -- mirrors
- * game_mode.c's gt_ set (see this animation's own comment above for
- * why); duplicated rather than shared, per this file's established
- * precedent for autonomous/interactive pairs. */
+/* Same pieces as game_mode.c's GT_PIECES, duplicated on purpose. */
 static const tetris_piece_def_t TETRIS_PIECES[TETRIS_NUM_PIECE_TYPES] = {
-    /* Dot: 1 cell, no real rotation (both states identical). */
+    /* Dot: 1 cell, rotation is a no-op. */
     {1u, {{0, 0}}, {{0, 0}}, 1.0f, 1.0f, 1.0f},
-    /* Domino: 2 cells, horizontal/vertical. */
+    /* Domino: horizontal/vertical. */
     {2u, {{0, 0}, {0, 1}}, {{0, 0}, {1, 0}}, 0.0f, 1.0f, 1.0f},
-    /* Straight tromino ("long piece," capped at 3): horizontal/vertical. */
+    /* Straight tromino: horizontal/vertical. */
     {3u, {{0, 0}, {0, 1}, {0, 2}}, {{0, 0}, {1, 0}, {2, 0}}, 0.0f, 1.0f, 0.0f},
-    /* Corner tromino: two different bends, not a strict rotation pair,
-     * just two distinct 3-cell shapes for variety. */
+    /* Corner tromino: two different bends for variety (not a strict rotation). */
     {3u, {{0, 0}, {1, 0}, {1, 1}}, {{0, 0}, {0, 1}, {1, 0}}, 1.0f, 0.5f, 0.0f},
-    /* Square: 2x2, 4 cells but compact -- rotation is a no-op. */
+    /* Square: 2x2, rotation is a no-op. */
     {4u, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, 1.0f, 1.0f, 0.0f},
 };
 
@@ -1205,13 +928,13 @@ typedef enum {
     TETRIS_PHASE_ROUND_END,
 } tetris_phase_t;
 
-/* 0 = empty, else (piece type index + 1) -- indexed [row - TETRIS_MIN_ROW][col - TETRIS_MIN_COL]. */
+/* 0 = empty, else piece type + 1; [row - TETRIS_MIN_ROW][col - TETRIS_MIN_COL]. */
 static uint8_t s_tetris_board[TETRIS_ROWS][TETRIS_COLS];
 static uint8_t s_tetris_piece_type;
 static uint8_t s_tetris_rotation;
 static int8_t s_tetris_origin_row;
 static int8_t s_tetris_origin_col;
-static int8_t s_tetris_target_row; /* the AI's chosen landing row for the current piece */
+static int8_t s_tetris_target_row; /* the AI's landing row for the current piece */
 static tetris_phase_t s_tetris_phase;
 static uint32_t s_tetris_last_step_ms;
 static uint32_t s_tetris_round_end_ms;
@@ -1241,10 +964,8 @@ static bool tetris_fits(uint8_t piece_type, uint8_t rotation, int8_t origin_row,
     return true;
 }
 
-/* Simulates dropping (piece_type, rotation, origin_col) from the top of
- * the well and returns the row it would land at (the deepest row it
- * still fits), or false if it doesn't even fit at spawn height for that
- * column. */
+/* Drops (piece, rotation, column) from the top and returns the landing
+ * row, or false if it doesn't fit even at spawn height. */
 static bool tetris_simulate_drop(uint8_t piece_type, uint8_t rotation, int8_t origin_col, int8_t *out_row) {
     if (!tetris_fits(piece_type, rotation, (int8_t)TETRIS_MIN_ROW, origin_col)) {
         return false;
@@ -1257,7 +978,7 @@ static bool tetris_simulate_drop(uint8_t piece_type, uint8_t rotation, int8_t or
     return true;
 }
 
-/* Greedy placement AI -- see the animation's file comment above. */
+/* Greedy placement (see the animation comment). */
 static void tetris_ai_place(uint8_t piece_type, uint8_t *out_rotation, int8_t *out_col, int8_t *out_row) {
     bool found = false;
     int8_t best_score = -1;
@@ -1301,11 +1022,8 @@ static void tetris_spawn(void) {
     tetris_ai_place(s_tetris_piece_type, &s_tetris_rotation, &s_tetris_origin_col, &s_tetris_target_row);
 }
 
-/* Same bottom-up, recheck-same-row-after-a-shift sweep as
- * game_mode.c's gt_clear_lines() -- correctly collapses multiple
- * simultaneous line clears in one pass. Returns how many rows were
- * cleared, so tetris_lock() below can trigger the line-clear flash only
- * when something actually cleared. */
+/* Bottom-up, rechecking the same row after a shift (like game_mode.c
+ * gt_clear_lines()). Returns rows cleared. */
 static uint8_t tetris_clear_lines(void) {
     uint8_t cleared = 0u;
     int8_t row = (int8_t)(TETRIS_ROWS - 1u);
@@ -1343,9 +1061,7 @@ static void tetris_new_round(uint32_t now_ms) {
     s_tetris_phase = TETRIS_PHASE_PLAYING;
     tetris_spawn();
     s_tetris_last_step_ms = now_ms;
-    /* "Already long past" rather than 0 -- 0 could still read as
-     * "within the flash window" if this round starts within
-     * TETRIS_LINE_CLEAR_FLASH_MS of boot. */
+    /* "Long past", not 0, so a round starting right after boot doesn't flash. */
     s_tetris_line_clear_flash_ms = now_ms - TETRIS_LINE_CLEAR_FLASH_MS - 1u;
 }
 
@@ -1362,7 +1078,7 @@ static void tetris_lock(uint32_t now_ms) {
     }
     tetris_spawn();
     if (!tetris_fits(s_tetris_piece_type, s_tetris_rotation, s_tetris_origin_row, s_tetris_origin_col)) {
-        /* Nowhere for the next piece to go -- topped out. */
+        /* Topped out. */
         s_tetris_phase = TETRIS_PHASE_ROUND_END;
         s_tetris_round_end_ms = now_ms;
     }
@@ -1405,9 +1121,7 @@ static tiles_standby_color_t anim_tetris(uint8_t row, uint8_t col, uint32_t now_
             int8_t r = (int8_t)(s_tetris_origin_row + offsets[i].dr);
             int8_t c = (int8_t)(s_tetris_origin_col + offsets[i].dc);
             if (r == (int8_t)row && c == (int8_t)col) {
-                /* The falling piece draws at full brightness, checked
-                 * before the locked board below so it's never masked by
-                 * whatever is already in that cell. */
+                /* The falling piece draws first, at full brightness. */
                 const tetris_piece_def_t *active = &TETRIS_PIECES[s_tetris_piece_type];
                 tiles_standby_color_t c_active = {active->r, active->g, active->b};
                 return c_active;
@@ -1425,10 +1139,7 @@ static tiles_standby_color_t anim_tetris(uint8_t row, uint8_t col, uint32_t now_
     return white(0.0f);
 }
 
-/* Topping out (game lost) blinks plain red -- real feedback: "when game
- * is lost it should flash red," not the red/purple alternation
- * brick breaker's win/lose flash uses. A line clear (still playing) is
- * a separate, much shorter dramatic white strobe instead. */
+/* Topping out blinks plain red; a line clear is a short white strobe. */
 static tiles_standby_color_t tetris_underglow(uint8_t pixel_index, uint32_t now_ms) {
     (void)pixel_index;
     if (s_tetris_phase == TETRIS_PHASE_ROUND_END) {
@@ -1448,33 +1159,20 @@ static tiles_standby_color_t tetris_underglow(uint8_t pixel_index, uint32_t now_
     return white(0.0f);
 }
 
-/* ---- Animation 12: Pong ----------------------------------------------------
- * The AI-vs-AI autonomous counterpart to game_mode.c's real, two-player
- * Pong -- same court/paddle/ball layout and colors, deliberately
- * separate state and code (same precedent as every other animation/
- * game pair here). Each paddle uses the same simple "move at most one
- * row per step toward the ball" heuristic brick breaker's paddle AI
- * already established, but only the side the ball is currently heading
- * toward actively tracks it (pong_ai_track()) -- the other side drifts
- * back to its rest position instead (pong_ai_recenter()). Both paddles
- * running the identical tracking rule every step, every step,
- * regardless of ball direction, made them move in lockstep and mirror
- * each other constantly (real feedback: "doing the same on both
- * sides," didn't feel like a real game); only one paddle "defends" at
- * a time now, the way a real opponent would. Rallies still essentially
- * never end on their own; a miss (on the rare occasion the ball
- * reverses faster than a paddle can react) triggers a brief white
- * underglow flash and an immediate re-serve, the same "stay in this
- * animation, just flash and continue" behavior the interactive version
- * uses instead of a win/lose round-end. Function buttons stay off. */
+/* ---- Animation: Pong ------------------------------------------------------
+ * Self-playing counterpart of game_mode.c's Pong: same layout and colors,
+ * separate code. Only the paddle the ball is heading toward tracks it
+ * (pong_ai_track()); the other drifts back to rest (pong_ai_recenter()),
+ * since mirrored paddles looked fake. A rare miss flashes the underglow
+ * white and re-serves. Buttons off. */
 
 #define PONG_MIN_ROW 1u /* row 0 is buttons, not part of the court */
 #define PONG_MAX_ROW TILES_GRID_MAX_ROW
 #define PONG_PADDLE_COL_LEFT TILES_GRID_MIN_COL
 #define PONG_PADDLE_COL_RIGHT TILES_GRID_MAX_COL
-#define PONG_PADDLE_TOP_MIN PONG_MIN_ROW /* paddle spans [top, top+1] */
+#define PONG_PADDLE_TOP_MIN PONG_MIN_ROW /* paddle covers [top, top+1] */
 #define PONG_PADDLE_TOP_MAX (TILES_GRID_MAX_ROW - 1u)
-#define PONG_STEP_MS 220u /* faster than the interactive version -- nothing here waits on a player */
+#define PONG_STEP_MS 220u /* faster than the game version: nobody is playing */
 #define PONG_POINT_FLASH_MS 500u
 #define PONG_POINT_FLASH_TOGGLE_MS 110u
 #define PONG_PADDLE_LEVEL 1.0f
@@ -1492,7 +1190,7 @@ static bool s_pong_inited;
 
 static void pong_serve(uint32_t now_ms) {
     s_pong_ball_row = (int8_t)(PONG_MIN_ROW + (rand() % (PONG_MAX_ROW - PONG_MIN_ROW + 1u)));
-    s_pong_ball_col = ((rand() % 2) == 0) ? 3 : 4; /* the two middle columns of 1-6 */
+    s_pong_ball_col = ((rand() % 2) == 0) ? 3 : 4; /* one of the two middle columns */
     s_pong_ball_drow = ((rand() % 2) == 0) ? -1 : 1;
     s_pong_ball_dcol = ((rand() % 2) == 0) ? -1 : 1;
     s_pong_last_step_ms = now_ms;
@@ -1502,14 +1200,12 @@ static void pong_new_round(uint32_t now_ms) {
     s_pong_left_paddle_top = 2;
     s_pong_right_paddle_top = 2;
     pong_serve(now_ms);
-    /* "Already long past" rather than 0 -- same reasoning as Tetris's
-     * line-clear flash above. */
+    /* "Long past", as for Tetris's flash. */
     s_pong_point_flash_ms = now_ms - PONG_POINT_FLASH_MS - 1u;
 }
 
-/* Moves *paddle_top by at most one row toward covering the ball's
- * current row -- the same "at most one column/row per step" simple AI
- * anim_brick_breaker's paddle already uses. */
+/* Moves the paddle at most one row toward the ball (the brick breaker
+ * paddle AI). */
 static void pong_ai_track(int8_t *paddle_top) {
     if (s_pong_ball_row < *paddle_top) {
         (*paddle_top)--;
@@ -1524,9 +1220,7 @@ static void pong_ai_track(int8_t *paddle_top) {
     }
 }
 
-/* Drifts *paddle_top one row back toward the rest position (the same
- * center it spawns at) -- used for whichever side the ball isn't
- * currently heading toward, below. */
+/* Drifts the paddle one row back toward its rest (spawn) position. */
 #define PONG_REST_TOP 2
 
 static void pong_ai_recenter(int8_t *paddle_top) {
@@ -1568,12 +1262,7 @@ static void pong_step(uint32_t now_ms) {
     s_pong_ball_row = new_row;
     s_pong_ball_col = new_col;
 
-    /* Only the side the ball is heading toward actively tracks it; the
-     * other side drifts back to its rest position instead of tracking
-     * too -- both paddles running the identical tracking rule every
-     * step made them move in lockstep/mirror each other constantly
-     * (real feedback: "doing the same on both sides"). This way only
-     * one paddle "defends" at a time, the way a real opponent would. */
+    /* Only the side the ball heads toward defends; the other recenters. */
     if (s_pong_ball_dcol < 0) {
         pong_ai_track(&s_pong_left_paddle_top);
         pong_ai_recenter(&s_pong_right_paddle_top);
@@ -1604,8 +1293,7 @@ static tiles_standby_color_t anim_pong(uint8_t row, uint8_t col, uint32_t now_ms
     }
 
     if ((int8_t)row == s_pong_ball_row && (int8_t)col == s_pong_ball_col) {
-        /* Checked before either paddle so it draws on top during a
-         * bounce -- same precedent as brick breaker's ball. */
+        /* Ball before paddles, so it's on top when they share a cell. */
         tiles_standby_color_t ball = {0.0f, 0.0f, PONG_BALL_LEVEL};
         return ball;
     }
@@ -1629,31 +1317,13 @@ static tiles_standby_color_t pong_underglow(uint8_t pixel_index, uint32_t now_ms
     return white(on ? 1.0f : 0.0f);
 }
 
-/* ---- Animation 13: falling dots -------------------------------------------
- * White dots fall one row at a time from the top, landing wherever they
- * hit the bottom or an already-landed dot below them and staying there
- * -- a slow, ambient "filling up" screensaver. Unlike every other
- * animation here, this one has real state that accumulates over its
- * whole run rather than looping continuously: new dots spawn
- * periodically in columns that still have room, gradually filling the
- * grid; once every column is completely full, it holds for a moment
- * then clears and the fill starts over. Function buttons stay off;
- * underglow mirrors the pad field like animations 1-5/10, so a dot
- * landing near an anchor lights it up naturally.
- *
- * Slowed down and cross-faded between rows -- real feedback: "slow down
- * falling dots animation and make it smoother." FALLINGDOTS_STEP_MS and
- * FALLINGDOTS_SPAWN_INTERVAL_MS both raised (roughly 1.8x) for a calmer
- * fall/spawn rate. All active dots share one global step clock
- * (s_fallingdots_last_step_ms below), so anim_fallingdots() can compute
- * a single 0-1 progress-through-the-current-step value from it and use
- * that to cross-fade every falling dot's brightness between its current
- * row (fading out) and the next one (fading in), smoothstep-eased --
- * rather than the previous hard, instant jump from one row to the next
- * every FALLINGDOTS_STEP_MS. A dot about to lock (its next row is
- * blocked) skips the fade-in target, since there's nowhere to fade into
- * -- it just holds steady at full brightness for the rest of that step
- * before locking. */
+/* ---- Animation: falling dots -------------------------------------------
+ * White dots fall one row at a time and stay where they land, slowly
+ * filling the grid; when it's full it holds a moment, clears, and starts
+ * over. Every falling dot shares one step clock, so each frame can
+ * cross-fade a dot between its row and the next (smoothstep), instead of
+ * jumping. A dot about to land holds full brightness. Buttons off;
+ * underglow samples the field. */
 
 #define FALLINGDOTS_MIN_ROW 1u
 #define FALLINGDOTS_MAX_ROW TILES_GRID_MAX_ROW
@@ -1661,10 +1331,10 @@ static tiles_standby_color_t pong_underglow(uint8_t pixel_index, uint32_t now_ms
 #define FALLINGDOTS_MAX_COL TILES_GRID_MAX_COL
 #define FALLINGDOTS_ROWS 4u
 #define FALLINGDOTS_COLS 6u
-#define FALLINGDOTS_STEP_MS 320u           /* how long a falling dot takes to cross one row */
-#define FALLINGDOTS_SPAWN_INTERVAL_MS 900u /* how often a new dot spawns, while there's still room */
+#define FALLINGDOTS_STEP_MS 320u           /* time for a falling dot to cross one row */
+#define FALLINGDOTS_SPAWN_INTERVAL_MS 900u /* spawn interval while there's room */
 #define FALLINGDOTS_MAX_CONCURRENT 4u
-#define FALLINGDOTS_FULL_PAUSE_MS 1800u /* how long the fully-filled grid holds before clearing */
+#define FALLINGDOTS_FULL_PAUSE_MS 1800u /* how long the full grid holds before clearing */
 #define FALLINGDOTS_ACTIVE_LEVEL 1.0f
 #define FALLINGDOTS_LANDED_LEVEL 0.65f
 
@@ -1695,11 +1365,8 @@ static void fallingdots_reset(void) {
     s_fallingdots_is_full = false;
 }
 
-/* Dots always land on top of whatever's already stacked in their
- * column (like Tetris pieces), filling bottom-up with no gaps -- so
- * row 1 (index 0) being empty is a valid, cheap proxy for "this column
- * still has room," and checking it across every column is equally
- * valid for "is the whole grid full." */
+/* Columns fill bottom-up with no gaps, so an empty top cell means the
+ * column has room (and checking every column answers "is it full"). */
 static bool fallingdots_col_has_room(uint8_t col0) {
     return !s_fallingdots_filled[0][col0];
 }
@@ -1726,12 +1393,11 @@ static void fallingdots_spawn(void) {
         }
     }
     if (slot < 0) {
-        return; /* already at the concurrent cap */
+        return; /* at the concurrent cap */
     }
 
-    /* A handful of random tries for a column with room -- small board,
-     * finds one almost immediately in practice, same reasoning
-     * snake_place_food() uses for its own bounded rejection sampling. */
+    /* A few random tries for a column with room (bounded, like
+     * snake_place_food()). */
     for (uint8_t attempt = 0; attempt < 12u; attempt++) {
         uint8_t col0 = (uint8_t)(rand() % FALLINGDOTS_COLS);
         if (fallingdots_col_has_room(col0)) {
@@ -1741,16 +1407,13 @@ static void fallingdots_spawn(void) {
             return;
         }
     }
-    /* No column with room found in a handful of tries -- either the
-     * grid is nearly full (fallingdots_all_full() catches that shortly)
-     * or just unlucky this call; skip spawning rather than searching
-     * exhaustively. */
+    /* None found: the grid is nearly full (caught shortly) or we were unlucky;
+     * skip this spawn. */
 }
 
-/* Shared by fallingdots_step() (decides whether to advance or lock) and
- * anim_fallingdots() (decides whether to render a fade-in target on the
- * next row) -- true if this dot's next row is off the bottom of the
- * grid or already occupied. */
+/* True if the dot's next row is off the grid or occupied. Shared by the
+ * step (advance or land) and the renderer (whether to fade into the next
+ * row). */
 static bool fallingdots_next_blocked(const fallingdots_dot_t *dot) {
     int8_t next_row = (int8_t)(dot->row + 1);
     if (next_row > (int8_t)FALLINGDOTS_MAX_ROW) {
@@ -1804,9 +1467,7 @@ static void fallingdots_update(uint32_t now_ms) {
     fallingdots_step(now_ms);
 }
 
-/* Standard smoothstep -- eases the linear per-frame progress fraction
- * into a slow-in/slow-out curve so the cross-fade between rows reads as
- * a natural ease rather than a linear ramp. */
+/* Smoothstep, for the row cross-fade. */
 static float smoothstep01(float t) {
     t = clamp01(t);
     return t * t * (3.0f - 2.0f * t);
@@ -1827,8 +1488,7 @@ static tiles_standby_color_t anim_fallingdots(uint8_t row, uint8_t col, uint32_t
             continue;
         }
         if (fallingdots_next_blocked(dot)) {
-            /* About to lock at dot->row -- nowhere to fade into, so hold
-             * steady at full brightness for the rest of this step. */
+            /* About to land: hold full brightness. */
             if (dot->row == (int8_t)row) {
                 return white(FALLINGDOTS_ACTIVE_LEVEL);
             }
@@ -1859,28 +1519,17 @@ static const field_fn_t s_animations[] = {
     anim_brick_breaker,  anim_marquee,  anim_bounce, anim_tetris, anim_pong,
     anim_fallingdots,
 };
-/* Parallel to s_animations[] -- NULL means underglow samples the same
- * field the pads use at its anchor points (animations 1-5, 10, and 13,
- * where underglow mirroring the pad grid is exactly what's wanted). A
- * non-NULL entry means underglow needs genuinely different behavior
- * from whatever the pad field computes at that (row, col) -- the
- * equalizer's underglow is a constant accent unrelated to any one
- * column's bar, the circular-wave animation's whole point is
- * underglow-specific motion indexed by pixel, not by row/col at all,
- * brick breaker's underglow is off except for the won/lost flash, and
- * the marquee's underglow is simply always off. */
+/* Parallel to s_animations[]: NULL = underglow samples the pad field at
+ * its anchors; non-NULL = the animation draws its own underglow (EQ accent,
+ * circular wave, brick breaker/Tetris/Pong flashes, marquee off). */
 static const underglow_fn_t s_animation_underglow_override[] = {
     NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow, bb_underglow, marquee_underglow, NULL,
     tetris_underglow, pong_underglow, NULL,
 };
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
 
-/* Selection weight, parallel to s_animations[] -- real feedback: the
- * videogame screensavers (snake, brick breaker, Tetris, Pong) should
- * come up less often than the "regular" ambient ones. Regular = 2,
- * game = 1, so each regular animation is twice as likely to be picked
- * as each game animation on any given switch (see
- * pick_random_animation() below). */
+/* Selection weights, parallel to s_animations[]: ambient 2, game demos 1,
+ * so games come up half as often. */
 #define ANIM_WEIGHT_REGULAR 2u
 #define ANIM_WEIGHT_GAME 1u
 static const uint8_t s_animation_weight[] = {
@@ -1888,24 +1537,19 @@ static const uint8_t s_animation_weight[] = {
     ANIM_WEIGHT_REGULAR, /* glow */
     ANIM_WEIGHT_REGULAR, /* shooting stars */
     ANIM_WEIGHT_GAME,    /* snake */
-    ANIM_WEIGHT_REGULAR, /* rgb showcase */
+    ANIM_WEIGHT_REGULAR, /* RGB showcase */
     ANIM_WEIGHT_REGULAR, /* equalizer */
     ANIM_WEIGHT_REGULAR, /* underglow circle */
     ANIM_WEIGHT_GAME,    /* brick breaker */
     ANIM_WEIGHT_REGULAR, /* marquee */
     ANIM_WEIGHT_REGULAR, /* bounce */
-    ANIM_WEIGHT_GAME,    /* tetris */
-    ANIM_WEIGHT_GAME,    /* pong */
+    ANIM_WEIGHT_GAME,    /* Tetris */
+    ANIM_WEIGHT_GAME,    /* Pong */
     ANIM_WEIGHT_REGULAR, /* falling dots */
 };
 
-/* Function-button LEDs read noticeably brighter than pad LEDs at the
- * same commanded duty (different LED/diffusion/drive path -- PCA9685
- * PWM vs SK6805 addressable) -- observed on real hardware as the top
- * row "overpowering" every animation. Scaled down uniformly here rather
- * than per-animation since it's a hardware-brightness mismatch, not an
- * animation design choice. Unmeasured -- a starting guess, adjust if
- * still too bright/now too dim once seen lit. */
+/* Button LEDs look brighter than pads at the same duty (different LED and
+ * drive path), so the button row is scaled down uniformly. Starting guess. */
 #define BUTTON_STANDBY_BRIGHTNESS_SCALE 0.35f
 
 static void render_frame(uint8_t animation_index, uint32_t now_ms) {
@@ -1914,9 +1558,8 @@ static void render_frame(uint8_t animation_index, uint32_t now_ms) {
 
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         tiles_standby_color_t c = field(0u, col, now_ms);
-        /* Buttons are monochrome -- collapse color to a single
-         * brightness via the brightest channel, then apply the
-         * button-specific dimming above. */
+        /* Buttons are monochrome: use the brightest channel, then the button
+         * scale. */
         float luminance = c.r;
         if (c.g > luminance) {
             luminance = c.g;
@@ -1953,26 +1596,16 @@ static uint32_t s_last_activity_ms;
 static uint32_t s_last_frame_ms;
 static uint32_t s_animation_switch_ms;
 static uint8_t s_animation_index;
-static uint8_t s_prev_animation_index; /* the one that played immediately before s_animation_index */
+static uint8_t s_prev_animation_index; /* the animation shown before s_animation_index */
 
-/* True only while s_state == STANDBY *and* that STANDBY was entered via
- * the manual 4s circle-hold gesture (handle_circle_hold() below), not
- * the normal 60s auto-idle path. Changes two things while true: SW1/SW2
- * become animation-scroll controls instead of a wake signal (see
- * real_input_active()), and the STANDBY -> DEEP_SLEEP timeout extends
- * to TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS (30 minutes) instead
- * of the normal 20 -- both real feedback. Cleared on every way of
- * leaving STANDBY (waking, dropping to DEEP_SLEEP, or the 8s hold
- * escalating straight there) so a later *normal* auto-idle STANDBY never
- * inherits these. */
+/* True only in a STANDBY entered by the 4 s circle hold. Then "-"/"+"
+ * scroll animations instead of waking (see real_input_active()) and deep
+ * sleep comes after 30 min instead of 20. Cleared on every exit from
+ * STANDBY, so a later automatic standby never inherits it. */
 static bool s_manual_screensaver;
 
-/* Circle (SW6)'s dedicated long-press handling -- real feedback:
- * "holding for 10 sec send into power off standby... holding for 6
- * seconds send into screensaver animations... remember and set up
- * circle as our general shift button unless pressed for the intervals
- * we said," then later "hold sleep 4sec not 6 and hold 8 for deep
- * sleep" (6000 -> 4000, 10000 -> 8000). */
+/* Circle holds: 4 s = screensaver, 8 s = deep sleep. Otherwise circle is
+ * the shift button. */
 #define TILES_CIRCLE_SCREENSAVER_HOLD_MS 4000u
 #define TILES_CIRCLE_DEEP_SLEEP_HOLD_MS 8000u
 static bool s_circle_was_held;
@@ -1980,44 +1613,24 @@ static uint32_t s_circle_hold_start_ms;
 static bool s_circle_screensaver_fired;
 static bool s_circle_deep_sleep_fired;
 
-/* Real feedback: "can it override screensavers? like no screensaver can
- * activate if ableton is playing or midi is being recieved?" -- see
- * tiles_standby_scan()'s own comment on the policy. s_seen_midi_activity
- * is the last tiles_midi_in_activity_count() value this file compared
- * against (only inequality matters, it wraps harmlessly);
- * s_deep_sleep_manual is true only for a deep sleep the PLAYER asked for
- * (circle held ~8s) -- an automatic idle-timeout deep sleep is false.
- * The manual screensaver's own flag (s_manual_screensaver, above) already
- * covers the 4s-hold case. Both exist so incoming MIDI can wake/hold off
- * an AUTOMATIC screensaver without ever overriding one the player
- * deliberately started. */
+/* Incoming MIDI (see tiles_standby_scan()): s_seen_midi_activity is the
+ * last tiles_midi_in_activity_count() seen (only change matters).
+ * s_deep_sleep_manual marks a deep sleep the PLAYER asked for (8 s hold).
+ * Together with s_manual_screensaver, they let MIDI wake or hold off an
+ * AUTOMATIC screensaver but never undo one the player started. */
 static uint32_t s_seen_midi_activity;
 static bool s_deep_sleep_manual;
 
-/* Edge-tracking for handle_manual_scroll_input() below -- separate from
- * octave_control.c's own SW1/SW2 edge state, since that module skips
- * its own processing entirely while this mode owns the buttons (see
- * tiles_standby_owns_octave_buttons()) and each needs its own
- * independent "was this pressed last tick" memory. */
+/* Own "-"/"+" edge tracking for scrolling (octave_control.c stands down
+ * while this mode owns the buttons). */
 static bool s_scroll_prev_minus;
 static bool s_scroll_prev_plus;
 
-/* Extended STANDBY -> DEEP_SLEEP timeout for a manually-entered
- * screensaver -- real feedback: "animation timeout time changes to 20
- * minutes when done through that path." */
-/* Real feedback: "make screensaver 30 min if triggered manually, 20 if
- * auto" -- was 20, raised to 30 (see TILES_STANDBY_DEEP_SLEEP_TIMEOUT_MS
- * above for the auto half of the same change). */
+/* Deep-sleep timeout for a manually started screensaver. */
 #define TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS 1800000u /* 30 * 60 * 1000 */
 
-/* Real feedback that touch doesn't reliably wake standby -- prints
- * which specific input caused a wake, so a debug session can see
- * whether the MPR121 ever registers the touch that's supposed to be
- * waking it (pairs with touch.c's per-pad touched/released prints) or
- * whether wakes are only ever coming from a button/pedal instead. Only
- * called on the actual wake transition (tiles_standby_scan() below),
- * never every scan, so this stays cheap and non-spammy despite the
- * linear re-scan. */
+/* Logs which input woke standby (to check whether touch ever does). Runs
+ * only on the wake transition. */
 static void print_wake_source(uint32_t now_ms) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         if (tiles_touch_is_touched(pad)) {
@@ -2034,19 +1647,10 @@ static void print_wake_source(uint32_t now_ms) {
     printf("[standby] waking: pedal (t=%u ms)\n", now_ms);
 }
 
-/* Touch/button/pedal only -- deliberately NOT Hall (see
- * hall_depth_wake_triggered() below for why Hall is kept separate).
- * Used both to decide whether to enter standby and, once in it, as one
- * of the two ways to wake back up. Two buttons are conditionally
- * excluded here, both real feedback: circle (SW6) always, since it now
- * has its own dedicated long-press handling (handle_circle_hold())
- * rather than a generic "any press wakes it" meaning -- without this
- * exclusion, holding circle toward the 4s/8s thresholds would wake
- * standby on the very first tick of the hold, before either threshold
- * could ever fire; and SW1/SW2, but only while a manually-entered
- * screensaver is showing (see s_manual_screensaver), since they're
- * repurposed as animation-scroll controls there instead of a wake
- * signal -- see handle_manual_scroll_input(). */
+/* Touch, buttons, pedal (not Hall; see hall_depth_wake_triggered()). Used
+ * to enter standby and to wake from it. Excluded: circle always (it has its
+ * own hold handling, and a building hold must not wake on its first
+ * tick), and "-"/"+" while a manual screensaver uses them to scroll. */
 static bool real_input_active(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         if (tiles_touch_is_touched(pad)) {
@@ -2069,20 +1673,10 @@ static bool real_input_active(void) {
     return tiles_pedal_is_sustained();
 }
 
-/* See TILES_STANDBY_HALL_WAKE_DEPTH above for why this exists. Checked
- * ONLY while already in standby (tiles_standby_scan() below), never as
- * part of deciding whether to ENTER standby or as the idle-timer reset
- * condition -- hall.c's depth is a raw, uncalibrated reading against a
- * baseline captured once at boot with no drift compensation yet (see
- * hall.h), so ambient noise or thermal drift alone can plausibly sit
- * above this threshold for some pad at any given moment. Folding that
- * into the same check used to decide "is anything active" broke
- * standby entirely the first time it was tried (real symptom: standby
- * never triggered at all) -- some pad's drifted/noisy reading looked
- * "always active" and the idle timer never got a chance to elapse.
- * Restricting it to wake-only means a false positive here just costs an
- * unnecessary early exit from standby, not a permanently broken idle
- * timer. */
+/* Wake-only (see TILES_STANDBY_HALL_WAKE_DEPTH). Using raw depth to decide
+ * whether anything is active kept standby from ever starting (some pad
+ * always looked active); as a wake check, a false positive only wakes it
+ * early. */
 static bool hall_depth_wake_triggered(void) {
 #if TILES_STANDBY_HALL_WAKE_ENABLED
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
@@ -2094,22 +1688,10 @@ static bool hall_depth_wake_triggered(void) {
     return false;
 }
 
-/* Picks a random animation index, excluding both `exclude_a` and
- * `exclude_b` (pass a value >= NUM_ANIMATIONS, e.g. 0xFFu, for either to
- * not exclude anything there -- used for the very first pick, which has
- * no real history to avoid repeating). Excluding both the animation
- * about to end AND the one before it means a switch never immediately
- * repeats the current animation, and never bounces straight back to
- * the one two animations ago either (e.g. A, B, A back-to-back) --
- * with NUM_ANIMATIONS==12 this still leaves at least 9 valid choices.
- *
- * Weighted by s_animation_weight[] (regular animations twice as likely
- * as game ones) rather than a uniform rand() % NUM_ANIMATIONS: sums the
- * weight of every non-excluded animation, rolls a random value in that
- * range, then walks the cumulative weights to find which animation that
- * roll landed on. A single pass, not a retry loop -- unlike the
- * previous uniform version's "re-roll until it isn't excluded," which
- * would need reweighting on every retry to stay correctly weighted. */
+/* Weighted random pick (s_animation_weight[]), excluding `exclude_a` and
+ * `exclude_b` (pass >= NUM_ANIMATIONS, e.g. 0xFF, to exclude nothing), so a
+ * switch never repeats the current animation or bounces back to the one
+ * before. One pass over the cumulative weights, no retry loop. */
 static uint8_t pick_random_animation(uint8_t exclude_a, uint8_t exclude_b) {
     if (NUM_ANIMATIONS <= 2u) {
         return 0u;
@@ -2133,30 +1715,24 @@ static uint8_t pick_random_animation(uint8_t exclude_a, uint8_t exclude_b) {
         }
         roll = (uint16_t)(roll - s_animation_weight[i]);
     }
-    return 0u; /* unreachable: total_weight > 0 whenever NUM_ANIMATIONS > 2 */
+    return 0u; /* unreachable: total_weight > 0 when NUM_ANIMATIONS > 2 */
 }
 
 static void enter_standby(uint32_t now_ms) {
     s_state = TILES_STANDBY_STATE_STANDBY;
-    /* Excludes whatever was showing (and the one before that) when
-     * standby last ended, so re-entering standby shortly after leaving
-     * it doesn't immediately repeat the same animation either. */
+    /* Exclude what was showing when standby last ended, so re-entering soon
+     * after doesn't repeat it. */
     uint8_t next = pick_random_animation(s_animation_index, s_prev_animation_index);
     s_prev_animation_index = s_animation_index;
     s_animation_index = next;
     s_animation_switch_ms = now_ms;
-    s_last_frame_ms = 0u; /* forces an immediate first frame below */
+    s_last_frame_ms = 0u; /* forces an immediate first frame */
     tiles_lighting_set_standby_active(true);
     tiles_buttons_set_standby_active(true);
 }
 
-/* Wakes to AWAKE from STANDBY or DEEP_SLEEP -- the same teardown either
- * way (hand rendering back to touch-driven behavior), so one function
- * covers both. Also clears s_manual_screensaver (a later *normal*
- * auto-idle STANDBY should never inherit a manual session's behavior)
- * and the circle hold-tracker (so a hold interrupted by some other real
- * input starts fresh on the next tick rather than resuming a stale
- * timer). */
+/* Back to AWAKE from STANDBY or DEEP_SLEEP (same teardown). Also clears
+ * the manual flag and the circle hold tracker. */
 static void exit_standby(void) {
     s_state = TILES_STANDBY_STATE_AWAKE;
     s_manual_screensaver = false;
@@ -2164,55 +1740,28 @@ static void exit_standby(void) {
     s_circle_was_held = false;
     tiles_lighting_set_standby_active(false);
     tiles_buttons_set_standby_active(false);
-    /* Harmless no-op if deep sleep's own silence was never engaged (e.g.
-     * waking from plain STANDBY, which never touches this) -- see
-     * enter_deep_sleep()'s own call and haptics.h's tiles_haptics_set_
-     * sleep_silenced() for why this is a separate flag from the user's
-     * own expression-mute, safe to always clear here regardless of how
-     * we got to AWAKE. */
+    /* Always safe to clear (only deep sleep sets it). */
     tiles_haptics_set_sleep_silenced(false);
 }
 
-/* Deep sleep: the single dormant state reached either by
- * current_deep_sleep_timeout_ms() of total inactivity from STANDBY, OR
- * directly by holding circle (SW6) for TILES_CIRCLE_DEEP_SLEEP_HOLD_MS
- * (8s) -- real feedback: "the sleep mode after 10 secs is the same as
- * the timeout of the animations, not two separate things... both behave
- * as sleep with a single circle light indicator pulsing slowly." An
- * earlier version had the 10s hold jump to a second, fully-blank state
- * instead of this one; that's gone now, this is the only "sleep" this
- * firmware has. Animations stop, everything goes dark except the circle
- * button (SW6, the rightmost -- see TILES_CIRCLE_BUTTON_COL in
- * board_layout.h), which pulses slowly as the one way to tell the board
- * is in deep sleep rather than fully off. Explicitly (re)asserts the
- * lighting/buttons standby-active claim rather than assuming
- * enter_standby() already made it -- true whenever this is reached via
- * the normal STANDBY timeout path, but the 8s circle hold can in
- * principle land here without ever having passed through STANDBY. */
+/* Deep sleep, the only sleep state: reached by the inactivity timeout or
+ * the 8 s circle hold. Everything dark except circle pulsing slowly (the
+ * sign it's asleep, not off). Claims the standby rendering itself, since
+ * the 8 s hold can arrive here without passing through STANDBY. */
 static void enter_deep_sleep(void) {
     s_state = TILES_STANDBY_STATE_DEEP_SLEEP;
     s_manual_screensaver = false;
-    s_deep_sleep_manual = false; /* the circle-hold caller sets this true itself, right after */
+    s_deep_sleep_manual = false; /* the circle-hold caller sets it true right after */
     tiles_lighting_set_standby_active(true);
     tiles_buttons_set_standby_active(true);
     s_last_frame_ms = 0u; /* forces an immediate first frame */
-    /* Real feedback: "in sleep mode haptics should be off." Regular
-     * STANDBY/screensaver deliberately leaves haptics running normally
-     * (this file's own "lighting-only concept" header) -- only this
-     * deeper, meant-to-be-fully-dormant state silences them. */
+    /* Haptics off in deep sleep only (regular standby leaves them running). */
     tiles_haptics_set_sleep_silenced(true);
 }
 
-/* Circle (SW6)'s dedicated long-press gesture -- see this file's
- * s_manual_screensaver/TILES_CIRCLE_*_HOLD_MS comments above for the
- * full reasoning. Runs unconditionally at the very top of
- * tiles_standby_scan(), regardless of current state, so the gesture
- * works whether the board is currently AWAKE, already in STANDBY, or
- * already in DEEP_SLEEP -- a continuous hold naturally passes through
- * the 4s threshold (enters/escalates to a manual STANDBY) before the 8s
- * one (escalates further to DEEP_SLEEP -- the exact same state the
- * normal inactivity timeout below reaches, not a separate one), each
- * firing exactly once per hold via its own *_fired latch. */
+/* Circle's long-press gesture, run at the top of every scan in any state:
+ * a continuous hold passes 4 s (manual screensaver) then 8 s (deep sleep),
+ * each firing once per hold. */
 static void handle_circle_hold(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
 
@@ -2227,19 +1776,11 @@ static void handle_circle_hold(uint32_t now_ms) {
         if (held_ms >= TILES_CIRCLE_DEEP_SLEEP_HOLD_MS && !s_circle_deep_sleep_fired) {
             s_circle_deep_sleep_fired = true;
             s_last_activity_ms = now_ms;
-            /* Real feedback: "panic should be forced sleep with shift
-             * button. like that action sends a panic note off." Only on
-             * THIS, the deliberate player-held gesture -- not inside
-             * enter_deep_sleep() itself, which the automatic inactivity
-             * timeout below also reaches, and a panic broadcast has no
-             * business firing just because the board sat idle. See
-             * midi/midi_out.h's own tiles_midi_send_panic() for what it
-             * actually sends and why. Before enter_deep_sleep() rather
-             * than after -- a panic is a "stop right now" action, so it
-             * goes out before anything else this gesture does, not last. */
+            /* MIDI panic on the deliberate 8 s hold only, not the automatic timeout,
+             * and before sleeping (it's a "stop now" action). */
             tiles_midi_send_panic();
             enter_deep_sleep();
-            s_deep_sleep_manual = true; /* the player asked for this one -- see s_deep_sleep_manual's comment */
+            s_deep_sleep_manual = true; /* the player asked for this one */
         } else if (held_ms >= TILES_CIRCLE_SCREENSAVER_HOLD_MS && !s_circle_screensaver_fired) {
             s_circle_screensaver_fired = true;
             s_last_activity_ms = now_ms;
@@ -2247,18 +1788,9 @@ static void handle_circle_hold(uint32_t now_ms) {
             s_manual_screensaver = true;
         }
     } else if (s_circle_was_held && !s_circle_screensaver_fired) {
-        /* Falling edge of a hold that never reached either long-press
-         * threshold -- an ordinary short tap. Real feedback: "circle...
-         * not waking the instrument up from sleep." real_input_active()
-         * below deliberately excludes circle from its generic wake check
-         * (a hold building toward the 4s/8s thresholds must not wake
-         * standby on its very first tick, before either can fire), but
-         * that exclusion also silently swallowed the far more common
-         * case of a plain short tap doing nothing at all while asleep,
-         * unlike every other button. Only reachable here once release
-         * has already confirmed the hold was short -- can't wake on
-         * press, since a press might still turn into one of the two long
-         * holds above. */
+        /* A short tap (released before 4 s) wakes the board like any button.
+         * Circle is excluded from the generic wake check (a building hold mustn't
+         * wake on its first tick), so it's handled here on release. */
         if (s_state != TILES_STANDBY_STATE_AWAKE) {
             s_last_activity_ms = now_ms;
             printf("[standby] waking: button %u (t=%u ms)\n", (unsigned)TILES_CIRCLE_BUTTON_ID, now_ms);
@@ -2269,15 +1801,9 @@ static void handle_circle_hold(uint32_t now_ms) {
     s_circle_was_held = held;
 }
 
-/* SW1/SW2 as animation-scroll controls -- only called while
- * s_manual_screensaver is true (see tiles_standby_scan()), and
- * deliberately sequential (not pick_random_animation()'s weighted random
- * pick), since "scroll" implies stepping predictably back and forth
- * through the list, not landing somewhere new each press. Resets
- * s_last_activity_ms so this manual session's own (extended) timeout
- * keeps getting pushed back while actively browsing, without that
- * activity ever counting as a wake -- see real_input_active()'s SW1/SW2
- * exclusion for this same mode. */
+/* "-"/"+" step through animations in order (not random) while a manual
+ * screensaver shows. Each press resets the inactivity clock without
+ * counting as a wake. */
 static void handle_manual_scroll_input(uint32_t now_ms) {
     bool minus = tiles_button_is_pressed(1u); /* SW1 "-" */
     bool plus = tiles_button_is_pressed(2u);  /* SW2 "+" */
@@ -2287,7 +1813,7 @@ static void handle_manual_scroll_input(uint32_t now_ms) {
         s_animation_index = (uint8_t)((s_animation_index + NUM_ANIMATIONS - 1u) % NUM_ANIMATIONS);
         s_animation_switch_ms = now_ms;
         s_last_activity_ms = now_ms;
-        s_last_frame_ms = 0u; /* force an immediate redraw of the new animation */
+        s_last_frame_ms = 0u; /* redraw the new animation now */
     }
     if (plus && !s_scroll_prev_plus) {
         s_prev_animation_index = s_animation_index;
@@ -2303,10 +1829,8 @@ static void handle_manual_scroll_input(uint32_t now_ms) {
 
 static uint32_t current_deep_sleep_timeout_ms(void) {
     if (s_manual_screensaver) {
-        /* A deliberate user action takes priority over the sequencer-mode
-         * default below, even though both currently happen to be 30
-         * minutes -- that's a coincidence of the two numbers, not a
-         * dependency between them. */
+        /* The player's choice wins over the sequencer default (both 30 min, by
+         * coincidence). */
         return TILES_STANDBY_MANUAL_DEEP_SLEEP_TIMEOUT_MS;
     }
     if (tiles_op_mode_is_sequencer_active()) {
@@ -2344,11 +1868,8 @@ void tiles_standby_init(void) {
     s_last_activity_ms = now_ms;
     s_last_frame_ms = 0u;
     s_animation_switch_ms = now_ms;
-    /* Both out of range -- nothing to avoid repeating yet, so the very
-     * first standby entry's pick is fully unconstrained. Never used as a
-     * real array index: enter_standby() always overwrites
-     * s_animation_index with a valid pick before STANDBY rendering ever
-     * runs. */
+    /* No history yet, so the first pick is unconstrained. Never used as an
+     * index: enter_standby() picks a valid one before rendering. */
     s_animation_index = 0xFFu;
     s_prev_animation_index = 0xFFu;
     s_stars_inited = false;
@@ -2360,31 +1881,16 @@ void tiles_standby_init(void) {
     s_deep_sleep_manual = false;
     s_scroll_prev_minus = false;
     s_scroll_prev_plus = false;
-    /* Seeds the ONE global rand()/srand() stream every rand()-consuming
-     * feature in this firmware shares (snake/tetris/brick-breaker/Simon
-     * Says pattern generation, every standby animation's own randomness,
-     * etc.) -- real feedback: "is simon says generating unique patterns
-     * every time? it should do that." It wasn't reliably: this used to
-     * seed from now_ms, boot time in milliseconds at this specific,
-     * fairly deterministic point in the boot sequence (right after
-     * services/boot_sequence.c's own fixed ~4-second blocking animation)
-     * -- close enough to identical across boots that the "random" stream
-     * itself could end up nearly identical run to run. get_rand_32()
-     * (pico_rand, linked in CMakeLists.txt) draws on real hardware
-     * entropy (ROSC ring-oscillator jitter or the RP2350's own hardware
-     * TRNG, RAM contents, a bus performance counter -- see pico/rand.h's
-     * own header for the full list), genuinely different every boot
-     * rather than a predictable function of boot timing. */
+    /* Seeds the ONE shared rand() stream (games, animations, Simon Says) from
+     * hardware entropy (get_rand_32(), pico_rand). Seeding from boot time,
+     * which is nearly the same every boot, made "random" patterns repeat. */
     srand((unsigned int)get_rand_32());
 }
 
 void tiles_standby_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
-    /* Runs regardless of current state -- see the function's own
-     * comment for why (the gesture needs to work from AWAKE, STANDBY,
-     * or DEEP_SLEEP alike). May change s_state out from under
-     * everything below on this same call. */
+    /* Runs in every state; may change s_state for the rest of this call. */
     handle_circle_hold(now_ms);
 
     if (s_state == TILES_STANDBY_STATE_STANDBY && s_manual_screensaver) {
@@ -2400,33 +1906,17 @@ void tiles_standby_scan(void) {
         return;
     }
 
-    /* Real feedback: "can it override screensavers? like no screensaver
-     * can activate if ableton is playing or midi is being recieved?"
-     * tiles_midi_in_activity_count() only moves for Note-On/Off and the
-     * four Real-Time bytes (Clock/Start/Continue/Stop) -- i.e. a DAW
-     * actually playing, or a melody being echoed by the TILES DISPLAY
-     * device -- so this is "the board is being used," not "Ableton is
-     * open." Sampled on every scan that gets this far (even when nothing
-     * below acts on it) so a long stretch of ignored activity never
-     * leaves a stale value behind that would read as a fresh burst the
-     * instant it starts mattering.
-     *   - AWAKE: refreshes the idle timer exactly like a touch, so the
-     *     screensaver simply never gets its turn while MIDI keeps
-     *     arriving (external clock is ~48 events/s, so a playing DAW
-     *     holds it off continuously; a stray note holds it off for one
-     *     more idle-timeout, not forever). Includes sequencer mode's own
-     *     longer 20-minute timeout -- a pattern running off Ableton's
-     *     clock is precisely the "unattended" case this now covers.
-     *   - AUTOMATIC STANDBY/DEEP_SLEEP: wakes, same reasoning -- a
-     *     screensaver covering the pads would hide the very melody or
-     *     clock-synced pattern the MIDI is driving.
-     *   - MANUAL screensaver/deep sleep (circle held ~4s/~8s): left
-     *     alone. The player asked for those explicitly, so a DAW that
-     *     happens to be playing must not undo them -- and MIDI isn't
-     *     allowed to keep pushing THEIR inactivity timeout back either.
-     * No printf on the wake path (print_wake_source() only knows about
-     * touch/button/pedal, and this runs at clock rate) -- see this
-     * project's own history with USB-CDC stdio blocking the main loop. */
+    /* Incoming MIDI counts as activity: tiles_midi_in_activity_count() moves
+     * only for notes and clock/transport, i.e. a DAW playing or an echo, not
+     * just Live being open. Sampled every scan so a stale value never looks
+     * like a fresh burst.
+     *   - AWAKE: refreshes the idle timer like a touch, so a playing DAW keeps
+     *     the screensaver away (sequencer mode included).
+     *   - AUTOMATIC standby/deep sleep: wakes, so the pads show what MIDI is
+     *     driving.
+     *   - MANUAL screensaver/deep sleep: left alone, and MIDI doesn't push
+     *     their timeouts back.
+     * No printf here: this runs at clock rate. */
     uint32_t midi_activity = tiles_midi_in_activity_count();
     bool midi_active = (midi_activity != s_seen_midi_activity);
     s_seen_midi_activity = midi_activity;
@@ -2445,18 +1935,8 @@ void tiles_standby_scan(void) {
     }
 
     if (s_state == TILES_STANDBY_STATE_AWAKE) {
-        /* Real feedback: "something triggering animations when clicking
-         * the diamond menu" -- root cause was this idle timer itself,
-         * elapsing while a services/op_mode.h sub-view (the mode picker,
-         * most commonly) sat open with no touch on it, silently
-         * replacing it with the screensaver mid-browse. Reading a menu
-         * takes no touch at all, so holding off the timeout entirely
-         * while one is open -- refreshing s_last_activity_ms every tick
-         * it's open, same effect real_input_active() has for genuine
-         * touch/button/pedal activity -- is the fix, not a longer
-         * timeout (this isn't sequencer's "can legitimately run
-         * unattended" case, it's "the player is actively reading the
-         * screen right now"). */
+        /* An open op_mode menu (mode picker etc.) holds the timer off: reading a
+         * menu takes no touch, and the screensaver used to replace it mid-browse. */
         if (tiles_op_mode_has_menu_open()) {
             s_last_activity_ms = now_ms;
             return;
@@ -2469,11 +1949,8 @@ void tiles_standby_scan(void) {
         return;
     }
 
-    /* STANDBY or DEEP_SLEEP: real_input_active() above was false, so the
-     * only remaining wake path is Hall depth -- see
-     * hall_depth_wake_triggered()'s comment for why it's checked only
-     * here, not folded into real_input_active(). Applies to both states
-     * equally -- same underlying "not fully awake" concern. */
+    /* STANDBY or DEEP_SLEEP with no real input: the only other wake path is
+     * Hall depth (wake-only; see hall_depth_wake_triggered()). */
     if (hall_depth_wake_triggered()) {
         s_last_activity_ms = now_ms;
         exit_standby();
@@ -2494,16 +1971,9 @@ void tiles_standby_scan(void) {
         return;
     }
 
-    /* Auto-cycling pauses while manually browsing (handle_manual_scroll_
-     * input() above already changes s_animation_index/s_animation_switch_ms
-     * directly on a scroll press) -- otherwise a deliberately-picked
-     * animation would get randomly replaced out from under the user a
-     * couple of minutes later. */
+    /* No auto-cycling while manually browsing, so a chosen animation stays. */
     if (!s_manual_screensaver && now_ms - s_animation_switch_ms >= TILES_STANDBY_ANIMATION_CYCLE_MS) {
-        /* Random, not sequential -- excludes both the current animation
-         * and the one before it, so a switch never immediately repeats
-         * itself and never bounces straight back to the animation two
-         * ago either. */
+        /* Random, excluding the current and previous animation. */
         uint8_t next = pick_random_animation(s_animation_index, s_prev_animation_index);
         s_prev_animation_index = s_animation_index;
         s_animation_index = next;

@@ -13,6 +13,11 @@
  * (Hall-depth wake exists but is disabled until a light-touch threshold is
  * measured; see TILES_STANDBY_HALL_WAKE_DEPTH.)
  *
+ * Incoming MIDI notes or clock (a DAW playing, the melodic echo) count as
+ * activity too: they hold off and wake an AUTOMATIC screensaver, but never
+ * undo one the player started by holding circle. An open op_mode menu also
+ * holds the timer off.
+ *
  * ---- Deep sleep --------------------------------------------------------
  * After 20 minutes of total inactivity: everything dark except circle
  * pulsing slowly. Haptics are silenced (tiles_haptics_set_sleep_silenced()).
