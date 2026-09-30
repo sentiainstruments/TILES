@@ -24,30 +24,19 @@ static uint s_sm;
 static uint s_offset;
 static tiles_din_midi_trs_type_t s_type;
 
-/* Active Sensing (0xFE): real feedback: "before bnooting look into what
- * actually is standardized or good practice in this industry that we
- * havent implemented yet" -> confirmed standard practice for a DIN MIDI
- * transmitter (the spec: sent at least every 300ms whenever the line is
- * otherwise idle, so a receiver that understands it can tell a genuinely
- * dead connection -- cable unplugged, or this board crashed mid-note --
- * from ordinary silence, and silence itself as a failsafe rather than
- * leaving a note stuck forever). USB never needed this (tud_midi_mounted()
- * already tells a USB host the connection state directly, and sending an
- * unsolicited Active Sensing byte over USB-MIDI's class protocol would be
- * unusual, not established practice) -- this is DIN-only, and lives here
- * rather than in din_midi_queue.c because it's a real-time concern (when
- * did a byte last actually go out) that module deliberately has no clock
- * for. Support is optional on either end per spec; this only ever helps,
- * never hurts, a receiver that doesn't implement it. */
-#define DIN_ACTIVE_SENSE_INTERVAL_MS 250u /* under the spec's 300ms ceiling, a safety margin for scan-rate jitter */
+/* Active Sensing (0xFE): standard for DIN transmitters. Sent whenever the
+ * line has been idle, at least every 300 ms, so a receiver can tell a dead
+ * link (cable pulled, board crashed mid-note) from silence and release its
+ * notes. Optional for receivers, so harmless to ones that ignore it. Not
+ * sent on USB, where the host knows the connection state. */
+#define DIN_ACTIVE_SENSE_INTERVAL_MS 250u /* under the spec's 300 ms, with margin for loop jitter */
 static uint32_t s_din_last_activity_ms;
 
 static void din_note_activity(uint32_t now_ms) {
     s_din_last_activity_ms = now_ms;
 }
 
-/* The GPIO that carries the data waveform for a TRS type (see din_midi.h for
- * why Type A = GP0). */
+/* The GPIO carrying data for a TRS type (why Type A = GP0: din_midi.h). */
 static uint signal_gpio(tiles_din_midi_trs_type_t type) {
     return (type == TILES_DIN_MIDI_TRS_TYPE_B) ? TILES_GPIO_DIN_MIDI_OUT_B : TILES_GPIO_DIN_MIDI_OUT_A;
 }
@@ -58,11 +47,9 @@ static void tx_irq_source(bool enabled) {
     pio_set_irqn_source_enabled(s_pio, 0, pio_get_tx_fifo_not_full_interrupt_source(s_sm), enabled);
 }
 
-/* Fires while the PIO TX FIFO has room. Moves bytes from the queue into it;
- * when the queue runs dry, turns its own source off (level-triggered -- left
- * on with nothing to send it would fire forever). The has_data re-check
- * closes the race where main queued a byte between "queue empty" and the
- * disable, which would otherwise strand that byte until the next kick. */
+/* Runs while the PIO TX FIFO has room, moving bytes from the queue. When
+ * the queue is empty it disables its own (level-triggered) source; the
+ * has_data re-check catches a byte queued between "empty" and the disable. */
 static void din_tx_irq_handler(void) {
     while (!pio_sm_is_tx_fifo_full(s_pio, s_sm)) {
         uint8_t byte;
@@ -77,12 +64,11 @@ static void din_tx_irq_handler(void) {
     }
 }
 
-/* (Re)points the transmitter at `type`'s signal GPIO and parks the other high.
- * Order matters for the current loop: MIDI is "no current" while both lines
- * are equal, so the pin being taken over is first driven high through SIO,
- * then handed to PIO already high (pio_sm_set_pins_with_mask), and the
- * released pin ends up SIO-high -- neither transition ever pulls one line
- * low, so the receiver never sees a spurious start bit. */
+/* Points the transmitter at `type`'s GPIO and parks the other high. Order
+ * matters: no current flows while both lines are equal, so the pin taken
+ * over is driven high via SIO first and handed to PIO already high, and
+ * the released pin ends SIO-high. Neither line is ever pulled low, so the
+ * receiver never sees a false start bit. */
 static void tx_configure_type(tiles_din_midi_trs_type_t type) {
     uint signal = signal_gpio(type);
     uint idle = signal_gpio(type == TILES_DIN_MIDI_TRS_TYPE_A ? TILES_DIN_MIDI_TRS_TYPE_B : TILES_DIN_MIDI_TRS_TYPE_A);
@@ -97,7 +83,7 @@ static void tx_configure_type(tiles_din_midi_trs_type_t type) {
     gpio_set_dir(signal, GPIO_OUT);
 
     /* Same order as Raspberry Pi's uart_tx example: level and direction first
-     * (pin goes to PIO already high), then the state machine config. */
+     * (the pin reaches PIO high), then the state machine config. */
     pio_sm_set_pins_with_mask(s_pio, s_sm, 1u << signal, 1u << signal);
     pio_sm_set_pindirs_with_mask(s_pio, s_sm, 1u << signal, 1u << signal);
     pio_gpio_init(s_pio, signal);
@@ -105,7 +91,7 @@ static void tx_configure_type(tiles_din_midi_trs_type_t type) {
     pio_sm_config c = din_uart_tx_program_get_default_config(s_offset);
     sm_config_set_out_pins(&c, signal, 1);
     sm_config_set_sideset_pins(&c, signal);
-    /* LSB first, no autopull -- the program's own `pull` fetches each byte. */
+    /* LSB first, no autopull (the program's `pull` fetches each byte). */
     sm_config_set_out_shift(&c, true, false, 32);
     sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / (float)(DIN_TX_CYCLES_PER_BIT * DIN_MIDI_BAUD));
     pio_sm_init(s_pio, s_sm, s_offset, &c);
@@ -120,8 +106,7 @@ static void din_uart_irq_handler(void) {
     while (uart_is_readable(DIN_UART)) {
         uint32_t dr = hw->dr;
         if ((dr & (UART_UARTDR_OE_BITS | UART_UARTDR_BE_BITS | UART_UARTDR_PE_BITS | UART_UARTDR_FE_BITS)) != 0u) {
-            /* Framing error / break / overrun: this byte can't be trusted and
-             * the parser must not stitch the neighbours across the gap. */
+            /* Framing error / break / overrun: drop the byte and flag the gap. */
             tiles_din_queue_rx_flag_loss();
             continue;
         }
@@ -133,9 +118,8 @@ bool tiles_din_midi_init(void) {
     s_ready = false;
     tiles_din_queue_init();
 
-    /* Any PIO block with a free state machine and instruction space will do
-     * (lighting.c's SK6805 chains already use some of pio0). The program
-     * must be able to reach BOTH output lines (GP0..GP2). */
+    /* Any PIO block with a free state machine and room will do (the SK6805
+     * chains use some of pio0). The program must reach GP0..GP2. */
     if (!pio_claim_free_sm_and_add_program_for_gpio_range(&din_uart_tx_program, &s_pio, &s_sm, &s_offset,
                                                           TILES_GPIO_DIN_MIDI_OUT_A, 3u, true)) {
         return false;
@@ -146,22 +130,19 @@ bool tiles_din_midi_init(void) {
     irq_set_exclusive_handler((uint)irq, din_tx_irq_handler);
     irq_set_enabled((uint)irq, true);
 
-    /* RX. UART0's TX half is initialized too (uart_init enables both) but its
-     * pin function is never selected, so it drives nothing. */
+    /* RX only. uart_init() enables TX too, but its pin function is never
+     * selected, so it drives nothing. */
     uart_init(DIN_UART, DIN_MIDI_BAUD);
     gpio_set_function(TILES_GPIO_DIN_MIDI_IN_RX, GPIO_FUNC_UART);
     uart_set_hw_flow(DIN_UART, false, false);
     uart_set_format(DIN_UART, 8u, 1u, UART_PARITY_NONE);
     uart_set_fifo_enabled(DIN_UART, true);
-    /* Interrupt as soon as 1/8 of the 32-byte RX FIFO (4 bytes) is filled,
-     * not at the 1/2 reset default: anything shorter than the threshold only
-     * gets serviced by the ~1 ms receive-timeout interrupt, and a 3-byte
-     * Note-On is shorter than any threshold. The FIFO itself stays enabled
-     * for what it's really for -- ~10 ms of slack if the main loop or a flash
-     * write holds interrupts off, instead of losing every byte in that time. */
+    /* RX interrupt at 1/8 full (4 bytes), not the 1/2 default: shorter bursts
+     * (a 3-byte Note-On) otherwise wait for the ~1 ms receive timeout. The
+     * FIFO still gives ~10 ms of slack while interrupts are off (flash writes). */
     uart_get_hw(DIN_UART)->ifls = (0u << UART_UARTIFLS_TXIFLSEL_LSB) | (0u << UART_UARTIFLS_RXIFLSEL_LSB);
     while (uart_is_readable(DIN_UART)) {
-        (void)uart_get_hw(DIN_UART)->dr; /* discard whatever the line did while it was unconfigured */
+        (void)uart_get_hw(DIN_UART)->dr; /* discard what arrived while unconfigured */
     }
     irq_set_exclusive_handler(DIN_UART_IRQ, din_uart_irq_handler);
     irq_set_enabled(DIN_UART_IRQ, true);
@@ -215,11 +196,8 @@ void tiles_din_midi_service(void) {
     if (tiles_din_queue_service()) {
         din_note_activity(now_ms);
     } else if ((uint32_t)(now_ms - s_din_last_activity_ms) >= DIN_ACTIVE_SENSE_INTERVAL_MS) {
-        /* tiles_din_queue_push_message() rejects nothing for a single
-         * Real-Time byte (status >= 0xF8), so this can't fail -- but even a
-         * dropped Active Sensing byte is harmless (it's optional, and the
-         * NEXT tick tries again in another 250ms regardless, since a failed
-         * push doesn't touch s_din_last_activity_ms). */
+        /* Can't fail for a single Real-Time byte, and a dropped one is harmless:
+         * the timer isn't reset, so it retries next pass. */
         uint8_t active_sense = 0xFEu;
         if (tiles_din_queue_push_message(&active_sense, 1u)) {
             din_note_activity(now_ms);

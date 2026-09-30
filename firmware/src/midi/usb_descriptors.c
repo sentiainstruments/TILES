@@ -1,23 +1,10 @@
-/*
- * Composite USB device descriptors: CDC (the diagnostics console
- * everything so far has used) + MIDI + Vendor (firmware/src/usb_
- * vendor.c's own control-software settings protocol -- see that
- * file's own header comment), in one device.
+/* Composite USB device: CDC (diagnostics console) + MIDI (two cables) +
+ * vendor (settings, usb_vendor/) + picotool reset interface.
  *
- * Structure adapted from TinyUSB's own reference examples rather than
- * hand-built from scratch: the CDC+other-class composite pattern
- * (interface numbering, IAD device class, TUD_CDC_DESCRIPTOR usage)
- * from examples/device/cdc_msc/src/usb_descriptors.c, and the MIDI
- * interface descriptor (TUD_MIDI_DESCRIPTOR usage) from
- * examples/device/midi_test/src/usb_descriptors.c. Using TinyUSB's own
- * descriptor-building macros for each class, rather than hand-counting
- * descriptor bytes, is what keeps this from being the kind of thing
- * that's subtly wrong in a way that's painful to debug on real hardware.
- *
- * Compiles instead of pico_stdio_usb's bundled default descriptors
- * because firmware/src/CMakeLists.txt links tinyusb_device explicitly --
- * see tusb_config.h's header comment.
- */
+ * Built with TinyUSB's per-class descriptor macros (patterns from its
+ * cdc_msc and midi_test examples) rather than hand-counted bytes.
+ * Replaces pico_stdio_usb's default descriptors because CMakeLists.txt
+ * links tinyusb_device explicitly (see tusb_config.h). */
 
 #include <stdio.h>
 #include <string.h>
@@ -29,30 +16,22 @@
 #include "product_identity.h"
 #include "tusb.h"
 
-/* Full-speed only: RP2350's USB controller has no high-speed PHY, so
- * there is no separate high-speed descriptor path to maintain here
- * (unlike the TinyUSB examples this is adapted from, which support both). */
+/* Full speed only: the RP2350 has no high-speed PHY. */
 
-/* VID/PID and firmware version: midi/product_identity.h -- including why
- * this is no longer Raspberry Pi's VID with a self-picked PID (that PID
- * belonged to someone else's product).
+/* VID/PID and firmware version: midi/product_identity.h.
  *
- * USB 2.1 (not 2.0) so Windows asks for the BOS descriptor below, which is
- * how it learns -- without any driver install -- that the settings and
- * reset interfaces want Microsoft's generic WinUSB driver. */
+ * USB 2.1 (not 2.0) so Windows asks for the BOS descriptor below and binds
+ * WinUSB to the settings and reset interfaces without a driver install. */
 #define USB_BCD 0x0210u
 
-/* -------------------------------------------------------------------- */
-/* Device descriptor                                                     */
-/* -------------------------------------------------------------------- */
+/* ---- Device descriptor ---- */
 
 tusb_desc_device_t const desc_device = {
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
     .bcdUSB = USB_BCD,
 
-    /* Interface Association Descriptor for CDC, required whenever CDC
-     * is combined with another class in one configuration. */
+    /* IAD, required when CDC shares a configuration with other classes. */
     .bDeviceClass = TUSB_CLASS_MISC,
     .bDeviceSubClass = MISC_SUBCLASS_COMMON,
     .bDeviceProtocol = MISC_PROTOCOL_IAD,
@@ -74,9 +53,7 @@ uint8_t const *tud_descriptor_device_cb(void) {
     return (uint8_t const *)&desc_device;
 }
 
-/* -------------------------------------------------------------------- */
-/* Configuration descriptor                                              */
-/* -------------------------------------------------------------------- */
+/* ---- Configuration descriptor ---- */
 
 enum {
     ITF_NUM_CDC = 0,
@@ -84,7 +61,7 @@ enum {
     ITF_NUM_MIDI,
     ITF_NUM_MIDI_STREAMING,
     ITF_NUM_VENDOR,
-    ITF_NUM_RESET, /* picotool's software-reboot interface -- see tusb_config.h */
+    ITF_NUM_RESET, /* picotool reset interface; see tusb_config.h */
     ITF_NUM_TOTAL,
 };
 
@@ -98,7 +75,7 @@ enum {
 #define EPNUM_VENDOR_OUT 0x04u
 #define EPNUM_VENDOR_IN 0x84u
 
-/* String indices -- see string_desc_arr below. */
+/* String indices; see string_desc_arr below. */
 enum {
     STRID_LANGID = 0,
     STRID_MANUFACTURER,
@@ -111,12 +88,11 @@ enum {
     STRID_MIDI_PORT_DAW,
 };
 
-/* Two MIDI ports ("virtual cables") on one USB-MIDI interface -- see
- * midi/midi_ports.h for why. Built from TinyUSB's own per-cable macros
- * (the same pieces TUD_MIDI_DESCRIPTOR uses for its single cable): one
+/* Two MIDI ports (cables) on one USB-MIDI interface; see
+ * midi/midi_ports.h. Built from TinyUSB's per-cable macros: one
  * embedded+external jack pair per cable, each named (the jack string is
- * what a host shows as the port's name), then each endpoint lists its
- * embedded jacks in cable order -- that order IS the cable numbering. */
+ * the port name hosts show), then each endpoint lists its embedded jacks
+ * in cable order, which defines the cable numbers. */
 #define MIDI_NUM_CABLES 2u
 #define TILES_MIDI_DESC_LEN \
     (TUD_MIDI_DESC_HEAD_LEN + MIDI_NUM_CABLES * TUD_MIDI_DESC_JACK_LEN + 2u * TUD_MIDI_DESC_EP_LEN(MIDI_NUM_CABLES))
@@ -126,14 +102,14 @@ TU_VERIFY_STATIC(MIDI_NUM_CABLES == TILES_USB_MIDI_NUM_CABLES, "descriptor cable
     (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TILES_MIDI_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_RPI_RESET_DESC_LEN)
 
 uint8_t const desc_fs_configuration[] = {
-    /* Config number, interface count, string index, total length, attribute, power in mA */
+    /* config number, interface count, string index, total length, attributes, mA */
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
 
-    /* Interface number, string index, EP notification address + size, EP data (out, in) + size */
+    /* interface, string, notification EP + size, data EPs (out, in) + size */
     TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, STRID_CDC, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
 
     /* MIDI: cable 0 = MAIN ("MIDI"), cable 1 = DAW ("DAW"). TinyUSB's jack
-     * macros number cables from 1. */
+     * macros count cables from 1. */
     TUD_MIDI_DESC_HEAD(ITF_NUM_MIDI, STRID_MIDI, MIDI_NUM_CABLES),
     TUD_MIDI_DESC_JACK_DESC(1, STRID_MIDI_PORT_MAIN),
     TUD_MIDI_DESC_JACK_DESC(2, STRID_MIDI_PORT_DAW),
@@ -144,11 +120,10 @@ uint8_t const desc_fs_configuration[] = {
     TUD_MIDI_JACKID_OUT_EMB(1),
     TUD_MIDI_JACKID_OUT_EMB(2),
 
-    /* Interface number, string index, EP out & in address, EP size */
+    /* interface, string, EP out & in, EP size */
     TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, STRID_VENDOR, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
 
-    /* Control-transfers-only (no data endpoints, no string) -- see
-     * tusb_config.h's own comment on why this interface exists. */
+    /* Control transfers only (no endpoints, no string); see tusb_config.h. */
     TUD_RPI_RESET_DESCRIPTOR(ITF_NUM_RESET, 0),
 };
 TU_VERIFY_STATIC(sizeof(desc_fs_configuration) == CONFIG_TOTAL_LEN, "configuration descriptor length");
@@ -158,30 +133,22 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     return desc_fs_configuration;
 }
 
-/* -------------------------------------------------------------------- */
-/* BOS + Microsoft OS 2.0 descriptors (Windows driverless access)        */
-/* -------------------------------------------------------------------- */
+/* ---- BOS + Microsoft OS 2.0 descriptors (Windows driverless access) ---- */
 
-/* Real feedback: "do 8 as how standardized stuff works. production ready
- * industry stuff" (the standardization round). Windows binds a driver to
- * every interface of a composite device; it has class drivers for CDC and
- * MIDI, but NOT for a vendor-specific interface -- without this, the
- * settings interface (usb_vendor/, the future companion app) and the
- * picotool reset interface show up as "unknown device" and need a manual
- * driver install (Zadig). The Microsoft OS 2.0 descriptor set below asks
- * Windows to load its own WinUSB driver for exactly those two interfaces,
- * automatically -- the standard way, and the one pico-sdk itself uses for
- * the reset interface (pico_usb_reset/usb_reset.c, which this mirrors and
- * extends; that file's own copy is off in this build because this project
- * provides its own descriptors). macOS and Linux ignore all of this.
- * NOT hardware-tested on Windows yet. */
+/* Windows has class drivers for CDC and MIDI but not for vendor
+ * interfaces, so without this the settings and reset interfaces show up as
+ * "unknown device" and need Zadig. The MS OS 2.0 descriptor set asks
+ * Windows to load WinUSB for those two interfaces automatically: the
+ * standard approach, and the one pico-sdk uses for its reset interface
+ * (pico_usb_reset/usb_reset.c, mirrored and extended here; its own copy is
+ * off because we provide the descriptors). macOS and Linux ignore it.
+ * Not yet tested on Windows hardware. */
 
 #define MS_OS_20_VENDOR_CODE 0x01u
 
-/* Function subset for the settings interface: WinUSB + a device interface
- * GUID the companion app can look the device up by. Same layout as
- * pico-sdk's RPI_RESET_MS_OS_20_DESCRIPTOR (and so the same length);
- * the GUID is this project's own, generated for this interface. */
+/* Settings interface subset: WinUSB plus a device interface GUID the
+ * companion app can find the device by. Same layout (and length) as
+ * pico-sdk's RPI_RESET_MS_OS_20_DESCRIPTOR; the GUID is ours. */
 #define TILES_CONTROL_MS_OS_20_DESC_LEN (0x08 + 0x14 + 0x80)
 #define TILES_CONTROL_MS_OS_20_DESCRIPTOR(itf_num)                                                                     \
     U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION), itf_num, 0,                                 \
@@ -198,7 +165,7 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
 #define MS_OS_20_DESC_LEN (0x0A + TILES_CONTROL_MS_OS_20_DESC_LEN + RPI_RESET_MS_OS_20_DESC_LEN)
 
 static uint8_t const desc_ms_os_20[] = {
-    /* Set header: length, type, Windows version (8.1+), total length */
+    /* set header: length, type, Windows version (8.1+), total length */
     U16_TO_U8S_LE(0x000A), U16_TO_U8S_LE(MS_OS_20_SET_HEADER_DESCRIPTOR), U32_TO_U8S_LE(0x06030000),
     U16_TO_U8S_LE(MS_OS_20_DESC_LEN),
     TILES_CONTROL_MS_OS_20_DESCRIPTOR(ITF_NUM_VENDOR),
@@ -218,11 +185,10 @@ uint8_t const *tud_descriptor_bos_cb(void) {
     return desc_bos;
 }
 
-/* Every vendor-type control request lands here (TinyUSB routes them before
- * any class driver) -- the only one this device answers is Windows' "get
- * the MS OS 2.0 descriptor set" (bRequest = the vendor code advertised in
- * the BOS above, wIndex 7). Anything else stalls. The picotool reset
- * request is a CLASS request to its interface, so it never comes here. */
+/* Vendor-type control requests arrive here before any class driver. The
+ * only one answered is Windows' MS OS 2.0 descriptor request (bRequest =
+ * our vendor code, wIndex 7); anything else stalls. The picotool reset
+ * request is a class request, so it never comes here. */
 bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
     if (stage != CONTROL_STAGE_SETUP) {
         return true;
@@ -233,34 +199,24 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
     return false;
 }
 
-/* -------------------------------------------------------------------- */
-/* String descriptors                                                    */
-/* -------------------------------------------------------------------- */
+/* ---- String descriptors ---- */
 
-/* Real feedback on the port names: "do 8 as how standardized stuff works.
- * production ready industry stuff." The PRODUCT name is what every host
- * shows as the device -- and, with the jack names below, what DAWs call its
- * two MIDI ports ("SENTIA TILES MIDI" / "SENTIA TILES DAW" on macOS), and
- * what Ableton matches its control-surface script against. So it is the
- * same on every unit, like any shipping product; which physical board this
- * is comes from the serial number (the chip ID) and the unit label below.
- *
- * The unit label ("were moving to have identifiers" -- see board/
- * unit_id.h) used to BE the product name ("SENTIA TILES (Unit 2/4)"), which
- * gave every board differently-named MIDI ports: a Live set or MIDI setup
- * made with one board didn't recognize another. It now rides on the
- * diagnostics (CDC) interface's name instead -- still visible in the OS's
- * USB device listing (System Information on macOS) -- and in the settings
- * shell's INFO (usb_vendor/usb_vendor.c). */
+/* The PRODUCT name is the same on every unit, like any shipping product:
+ * hosts show it as the device, DAWs build the port names from it ("SENTIA
+ * TILES MIDI" / "SENTIA TILES DAW" on macOS), and Ableton matches its
+ * control surface script against it. Per-unit names would make a Live set
+ * made with one board miss another. Which board it is comes from the
+ * serial number (chip ID) and the unit label, which rides on the CDC
+ * interface name and the settings INFO reply. */
 static char const *string_desc_arr[] = {
-    NULL, /* 0: language ID, handled specially below */
+    NULL, /* 0: language ID, handled below */
     "SENTIA Instruments",
     "SENTIA TILES",
-    NULL, /* 3: serial, filled from the RP2350's unique ID below */
-    NULL, /* 4: diagnostics interface, built with the unit label below */
+    NULL, /* 3: serial, from the RP2350 unique ID */
+    NULL, /* 4: diagnostics interface, built with the unit label */
     "SENTIA TILES MIDI",
     "SENTIA TILES Control",
-    "MIDI", /* MAIN port's jacks -- see midi/midi_ports.h */
+    "MIDI", /* MAIN port's jacks (midi/midi_ports.h) */
     "DAW",  /* DAW port's jacks */
 };
 

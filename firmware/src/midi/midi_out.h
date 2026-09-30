@@ -1,289 +1,127 @@
 #pragma once
 
-/*
- * MIDI output -- USB and DIN -- MPE (MIDI Polyphonic Expression) Lower Zone.
+/* MIDI output, USB and DIN, including the MPE (MIDI Polyphonic Expression)
+ * Lower Zone.
  *
- * Every function below EXCEPT tiles_midi_send_daw_cc() and
- * tiles_midi_send_sysex() sends on both the USB MAIN port (when a host has
- * the device mounted) and the DIN MIDI OUT jack (whenever DIN initialized,
- * host or not) -- see midi/din_midi.h. tiles_midi_send_daw_cc() goes to the
- * USB DAW port only (midi/midi_ports.h): it's the DAW remote script's
- * private control protocol, which neither an instrument track nor anything
- * on the DIN jack must ever receive. tiles_midi_send_sysex() goes to one
- * USB port, the caller's choice.
+ * Every function sends on the USB MAIN port (when mounted) and the DIN OUT
+ * jack (when initialized), except:
+ *   - tiles_midi_send_daw_cc(): USB DAW port only (midi/midi_ports.h), the
+ *     DAW remote script's private protocol, which no instrument or DIN
+ *     device should see.
+ *   - tiles_midi_send_sysex(): one USB port, the caller's choice.
  *
- * Real feedback: "we need to make sure we have individual per note
- * pitch bend not just regular all key pitch bend. like the roli
- * seaboard." Every earlier round of services/expression.c's pitch-bend
- * work had to route around this file's old single-channel limitation --
- * "a channel-wide message with no per-note addressing... this module
- * tracks a single owner pad" -- because Pitch Bend Change (and Poly
- * Aftertouch, though that one's at least addressed by note number) is
- * a channel-wide concept in the MIDI spec itself; there's no way to
- * bend one held note without also bending every other note on the same
- * channel. MPE's fix is real per-note channels, not a workaround: give
- * every simultaneously-held note its own MIDI channel, and Pitch Bend
- * Change on that channel is now genuinely that ONE note's bend.
+ * MPE gives each held note its own channel, so channel-wide messages
+ * (pitch bend, pressure) become per-note. Lower Zone layout:
+ *   - Ch 1 (TILES_MIDI_MPE_MASTER_CHANNEL): Zone Master Channel. Zone RPNs
+ *     and zone-wide controls (pedals), never a note. With MPE off, every
+ *     note goes here.
+ *   - Ch 2-9: Member Channels, one per held note. How many are really in
+ *     the zone depends on Song mode (services/midi_channels.h, which owns
+ *     the full channel map). Ch 10-16 are fixed parts or unused.
  *
- * Zone layout (a single "Lower Zone," the simpler and far more common
- * of the two MPE zone configurations -- an "Upper Zone" would only
- * matter for a controller wanting BOTH zones simultaneously, which
- * nothing about this board's 24-pad, single-region layout calls for):
- *   - Channel 1 (TILES_MIDI_MPE_MASTER_CHANNEL) is the Zone Master
- *     Channel -- the zone configuration RPNs (tiles_midi_mpe_init()) and
- *     zone-wide controls (the pedals, services/pedal.c), never an MPE
- *     note. (With MPE switched off it is the one ordinary channel every
- *     note goes on.)
- *   - Channels 2-9 (TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL and up) are
- *     Member Channels, one per currently-held note -- of these, only
- *     however many services/midi_channels.h's declared MPE Lower Zone
- *     currently spans are genuine MPE members at any moment; channels
- *     10-16 are permanently a fixed part's own channel (chord, game mode,
- *     the 4 sequencer lanes) or General MIDI's percussion channel (10),
- *     never assigned to anything -- see that header for the full
- *     board-wide layout this file's own constants are now one piece of.
- * This file is only the wire-protocol layer -- every function here just
- * sends whatever channel it's told to. The actual per-note channel
- * ALLOCATION (claim on strike, release on note-off, steal-the-oldest if
- * the live zone is full -- mirroring services/haptics.c's own voice-
- * stealing policy for the exact same "ran out of a limited resource"
- * reasoning) lives in services/expression.c, the module that already
- * owns each pad's note lifecycle.
- *
- * Sustain/expression pedal CCs (services/pedal.c) reach every note at once
- * by going on the Master Channel, per the MPE spec -- not by broadcasting
- * to every channel (see tiles_midi_send_cc_broadcast() below for the one
- * thing that does: panic).
- */
+ * This file is the wire layer only: it sends on whatever channel it is
+ * given. Channel allocation (claim on strike, release on Note-Off, steal
+ * when full) lives in services/expression.c. Pedals reach all notes via
+ * the Master Channel, not a broadcast; only panic broadcasts. */
 
 #include <stdint.h>
 
 #include "midi_ports.h"
 
-#define TILES_MIDI_MPE_MASTER_CHANNEL 0u       /* status-byte channel nibble; 0 = MIDI channel 1 */
-#define TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL 1u /* status-byte channel nibble; 1 = MIDI channel 2 */
-/* NOT a fixed 15 anymore -- see services/midi_channels.h's own header for the
- * full "why," in short: channels 10-16 are permanently split between General
- * MIDI's percussion channel (10, never assigned to anything) and six fixed
- * parts (chord, game mode, the 4 sequencer lanes), and channels 2-9 are a
- * pool shared with Song mode, so the Lower Zone's real, honest size varies
- * from 0 to 8 depending on what Song mode currently holds. tiles_midi_mpe_
- * init() below takes the size to declare as a parameter (services/
- * midi_channels.h's tiles_midi_channels_declare_zone()). */
+#define TILES_MIDI_MPE_MASTER_CHANNEL 0u       /* status nibble; 0 = MIDI channel 1 */
+#define TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL 1u /* status nibble; 1 = MIDI channel 2 */
+/* The zone size is not fixed at 15: ch 10-16 are fixed parts or GM drums,
+ * and ch 2-9 are shared with Song mode, so the zone is 0-8 channels.
+ * tiles_midi_mpe_init() takes the size (services/midi_channels.h,
+ * tiles_midi_channels_declare_zone()). */
 
-/* This Lower Zone's declared per-Member-Channel pitch bend range, in
- * semitones, sent via RPN 0 as part of tiles_midi_mpe_init() below. This
- * NAME is a RECEIVER-side interpretation setting -- it doesn't directly
- * determine what tiles_midi_send_pitch_bend() puts on the wire -- but as
- * of services/expression.c's PITCH_BEND_WIRE_RANGE_COMPENSATION, this
- * constant's VALUE is also read there to derive that wire-level scaling,
- * so it is no longer safe to change this number alone expecting only the
- * RPN to change; see that constant's own comment for why both now have
- * to move together.
+/* Pitch bend range declared per Member Channel (RPN 0), in semitones. Also
+ * used by services/expression.c's PITCH_BEND_WIRE_RANGE_COMPENSATION to
+ * scale the wire value, so change them together.
  *
- * History: 48 (the MPE specification's own recommended default, and what
- * a real ROLI Seaboard ships with) -- real feedback after trying it:
- * "the pitch bend is so extreme the glide in equator is too extreme."
- * 48 semitones is 4 full octaves of swing at full-scale wire value, which
- * services/expression.c's own sensitivity tuning reaches on any
- * comfortable deliberate tilt (see s_pitch_bend_max_cosine_deviation's
- * own comment) -- musically that's a dramatic swoop, not the subtler
- * per-note "glide" a Seaboard is normally played with. Lowered to 12 (one
- * octave full-scale) as a more reasonable middle ground between the
- * legacy single-channel MIDI default (2, far too tight for an expressive
- * per-note glide) and the MPE spec's own wide default.
- *
- * That alone didn't hold up under real testing: "reduce the range of
- * pitch bend, rn we can bend 4 ocvave" came back even with this already
- * at 12, traced (see tiles_midi_mpe_init()'s own comment) to the RPN
- * only being sent on the Zone Master Channel and not every receiver
- * generalizing that zone-wide -- fixed by also sending it on every
- * Member Channel. Still didn't hold up: "even tho you say that its
- * reduced to one octave it still does more in Equator mpe mode," then,
- * after trying a completely different synth from a different vendor,
- * "tried serum and also is bending too far. so its not roli. the tilt
- * pushes too far." Two unrelated receivers both still swinging at
- * roughly the spec's 48-semitone default regardless of the RPN sent on
- * every channel means dynamically honoring a third-party controller's
- * Pitch Bend Sensitivity RPN just isn't something real-world MPE hosts/
- * plugins reliably do in practice, spec-legal or not -- ROLI's own docs
- * confirm Equator's range is a value the user sets manually to match the
- * controller, not one it negotiates automatically. The RPN sends here
- * stay (correct and harmless for any receiver that does honor them), but
- * services/expression.c no longer trusts them alone -- see PITCH_BEND_
- * WIRE_RANGE_COMPENSATION's own comment for the defensive fix that
- * doesn't depend on receiver cooperation at all. */
+ * 12 (one octave), not the MPE default 48: 48 made normal tilts swoop
+ * several octaves. Real receivers (Equator, Serum) often ignore the RPN
+ * and stay at 48, which is why expression.c also compensates on the wire
+ * side. Background: services/HISTORY.md. */
 #define TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES 12u
 
-/* Sends this Lower Zone's required setup: the MPE Configuration Message
- * (RPN 6, "MCM" -- declares `member_channel_count` Member Channels in the
- * zone, the message an MPE-aware DAW/synth uses to
- * auto-detect this is an MPE controller at all), sent once on the Zone
- * Master Channel per spec, followed by the Pitch Bend Sensitivity RPN
- * (RPN 0, TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES) -- sent on the
- * Master Channel (the spec's own "applies zone-wide" convention) AND
- * redundantly on EVERY Member Channel individually. Real feedback:
- * "reduce the range of pitch bend, rn we can bend 4 octave" -- reported
- * with TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES already set to 12 (one
- * octave) in firmware, not 48 -- "4 octaves" is EXACTLY the MPE spec's
- * own recommended default a receiver would fall back to if it never
- * received an explicit override on the channel it's actually reading
- * pitch bend from. Not every real MPE receiver fully generalizes a
- * Master-Channel-only Pitch Bend Sensitivity to the whole zone despite
- * what the spec says should happen; sending the same RPN on each
- * Member Channel too is a well-known, low-risk robustness workaround
- * for exactly that gap -- redundant on a receiver that already handles
- * the Master-Channel version correctly, but a real fix for one that
- * doesn't. Sent (via services/expression.c's tiles_expression_announce_
- * mpe_zone()) once at boot, after saved settings are applied, so a
- * receiver on the DIN jack gets the zone configuration too (~300 bytes,
- * ~100 ms of wire time), and again every time USB MIDI mounts -- harmless
- * before a host has enumerated: the USB half of every send is gated on
- * tud_midi_mounted(). */
-/* `member_channel_count` is the Lower Zone's real size right now (0-8;
- * services/midi_channels.h's tiles_midi_channels_declare_zone()) -- this
- * function no longer assumes 15. Declares that many Member Channels (RPN 6)
- * and sends the Pitch Bend Sensitivity RPN (RPN 0) redundantly on the
- * Master Channel and on exactly those `member_channel_count` Member
- * Channels -- never on a channel outside the real zone, which by now
- * belongs to a fixed part (chord/game/sequencer) or Song mode, not this
- * device's own MPE declaration.
+/* Sends the zone setup: the MPE Configuration Message (RPN 6, declaring
+ * `member_channel_count` Member Channels; how an MPE host detects an MPE
+ * controller) on the Master Channel, then Pitch Bend Sensitivity (RPN 0)
+ * on the Master Channel AND each Member Channel. The per-member copies are
+ * a common robustness measure for receivers that don't apply the Master
+ * Channel's RPN zone-wide.
  *
- * 0 withdraws the zone (RPN 6 only) -- the spec's own way to say "this is
- * not an MPE zone anymore" (JUCE's MPE tutorial: "An MPE zone can be turned
- * off by sending an MCM without any member channels"), used when the
- * runtime `expression.mpe_enabled` setting is off. There is deliberately no
- * way to send RPN 6 without RPN 0 any more: every non-zero declaration
- * resets a JUCE-based receiver's bend range to 48 semitones, so the two
- * always travel together (see services/midi_channels.h's header). Only
- * services/expression.c calls this (tiles_expression_announce_mpe_zone()),
- * so the declaration always matches the MPE on/off setting. */
+ * Sent by services/expression.c's tiles_expression_announce_mpe_zone():
+ * at boot after settings load (so DIN receivers get it; ~300 bytes,
+ * ~100 ms), and on every USB mount. The USB half is gated on
+ * tud_midi_mounted(). */
+/* `member_channel_count` is the zone's current size (0-8). RPN 0 goes only
+ * to channels inside it, never to a fixed part or Song channel.
+ *
+ * 0 withdraws the zone (RPN 6 only; "an MPE zone can be turned off by
+ * sending an MCM without any member channels"), used when
+ * `expression.mpe_enabled` is off. A non-zero RPN 6 resets JUCE receivers
+ * to 48 semitones, so RPN 0 always follows it. Only services/expression.c
+ * calls this, so the declaration always matches the MPE setting. */
 void tiles_midi_mpe_init(uint8_t member_channel_count);
 
-/* MPE per-note setup (MPE spec section 3.3.1/3.3.4): puts `channel`'s
- * Pitch Bend back at center and its Channel Pressure at 0, right before a
- * Note-On -- skipping either one that is already there (this file tracks
- * the last value it sent per channel). Real feedback: "do all" (the
- * standardization round). A released note's bend used to be snapped back
- * to center BEFORE its Note-Off, which audibly yanked the pitch of every
- * release tail and every pedal-sustained note ("released MPE notes lose
- * their pitch bend" is a known receiver-side complaint about exactly
- * that). The spec's order is the other way round: control of a note ends
- * at its Note-Off, the note rings out as it was, and the channel is reset
- * as setup for the NEXT note on it -- this function. */
+/* MPE per-note setup (spec 3.3.1/3.3.4), right before a Note-On: centers
+ * `channel`'s pitch bend and zeroes its pressure, skipping either if it
+ * is already there (the last sent values are tracked per channel). Bend is
+ * NOT recentered at Note-Off: control ends at Note-Off and the tail rings
+ * as played; the reset is setup for the next note on that channel. */
 void tiles_midi_send_note_setup(uint8_t channel);
 
-/* Note on/off, on a specific MPE Member Channel (status-byte nibble --
- * see services/expression.c's per-pad MPE channel allocator for how a
- * pad's currently-held note gets one). `release_velocity` is note-off's
- * own third data byte -- real feedback: "before bnooting look into what
- * actually is standardized or good practice in this industry that we
- * havent implemented yet" -> "5. research and implement it": MPE's own
- * spec lists release velocity as one of its supported per-note
- * dimensions, alongside pitch bend, pressure and CC74, and this codebase
- * used to hardcode it to 0 (meaning "no release-velocity data," the
- * universal convention every existing device that doesn't measure it
- * already sends). services/expression.c's own end_held_note() is the one
- * caller that derives a real, non-zero value, from how fast this pad's
- * Hall depth was returning toward rest just before the finger actually
- * lifted -- see that function's own comment for the full reasoning and
- * why it's an unmeasured first attempt, same as every other sensing-
- * derived curve in that file. Every other caller (chord/sequencer/Song/
- * game mode, harmonics, a retrigger or steal-evicted channel) has no real
- * release gesture behind its own note-offs and passes 0. */
+/* Note on/off on a channel (status nibble). `release_velocity` is
+ * Note-Off's third byte, an MPE per-note dimension. Only
+ * services/expression.c's end_held_note() sends a real value, from how
+ * fast the pad was rising before the finger lifted (an unmeasured first
+ * curve). Everything else sends 0 ("no release velocity"). */
 void tiles_midi_note_on(uint8_t channel, uint8_t note, uint8_t velocity);
 void tiles_midi_note_off(uint8_t channel, uint8_t note, uint8_t release_velocity);
 
-/* Channel Pressure (0xD0 | channel, pressure) on a specific Member
- * Channel -- this, not Poly Key Pressure, is MPE's actual Z-dimension
- * message. Real feedback after the first MPE flash: "you broke mpe
- * preassure." Root cause: this used to send Poly Key Pressure (0xA0),
- * which is valid MIDI but isn't what an MPE-aware receiver listens for --
- * MPE's three per-note dimensions are Pitch Bend (X), CC74 (Y), and
- * Channel Pressure (Z) specifically, because under MPE a channel IS a
- * note, so channel-wide pressure is already per-note pressure with no
- * note field needed. Channel Pressure is a 2-data-byte message (no note
- * number), unlike every other message in this file. */
+/* Channel Pressure (0xD0|ch, value): MPE's Z dimension. Not Poly Key
+ * Pressure (0xA0), which MPE receivers ignore; under MPE a channel is a
+ * note. Two data bytes, no note number. */
 void tiles_midi_send_channel_pressure(uint8_t channel, uint8_t pressure);
 
-/* Sends a Control Change message (0xB0 | channel, controller, value) on
- * one specific channel -- USB and DIN. */
+/* Control Change (0xB0|ch, controller, value) on one channel, USB and DIN. */
 void tiles_midi_send_cc(uint8_t channel, uint8_t controller, uint8_t value);
 
-/* Same message, on the USB DAW port ONLY (midi/midi_ports.h) -- for CCs
- * that steer the DAW's remote script (the transport Play/Stop/Record CCs
- * and every Scene Launch grid/stop/offset/delete/capture CC in services/
- * op_mode.c) rather than an instrument. First kept off DIN (added with DIN
- * MIDI OUT: a hardware synth may well have these controller numbers mapped
- * to something); since the standardization round also off the MAIN port,
- * where an instrument track listening on it would get them too. */
+/* Same, on the USB DAW port ONLY: CCs for the DAW remote script (transport
+ * and Scene Launch, services/op_mode.c), kept off DIN and MAIN so no
+ * synth or instrument track reacts to them. */
 void tiles_midi_send_daw_cc(uint8_t channel, uint8_t controller, uint8_t value);
 
-/* Same CC on the Zone Master Channel AND every one of channels 2-16 -- ONLY
- * for tiles_midi_send_panic() below, where reaching every channel no
- * matter how the receiver is set up is the whole point of a MIDI panic (a
- * compliant MPE receiver ignores the Member Channel copies).
- *
- * Deliberately NOT for pedals: services/pedal.c sends sustain/expression
- * strictly per the MPE spec (Master Channel only for the zone -- MMA
- * RP-053 v1.0 section 2.3.1), a standardize-don't-paper-over decision
- * (real feedback: "yes go strict") -- see its send_pedal_cc() comment for
- * the full history, including the one round a broadcast went back in.
- * This file stays deliberately unaware of the channel layout (see this
- * header's own comment on the module boundary). */
+/* Same CC on channels 1-16. ONLY for tiles_midi_send_panic(), where
+ * reaching every channel regardless of setup is the point (an MPE
+ * receiver ignores the member copies). Not for pedals: services/pedal.c
+ * uses the Master Channel only (see its send_pedal_cc()). */
 void tiles_midi_send_cc_broadcast(uint8_t controller, uint8_t value);
 
-/* MIDI panic: Sustain off (CC 64), then All Notes Off (CC 123), then All
- * Sound Off (CC 120), on every channel this device could ever have a note
- * on -- real feedback: "panic should be forced sleep with shift button.
- * like that action sends a panic note off." services/standby.c calls
- * this from the manual (shift/circle-held) forced-sleep gesture
- * specifically, not the automatic inactivity timeout that reaches the
- * same sleep state -- a panic broadcast is a deliberate player action,
- * not something that should also fire silently every time the board goes
- * idle. CC 64 was added after a later real-hardware report ("panic
- * hardware didnt clear it but panic built into the plugin did stop
- * notes") -- see this function's own definition for the full reasoning
- * on why sustain is cleared first, and why it deliberately doesn't touch
- * this device's own internal note-tracking state at all. */
+/* MIDI panic: Sustain off (CC 64), All Notes Off (CC 123), All Sound Off
+ * (CC 120) on every channel. Sustain first, because All Notes Off alone
+ * leaves pedal-held notes ringing on many synths. Called by
+ * services/standby.c's manual forced-sleep gesture only, not the idle
+ * timeout. Doesn't touch internal note tracking (see the definition). */
 void tiles_midi_send_panic(void);
 
-/* Sends a Pitch Bend Change (0xE0 | channel, LSB, MSB) on one specific
- * Member Channel. bend_14bit is the full unsigned wire value (0-16383,
- * 8192 = center/no bend) -- callers do the signed-to-wire conversion
- * themselves. Genuinely per-note now that every held note has its own
- * channel -- see this file's header for the full MPE reasoning. */
+/* Pitch Bend Change (0xE0|ch, LSB, MSB). bend_14bit is the unsigned wire
+ * value (0-16383, 8192 = center); callers convert from signed. */
 void tiles_midi_send_pitch_bend(uint8_t channel, uint16_t bend_14bit);
 
-/* MIDI System Realtime Start (0xFA) / Stop (0xFC) -- single status byte,
- * no channel nibble at all (these apply to the whole MIDI stream, not
- * one channel), used by services/op_mode.c's diamond transport toggle to
- * remote-control a DAW's transport. Real feedback: "the diamond for now
- * will play and stop in ableton like a toggle and stop brings back to
- * the start always." With a DAW's MIDI input "Sync"/"Ext" enabled (in
- * Ableton Live: Preferences -> Link/MIDI, Sync column on the relevant
- * input port, then the transport's own Ext button), these two messages
- * fully drive its transport, and Start is spec-defined to always begin
- * from position 0 -- never resumes from wherever a Continue message
- * would. That's what makes "stop brings back to the start always" true
- * for free: this pair is deliberately never joined by a Continue sender
- * anywhere in this codebase, so every "play" is a Start, never a
- * resume. */
+/* System Realtime Start (0xFA) / Stop (0xFC). op_mode.c's diamond
+ * transport sends them alongside its DAW CCs (the primary path), for hosts
+ * synced to TILES. Start always begins from the top; nothing here ever
+ * sends Continue. */
 void tiles_midi_send_start(void);
 void tiles_midi_send_stop(void);
-/* (Both also go out the DIN jack -- a hardware sequencer or drum machine
- * slaved to this controller's transport wants them just as much as a DAW
- * does. Still skipped by op_mode.c while an external clock is driving us.) */
+/* (Also sent on DIN, for slaved hardware. op_mode.c skips them while an
+ * external clock is driving TILES.) */
 
-/* Real feedback: "lets implemebt a new mode that triggers scenes in
- * ableton live... can we pull the colors of the scenes from ableton?"
- * -- services/op_mode.c's Scene Launch mode's own outgoing half (fire
- * clip/launch scene) needs a real SysEx sender, this codebase's first;
- * see midi/midi_in.h for the matching incoming half and shared/protocol/
- * README.md's own "Scene Launch" section for the actual message
- * catalog. Wraps `data`/`len` in 0xF0/0xF7 and sends it on `port` -- a USB
- * port only (TILES_MIDI_PORT_DIN is a no-op: DIN OUT has no SysEx path).
- * midi/identity.c replies on whichever port the request came in on. `len`
- * is expected to comfortably fit this codebase's own message sizes, not a
- * general large-SysEx streaming API. */
+/* Wraps `data` in 0xF0/0xF7 and sends it on a USB `port`
+ * (TILES_MIDI_PORT_DIN is a no-op: no DIN SysEx path). Used by Scene
+ * Launch mode and identity replies. Sized for this firmware's short
+ * messages, not bulk SysEx. Message catalog: shared/protocol/README.md. */
 void tiles_midi_send_sysex(tiles_midi_port_t port, const uint8_t *data, uint32_t len);

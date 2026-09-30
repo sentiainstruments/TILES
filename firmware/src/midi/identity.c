@@ -12,26 +12,20 @@
 #define SUB_ID_IDENTITY_REPLY 0x02u
 #define DEVICE_ID_UNADDRESSED 0x7Fu
 
-/* Family / family-member code: self-assigned, since a non-commercial
- * manufacturer ID has no registry to assign real ones from -- these only
- * need to be internally consistent, not globally unique. Family = "TILES"
- * as a product line; member = this hardware revision (Rev A0) -- bump the
- * member code for a real, distinguishable future PCB revision a host might
- * need to tell apart, not for a firmware-only change. */
+/* Family / member codes are self-assigned (a development manufacturer ID
+ * has no registry): family = TILES, member = hardware revision (Rev A0).
+ * Bump the member code for a distinguishable new PCB, not for firmware. */
 #define TILES_IDENTITY_FAMILY_LSB 0x01u
 #define TILES_IDENTITY_FAMILY_MSB 0x00u
 #define TILES_IDENTITY_MEMBER_LSB 0x00u /* Rev A0 */
 #define TILES_IDENTITY_MEMBER_MSB 0x00u
 
-/* Software version, 4 bytes (format is the manufacturer's choice): major,
- * minor, patch, 0 -- the same firmware version USB reports as bcdDevice,
- * both from midi/product_identity.h. */
+/* Version, 4 bytes (manufacturer's choice): major, minor, patch, 0; the
+ * same version USB reports as bcdDevice (midi/product_identity.h). */
 
 static void identity_on_sysex(tiles_midi_port_t port, const uint8_t *data, size_t len) {
-    /* Request payload (the bytes strictly between F0/F7, per midi_in.h's
-     * own sysex-callback contract): 7E <device id> 06 01 -- exactly 4
-     * bytes. Deliberately doesn't check data[1] (the device id byte) --
-     * see this file's own header comment on why any value is accepted. */
+    /* Request payload between F0/F7: 7E <device id> 06 01, exactly 4 bytes.
+     * The device id is not checked (see the header). */
     if (len != 4u || data[0] != UNIVERSAL_NON_REALTIME || data[2] != SUB_ID_GENERAL_INFO ||
         data[3] != SUB_ID_IDENTITY_REQUEST) {
         return;
@@ -49,9 +43,8 @@ static void identity_on_sysex(tiles_midi_port_t port, const uint8_t *data, size_
                        TILES_FW_VERSION_MINOR,
                        TILES_FW_VERSION_PATCH,
                        0u};
-    /* Back on the port the request came in on -- a DAW probing either USB
-     * port gets its answer there. A request from DIN gets none (DIN OUT has
-     * no SysEx path; tiles_midi_send_sysex() skips it). */
+    /* Back on the port the request came from. DIN requests get no reply (no
+     * SysEx path). */
     tiles_midi_send_sysex(port, reply, sizeof(reply));
 }
 

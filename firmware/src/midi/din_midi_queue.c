@@ -2,12 +2,10 @@
 
 #include <stddef.h>
 
-/* Ring indices are volatile and only ever advanced by their one owner (see
- * the header's threading note). The barrier keeps the compiler from moving
- * the buffer write after the index publish (or the buffer read before the
- * index check) -- volatile alone only orders volatile accesses against each
- * other, and the buffers are plain arrays. Same core, so no hardware fence
- * is needed. */
+/* Ring indices are volatile and advanced only by their one owner (see the
+ * header). The compiler barrier stops buffer accesses moving across the
+ * index publish/check (volatile only orders volatile accesses). Single
+ * core, so no hardware fence. */
 #define DIN_COMPILER_BARRIER() __asm__ volatile("" ::: "memory")
 
 #define TX_MASK (TILES_DIN_TX_RING_SIZE - 1u)
@@ -29,46 +27,26 @@ static volatile bool s_rx_overflow;
 
 static uint32_t s_tx_dropped;
 
-/* Running status: MIDI 1.0's own standard wire-bandwidth optimization --
- * real feedback: "before bnooting look into what actually is standardized
- * or good practice in this industry that we havent implemented yet" ->
- * "4. fix it." Every practical MIDI receiver already understands it;
- * omitting a repeated status byte for two consecutive same-status
- * messages is real, free bandwidth back specifically on THIS wire's slow
- * 31,250 baud (~32 microseconds/byte) -- worth doing here and nowhere
- * else in this firmware, because USB-MIDI's own class protocol packs
- * every message into a fixed 4-byte Event Packet with an explicit Code
- * Index Number regardless of the underlying byte stream, so there is no
- * equivalent USB saving to make (a compressed, status-less send would not
- * even be a valid USB-MIDI Event Packet). This lives entirely inside this
- * ring (see tx_push() below), never touching midi/midi_out.c's own USB
- * path or the bytes it hands this file via tiles_din_midi_send() -- those
- * still always carry a full status byte; the compression happens only
- * here, at the point of actually queueing wire bytes.
+/* Running status (MIDI 1.0): a repeated status byte is omitted, which on
+ * 31,250 baud (~32 us/byte) is real bandwidth. DIN only: USB-MIDI packets
+ * always carry a full status. Done here, at the point wire bytes are
+ * queued; callers always hand over full messages.
  *
- * Tracks the status byte of the last message tx_push() actually wrote to
- * the ring (0 = none yet). Correct because nothing else this queue ever
- * enqueues here can legally cancel running status: System Common bytes
- * (which the spec says DO cancel it) and SysEx are both already rejected
- * by tiles_din_queue_push_message() before reaching tx_push() (see that
- * function's own comment), and Real-Time bytes (which do NOT cancel it,
- * and may legally appear between two running-status messages without
- * disturbing it) go through the entirely separate RT queue, never through
- * this ring at all -- so every message that ever reaches tx_push() really
- * is either the compressed continuation of, or a genuine change from, the
- * immediately preceding one on the wire. */
+ * s_last_wire_status = status of the last message written to the ring (0 =
+ * none). Nothing that reaches tx_push() can cancel running status: System
+ * Common and SysEx are rejected earlier, and Real-Time bytes use the
+ * separate RT queue (and don't cancel it anyway). */
 static uint8_t s_last_wire_status;
 
 /* ---- coalescing slots ----
- * One per (channel, continuous kind). `dirty` = a value is waiting to go out.
- * Only ever touched from main context (push_message / service), so no
- * cross-context sharing to protect. */
+ * One per (channel, continuous kind); `dirty` = a value waits to go out.
+ * Main context only. */
 typedef enum {
     KIND_PITCH_BEND = 0,
     KIND_CHANNEL_PRESSURE,
     KIND_CC_MOD,        /* CC1  */
     KIND_CC_EXPRESSION, /* CC11 */
-    KIND_CC_SLIDE,      /* CC74 -- MPE's Y dimension */
+    KIND_CC_SLIDE,      /* CC74, MPE's Y dimension */
     KIND_COUNT
 } continuous_kind_t;
 
@@ -83,9 +61,8 @@ typedef struct {
 
 static slot_t s_slots[NUM_CHANNELS][KIND_COUNT];
 static uint8_t s_scan_pos;
-/* How many slots are dirty right now -- lets service() (called every main-
- * loop iteration) return immediately in the overwhelmingly common case that
- * nothing is waiting, instead of scanning all 80 slots. */
+/* Dirty slot count, so service() can return at once when nothing waits
+ * instead of scanning all 80 slots. */
 static uint8_t s_dirty_count;
 
 void tiles_din_queue_init(void) {
@@ -114,15 +91,13 @@ static uint16_t tx_count(void) {
 }
 
 static uint16_t tx_free(void) {
-    /* One slot stays empty so head == tail always means "empty". */
+    /* One slot stays empty, so head == tail means empty. */
     return (uint16_t)(TILES_DIN_TX_RING_SIZE - 1u - tx_count());
 }
 
-/* Whole-message enqueue: either every byte goes in, or none do (and the
- * drop is counted). The head is published once, after the last byte, so the
- * consumer never sees half a message. */
-/* Running status compression -- see s_last_wire_status's own comment
- * above for the full reasoning. */
+/* All bytes or none (a drop is counted). The head is published once, after
+ * the last byte, so the consumer never sees half a message. */
+/* Running status; see s_last_wire_status. */
 static bool tx_push(const uint8_t *msg, uint8_t len) {
     bool compress = len > 1u && msg[0] == s_last_wire_status;
     const uint8_t *bytes = compress ? &msg[1] : msg;
@@ -137,7 +112,7 @@ static bool tx_push(const uint8_t *msg, uint8_t len) {
     }
     DIN_COMPILER_BARRIER();
     s_tx_head = (uint16_t)((head + n) & TX_MASK);
-    s_last_wire_status = msg[0]; /* only reached on success -- a dropped message never touches this */
+    s_last_wire_status = msg[0]; /* only on success; a drop leaves it unchanged */
     return true;
 }
 
@@ -145,7 +120,7 @@ static bool rt_push(uint8_t byte) {
     uint16_t head = s_rt_head;
     uint16_t next = (uint16_t)((head + 1u) & RT_MASK);
     if (next == s_rt_tail) {
-        return false; /* full; a Real-Time byte is dropped, never blocks */
+        return false; /* full: drop the Real-Time byte, never block */
     }
     s_rt_buf[head] = byte;
     DIN_COMPILER_BARRIER();
@@ -214,9 +189,8 @@ static uint8_t slot_to_message(uint8_t channel, continuous_kind_t kind, const sl
     }
 }
 
-/* Pushes one slot's pending value if the ring has room for it. Leaves it
- * dirty (to try again later) if not -- a coalesced value is never counted as
- * dropped, it just waits. */
+/* Pushes one slot's pending value if it fits; otherwise it stays dirty
+ * and waits (never counted as dropped). */
 static bool flush_slot(uint8_t channel, uint8_t kind) {
     slot_t *s = &s_slots[channel][kind];
     if (!s->dirty) {
@@ -224,11 +198,8 @@ static bool flush_slot(uint8_t channel, uint8_t kind) {
     }
     uint8_t msg[3];
     uint8_t len = slot_to_message(channel, (continuous_kind_t)kind, s, msg);
-    /* No separate "does it fit" pre-check here anymore -- tx_push() is the
-     * single source of truth for that now that it can compress a message
-     * to less than `len` bytes via running status; checking `len` here
-     * (the uncompressed size) could wrongly skip a flush that would have
-     * fit compressed. */
+    /* No size pre-check: tx_push() decides, since running status can make the
+     * message shorter than `len`. */
     if (!tx_push(msg, len)) {
         return false; /* try again next scan */
     }
@@ -260,7 +231,7 @@ bool tiles_din_queue_push_message(const uint8_t *msg, uint8_t len) {
     continuous_kind_t kind;
     if (classify_continuous(msg, len, &kind)) {
         slot_t *s = &s_slots[channel][kind];
-        /* CCs carry their value in data2; everything else in d1/d2 as sent. */
+        /* CCs keep their value in d1; other kinds keep d1/d2 as sent. */
         if ((status & 0xF0u) == 0xB0u) {
             s->d1 = msg[2];
             s->d2 = 0u;
@@ -275,7 +246,7 @@ bool tiles_din_queue_push_message(const uint8_t *msg, uint8_t len) {
         return true;
     }
 
-    /* Reliable: anything already pending on this channel goes first. */
+    /* Reliable: this channel's pending values go first. */
     flush_channel(channel);
     return tx_push(msg, len);
 }
@@ -285,9 +256,9 @@ bool tiles_din_queue_service(void) {
         return false;
     }
     bool queued = false;
-    /* Scan every slot at most once per call, resuming where the last call
-     * stopped so a busy channel can't starve the others. Stop as soon as the
-     * ring is no longer shallow. */
+    /* Visit each slot at most once per call, resuming where the last call
+     * stopped so a busy channel can't starve the rest. Stop once the ring is
+     * no longer shallow. */
     uint8_t start = s_scan_pos;
     for (uint8_t n = 0u; n < NUM_SLOTS; n++) {
         if (tx_count() > TILES_DIN_TX_FLUSH_THRESHOLD_BYTES) {
