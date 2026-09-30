@@ -41,8 +41,8 @@ non-negotiables:
 - Both PCA9685s start all-off (MODE2.OUTDRV=1) before any other output
   service. GP20 is their shared output enable (active low): driven low
   only after every channel is configured, never driven high. (The
-  hardware handoff calls GP20 an address strap; that is wrong, see
-  `firmware/src/board/README.md`.)
+  original hardware handoff called GP20 an address strap; its
+  Corrections note and `firmware/src/board/README.md` have the details.)
 - All three LED mux banks are disabled while their selector bits change;
   one bank is enabled per pixel update.
 - Only one Hall mux channel is open across the three TCA9548As at a time.
