@@ -9303,5 +9303,12 @@ not its code.
     channel"), `midi/din_midi_queue.h` (a 16-channel expression-pedal
     broadcast -- it's 7 channels, 21 bytes), `midi/README.md` ("15
     member channels").
+- **Song mode marked beta.** Real feedback: "song mode will remain not
+  tested and should be considered a beta for now." Everything else in the
+  standardization round was confirmed on board 2 ("pedal and harmonics
+  are working. everything working"); Song mode was never tested on
+  hardware, including how it behaves with the deferred zone re-declaration
+  and per-channel setup from the MPE entry above. Flagged in `op_mode.c`'s
+  Song section and `firmware/README.md`'s Status.
 - Everything else (per-pad Hall calibration) is not built
   yet.

@@ -5598,6 +5598,14 @@ bool tiles_op_mode_has_menu_open(void) {
 }
 
 /* ---- Song mode -----------------------------------------------------------
+ * BETA (2026-09-29): real feedback, "song mode will remain not tested and
+ * should be considered a beta for now." Everything else in the
+ * standardization round was checked on hardware; Song mode was not --
+ * including its interaction with the MPE changes (a Song channel claim now
+ * waits for the zone to go idle before the zone is re-declared, and resets
+ * the claimed channel's bend/pressure). Treat any change here as untested
+ * until someone plays it.
+ *
  * Real feedback: "lets implement another sequencer mode know as song
  * mode as the default capture modes instead of regular sequencer. with
  * multiple pages per sequence meaning 16 steps per page and the right

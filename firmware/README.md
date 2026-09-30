@@ -46,6 +46,11 @@ intact.
 
 ## Status
 
+**Song mode is beta** (as of 2026-09-29): built and documented, never
+tested on hardware, and not tested since the MPE/channel changes of the
+standardization round -- see `services/op_mode.c`'s "Song mode" section.
+Every other play mode has been played on real hardware.
+
 **Real hardware, not just simulated/reasoned-through.** As of
 2026-08-21 this has been flashed to and run on an actual soldered Rev
 A0 board: all 8 expected I2C devices ACK, underglow and all 24 pad LEDs
