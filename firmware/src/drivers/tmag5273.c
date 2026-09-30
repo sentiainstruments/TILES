@@ -1,0 +1,87 @@
+#include "tmag5273.h"
+
+#include "i2c_bus.h"
+
+/* Register offsets, TMAG5273 datasheet Table 8-1. */
+#define REG_DEVICE_CONFIG_1 0x00u
+#define REG_DEVICE_CONFIG_2 0x01u
+#define REG_SENSOR_CONFIG_1 0x02u
+#define REG_SENSOR_CONFIG_2 0x03u
+#define REG_MANUFACTURER_ID_LSB 0x0Eu
+#define REG_MANUFACTURER_ID_MSB 0x0Fu
+#define REG_X_MSB_RESULT 0x12u
+
+/* Tables 8-17/8-18 reset values: "TI" (MSB 0x54 'T', LSB 0x49 'I'). */
+#define EXPECTED_MANUFACTURER_ID_LSB 0x49u
+#define EXPECTED_MANUFACTURER_ID_MSB 0x54u
+
+/* DEVICE_CONFIG_1 (table 8-3): no CRC, no tempco, 1x averaging, standard
+ * sequential reads. */
+#define DEVICE_CONFIG_1_VALUE 0x00u
+
+/* DEVICE_CONFIG_2 (table 8-4): low active-current mode, glitch filter on,
+ * continuous measure -> 0x02. */
+#define DEVICE_CONFIG_2_VALUE 0x02u
+
+/* SENSOR_CONFIG_1 (table 8-5): X/Y/Z enabled (bits 7-4 = 7h) -> 0x70. */
+#define SENSOR_CONFIG_1_VALUE 0x70u
+
+/* SENSOR_CONFIG_2 (table 8-6): no angle calc, +/-80 mT on X/Y and Z -> 0x03. */
+#define SENSOR_CONFIG_2_VALUE 0x03u
+
+/* Read for all 24 pads every Hall scan: the busiest I2C traffic in the
+ * firmware, all through drivers/i2c_bus. */
+
+static bool write_reg(i2c_inst_t *bus, uint8_t addr, uint8_t reg, uint8_t value) {
+    uint8_t buf[2] = {reg, value};
+    return tiles_i2c_write(bus, addr, buf, 2, false);
+}
+
+/* Sequential read (figure 6-9): write the start register without STOP, then
+ * repeated-START and read `len` registers. */
+static bool read_regs(i2c_inst_t *bus, uint8_t addr, uint8_t reg, uint8_t *buf, size_t len) {
+    if (!tiles_i2c_write(bus, addr, &reg, 1, true)) {
+        return false;
+    }
+    return tiles_i2c_read(bus, addr, buf, len, false);
+}
+
+bool tiles_tmag5273_identify(i2c_inst_t *bus, uint8_t addr) {
+    uint8_t id[2];
+    if (!read_regs(bus, addr, REG_MANUFACTURER_ID_LSB, id, 2)) {
+        return false;
+    }
+    return id[0] == EXPECTED_MANUFACTURER_ID_LSB && id[1] == EXPECTED_MANUFACTURER_ID_MSB;
+}
+
+bool tiles_tmag5273_init(tiles_tmag5273_t *dev, i2c_inst_t *bus, uint8_t addr) {
+    dev->bus = bus;
+    dev->addr = addr;
+
+    if (!write_reg(bus, addr, REG_DEVICE_CONFIG_1, DEVICE_CONFIG_1_VALUE)) {
+        return false;
+    }
+    if (!write_reg(bus, addr, REG_DEVICE_CONFIG_2, DEVICE_CONFIG_2_VALUE)) {
+        return false;
+    }
+    if (!write_reg(bus, addr, REG_SENSOR_CONFIG_1, SENSOR_CONFIG_1_VALUE)) {
+        return false;
+    }
+    if (!write_reg(bus, addr, REG_SENSOR_CONFIG_2, SENSOR_CONFIG_2_VALUE)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool tiles_tmag5273_read_xyz(const tiles_tmag5273_t *dev, tiles_tmag5273_sample_t *out) {
+    uint8_t buf[6];
+    if (!read_regs(dev->bus, dev->addr, REG_X_MSB_RESULT, buf, sizeof(buf))) {
+        return false;
+    }
+
+    out->x = (int16_t)(((uint16_t)buf[0] << 8) | buf[1]);
+    out->y = (int16_t)(((uint16_t)buf[2] << 8) | buf[3]);
+    out->z = (int16_t)(((uint16_t)buf[4] << 8) | buf[5]);
+    return true;
+}

@@ -1,0 +1,24 @@
+; DIN MIDI OUT transmitter: 31,250 baud, 8 data bits, no parity, 1 stop bit
+; (8N1), LSB first, idle high. Same shape as Raspberry Pi's reference
+; uart_tx.pio (pico-examples) -- reused rather than re-derived, since a UART
+; whose bit cell is off by one cycle silently corrupts every byte. Bit cell =
+; 8 PIO cycles, so the state machine's clock divider is
+; sys_clk / (8 * 31250) -- see midi/din_midi.c for that math (150 MHz ->
+; exactly 600.0, no fractional error).
+;
+; Pin use: ONE pin does everything. The DIN OUT buffer has two channels
+; (GP0 = "line A", GP2 = "line B", see docs/hardware/), and MIDI's current
+; loop only flows when the two lines DIFFER, so the transmitter drives the
+; chosen signal pin while the other one is held high by plain GPIO
+; (midi/din_midi.c) -- swapping which is which is what flips TRS polarity.
+; "out pins, 1" and the side-set both target that same pin: the side-set
+; produces the start and stop bits, "out" the eight data bits.
+
+.program din_uart_tx
+.side_set 1 opt
+
+    pull       side 1 [7]   ; stop bit (or idle-high while the FIFO is empty)
+    set x, 7   side 0 [7]   ; start bit: 8 cycles low, preload the bit counter
+bitloop:                    ; runs 8 times, one data bit per iteration
+    out pins, 1             ; shift the next data bit (LSB first) onto the pin
+    jmp x-- bitloop      [6]; 1 + 6 delay = 8 cycles per bit

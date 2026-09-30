@@ -3,12 +3,15 @@
   "schema_version": 1,
   "hardware_revision": "TILES PRE-PRODUCTION Rev A0 / production export 2026-08-01",
   "logical_numbering": "Pads 1-24 are row-major, left-to-right, top-to-bottom in a 6x4 grid.",
+  "corrections": [
+    "2026-08-21, verified on hardware from the fab flying-probe netlist: GP20 (NET_25) is the shared PCA9685 OE (pin 23), not the A5 address strap; OE is not tied to ground; the PCA9685 addresses are 0x40/0x41 (64/65), not 0x60/0x61. See TILES repo commit be55ebe."
+  ],
   "sources": {
-    "motherboard_bom": "/Users/matiascevallos/Downloads/BOM_Board1_PCB1_2026-08-01.xlsx",
-    "motherboard_pnp": "/Users/matiascevallos/Downloads/PickAndPlace_PCB1_2026_08_01.xlsx",
+    "motherboard_bom": "BOM_Board1_PCB1_2026-08-01.xlsx",
+    "motherboard_pnp": "PickAndPlace_PCB1_2026_08_01.xlsx",
     "motherboard_flying_probe": ".tmp_audit/main_gerber_0801/FlyingProbeTesting.json",
     "daughterboard_flying_probe": ".tmp_audit/daughter_gerber_0801/FlyingProbeTesting.json",
-    "flex_archive": "/Users/matiascevallos/Downloads/flex.zip"
+    "flex_archive": "flex.zip"
   },
   "controller": {
     "module": "Raspberry Pi Pico 2",
@@ -172,10 +175,10 @@
         "gpio": 20,
         "pico_pin": 26,
         "net": "NET_25",
-        "role": "PCA9685 A5 address strap",
-        "direction": "input",
-        "boot": "input/high-Z",
-        "critical": "Never drive this GPIO. It is a hardware address strap pulled to 3V3."
+        "role": "PCA9685 OE, shared by both chips (pin 23, active low, 10k pull-up R66)",
+        "direction": "output, driven low once configured",
+        "boot": "input/high-Z (PCA9685 outputs off)",
+        "critical": "Leave high-Z until every PCA9685 channel is configured, then drive low. Never drive high. Not an address strap (corrected 2026-08-21 from the fab netlist)."
       },
       {
         "gpio": 21,
@@ -391,12 +394,12 @@
           {
             "ref": "U_HAPTIC1",
             "part": "PCA9685PW,118",
-            "address": 96
+            "address": 64
           },
           {
             "ref": "U_HAPTIC2",
             "part": "PCA9685PW,118",
-            "address": 97
+            "address": 65
           }
         ],
         "led_mux_control": {
@@ -407,9 +410,9 @@
       },
       "rules": [
         "Configure PCA9685 MODE2.OUTDRV=1 (totem-pole); motor MOSFET gates require driven-high outputs.",
-        "PCA9685 OE is tied to ground, so firmware cannot use OE as a kill switch.",
+        "PCA9685 OE is GP20 (active low, 10k pull-up): outputs stay off until firmware drives it low.",
         "PCA9685 EXTCLK is grounded; use the internal oscillator.",
-        "GP20 is the shared A5 address strap and must remain input/high-Z.",
+        "GP20 stays input/high-Z until every PCA9685 channel is configured, then is driven low; never driven high.",
         "Motor channels are active-high; function-button LED channels are active-low current sinks."
       ]
     }
@@ -440,7 +443,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 96,
+        "pca9685_address": 64,
         "channel": 3,
         "active": "high"
       },
@@ -471,7 +474,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 96,
+        "pca9685_address": 64,
         "channel": 4,
         "active": "high"
       },
@@ -502,7 +505,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 96,
+        "pca9685_address": 64,
         "channel": 5,
         "active": "high"
       },
@@ -533,7 +536,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 97,
+        "pca9685_address": 65,
         "channel": 0,
         "active": "high"
       },
@@ -564,7 +567,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 97,
+        "pca9685_address": 65,
         "channel": 1,
         "active": "high"
       },
@@ -595,7 +598,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 97,
+        "pca9685_address": 65,
         "channel": 6,
         "active": "high"
       },
@@ -626,7 +629,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 96,
+        "pca9685_address": 64,
         "channel": 2,
         "active": "high"
       },
@@ -657,7 +660,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 96,
+        "pca9685_address": 64,
         "channel": 15,
         "active": "high"
       },
@@ -688,7 +691,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 96,
+        "pca9685_address": 64,
         "channel": 7,
         "active": "high"
       },
@@ -719,7 +722,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 97,
+        "pca9685_address": 65,
         "channel": 15,
         "active": "high"
       },
@@ -750,7 +753,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 97,
+        "pca9685_address": 65,
         "channel": 14,
         "active": "high"
       },
@@ -781,7 +784,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 97,
+        "pca9685_address": 65,
         "channel": 7,
         "active": "high"
       },
@@ -812,7 +815,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 96,
+        "pca9685_address": 64,
         "channel": 14,
         "active": "high"
       },
@@ -843,7 +846,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 96,
+        "pca9685_address": 64,
         "channel": 13,
         "active": "high"
       },
@@ -874,7 +877,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 96,
+        "pca9685_address": 64,
         "channel": 8,
         "active": "high"
       },
@@ -905,7 +908,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 97,
+        "pca9685_address": 65,
         "channel": 13,
         "active": "high"
       },
@@ -936,7 +939,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 97,
+        "pca9685_address": 65,
         "channel": 11,
         "active": "high"
       },
@@ -967,7 +970,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 97,
+        "pca9685_address": 65,
         "channel": 9,
         "active": "high"
       },
@@ -998,7 +1001,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 96,
+        "pca9685_address": 64,
         "channel": 12,
         "active": "high"
       },
@@ -1029,7 +1032,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 96,
+        "pca9685_address": 64,
         "channel": 11,
         "active": "high"
       },
@@ -1060,7 +1063,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 96,
+        "pca9685_address": 64,
         "channel": 9,
         "active": "high"
       },
@@ -1091,7 +1094,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 97,
+        "pca9685_address": 65,
         "channel": 12,
         "active": "high"
       },
@@ -1122,7 +1125,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 97,
+        "pca9685_address": 65,
         "channel": 10,
         "active": "high"
       },
@@ -1153,7 +1156,7 @@
         "active_enable": "low"
       },
       "haptic": {
-        "pca9685_address": 97,
+        "pca9685_address": 65,
         "channel": 8,
         "active": "high"
       },
@@ -1165,7 +1168,7 @@
       "id": 1,
       "shape": "left capsule",
       "gpio": 19,
-      "pca9685_address": 96,
+      "pca9685_address": 64,
       "pca_channel": 0,
       "input_active": "low",
       "led_active": "low",
@@ -1175,7 +1178,7 @@
       "id": 2,
       "shape": "right capsule",
       "gpio": 18,
-      "pca9685_address": 96,
+      "pca9685_address": 64,
       "pca_channel": 1,
       "input_active": "low",
       "led_active": "low",
@@ -1185,7 +1188,7 @@
       "id": 3,
       "shape": "triangle",
       "gpio": 16,
-      "pca9685_address": 97,
+      "pca9685_address": 65,
       "pca_channel": 2,
       "input_active": "low",
       "led_active": "low",
@@ -1195,7 +1198,7 @@
       "id": 4,
       "shape": "diamond",
       "gpio": 17,
-      "pca9685_address": 97,
+      "pca9685_address": 65,
       "pca_channel": 3,
       "input_active": "low",
       "led_active": "low",
@@ -1205,7 +1208,7 @@
       "id": 5,
       "shape": "square",
       "gpio": 15,
-      "pca9685_address": 97,
+      "pca9685_address": 65,
       "pca_channel": 4,
       "input_active": "low",
       "led_active": "low",
@@ -1215,7 +1218,7 @@
       "id": 6,
       "shape": "circle",
       "gpio": 14,
-      "pca9685_address": 97,
+      "pca9685_address": 65,
       "pca_channel": 5,
       "input_active": "low",
       "led_active": "low",
@@ -1581,12 +1584,12 @@
   },
   "bringup": {
     "boot_order": [
-      "Set GP0/GP2 high; GP3/GP8/GP12 low; GP13 high; GP20 input/high-Z.",
+      "Set GP0/GP2 high; GP3/GP8/GP12 low; GP13 high; GP20 input/high-Z (PCA9685 outputs off).",
       "Start watchdog and diagnostics transport.",
       "Initialize I2C buses at 100kHz for detection, then raise to 400kHz after all expected devices ACK.",
       "Disable every TCA9548A Hall channel.",
       "Set TCA9554 P3/P4/P5 high so all LED mux banks are disabled, then set selector bits.",
-      "Initialize both PCA9685 devices with all channels at zero/off and MODE2.OUTDRV=1.",
+      "Initialize both PCA9685 devices with all channels at zero/off and MODE2.OUTDRV=1, then drive GP20 low to enable their outputs.",
       "Read GP22 and TinyUSB state; select the safe profile unless a stored, CRC-valid explicit override exists.",
       "Initialize sensors and outputs module-by-module; a failed module remains disabled without blocking USB diagnostics."
     ],
