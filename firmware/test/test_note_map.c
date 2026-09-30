@@ -1,13 +1,8 @@
 /*
- * Host-buildable test for the pad -> MIDI note layout. Verifies it
- * matches the exact examples given when the layout was specified:
- * pad 19 = C (lowest), 20 = C#, 21 = D, 22 = D#, 23 = E, 24 = F, then
- * wrapping to the row above: 13 = F#, 14 = G -- and extrapolates the
- * same bottom-to-top, left-to-right pattern through all 24 pads.
- *
- *   cc -std=c11 -I../src/board -I../src/services test_note_map.c \
- *     ../src/board/pad_config.c ../src/services/note_map.c -o /tmp/test_note_map
- *   /tmp/test_note_map
+ * services/note_map.c -- the default (chromatic) pad -> note layout:
+ * pad 19 = C (lowest), 20 = C#, ... 24 = F, then the row above:
+ * 13 = F#, 14 = G, and so on bottom-to-top, left-to-right through all
+ * 24 pads. Run with test/run.sh.
  */
 
 #include <stdio.h>

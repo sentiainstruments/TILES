@@ -1,52 +1,29 @@
 # test/
 
-Host-buildable unit tests (no hardware required) for logic that can be
-isolated from the Pico SDK runtime. Hardware-dependent code stays covered
-by the `diagnostics/` manufacturing test commands instead.
+Host-side unit tests for the logic that doesn't need the Pico SDK or
+hardware. Run them all from `firmware/`:
 
-- `test_pad_config.c` — asserts all 24 touch/Hall/LED/haptic/FPC routes
-  in `board/pad_config.c` are unique, plus row/col/fpc sequencing and the
-  LED mux-index→enable-port relationship. Required by
-  `SENTIA_FIRMWARE_CODEX_START.md` before writing further implementation
-  code. Run it: `./run.sh`.
+```bash
+./test/run.sh
+```
 
-Planned additions as those modules get built: scale/note mapping, voice
-allocation, calibration math, `usb_vendor/` protocol framing.
-- `test_din_midi_queue.c` -- `midi/din_midi_queue.c`, the hardware-free half
-  of DIN MIDI: ordering, coalescing of pitch bend/pressure/expression,
-  Real-Time priority, whole-message overflow drops, ring wraparound.
-- `test_midi_in.c` -- the real `midi/midi_in.c` (tusb/pico-time stubbed in
-  `stubs/`): USB MAIN, USB DAW and DIN each parse with their own state
-  (USB fed as USB-MIDI packets per cable), running status per source, one
-  clock owner at a time, loss recovery, SysEx tagged with its port.
-- `test_usb_midi_packet.c` -- `midi/usb_midi_packet.c`: USB-MIDI 1.0 event
-  packets (cable number + Code Index Number) for every message kind TILES
-  sends, SysEx chunking, refusal of anything that isn't one whole message,
-  and the receive-side byte count per CIN.
-- `test_midi_channels.c` -- `services/midi_channels.c`, the shared 8-channel pool
-  Song mode and the live MPE Lower Zone draw from: claim-highest-first, the
-  contiguous zone-size math, declared-vs-honest zone size (the receiver is
-  only re-told when nothing is sounding), and the cross-module invariant that
-  Song can never claim a channel a live MPE note is using (and vice versa)
-  even though the two are otherwise independent bookkeeping.
-- `test_mpe_alloc.c` -- `services/mpe_alloc.c`, which Member Channel a new MPE
-  note gets (the spec's section 3.2 order: the same note's previous channel,
-  else the one idle longest -- never back onto a channel whose release tail is
-  still ringing while an idler one exists) and which note is stolen when every
-  channel is busy (a pedal-held one first, then the oldest; never a harmonic).
-- `test_identity.c` -- `midi/identity.c`'s Universal MIDI Identity Request/Reply:
-  a real request gets the right reply bytes, the request's own device-id byte
-  is ignored, every malformed/unrelated frame (including a real Scene Launch
-  one) is silently ignored.
-- `test_kv_store.c` -- `storage/kv_store.c` against a simulated NOR flash, including a
-  power cut after every erase/program step (and partially-applied operations):
-  the store always comes back with the old payload or the new one, never garbage,
-  and keeps working afterwards.
-- `test_settings.c` -- the settings registry (parse/range rules, schema text, sparse
-  blob incl. bad/unknown/volatile entries) and the debounced flash saver over a
-  simulated flash (debounce, idle gating, retry, RESET, changed defaults).
-- `pio_sim_din_tx.py` -- runs the *assembled* DIN OUT PIO program through a
-  tiny instruction-level simulator and decodes its waveform as 8N1 at
-  31,250 baud. Needs a firmware build first (it reads pioasm's header).
-  None of these touch the electrical side (jacks, buffer, opto, TRS
-  polarity) -- that only shows up on real hardware.
+Each test compiles the real module source with the host `cc`; where a
+module calls into TinyUSB or pico time, `stubs/` stands in. Hardware
+paths are checked on the board instead (`src/diagnostics/`).
+
+| Test | Covers |
+|---|---|
+| `test_pad_config.c` | `board/pad_config.c`: all 24 touch, Hall, LED, haptic and FPC routes unique; row/col/FPC order; LED mux index -> enable port. |
+| `test_note_map.c` | `services/note_map.c`: the default chromatic layout, pad 19 = lowest C, bottom-to-top and left-to-right through all 24 pads. |
+| `test_mpe_alloc.c` | `services/mpe_alloc.c`: MPE Member Channel choice (spec section 3.2: same-note reuse, longest idle first) and steal order (pedal-held first, then oldest, never a harmonic). |
+| `test_midi_channels.c` | `services/midi_channels.c`: the fixed channels, the shared pool Song and the live MPE zone draw from (highest free first, contiguous zone size, declared vs. actual zone size), and that neither can take a channel the other is using. |
+| `test_usb_midi_packet.c` | `midi/usb_midi_packet.c`: USB-MIDI 1.0 event packets (cable + Code Index Number) for every message TILES sends, SysEx chunking, receive-side byte counts. |
+| `test_midi_in.c` | `midi/midi_in.c`: USB MAIN, USB DAW and DIN parsed with separate state, running status per source, one clock owner at a time, loss recovery, SysEx tagged with its port. |
+| `test_din_midi_queue.c` | `midi/din_midi_queue.c`: DIN OUT ordering, coalescing of pitch bend/pressure/expression, Real-Time priority, whole-message overflow drops, wraparound. |
+| `test_identity.c` | `midi/identity.c`: the Universal MIDI Identity Request/Reply; malformed or unrelated SysEx ignored. |
+| `test_kv_store.c` | `storage/kv_store.c` on simulated NOR flash with a power cut after every erase/program step: always the old or the new payload, never garbage. |
+| `test_settings.c` | `profiles/settings.c` and `settings_persist.c`: parsing and ranges, schema text, the sparse flash blob, and the debounced saver (idle gating, retry, RESET). |
+| `pio_sim_din_tx.py` | The assembled DIN OUT PIO program, simulated and decoded as 8N1 at 31,250 baud. Needs a firmware build first (reads pioasm's header); skipped otherwise. |
+
+None of these cover the DIN electrical side (jacks, buffer, opto, TRS
+polarity); that is only testable on hardware.

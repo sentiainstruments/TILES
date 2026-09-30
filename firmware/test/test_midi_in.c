@@ -1,3 +1,6 @@
+/* midi/midi_in.c (tusb and pico time stubbed in stubs/): USB MAIN, USB DAW
+ * and DIN each parse with their own state, running status per source, one
+ * clock owner at a time, loss recovery, SysEx tagged with its port. */
 #include "midi_in.h"
 #include "usb_midi_packet.h"
 #include <assert.h>

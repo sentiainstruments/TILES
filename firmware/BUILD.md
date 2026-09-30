@@ -1,55 +1,51 @@
 # Building the firmware
 
-Not yet buildable on this machine — `cmake` and the pico-sdk checkout are
-both missing. `arm-none-eabi-gcc` (10.3) is already installed.
-
 ## One-time setup
 
+Needs `arm-none-eabi-gcc` (10.3 or newer), `cmake` and a pico-sdk
+checkout:
+
 ```bash
-brew install cmake
+brew install cmake picotool
 git clone -b master https://github.com/raspberrypi/pico-sdk.git ~/pico-sdk
 cd ~/pico-sdk && git submodule update --init
 export PICO_SDK_PATH=~/pico-sdk   # add to your shell profile
 cp "$PICO_SDK_PATH/external/pico_sdk_import.cmake" firmware/pico_sdk_import.cmake
 ```
 
-`pico_sdk_import.cmake` is SDK boilerplate, not project code, and is
-`.gitignore`d — copy it in fresh from whatever SDK checkout you're
-building against rather than hand-editing it.
+`pico_sdk_import.cmake` is SDK boilerplate and `.gitignore`d: copy it
+from the SDK you build against rather than editing it.
 
 ## Build
 
 ```bash
 cd firmware
-mkdir build && cd build
+mkdir -p build && cd build
 cmake -DPICO_BOARD=pico2 ..
 make -j
 ```
 
-Produces `src/sentia_tiles_firmware.uf2`. Flash with `picotool`, not
-drag-and-drop copy to the mass-storage device — the latter was found
-unreliable on this hardware (see `AGENTS.md` for why and the full flash
-workflow). `brew install picotool`, then:
+`-DPICO_BOARD=pico2` is required (without it the image targets the
+RP2040 and the board won't boot). A clean build has zero warnings. The
+output is `build/src/sentia_tiles_firmware.uf2`.
+
+## Flash
+
+With the board running the app (no BOOTSEL button needed):
 
 ```bash
 ../tools/flash.sh
 ```
 
-That's `picotool load -f --vid 0x1209 --pid 0x0001 -x -v --ignore-partitions
-build/src/sentia_tiles_firmware.uf2`: `-f` reboots a board that's already
-running the app into BOOTSEL by itself — no button press needed — and the
-`--vid/--pid` are required, because without them picotool only looks for
-Raspberry Pi's stock product IDs and never finds TILES (see `AGENTS.md`'s
-"Flash" section). Only fall back to a manual BOOTSEL button press if the
-app isn't running to begin with; `flash.sh` then flashes the board as is.
+`AGENTS.md` ("Flash") covers how it works, picking one of several
+boards, and the fallbacks.
 
-## Running the pad-table test (no toolchain needed)
+## Tests
 
-`firmware/test/test_pad_config.c` is plain host C, no Pico SDK
-dependency:
+Host-side unit tests, no SDK or hardware needed:
 
 ```bash
-cd firmware
-cc -std=c11 -Wall -Wextra -Isrc/board test/test_pad_config.c src/board/pad_config.c -o /tmp/test_pad_config
-/tmp/test_pad_config
+./test/run.sh    # from firmware/
 ```
+
+See `test/README.md` for what each one covers.

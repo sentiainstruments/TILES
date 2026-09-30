@@ -1,7 +1,7 @@
-# Instruction-level simulation of midi/din_midi_tx.pio using the words pioasm actually assembled
-# (so it checks the real program). Decodes the pin waveform as 8N1 @ 8 PIO cycles per bit.
-# Minimal simulator for the four instructions in din_midi_tx.pio, taken from the
-# assembled words pioasm produced (so this checks the real program, not my reading of it).
+# Instruction-level simulation of midi/din_midi_tx.pio, run on the words pioasm
+# actually assembled (so it checks the real program, not a reading of it).
+# Decodes the pin waveform as 8N1 at 8 PIO cycles per bit. Needs a firmware
+# build first (it reads pioasm's generated header).
 import glob, os, re
 here = os.path.dirname(os.path.abspath(__file__))
 matches = glob.glob(os.path.join(here, "..", "build", "**", "din_midi_tx.pio.h"), recursive=True)

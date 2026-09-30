@@ -1,12 +1,10 @@
 /*
  * Host-buildable integrity test for the canonical pad table.
  *
- * Per SENTIA_FIRMWARE_CODEX_START.md: before writing implementation code,
- * assert that all 24 touch, Hall, LED, haptic and FPC routes are unique.
- * No Pico SDK / hardware dependency -- build and run directly:
- *
- *   cc -std=c11 -I../src/board test_pad_config.c ../src/board/pad_config.c -o /tmp/test_pad_config
- *   /tmp/test_pad_config
+ * Asserts all 24 touch, Hall, LED, haptic and FPC routes are unique
+ * (required by SENTIA_FIRMWARE_CODEX_START.md), plus row/col/FPC order
+ * and the LED mux index -> enable port relationship. Run with
+ * test/run.sh.
  */
 
 #include <stdio.h>

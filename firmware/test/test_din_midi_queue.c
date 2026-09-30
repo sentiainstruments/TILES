@@ -1,3 +1,6 @@
+/* midi/din_midi_queue.c -- the hardware-free half of DIN MIDI OUT: ordering,
+ * coalescing of pitch bend/pressure/expression, Real-Time priority,
+ * whole-message overflow drops, ring wraparound. */
 #include "din_midi_queue.h"
 #include <assert.h>
 #include <stdio.h>
