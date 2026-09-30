@@ -13,7 +13,7 @@
  * recapturable on demand, and slowly drift-corrected in the background per
  * docs/architecture/defaults-and-safeguards.md "Pad baseline calibration
  * and drift compensation"), and a depth magnitude from it. Depth uses Z
- * for every pad (same doc, "V1 sensing scope": straight vertical travel,
+ * for every pad (same doc, "Sensing": straight vertical travel,
  * flat-mounted sensor). No per-pad calibration curve yet. */
 
 #include <stdbool.h>

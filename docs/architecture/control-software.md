@@ -1,104 +1,98 @@
-# Control software: how TILES talks to the mapper / layout store
+# Control software: how TILES talks to the companion app
 
-Decisions and direction for the companion software (mapper, control panel,
-layout store). Written 2026-09 after real feedback: "it's worth streamlining
-stuff and figuring out how we are going to communicate with the mapper/control/
-layout store software" -> "yes start with the settings table and flash saving.
-the app should be compatible in mac and windows and linux hopefully. the main
-thing is that its self contained and can interface with the system... layout
-store means downloading from online eventually."
+How the companion software (control panel, mapper, layout store) talks
+to the device, and the decisions behind it. Requirements: macOS, Windows
+and Linux; self-contained (nothing else to install); able to reach the
+system's USB; layouts downloadable from an online store eventually.
 
 ## What exists (firmware side)
 
-- **Settings table + flash saving** -- built. One registry row per setting
-  (`firmware/src/profiles/`), saved sparsely to a power-cut-safe two-slot flash
-  store (`firmware/src/storage/`), exposed over the USB vendor interface as a
-  text shell (`GET/SET/LIST/RESET/SAVE/SCHEMA/INFO`, `shared/protocol/README.md`).
-  `SCHEMA` lets an app discover every setting (id, type, range, default) instead
-  of hard-coding the list.
-- **Not built:** the binary protocol, layouts/profiles as stored objects,
-  calibration streaming, the app itself.
-- **Software reboot** -- built. Real feedback: "will we be able to flash
-  updates without putting the board in bootloader mode" -> "yes add the
-  software reboot command." Two independent paths (`firmware/src/midi/
-  usb_descriptors.c`, `tusb_config.h`, `usb_vendor/usb_vendor.c`):
-  - `picotool load -f` now works with the board already running the app --
-    no BOOTSEL button. A standard, separate USB interface (pico-sdk's own
-    `pico_usb_reset`, the same one `pico_stdio_usb` would add automatically)
-    handles it. picotool needs the board's USB ID spelled out (`--vid/--pid`)
-    because TILES doesn't use a Raspberry Pi stock product ID --
-    `tools/flash.sh` does that (`firmware/AGENTS.md`, "Flash").
-  - `REBOOT BOOTSEL` / `REBOOT APP` over the settings shell, for a script or
-    the future app to trigger the same thing without shelling out to
-    `picotool`.
-  This removes the manual BOOTSEL step for every build-time flash. It is
-  NOT yet the app's own firmware-update flow -- that still needs a real UI
-  and, eventually, the A/B flash-partition rollback under "Next steps"
-  below; this is the plumbing that flow will use.
+- **Settings table + flash saving.** One registry row per setting
+  (`firmware/src/profiles/`), saved sparsely to a power-cut-safe two-slot
+  flash store (`firmware/src/storage/`), exposed over the USB vendor
+  interface as a text shell (`GET/SET/LIST/RESET/SAVE/SCHEMA/INFO`,
+  `shared/protocol/README.md`). `SCHEMA` lets an app discover every
+  setting (id, type, range, default) instead of hard-coding the list.
+- **Software reboot, no BOOTSEL button.** Two paths:
+  - pico-sdk's standard USB reset interface (`pico_usb_reset`, added by
+    hand in `firmware/src/midi/usb_descriptors.c`), which
+    `picotool load -f` uses to flash a running board. picotool needs the
+    non-stock USB ID spelled out (`--vid/--pid`); `tools/flash.sh` does
+    that (`firmware/AGENTS.md`, "Flash").
+  - `REBOOT BOOTSEL` / `REBOOT APP` over the settings shell, for a
+    script or the app.
+
+  This is the plumbing a firmware-update flow will use, not the flow
+  itself (that needs a UI and, eventually, A/B partitions with
+  rollback).
+- **Driverless on Windows:** Microsoft OS 2.0 (BOS) descriptors bind
+  WinUSB to the vendor interface automatically. Not yet tried on a
+  Windows machine.
+- **Not built:** the binary protocol, layouts/profiles as stored
+  objects, calibration streaming, a Linux udev rule, the app itself.
 
 ## Decisions
 
-1. **The USB vendor interface is THE control channel; MIDI stays for
-   performance.** The vendor interface is separate from MIDI and CDC, so the app
-   works while Ableton has the MIDI port open (a DAW owns the port; on Windows,
-   often exclusively), and high-rate calibration streaming (24 pads x XYZ at
-   ~120 Hz) can't compete with note/expression traffic. DAW integration (Remote
-   Script, TILES DISPLAY) stays on MIDI -- it is performance-adjacent and the DAW
-   owns that path.
-2. **A setting is one table row.** Adding one never changes the protocol; the app
-   builds its UI from `SCHEMA`. Ids are permanent; keys are for humans.
-3. **The device is the source of truth.** The app reads the device on connect.
-   On-device edits (a scale button) and app edits both land in the owning module,
-   so they can't disagree. Later: a revision counter + change notification so a
-   running app notices a button-driven change.
-4. **Layouts are portable files, and the store is only distribution.** A layout
-   = a versioned, hashed file holding a subset of the settings/profile schema
-   (later: pad->note maps, scales, themes). The app downloads, validates (schema +
-   device protocol version + the setting ranges) and pushes it; the **device never
-   talks to a store**. Firmware ranges are enforced on the device regardless of
-   what a file says, so a bad or malicious layout can't push an unsafe value
-   (LED power ceiling, CV output range). Signing/metadata become relevant only
-   once there is an online catalog.
+1. **The USB vendor interface is the control channel; MIDI stays for
+   performance.** The vendor interface is separate from MIDI and CDC, so
+   the app works while a DAW has the MIDI ports open (on Windows often
+   exclusively), and high-rate calibration streaming (24 pads x XYZ at
+   ~120 Hz) can't compete with note and expression traffic. DAW
+   integration (the Ableton script, TILES DISPLAY) stays on MIDI: it is
+   part of performance, and the DAW owns that path.
+2. **A setting is one table row.** Adding one never changes the
+   protocol; the app builds its UI from `SCHEMA`. Ids are permanent;
+   keys are for humans.
+3. **The device is the source of truth.** The app reads the device on
+   connect. On-device edits (a scale button) and app edits both land in
+   the owning module, so they can't disagree. Later: a revision counter
+   and change notification, so a running app notices a button-driven
+   change.
+4. **Layouts are portable files; the store only distributes them.** A
+   layout is a versioned, hashed file holding a subset of the settings
+   schema (later: pad-to-note maps, scales, themes). The app downloads,
+   validates (schema, device protocol version, setting ranges) and pushes
+   it; the **device never talks to a store**. The device enforces its
+   own ranges whatever a file says, so a bad or malicious layout can't
+   push an unsafe value (LED power ceiling, CV range). Signing and
+   metadata matter only once there is an online catalog.
 
 ## Next steps (in order)
 
-1. **Binary protocol** replacing the text shell for the app (the shell stays as a
-   debug tool): length-prefixed frames, sequence IDs, a version/capability
-   handshake so an old app and new firmware (or the reverse) fail safely, chunked
-   transfers for larger blobs (layouts, later firmware update), a separate stream
-   for telemetry. Generated from ONE schema into C, TypeScript and Python
-   (`shared/protocol/` + `tools/` -- the planned, still unbuilt codegen), which
-   also removes today's "must match op_mode.c" duplication of DAW CC numbers and
-   channel conventions.
-2. **Driverless on every OS**: the Microsoft OS 2.0 (BOS) descriptors are done
-   (2026-09-29, untested on Windows) -- Windows should bind WinUSB to the vendor
-   interface automatically; macOS needs nothing; Linux still needs one udev rule
-   for non-root access. A WebUSB descriptor is only worth adding if a browser
-   build of the app happens.
-3. **Layout/profile object** in flash (own region via `storage/`) plus the
-   revision counter.
+1. **Binary protocol** for the app (the text shell stays as a debug
+   tool): length-prefixed frames, sequence IDs, a version/capability
+   handshake so an old app and new firmware (or the reverse) fail
+   safely, chunked transfers for larger blobs (layouts, later firmware
+   update), and a separate telemetry stream. Generated from one schema
+   into C, TypeScript and Python (`shared/protocol/` + codegen in
+   `tools/`, not built), which also ends the hand-kept copies of the DAW
+   CC numbers and channel conventions in the Ableton script.
+2. **Driverless on every OS:** test the Windows descriptors; Linux needs
+   one udev rule for non-root access; macOS needs nothing. A WebUSB
+   descriptor is only worth adding if a browser build of the app
+   happens.
+3. **Layout/profile object** in flash (its own region via `storage/`)
+   plus the revision counter.
 4. The app.
 
-## App stack options
+## App stack
 
-Requirements: macOS + Windows + Linux, self-contained (no separate runtime to
-install), talks to a USB vendor interface, fetches JSON from the web, updates
-itself. The firmware side is identical for all of them -- it only sees USB bulk
-transfers -- so the choice is reversible.
+The firmware side is identical for every option (it only sees USB bulk
+transfers), so the choice is reversible.
 
 | Option | For | Against |
 |---|---|---|
-| **Electron** (current plan) | Chromium's WebUSB means USB from the UI process with no native module to build for three OSes; biggest ecosystem for the store UI (React, HTTPS, JSON); mature auto-update, code signing, notarization | Large installer/RAM (~100+ MB); ships a whole browser |
-| **Tauri 2** | Much smaller (single-digit-MB class), Rust backend | Uses each OS's own webview, and WebUSB isn't available in all of them -- so USB goes through Rust (`nusb`/`rusb`) with a Rust<->JS bridge; three different web engines to test |
-| **Qt** (C++ or PySide) | Self-contained, native look, mature libusb bindings | A different UI stack from web tech, so the store UI and any future web presence don't share code; LGPL obligations |
+| **Electron** (chosen) | Chromium's WebUSB gives USB from the UI with no native module to build for three OSes; the biggest ecosystem for the store UI (React, HTTPS, JSON); mature auto-update, code signing, notarization | Large installer and RAM (~100+ MB); ships a whole browser |
+| **Tauri 2** | Much smaller (single-digit MB), Rust backend | Uses each OS's own webview, and WebUSB isn't in all of them, so USB goes through Rust (`nusb`/`rusb`) with a Rust-JS bridge; three web engines to test |
+| **Qt** (C++ or PySide) | Self-contained, native look, mature libusb bindings | A different UI stack from web tech, so the store UI and any web presence share no code; LGPL obligations |
 | **.NET + Avalonia** | Self-contained per-OS publish, one C# codebase | Smaller ecosystem; USB via a libusb wrapper |
-| **Flutter desktop** | One codebase, native-compiled | USB packages are the least mature of the group |
-| **Browser-only web app** | Zero install | WebUSB is Chrome/Edge only (no Safari, no Firefox); not "self-contained" |
+| **Flutter desktop** | One codebase, native-compiled | The least mature USB packages of the group |
+| **Browser-only web app** | Zero install | WebUSB is Chrome/Edge only (no Safari, no Firefox); not self-contained |
 
-**Recommendation: stay with Electron for V1.** (Confirmed 2026-09-29 with
-Vite + React + TypeScript inside it; no database or server until the online
-layout store -- see `companion-app/BRIEF.md`, the developer brief.) The deciding factors are
-WebUSB-in-Chromium (no per-OS native USB build) and web tech for the online layout
-store. Tauri is the credible lighter alternative if installer size becomes a
-priority; a browser-only build of the same UI can be offered later for Chrome/Edge
+**Electron for V1**, with Vite + React + TypeScript and no database or
+server until the online layout store (`companion-app/BRIEF.md`, the
+developer brief). The deciding factors are WebUSB in Chromium (no
+per-OS native USB build) and web tech for the store. Tauri is the
+credible lighter alternative if installer size becomes a priority; a
+browser build of the same UI could be offered later for Chrome/Edge
 users.

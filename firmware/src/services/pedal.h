@@ -11,7 +11,7 @@
  * Mode, polarity and sustain style are settings (`pedal.*`, see
  * profiles/settings_table.c); there is no on-device gesture for them.
  * Polarity defaults to normally-open (unpressed reads high via the pull-up).
- * Auto-sensing polarity/disconnect is future work; see
+ * Auto-sensing polarity/disconnect is not built; see
  * docs/architecture/defaults-and-safeguards.md "Pedal polarity". */
 
 #include <stdbool.h>

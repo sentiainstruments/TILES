@@ -1,22 +1,16 @@
 # Architecture notes
 
-Cross-cutting design notes that span firmware and companion-app rather
-than belonging to one side — e.g. how on-device button-driven config
-changes (a scale switch from a function button) and companion-app edits to
-the same profile stay consistent, or how calibration data ownership is
-split between device flash and app-side backups.
+Design notes that span several parts of the project rather than
+belonging to one module.
 
-## Contents
+- [`defaults-and-safeguards.md`](defaults-and-safeguards.md): what the
+  sensors drive, the power safeguards and per-mode budgets, LED
+  brightness, CV/gate, DIN and pedal polarity, and Hall baseline drift
+  compensation. Firmware headers link to its sections.
+- [`control-software.md`](control-software.md): how the companion app
+  talks to the device (USB vendor interface, the settings table,
+  layouts as portable files), what's built, the next steps, and the app
+  stack choice.
 
-- [`defaults-and-safeguards.md`](defaults-and-safeguards.md) — V1 sensing
-  scope (pressure/depth axis only), CV/gate/MIDI-polarity/pedal-polarity/
-  LED-brightness defaults, and the pad baseline drift-compensation
-  trigger. The reference `firmware/src/board/` and `firmware/src/services/`
-  get built against.
-
-- [`control-software.md`](control-software.md) -- how the device talks to the
-  mapper / control panel / layout store: USB vendor interface as the control
-  channel, the settings table, layouts as portable files, next steps, and the
-  cross-platform app-stack options.
-
-More notes will be added here as cross-cutting decisions get made.
+Earlier versions of these notes (the pre-implementation plans) are in
+git history: `git log -p docs/architecture/`.
