@@ -84,23 +84,18 @@ target_link_libraries(sentia_tiles_firmware
     m
 )
 
-# USB diagnostics console (CDC) + MIDI, composite device. Linking
-# tinyusb_device explicitly (above) makes pico_stdio_usb defer both
-# calling tusb_init() and providing descriptors to us -- see
-# midi/usb_device.c and midi/usb_descriptors.c. Drop the CDC half once
-# usb_vendor/ owns diagnostics instead.
+# stdio over the USB-CDC console. Linking tinyusb_device explicitly (above)
+# makes pico_stdio_usb leave tusb_init() and the descriptors to us (see
+# midi/usb_device.h, midi/usb_descriptors.c).
 pico_enable_stdio_usb(sentia_tiles_firmware 1)
 pico_enable_stdio_uart(sentia_tiles_firmware 0)
 
 # printf() over USB-CDC waits for buffer room when a terminal holds the port
-# open but isn't reading -- up to pico-sdk's default 500 ms per stall, the
-# cause of several "freeze"/"stuck note" bugs in this codebase (see
-# services/README.md, "printf() can no longer stall the main loop"). 5 ms
-# caps that for every printf at once: a reading terminal drains a 64-byte
-# packet every 1 ms USB frame, so it never waits that long; one that isn't
-# reading costs at most 5 ms once, after which prints are dropped without
-# waiting until it reads again. Paired with the larger CDC TX buffer in
-# midi/tusb_config.h so an ordinary burst never has to wait at all.
+# open without reading: up to 500 ms per call by default, the cause of
+# several freezes and stuck notes (services/HISTORY.md). 5 ms caps it: a
+# reading terminal drains a packet every 1 ms frame, and one that isn't
+# reading costs at most 5 ms once, then prints are dropped. Paired with the
+# 1 KB CDC TX buffer in midi/tusb_config.h.
 target_compile_definitions(sentia_tiles_firmware PRIVATE PICO_STDIO_USB_STDOUT_TIMEOUT_US=5000)
 
 pico_add_extra_outputs(sentia_tiles_firmware)

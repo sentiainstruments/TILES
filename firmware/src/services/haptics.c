@@ -322,7 +322,7 @@ void tiles_haptics_trigger_touch_pulse(uint8_t logical_pad) {
     }
     uint8_t idx = (uint8_t)(logical_pad - 1u);
     if (s_pads[idx].phase != HAPTIC_PHASE_IDLE) {
-        /* Busy with real feedback: don't interrupt it. */
+        /* Already giving strike feedback: don't interrupt it. */
         return;
     }
     const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
