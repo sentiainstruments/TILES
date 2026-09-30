@@ -9,7 +9,7 @@
  * round returns to the game menu.
  *
  * Menu: pad 1 (green) Snake, pad 2 (orange) Tile Breaker, pad 3 (cyan)
- * Tetris, pad 4 (blue) Pong, pad 5 (white) Simon Says; touch one to start.
+ * Tetris, pad 4 (blue) Paddle, pad 5 (white) Simon Says; touch one to start.
  *   Snake: "-" left, "+" right, triangle up, diamond down (absolute
  *     directions; reversing into the neck is ignored). Wraps at the edges,
  *     dies only on self-collision.
@@ -19,7 +19,7 @@
  *     diamond hard-drops. A small custom piece set for a 4-row board: dot,
  *     domino, straight tromino, corner tromino, 2x2 square. Line clears
  *     flash the underglow white; topping out ends the round.
- *   Pong (two players): left paddle column 1 ("-" up, "+" down), right
+ *   Paddle (two players): left paddle column 1 ("-" up, "+" down), right
  *     paddle column 6 (square up, circle down). Paddles 2 pads, white; the
  *     ball is blue. First to 2 wins. A miss flashes the underglow white and
  *     re-serves. The score glows on each player's buttons (1 point: the

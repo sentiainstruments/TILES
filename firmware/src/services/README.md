@@ -44,7 +44,7 @@ before re-tuning a constant or reviving an approach that was dropped.
 | `lighting` | Pad LEDs and underglow; power-derived brightness ceiling; idle colors by note role; indicator priority on the underglow. |
 | `standby` | Screensaver animations and deep sleep; circle holds. |
 | `boot_sequence` | Power-on animation (+ a Hall baseline recapture). |
-| `game_mode` | Snake, Tile Breaker, Tetris, Pong, Simon Says. |
+| `game_mode` | Snake, Tile Breaker, Tetris, Paddle, Simon Says. |
 | `pixel_font` | 4x4 font for the marquee and the transpose display. |
 | `debug_mode`, `crash_indicator` | Crash recorder and watchdog; red underglow after a crash reboot. |
 

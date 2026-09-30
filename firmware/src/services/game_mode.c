@@ -33,7 +33,7 @@ typedef enum {
     GM_STATE_PLAYING_SNAKE,
     GM_STATE_PLAYING_TILE_BREAKER,
     GM_STATE_PLAYING_TETRIS,
-    GM_STATE_PLAYING_PONG,
+    GM_STATE_PLAYING_PADDLE,
     GM_STATE_PLAYING_SIMON,
     GM_STATE_ROUND_END,
 } gm_state_t;
@@ -752,7 +752,7 @@ static void render_tetris(uint32_t now_ms) {
     }
 }
 
-/* ---- Pong ----------------------------------------------------------------
+/* ---- Paddle --------------------------------------------------------------
  * Two players on one board: left paddle column 1 ("-" up, "+" down), right
  * paddle column 6 (square up, circle down; the rightmost pair mirrors the
  * leftmost). Paddles are 2 pads, white; the ball is blue.
@@ -863,7 +863,7 @@ static void gp_point_scored(uint32_t now_ms, bool left_missed) {
     if (s_gp_left_score >= GP_WIN_SCORE || s_gp_right_score >= GP_WIN_SCORE) {
         s_gp_match_over = true;
         s_gp_match_over_ms = now_ms;
-        /* Pong skips gm_start_round_end(), so play the melody here. Always WIN:
+        /* Paddle skips gm_start_round_end(), so play the melody here. Always WIN:
          * two local players, no single loser. */
         gm_melody_start(&GM_MELODY_WIN, now_ms);
         return;
@@ -909,8 +909,8 @@ static void gp_update(uint32_t now_ms) {
     gp_step(now_ms);
 }
 
-/* Score on each side's control buttons (see the Pong section). */
-static void render_pong_score_buttons(uint32_t now_ms) {
+/* Score on each side's control buttons (see the Paddle section). */
+static void render_paddle_score_buttons(uint32_t now_ms) {
     float raw = 0.5f + 0.5f * sinf(2.0f * GAME_MODE_PI * (float)now_ms / GP_SCORE_GLOW_PERIOD_MS);
     float glow = GP_SCORE_GLOW_MIN + (GP_SCORE_GLOW_MAX - GP_SCORE_GLOW_MIN) * raw;
 
@@ -922,8 +922,8 @@ static void render_pong_score_buttons(uint32_t now_ms) {
     tiles_buttons_set_standby_led(6u, (s_gp_right_score >= 2u) ? glow : 0.0f); /* SW6 circle */
 }
 
-static void render_pong(uint32_t now_ms) {
-    render_pong_score_buttons(now_ms);
+static void render_paddle(uint32_t now_ms) {
+    render_paddle_score_buttons(now_ms);
 
     for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
@@ -1167,7 +1167,7 @@ static void render_menu(uint32_t now_ms) {
             } else if (row == 1u && col == 3u) {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 1.0f, 1.0f); /* Tetris = cyan */
             } else if (row == 1u && col == 4u) {
-                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 1.0f); /* Pong = blue, like its ball */
+                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 1.0f); /* Paddle = blue, like its ball */
             } else if (row == 1u && col == 5u) {
                 tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f); /* Simon Says = white (its pattern is the colorful part) */
             } else {
@@ -1225,8 +1225,8 @@ static void gm_start_tetris(uint32_t now_ms) {
     gt_start(now_ms);
 }
 
-static void gm_start_pong(uint32_t now_ms) {
-    s_gm_state = GM_STATE_PLAYING_PONG;
+static void gm_start_paddle(uint32_t now_ms) {
+    s_gm_state = GM_STATE_PLAYING_PADDLE;
     gp_start(now_ms);
 }
 
@@ -1255,7 +1255,7 @@ static void gm_handle_menu_selection(void) {
         gm_start_tetris(now_ms);
     } else if (pad4 && !s_gm_prev_pad4_touched) {
         tiles_haptics_trigger_kick(4u, GM_MENU_SELECT_VELOCITY);
-        gm_start_pong(now_ms);
+        gm_start_paddle(now_ms);
     } else if (pad5 && !s_gm_prev_pad5_touched) {
         tiles_haptics_trigger_kick(5u, GM_MENU_SELECT_VELOCITY);
         gm_start_simon(now_ms);
@@ -1361,10 +1361,10 @@ void tiles_game_mode_scan(void) {
     } else if (s_gm_state == GM_STATE_PLAYING_TETRIS) {
         gt_handle_input(now_ms);
         gt_update(now_ms);
-    } else if (s_gm_state == GM_STATE_PLAYING_PONG) {
+    } else if (s_gm_state == GM_STATE_PLAYING_PADDLE) {
         if (s_gp_match_over) {
             /* Frozen board, winner's buttons glowing, then back to the menu (see the
-             * Pong section). */
+             * Paddle section). */
             if (now_ms - s_gp_match_over_ms >= GP_MATCH_END_DISPLAY_MS) {
                 gm_enter_menu();
             }
@@ -1390,8 +1390,8 @@ void tiles_game_mode_scan(void) {
             render_tile_breaker(now_ms);
         } else if (s_gm_state == GM_STATE_PLAYING_TETRIS) {
             render_tetris(now_ms);
-        } else if (s_gm_state == GM_STATE_PLAYING_PONG) {
-            render_pong(now_ms);
+        } else if (s_gm_state == GM_STATE_PLAYING_PADDLE) {
+            render_paddle(now_ms);
         } else if (s_gm_state == GM_STATE_PLAYING_SIMON) {
             render_simon(now_ms);
         } else if (s_gm_state == GM_STATE_ROUND_END) {

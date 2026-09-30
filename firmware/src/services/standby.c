@@ -1159,161 +1159,161 @@ static tiles_standby_color_t tetris_underglow(uint8_t pixel_index, uint32_t now_
     return white(0.0f);
 }
 
-/* ---- Animation: Pong ------------------------------------------------------
- * Self-playing counterpart of game_mode.c's Pong: same layout and colors,
+/* ---- Animation: Paddle ----------------------------------------------------
+ * Self-playing counterpart of game_mode.c's Paddle: same layout and colors,
  * separate code. Only the paddle the ball is heading toward tracks it
- * (pong_ai_track()); the other drifts back to rest (pong_ai_recenter()),
+ * (pd_ai_track()); the other drifts back to rest (pd_ai_recenter()),
  * since mirrored paddles looked fake. A rare miss flashes the underglow
  * white and re-serves. Buttons off. */
 
-#define PONG_MIN_ROW 1u /* row 0 is buttons, not part of the court */
-#define PONG_MAX_ROW TILES_GRID_MAX_ROW
-#define PONG_PADDLE_COL_LEFT TILES_GRID_MIN_COL
-#define PONG_PADDLE_COL_RIGHT TILES_GRID_MAX_COL
-#define PONG_PADDLE_TOP_MIN PONG_MIN_ROW /* paddle covers [top, top+1] */
-#define PONG_PADDLE_TOP_MAX (TILES_GRID_MAX_ROW - 1u)
-#define PONG_STEP_MS 220u /* faster than the game version: nobody is playing */
-#define PONG_POINT_FLASH_MS 500u
-#define PONG_POINT_FLASH_TOGGLE_MS 110u
-#define PONG_PADDLE_LEVEL 1.0f
-#define PONG_BALL_LEVEL 1.0f
+#define PD_MIN_ROW 1u /* row 0 is buttons, not part of the court */
+#define PD_MAX_ROW TILES_GRID_MAX_ROW
+#define PD_PADDLE_COL_LEFT TILES_GRID_MIN_COL
+#define PD_PADDLE_COL_RIGHT TILES_GRID_MAX_COL
+#define PD_PADDLE_TOP_MIN PD_MIN_ROW /* paddle covers [top, top+1] */
+#define PD_PADDLE_TOP_MAX (TILES_GRID_MAX_ROW - 1u)
+#define PD_STEP_MS 220u /* faster than the game version: nobody is playing */
+#define PD_POINT_FLASH_MS 500u
+#define PD_POINT_FLASH_TOGGLE_MS 110u
+#define PD_PADDLE_LEVEL 1.0f
+#define PD_BALL_LEVEL 1.0f
 
-static int8_t s_pong_left_paddle_top;
-static int8_t s_pong_right_paddle_top;
-static int8_t s_pong_ball_row;
-static int8_t s_pong_ball_col;
-static int8_t s_pong_ball_drow;
-static int8_t s_pong_ball_dcol;
-static uint32_t s_pong_last_step_ms;
-static uint32_t s_pong_point_flash_ms;
-static bool s_pong_inited;
+static int8_t s_pd_left_paddle_top;
+static int8_t s_pd_right_paddle_top;
+static int8_t s_pd_ball_row;
+static int8_t s_pd_ball_col;
+static int8_t s_pd_ball_drow;
+static int8_t s_pd_ball_dcol;
+static uint32_t s_pd_last_step_ms;
+static uint32_t s_pd_point_flash_ms;
+static bool s_pd_inited;
 
-static void pong_serve(uint32_t now_ms) {
-    s_pong_ball_row = (int8_t)(PONG_MIN_ROW + (rand() % (PONG_MAX_ROW - PONG_MIN_ROW + 1u)));
-    s_pong_ball_col = ((rand() % 2) == 0) ? 3 : 4; /* one of the two middle columns */
-    s_pong_ball_drow = ((rand() % 2) == 0) ? -1 : 1;
-    s_pong_ball_dcol = ((rand() % 2) == 0) ? -1 : 1;
-    s_pong_last_step_ms = now_ms;
+static void pd_serve(uint32_t now_ms) {
+    s_pd_ball_row = (int8_t)(PD_MIN_ROW + (rand() % (PD_MAX_ROW - PD_MIN_ROW + 1u)));
+    s_pd_ball_col = ((rand() % 2) == 0) ? 3 : 4; /* one of the two middle columns */
+    s_pd_ball_drow = ((rand() % 2) == 0) ? -1 : 1;
+    s_pd_ball_dcol = ((rand() % 2) == 0) ? -1 : 1;
+    s_pd_last_step_ms = now_ms;
 }
 
-static void pong_new_round(uint32_t now_ms) {
-    s_pong_left_paddle_top = 2;
-    s_pong_right_paddle_top = 2;
-    pong_serve(now_ms);
+static void pd_new_round(uint32_t now_ms) {
+    s_pd_left_paddle_top = 2;
+    s_pd_right_paddle_top = 2;
+    pd_serve(now_ms);
     /* "Long past", as for Tetris's flash. */
-    s_pong_point_flash_ms = now_ms - PONG_POINT_FLASH_MS - 1u;
+    s_pd_point_flash_ms = now_ms - PD_POINT_FLASH_MS - 1u;
 }
 
 /* Moves the paddle at most one row toward the ball (the tile breaker
  * paddle AI). */
-static void pong_ai_track(int8_t *paddle_top) {
-    if (s_pong_ball_row < *paddle_top) {
+static void pd_ai_track(int8_t *paddle_top) {
+    if (s_pd_ball_row < *paddle_top) {
         (*paddle_top)--;
-    } else if (s_pong_ball_row > (int8_t)(*paddle_top + 1)) {
+    } else if (s_pd_ball_row > (int8_t)(*paddle_top + 1)) {
         (*paddle_top)++;
     }
-    if (*paddle_top < (int8_t)PONG_PADDLE_TOP_MIN) {
-        *paddle_top = (int8_t)PONG_PADDLE_TOP_MIN;
+    if (*paddle_top < (int8_t)PD_PADDLE_TOP_MIN) {
+        *paddle_top = (int8_t)PD_PADDLE_TOP_MIN;
     }
-    if (*paddle_top > (int8_t)PONG_PADDLE_TOP_MAX) {
-        *paddle_top = (int8_t)PONG_PADDLE_TOP_MAX;
+    if (*paddle_top > (int8_t)PD_PADDLE_TOP_MAX) {
+        *paddle_top = (int8_t)PD_PADDLE_TOP_MAX;
     }
 }
 
 /* Drifts the paddle one row back toward its rest (spawn) position. */
-#define PONG_REST_TOP 2
+#define PD_REST_TOP 2
 
-static void pong_ai_recenter(int8_t *paddle_top) {
-    if (*paddle_top < (int8_t)PONG_REST_TOP) {
+static void pd_ai_recenter(int8_t *paddle_top) {
+    if (*paddle_top < (int8_t)PD_REST_TOP) {
         (*paddle_top)++;
-    } else if (*paddle_top > (int8_t)PONG_REST_TOP) {
+    } else if (*paddle_top > (int8_t)PD_REST_TOP) {
         (*paddle_top)--;
     }
 }
 
-static void pong_step(uint32_t now_ms) {
-    int8_t new_row = (int8_t)(s_pong_ball_row + s_pong_ball_drow);
-    if (new_row < (int8_t)PONG_MIN_ROW || new_row > (int8_t)PONG_MAX_ROW) {
-        s_pong_ball_drow = (int8_t)(-s_pong_ball_drow);
-        new_row = (int8_t)(s_pong_ball_row + s_pong_ball_drow);
+static void pd_step(uint32_t now_ms) {
+    int8_t new_row = (int8_t)(s_pd_ball_row + s_pd_ball_drow);
+    if (new_row < (int8_t)PD_MIN_ROW || new_row > (int8_t)PD_MAX_ROW) {
+        s_pd_ball_drow = (int8_t)(-s_pd_ball_drow);
+        new_row = (int8_t)(s_pd_ball_row + s_pd_ball_drow);
     }
 
-    int8_t new_col = (int8_t)(s_pong_ball_col + s_pong_ball_dcol);
-    if (new_col < (int8_t)PONG_PADDLE_COL_LEFT) {
-        if (new_row >= s_pong_left_paddle_top && new_row <= (int8_t)(s_pong_left_paddle_top + 1)) {
-            s_pong_ball_dcol = 1;
-            new_col = (int8_t)PONG_PADDLE_COL_LEFT;
+    int8_t new_col = (int8_t)(s_pd_ball_col + s_pd_ball_dcol);
+    if (new_col < (int8_t)PD_PADDLE_COL_LEFT) {
+        if (new_row >= s_pd_left_paddle_top && new_row <= (int8_t)(s_pd_left_paddle_top + 1)) {
+            s_pd_ball_dcol = 1;
+            new_col = (int8_t)PD_PADDLE_COL_LEFT;
         } else {
-            s_pong_point_flash_ms = now_ms;
-            pong_serve(now_ms);
+            s_pd_point_flash_ms = now_ms;
+            pd_serve(now_ms);
             return;
         }
-    } else if (new_col > (int8_t)PONG_PADDLE_COL_RIGHT) {
-        if (new_row >= s_pong_right_paddle_top && new_row <= (int8_t)(s_pong_right_paddle_top + 1)) {
-            s_pong_ball_dcol = -1;
-            new_col = (int8_t)PONG_PADDLE_COL_RIGHT;
+    } else if (new_col > (int8_t)PD_PADDLE_COL_RIGHT) {
+        if (new_row >= s_pd_right_paddle_top && new_row <= (int8_t)(s_pd_right_paddle_top + 1)) {
+            s_pd_ball_dcol = -1;
+            new_col = (int8_t)PD_PADDLE_COL_RIGHT;
         } else {
-            s_pong_point_flash_ms = now_ms;
-            pong_serve(now_ms);
+            s_pd_point_flash_ms = now_ms;
+            pd_serve(now_ms);
             return;
         }
     }
 
-    s_pong_ball_row = new_row;
-    s_pong_ball_col = new_col;
+    s_pd_ball_row = new_row;
+    s_pd_ball_col = new_col;
 
     /* Only the side the ball heads toward defends; the other recenters. */
-    if (s_pong_ball_dcol < 0) {
-        pong_ai_track(&s_pong_left_paddle_top);
-        pong_ai_recenter(&s_pong_right_paddle_top);
+    if (s_pd_ball_dcol < 0) {
+        pd_ai_track(&s_pd_left_paddle_top);
+        pd_ai_recenter(&s_pd_right_paddle_top);
     } else {
-        pong_ai_track(&s_pong_right_paddle_top);
-        pong_ai_recenter(&s_pong_left_paddle_top);
+        pd_ai_track(&s_pd_right_paddle_top);
+        pd_ai_recenter(&s_pd_left_paddle_top);
     }
 }
 
-static void pong_update(uint32_t now_ms) {
-    if (!s_pong_inited) {
-        pong_new_round(now_ms);
-        s_pong_inited = true;
+static void pd_update(uint32_t now_ms) {
+    if (!s_pd_inited) {
+        pd_new_round(now_ms);
+        s_pd_inited = true;
         return;
     }
-    if (now_ms - s_pong_last_step_ms < PONG_STEP_MS) {
+    if (now_ms - s_pd_last_step_ms < PD_STEP_MS) {
         return;
     }
-    s_pong_last_step_ms = now_ms;
-    pong_step(now_ms);
+    s_pd_last_step_ms = now_ms;
+    pd_step(now_ms);
 }
 
-static tiles_standby_color_t anim_pong(uint8_t row, uint8_t col, uint32_t now_ms) {
-    pong_update(now_ms);
+static tiles_standby_color_t anim_paddle(uint8_t row, uint8_t col, uint32_t now_ms) {
+    pd_update(now_ms);
 
     if (row == 0u) {
         return white(0.0f);
     }
 
-    if ((int8_t)row == s_pong_ball_row && (int8_t)col == s_pong_ball_col) {
+    if ((int8_t)row == s_pd_ball_row && (int8_t)col == s_pd_ball_col) {
         /* Ball before paddles, so it's on top when they share a cell. */
-        tiles_standby_color_t ball = {0.0f, 0.0f, PONG_BALL_LEVEL};
+        tiles_standby_color_t ball = {0.0f, 0.0f, PD_BALL_LEVEL};
         return ball;
     }
-    if (col == PONG_PADDLE_COL_LEFT && (int8_t)row >= s_pong_left_paddle_top &&
-        (int8_t)row <= (int8_t)(s_pong_left_paddle_top + 1)) {
-        return white(PONG_PADDLE_LEVEL);
+    if (col == PD_PADDLE_COL_LEFT && (int8_t)row >= s_pd_left_paddle_top &&
+        (int8_t)row <= (int8_t)(s_pd_left_paddle_top + 1)) {
+        return white(PD_PADDLE_LEVEL);
     }
-    if (col == PONG_PADDLE_COL_RIGHT && (int8_t)row >= s_pong_right_paddle_top &&
-        (int8_t)row <= (int8_t)(s_pong_right_paddle_top + 1)) {
-        return white(PONG_PADDLE_LEVEL);
+    if (col == PD_PADDLE_COL_RIGHT && (int8_t)row >= s_pd_right_paddle_top &&
+        (int8_t)row <= (int8_t)(s_pd_right_paddle_top + 1)) {
+        return white(PD_PADDLE_LEVEL);
     }
     return white(0.0f);
 }
 
-static tiles_standby_color_t pong_underglow(uint8_t pixel_index, uint32_t now_ms) {
+static tiles_standby_color_t pd_underglow(uint8_t pixel_index, uint32_t now_ms) {
     (void)pixel_index;
-    if (now_ms - s_pong_point_flash_ms >= PONG_POINT_FLASH_MS) {
+    if (now_ms - s_pd_point_flash_ms >= PD_POINT_FLASH_MS) {
         return white(0.0f);
     }
-    bool on = (((now_ms - s_pong_point_flash_ms) / PONG_POINT_FLASH_TOGGLE_MS) % 2u) == 0u;
+    bool on = (((now_ms - s_pd_point_flash_ms) / PD_POINT_FLASH_TOGGLE_MS) % 2u) == 0u;
     return white(on ? 1.0f : 0.0f);
 }
 
@@ -1516,15 +1516,15 @@ typedef tiles_standby_color_t (*underglow_fn_t)(uint8_t pixel_index, uint32_t no
 static const field_fn_t s_animations[] = {
     anim_wave,           anim_glow,     anim_shooting_stars, anim_snake,
     anim_rgb_showcase,   anim_equalizer, anim_underglow_circle,
-    anim_tile_breaker,  anim_marquee,  anim_bounce, anim_tetris, anim_pong,
+    anim_tile_breaker,  anim_marquee,  anim_bounce, anim_tetris, anim_paddle,
     anim_fallingdots,
 };
 /* Parallel to s_animations[]: NULL = underglow samples the pad field at
  * its anchors; non-NULL = the animation draws its own underglow (EQ accent,
- * circular wave, tile breaker/Tetris/Pong flashes, marquee off). */
+ * circular wave, tile breaker/Tetris/Paddle flashes, marquee off). */
 static const underglow_fn_t s_animation_underglow_override[] = {
     NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow, tb_underglow, marquee_underglow, NULL,
-    tetris_underglow, pong_underglow, NULL,
+    tetris_underglow, pd_underglow, NULL,
 };
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
 
@@ -1544,7 +1544,7 @@ static const uint8_t s_animation_weight[] = {
     ANIM_WEIGHT_REGULAR, /* marquee */
     ANIM_WEIGHT_REGULAR, /* bounce */
     ANIM_WEIGHT_GAME,    /* Tetris */
-    ANIM_WEIGHT_GAME,    /* Pong */
+    ANIM_WEIGHT_GAME,    /* Paddle */
     ANIM_WEIGHT_REGULAR, /* falling dots */
 };
 
