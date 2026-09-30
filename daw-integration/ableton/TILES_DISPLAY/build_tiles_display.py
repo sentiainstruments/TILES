@@ -24,18 +24,30 @@ straight to that script's MIDI OUTPUT port (the same port
 scene_launch.py already uses for its SysEx feedback) -- confirmed
 against Cycling '74's LOM docs and forum reports of exactly this use
 (e.g. lighting Push pads from a device). No network layer, no extra
-Remote Script code. The one thing a device can't know is WHICH
-control surface TILES is (the LOM exposes no name for one), so the
-device has a small SURFACE number, saved with the Live set, that the
-player sets once. It is the position among LOADED control surfaces, NOT
-the Preferences slot number -- Live's own device bridge skips empty slots
-(_MxDCore/LomTypes.py: get_control_surfaces() is tuple(filter(lambda c:
-c is not None, application.control_surfaces))). The first version got
-this wrong and every send_midi was rejected with "no valid object set"
-(seen in Live's Log.txt); it also capped the range at 6 when Live 12.4
-has 7 slots. To make finding the right number a matter of stepping it
-rather than guessing, the device flashes pads on TILES whenever the
-route could have just changed (SURFACE edited, VIEW turned on).
+Remote Script code.
+
+Finding the TILES control surface. It is addressed by its position among
+LOADED control surfaces (the SURFACE number), NOT the Preferences slot
+number -- Live's own device bridge skips empty slots (_MxDCore/
+LomTypes.py: get_control_surfaces() is tuple(filter(lambda c: c is not
+None, application.control_surfaces))). That number used to be set by
+hand, and it silently broke whenever the Preferences list changed: real
+feedback, after the control-surface rows were reshuffled for TILES's new
+DAW port, "one thing that broke is the lit up thing with ableton live" --
+every send_midi rejected with "no valid object set" in Live's Log.txt.
+-> "yes build the auto-find for tiles display." The device now finds TILES
+itself: each control surface reports its script's class name as the LOM
+property type_name (_MxDCore/ControlSurfaceWrapper.py,
+LocalControlSurfaceWrapper.type_name = the script's class __name__ --
+"TILES", daw-integration/ableton/TILES/TILES.py), so on load and every
+time VIEW is armed it asks each loaded surface for type_name and takes
+the first "TILES" (see the "Auto-find" section in build_patcher()). An
+earlier version of this comment said the LOM exposes no name for a
+control surface; it does. SURFACE stays as the display of what was found
+and a manual fallback (a Live version without type_name, or TILES not
+loaded when the scan ran). The device still flashes pads on TILES
+whenever the route could have just changed (SURFACE edited by hand, VIEW
+turned on), as a visible "connected" signal.
 
 MPE / expression pass-through: the device is a pure tap. The MIDI thru
 is ONE direct patchline, midiin -> midiout, with nothing parsed,
@@ -307,7 +319,7 @@ def build_patcher():
     )
     comment(
         "hint",
-        "Pads flash on TILES when SURFACE is right. Step it (1-7) until they do. 2nd armed = soft red.",
+        "Finds TILES by itself; pads flash when connected. SURFACE: manual override. 2nd armed = soft red.",
         [600.0, 150.0, 200.0, 30.0],
         [12.0, 128.0, 136.0, 34.0],
         9.0,
@@ -368,12 +380,6 @@ def build_patcher():
     conn("lpath_surface", 0, "lobj", 1)
     conn("lpath_surface", 1, "lobj", 1)
 
-    # ---- VIEW: only real transitions matter (a redundant 0, e.g. from an
-    # unarmed instance being told to disarm, must not flush). ----------------
-    newobj("view_change", "change", [32.0, 296.0, 46.0, 20.0], 1, 3, ["int", "int", "int"])
-    conn("view", 0, "view_change", 0)
-    conn("view_change", 0, "gate", 0)
-
     # ---- Two instances at once: slots, see the module docstring ------------
     # thisdev is still needed further down (the route flash's load guard).
     newobj("thisdev", "live.thisdevice", [32.0, 328.0, 83.0, 20.0], 1, 3, ["bang", "int", "int"])
@@ -396,11 +402,13 @@ def build_patcher():
     newobj("sel_view", "select 1 0", [32.0, 344.0, 62.0, 20.0], 2, 3, ["bang", "bang", ""])
     conn("view_change", 0, "sel_view", 0)
 
-    # ARM (VIEW just turned on). [t b b b b] fires right to left:
+    # ARM (VIEW just turned on). [t b b b b b] fires right to left:
+    #   0. find TILES again (auto-find, below) -- the Preferences list may
+    #      have changed since load
     #   1. clear taken_flag        2. ask "who holds slot 1?" (synchronous)
     #   3. slot = taken_flag + 1   4. the route-confirmation flash, last, so
     #      it goes out on the NEW slot's channel (a secondary flashes red).
-    newobj("arm_t", "t b b b b", [32.0, 392.0, 66.0, 20.0], 1, 4, ["bang", "bang", "bang", "bang"])
+    newobj("arm_t", "t b b b b b", [32.0, 392.0, 80.0, 20.0], 1, 5, ["bang", "bang", "bang", "bang", "bang"])
     message("msg_t1_reset", "0", [120.0, 392.0, 24.0, 20.0])
     newobj("taken_flag", "int 0", [120.0, 424.0, 32.0, 20.0], 2, 1, ["int"])
     newobj("send_who", "s " + BUS_WHO, [160.0, 392.0, 120.0, 20.0], 1, 0)
@@ -495,6 +503,70 @@ def build_patcher():
     conn("uzi_zero", 0, "pack_flush", 0)
     conn("pack_flush", 0, "status_gate", 1)
 
+    # ---- Auto-find: which loaded control surface is TILES -----------------
+    # Asks control_surfaces 0..6 for their type_name (the script's class
+    # name) and takes the first "TILES". Runs 1.5 s after load (load_delay,
+    # below -- the control surfaces are up by then) and first thing on every
+    # arm. On the load path [deferlow] moves the scan to Max's low-priority thread,
+    # where live.path/live.object answer synchronously, so each probe's
+    # answer arrives while cand_idx still holds that probe's index (a
+    # [delay] fires in the high-priority thread, where the LOM objects would
+    # defer and the loop would race ahead). onebang lets only the first
+    # match through (a duplicate TILES row can't win over the first).
+    # A found index goes to surface_zero (drives the live.path/live.object
+    # route directly) and to the SURFACE box with "set" (display + saved
+    # value, no output) -- so finding TILES never triggers the SURFACE-
+    # edited flash, and a set full of instances doesn't flash TILES on open.
+    # Not found (TILES not loaded, or a Live without type_name): SURFACE is
+    # left as it was, the manual fallback.
+    newobj("scan_defer", "deferlow", [40.0, 700.0, 56.0, 20.0], 1, 1)
+    newobj("scan_t", "t b b", [40.0, 732.0, 40.0, 20.0], 1, 2, ["bang", "bang"])
+    newobj("scan_once", "onebang", [360.0, 860.0, 56.0, 20.0], 2, 2, ["bang", "bang"])
+    newobj("scan_uzi", "uzi 7", [40.0, 764.0, 46.0, 20.0], 2, 3, ["bang", "bang", "int"])
+    newobj("scan_idx_t", "t i i", [40.0, 796.0, 40.0, 20.0], 1, 2, ["int", "int"])
+    newobj("cand_idx", "int 0", [200.0, 860.0, 32.0, 20.0], 2, 1, ["int"])
+    newobj("scan_zero", "- 1", [40.0, 828.0, 32.0, 20.0], 2, 1, ["int"])
+    newobj("scan_prep_path", "prepend path control_surfaces", [40.0, 860.0, 150.0, 20.0], 1, 1)
+    newobj("scan_path", "live.path", [40.0, 892.0, 62.0, 20.0], 1, 3, ["", "", ""])
+    newobj("scan_route_id", "route id", [40.0, 924.0, 50.0, 20.0], 2, 2, ["", ""])
+    newobj("scan_nonzero", "select 0", [40.0, 956.0, 52.0, 20.0], 2, 2, ["bang", ""])
+    newobj("probe_t", "t b i", [40.0, 988.0, 40.0, 20.0], 1, 2, ["bang", "int"])
+    newobj("probe_prep_id", "prepend id", [120.0, 1020.0, 62.0, 20.0], 1, 1)
+    message("probe_get", "get type_name", [40.0, 1020.0, 76.0, 20.0])
+    newobj("probe_obj", "live.object", [40.0, 1052.0, 68.0, 20.0], 2, 1)
+    newobj("probe_route", "route type_name", [40.0, 1084.0, 86.0, 20.0], 2, 2, ["", ""])
+    newobj("probe_sel", "select TILES", [40.0, 1116.0, 70.0, 20.0], 2, 2, ["bang", ""])
+    newobj("found_t", "t i i", [200.0, 892.0, 40.0, 20.0], 1, 2, ["int", "int"])
+    newobj("found_set", "prepend set", [260.0, 924.0, 68.0, 20.0], 1, 1)
+    # Arm runs the scan directly: a VIEW click already arrives on Max's
+    # low-priority thread, and a deferlow here would postpone the scan until
+    # after arm_t's route-confirmation flash, which would then go out on the
+    # OLD route. Only the load path (a [delay], high-priority) needs deferlow.
+    conn("arm_t", 4, "scan_t", 0)
+    conn("scan_defer", 0, "scan_t", 0)
+    conn("scan_t", 1, "scan_once", 1)  # first: re-arm onebang for this scan
+    conn("scan_t", 0, "scan_uzi", 0)
+    conn("scan_uzi", 2, "scan_idx_t", 0)  # 1..7
+    conn("scan_idx_t", 1, "cand_idx", 1)  # first: remember which index this probe is
+    conn("scan_idx_t", 0, "scan_zero", 0)
+    conn("scan_zero", 0, "scan_prep_path", 0)
+    conn("scan_prep_path", 0, "scan_path", 0)
+    conn("scan_path", 0, "scan_route_id", 0)
+    conn("scan_route_id", 0, "scan_nonzero", 0)
+    conn("scan_nonzero", 1, "probe_t", 0)  # id 0 = no surface at that index: skip
+    conn("probe_t", 1, "probe_prep_id", 0)  # first: point the probe at it
+    conn("probe_prep_id", 0, "probe_obj", 1)
+    conn("probe_t", 0, "probe_get", 0)
+    conn("probe_get", 0, "probe_obj", 0)
+    conn("probe_obj", 0, "probe_route", 0)
+    conn("probe_route", 0, "probe_sel", 0)
+    conn("probe_sel", 0, "scan_once", 0)
+    conn("scan_once", 0, "cand_idx", 0)
+    conn("cand_idx", 0, "found_t", 0)
+    conn("found_t", 1, "found_set", 0)  # first: show it in SURFACE (no output)
+    conn("found_set", 0, "surface", 0)
+    conn("found_t", 0, "surface_zero", 0)  # then route to it
+
     # ---- Route confirmation: a brief flash of pads on TILES whenever the
     # route could have just changed (SURFACE edited, or VIEW turned on), so
     # finding the right SURFACE number is "step it until pads flash" rather
@@ -520,6 +592,7 @@ def build_patcher():
     newobj("pack_off", "pack 0 0", [640.0, 328.0, 52.0, 20.0], 2, 1)
     conn("thisdev", 0, "load_delay", 0)
     conn("load_delay", 0, "msg_one", 0)
+    conn("load_delay", 0, "scan_defer", 0)  # auto-find, once the surfaces are up
     conn("msg_one", 0, "flash_gate", 0)  # gate opens 1.5 s after load
     conn("surface", 0, "surf_delay", 0)  # let the new id land first
     conn("surf_delay", 0, "flash_gate", 1)

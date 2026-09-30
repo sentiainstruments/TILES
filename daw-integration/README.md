@@ -364,22 +364,24 @@ clears it on the Note-Off.
   **Replace any device already in a set** with this version (delete it and
   drag the updated one in): a saved instance keeps its old patcher, and an
   old and a new instance don't talk to each other.
-- **SURFACE** -- which control surface TILES is, 1-7. Set once, saved
-  with the set. This exists because the Live Object Model gives a device
-  no way to ask a control surface what script it is. **It is NOT the
-  Preferences slot number**: Live's own device bridge (`_MxDCore/
-  LomTypes.py`, `get_control_surfaces()`) is `tuple(filter(lambda c: c is
-  not None, application.control_surfaces))` -- empty slots are skipped,
-  so this counts *loaded* scripts in slot order. (The first version of
-  this doc told you to enter the slot number; that was wrong, and Live's
-  own Log.txt showed why: every send was rejected with "no valid object
-  set".) To find the right number, **just step SURFACE from 1 upward:
-  whenever it changes, and whenever VIEW is armed, the device flashes a
-  run of pads on TILES for about a third of a second** -- the number that
-  makes pads flash green (TILES in melodic mode) is TILES. A wrong number
-  is harmless if the script at that position has no MIDI output port, but
-  would send notes to another controller's hardware if it does, which is
-  why this isn't guessed automatically.
+- **SURFACE** -- which control surface TILES is. **The device finds it by
+  itself** (added 2026-09-29): 1.5 s after it loads, and every time VIEW is
+  armed, it asks each loaded control surface for its script name (the Live
+  Object Model's `type_name`, which is the script's class name, "TILES")
+  and uses the first match. SURFACE then shows which one it found. Real
+  feedback that prompted it: "one thing that broke is the lit up thing with
+  ableton live" -- after the Preferences rows were reshuffled for TILES's
+  new DAW port, the hand-set number pointed at nothing and every send was
+  rejected ("no valid object set" in Live's Log.txt) -> "yes build the
+  auto-find for tiles display." The number is the position among *loaded*
+  control surfaces, not the Preferences row (Live skips empty rows), which
+  is why a hand-set value broke whenever the list changed. You only need
+  SURFACE as a manual override: if TILES isn't found (script not loaded
+  when the device scanned, or a Live version without `type_name`), step it
+  by hand -- pads on TILES flash for about a third of a second whenever it
+  changes or VIEW is armed, and the value that flashes them green (TILES
+  in melodic mode) is TILES. Replace instances already in a set with the
+  new device to get this.
 
 TILES must be in melodic mode, and a note outside the currently selected
 scale/octave/key has no pad to light (same accepted tradeoffs as the
@@ -424,16 +426,18 @@ every connection points at a real inlet/outlet before writing.
 
 ### Verification status -- read this first time
 
-**Written and structurally validated, never opened in Live yet** (no way
-to drive Live's UI from where this was written). First-run checklist:
+Used in Live since the first version (two-instance mode confirmed). The
+auto-find added 2026-09-29 is built and structurally validated but not yet
+confirmed in Live. First-run checklist:
 
 1. Drop the device on a MIDI track before an instrument; it should load
    with no red/errors in Max's console and show the dark panel, a pink
    underline, the **VIEW** button, and **SURFACE**.
-2. TILES in melodic mode: step **SURFACE** from 1 upward until pads
-   flash green on TILES, then click **VIEW** -- button turns Sentia
-   pink (pads flash once more); play a note on that track and the
-   matching pad should light green, then go dark on release.
+2. TILES in melodic mode: click **VIEW** -- the button turns Sentia pink,
+   **SURFACE jumps to TILES's position by itself**, and pads flash on
+   TILES; play a note on that track and the matching pad should light
+   green, then go dark on release. (No flash: step SURFACE by hand until
+   pads flash, and tell us -- the auto-find didn't work in that setup.)
 3. Add a second instance on another track and arm it -- both VIEW
    buttons stay on: the first pink, the second **soft red**, and the
    second track's notes light **soft red** pads while the first's stay
@@ -445,13 +449,15 @@ to drive Live's UI from where this was written). First-run checklist:
    remaining device turns pink and its notes go green.
 5. Stop transport / disarm mid-note -- no pad should stay lit.
 
-If step 2 fails but 1 loads clean, the likely culprits, in order:
-SURFACE number (above), the TILES script not selected in a Control
-Surface slot with its **Output** port set, or TILES not in melodic mode.
+If step 2 fails but 1 loads clean, the likely culprits, in order: the
+TILES script not selected in a Control Surface row with its **Output**
+set to "SENTIA TILES (DAW)", the SURFACE number (above), or TILES not in
+melodic mode.
 Live's own log is the fastest way to see which:
 `~/Library/Preferences/Ableton/Live <version>/Log.txt`. A line like
 `call send_midi 144 60 100: no valid object set` means the device is
-tapping notes fine but SURFACE points at nothing; no such lines while
+tapping notes fine but SURFACE points at nothing (auto-find found no
+TILES -- is the script loaded?); no such lines while
 nothing lights means the send is reaching a control surface and the
 problem is that surface's output port or TILES's own mode.
 
