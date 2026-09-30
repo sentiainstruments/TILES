@@ -33,14 +33,13 @@ static bool ops_read(uint8_t slot, uint32_t offset, uint8_t *buf, uint32_t len) 
     return true;
 }
 
-/* Erase and program stall everything: the chip is memory-mapped and executed
- * from (XIP), so nothing can be fetched from flash while it is being written,
- * and every interrupt (USB, DIN RX) must stay off for the whole span. The SDK's
- * flash_range_*() do NOT do that for us -- same single-core pattern, and the
- * same watchdog pets before and after (not during: watchdog_update() is
- * flash-resident code), as services/op_mode.c's pattern bank documents at
- * length. A sector erase is tens of milliseconds; a page program well under a
- * millisecond. settings_persist.c only ever gets here with the pads idle. */
+/* Erase/program stall everything: code runs from flash (XIP), so no
+ * interrupt (USB, DIN RX) may run during the write. The SDK's
+ * flash_range_*() don't disable them, so we do. The watchdog is fed before
+ * and after, not during (watchdog_update() lives in flash); same pattern
+ * as the pattern bank in services/op_mode.c. A sector erase takes tens of
+ * ms, a page program well under 1 ms. settings_persist.c only saves with
+ * the pads idle. */
 static bool ops_erase(uint8_t slot) {
     if (slot >= TILES_KV_NUM_SLOTS) {
         return false;

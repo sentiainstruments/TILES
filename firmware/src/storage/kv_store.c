@@ -5,8 +5,8 @@
 static const tiles_kv_ops_t *s_ops;
 static tiles_kv_info_t s_info;
 
-/* ---- little-endian helpers (the header is byte-packed on purpose: no struct
- * layout, alignment or host-endianness assumptions) ---- */
+/* ---- little-endian helpers (the header is byte-packed: no struct layout,
+ * alignment or endianness assumptions) ---- */
 
 static void put_u16(uint8_t *p, uint16_t v) {
     p[0] = (uint8_t)(v & 0xFFu);
@@ -170,9 +170,8 @@ tiles_kv_result_t tiles_kv_write(const uint8_t *payload, uint16_t len, uint16_t 
     uint8_t pages = (uint8_t)((TILES_KV_HEADER_SIZE + len + TILES_KV_PAGE_SIZE - 1u) / TILES_KV_PAGE_SIZE);
     uint8_t buf[TILES_KV_PAGE_SIZE];
 
-    /* The slot about to be rewritten stops being trusted from this moment: if
-     * we lose power now, boot must not consider it (it is erased/half-written
-     * anyway) and the OTHER slot remains the newest valid one. */
+    /* Stop trusting the target slot now: after a power cut here, the other
+     * slot must be the newest valid one. */
     s_info.valid[target] = false;
 
     if (!s_ops->erase(target)) {

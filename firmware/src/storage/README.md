@@ -4,7 +4,7 @@ Versioned, CRC-protected configuration storage in Pico flash, with two
 alternating slots so a failed/interrupted write never bricks the active
 data.
 
-## Built
+## Files
 
 - **`kv_store.{h,c}`** -- the two-slot blob store, pure logic (no Pico SDK).
   One caller-defined payload (up to 4076 bytes) lives in one of two 4 KB

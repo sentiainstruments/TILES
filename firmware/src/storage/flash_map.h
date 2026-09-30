@@ -1,26 +1,19 @@
 #pragma once
 
-/*
- * Where everything the firmware keeps in flash lives -- ONE place, so two
- * features can't quietly claim the same sector.
+/* Every flash region the firmware uses, in ONE place so no two features
+ * claim the same sector.
  *
- * All of it sits at the very END of the chip's flash, as far as possible from
- * the application image at the start (which is ~160 KB today), so the image can
- * grow a long way before this matters -- storage_flash.c checks at boot that it
- * still hasn't, and refuses to touch flash if it has. Reflashing with
- * `picotool load` only writes the image's own range, so none of this is erased
- * by a firmware update (settings and saved patterns survive a reflash).
+ * All at the END of flash, far from the application image (~160 KB);
+ * storage_flash.c checks at boot that the image hasn't grown into them and
+ * refuses to write if it has. `picotool load` only writes the image's
+ * range, so settings and saved patterns survive a firmware update.
  *
  *   top of flash (PICO_FLASH_SIZE_BYTES)
- *   -1 sector   Sequencer pattern bank      services/op_mode.c
- *   -4 sectors  Song mode store             services/op_mode.c
- *   -2 sectors  Settings (two alternating slots)   profiles/settings_persist.c
+ *   -1 sector   Sequencer pattern bank           services/op_mode.c
+ *   -4 sectors  Song mode store                  services/op_mode.c
+ *   -2 sectors  Settings (two alternating slots) profiles/settings_persist.c
  *   ...         free
- *   0           application image
- *
- * The pattern/song offsets are exactly what op_mode.c always used (it now takes
- * them from here); the settings region is new, placed directly below them.
- */
+ *   0           application image */
 
 #include "hardware/flash.h"
 

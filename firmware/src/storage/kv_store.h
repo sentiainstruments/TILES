@@ -1,40 +1,28 @@
 #pragma once
 
-/*
- * Two-slot, CRC-protected blob store -- the hardware-free half of storage/.
+/* Two-slot, CRC-protected blob store: the hardware-free half of storage/,
+ * used under the settings table (profiles/settings.h).
  *
- * Real feedback: "yes start with the settings table and flash saving." Every
- * setting used to reset on reboot (shared/protocol/README.md's own
- * "Persistence: None"), and the ones worth tuning by ear -- LED levels, DIN
- * polarity, the melodic-harmonics switch -- were compile-time constants, so
- * each tweak meant edit / build / commit / flash. This is the persistence
- * layer under the settings table (profiles/settings.h).
+ * Guarantee: one caller-defined payload (up to TILES_KV_MAX_PAYLOAD) lives
+ * in one of two flash sectors. A save goes to the OTHER slot and only
+ * counts once complete and verified, so a power cut at any instant leaves
+ * the previous payload intact. Boot picks the newest valid slot.
  *
- * What it guarantees: one caller-defined payload (a few hundred bytes today,
- * up to TILES_KV_MAX_PAYLOAD) is kept in one of two flash sectors; a save goes
- * to the OTHER one and only counts once it is complete and verified, so a
- * power cut or crash at any instant during a save leaves the previous payload
- * intact. Boot picks the newest valid slot. That is the "two alternating slots
- * so a failed/interrupted write never bricks the active profile" that
- * storage/README.md always promised.
- *
- * How a slot is laid out (little-endian, header 20 bytes then the payload):
+ * Slot layout (little-endian, 20-byte header, then the payload):
  *   0  u32 magic            TILES_KV_MAGIC
- *   4  u16 layout_version   this header's own layout (TILES_KV_LAYOUT_VERSION)
- *   6  u16 payload_version  the CALLER's schema version for the payload
- *   8  u32 seq              monotonically increasing; newest valid slot wins
+ *   4  u16 layout_version   this header's layout (TILES_KV_LAYOUT_VERSION)
+ *   6  u16 payload_version  the CALLER's schema version
+ *   8  u32 seq              increasing; newest valid slot wins
  *  12  u16 payload_len
  *  14  u16 reserved (0)
  *  16  u32 crc32            over bytes 0..15 and the payload
- * A save erases the slot, programs every page EXCEPT the first, then the first
- * page (the one holding the magic) LAST. A torn write therefore has either no
- * magic at all or a CRC that doesn't match -- it can never look valid.
+ * A save erases the slot, programs every page except the first, then the
+ * first page (with the magic) LAST. A torn write has no magic or a bad
+ * CRC, so it can never look valid.
  *
- * Pure logic on purpose: flash access goes through tiles_kv_ops_t, so this
- * file is compiled and exercised natively off-target, including a simulated
- * power cut after every single erase/program step (firmware/test/
- * test_kv_store.c). storage/storage_flash.c supplies the real ops.
- */
+ * Flash access goes through tiles_kv_ops_t, so this runs natively in
+ * firmware/test/test_kv_store.c, including a simulated power cut after
+ * every erase/program step. storage/storage_flash.c supplies the real ops. */
 
 #include <stdbool.h>
 #include <stdint.h>
