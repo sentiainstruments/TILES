@@ -49,9 +49,8 @@ void tiles_touch_scan(void) {
             touched = (mask2 & (1u << cfg->touch.electrode)) != 0;
         }
 
-        /* MIDI note on/off/velocity/aftertouch are owned by
-         * services/expression.c, which reads tiles_touch_is_touched()
-         * itself -- this module is touch state + lighting only. */
+        /* Notes are services/expression.c's job; it reads
+         * tiles_touch_is_touched(). */
         s_pad_touched[i] = touched;
         tiles_lighting_set_pad_press(cfg->logical_pad, touched ? 1.0f : 0.0f);
     }

@@ -2,19 +2,15 @@
 
 #include <stddef.h>
 
-/* Descending: index 0 is channel 9 (the top of the shared pool), index 7 is
- * channel 2 (the bottom) -- see midi_channels.h's own header on why "claim
- * the highest free first" is what keeps this simple. */
+/* Descending: index 0 = channel 9 (top of the pool), index 7 = channel 2. */
 static uint8_t s_pool_channel[TILES_MIDI_SHARED_POOL_SIZE];
 static bool s_pool_in_use[TILES_MIDI_SHARED_POOL_SIZE];
 
-/* What the receiver was last told (RPN 6) -- see tiles_midi_channels_declare_
- * zone(). Starts at the full pool: nothing has claimed a Song channel yet at
- * boot, so the first declaration is always the full 8. */
+/* What the receiver was last told (RPN 6); starts at the full pool of 8. */
 static uint8_t s_declared_zone_size;
 
-/* Indexed by (channel - TILES_MIDI_SHARED_POOL_FIRST) -- see this file's own
- * header comment on tiles_midi_channels_note_channel_claimed(). */
+/* Indexed by channel - TILES_MIDI_SHARED_POOL_FIRST; see
+ * tiles_midi_channels_note_channel_claimed(). */
 static bool s_live_note_active[TILES_MIDI_SHARED_POOL_SIZE];
 
 void tiles_midi_channels_init(void) {
@@ -31,14 +27,8 @@ void tiles_midi_channels_init(void) {
 bool tiles_midi_channels_song_claim(uint8_t *out_channel) {
     for (uint8_t i = 0u; i < TILES_MIDI_SONG_MAX_CONCURRENT; i++) {
         uint8_t channel = s_pool_channel[i];
-        /* Skip a channel a live MPE note is using right now -- see this
-         * file's own header comment on tiles_midi_channels_note_channel_
-         * claimed() for why this check has to live here. A skip never
-         * leaves a permanent gap in Song's own held set: whichever channel
-         * this passed over is exactly what the NEXT claim (once nothing is
-         * blocking it) picks up, same self-healing "always take the
-         * highest currently-claimable one" property the rest of this file
-         * already relies on. */
+        /* Skip a channel a live note is using. That channel is simply picked up
+         * by a later claim once free, so no permanent gap forms. */
         if (!s_pool_in_use[i] && !s_live_note_active[channel - TILES_MIDI_SHARED_POOL_FIRST]) {
             s_pool_in_use[i] = true;
             *out_channel = channel;
@@ -77,15 +67,10 @@ uint8_t tiles_midi_channels_song_in_use_count(void) {
 }
 
 uint8_t tiles_midi_channels_lower_zone_size(void) {
-    /* Song claims top-down (index 0 = channel 9 first), so at any instant
-     * its held set is exactly a prefix of indices 0..k-1 for some k -- the
-     * zone is simply how many of the REMAINING (bottom) indices are free,
-     * counted from the bottom up. Scanning from the bottom and stopping at
-     * the first in-use slot is equivalent to (and cheaper than) counting
-     * every free slot, and is robust even if that top-down invariant were
-     * ever violated by a future bug: it reports the zone that is ACTUALLY
-     * safe to scan contiguously from channel 2, not a raw free-count that
-     * could overstate it if a gap existed in the middle. */
+    /* Count free slots from the bottom (channel 2) up, stopping at the first
+     * held one. Song's held set is a prefix from the top, so this equals the
+     * free count; and if that ever broke, this still reports only what is
+     * safe to use contiguously from channel 2. */
     uint8_t size = 0u;
     for (uint8_t i = TILES_MIDI_SHARED_POOL_SIZE; i-- > 0u;) {
         if (s_pool_in_use[i]) {

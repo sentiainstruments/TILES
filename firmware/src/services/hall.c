@@ -16,24 +16,16 @@ static tiles_hall_sample_t s_pad_sample[TILES_NUM_PADS];
 static int16_t s_pad_baseline_z[TILES_NUM_PADS];
 static uint8_t s_scan_cursor;
 
-/* Gated slow drift tracker -- see docs/architecture/defaults-and-
- * safeguards.md's "Pad baseline calibration and drift compensation"
- * section, which specs exactly this design (this is its first
- * implementation, not a deviation from it). A pad's baseline nudges
- * toward its current reading only while ALL of: untouched, no active
- * note (redundant with "untouched" given services/expression.c's tight
- * touch/note coupling -- a note is never active on a pad that reads
- * untouched in this codebase, so checking touched alone already
- * captures both conditions), and the reading has been consistent
- * (within DRIFT_NOISE_THRESHOLD of the previous background read, not a
- * fixed anchor -- letting the comparison point itself slide is what
- * lets genuine slow drift accumulate over many readings without ever
- * looking "unstable" in any single step) for DRIFT_DWELL_MS. Only
- * touches pads read via the background round-robin pass in
- * tiles_hall_scan() below, since touched pads never reach here anyway. */
-#define DRIFT_NOISE_THRESHOLD 8    /* raw Z counts a step can move and still count as "stable" */
-#define DRIFT_DWELL_MS 400u        /* how long a stable streak must hold before nudging starts */
-#define DRIFT_SLEW_DENOMINATOR 128 /* nudge by ~1/128 (under 1%) of the remaining gap per qualifying read, not a snap */
+/* Slow drift tracker (docs/architecture/defaults-and-safeguards.md "Pad
+ * baseline calibration and drift compensation"). A pad's baseline creeps
+ * toward its reading only while it is untouched (which also means no note)
+ * and each read stays within DRIFT_NOISE_THRESHOLD of the PREVIOUS one for
+ * DRIFT_DWELL_MS. The reference slides with every read, so slow drift
+ * accumulates without any single step looking unstable. Only background
+ * (untouched) reads get here. */
+#define DRIFT_NOISE_THRESHOLD 8    /* raw Z counts a step may move and still be "stable" */
+#define DRIFT_DWELL_MS 400u        /* how long a stable streak must last before nudging */
+#define DRIFT_SLEW_DENOMINATOR 128 /* nudge ~1/128 of the gap per qualifying read, never snap */
 
 static int16_t s_pad_drift_last_z[TILES_NUM_PADS];
 static uint32_t s_pad_drift_stable_since_ms[TILES_NUM_PADS];
@@ -58,9 +50,8 @@ static void disable_all_hall_muxes(void) {
     }
 }
 
-/* Disables every Hall mux channel, then enables exactly this pad's
- * channel on its one mux -- the other two muxes stay disabled, so at
- * most one channel across all three is ever open at once. */
+/* Disables every Hall channel, then opens only this pad's channel, so at
+ * most one channel across the three muxes is open. */
 static bool select_pad(const tiles_pad_config_t *cfg) {
     disable_all_hall_muxes();
 
@@ -71,9 +62,8 @@ static bool select_pad(const tiles_pad_config_t *cfg) {
     return tiles_tca9548a_select_channel(&s_hall_muxes[idx], cfg->hall.mux_channel);
 }
 
-/* Selects, reads, and deselects one pad's sensor, recording the result
- * (with a timestamp) into s_pad_sample. Used by both the touched-pad
- * priority pass and the background round-robin. */
+/* Select, read, deselect one pad; stores the timestamped sample. Used by
+ * both the touched-pad pass and the round-robin. */
 static void read_pad(uint8_t pad_index /* 0-23 */) {
     const tiles_pad_config_t *cfg = board_pad_config((uint8_t)(pad_index + 1u));
     if (cfg == NULL || !select_pad(cfg)) {
@@ -103,19 +93,15 @@ static void reset_drift_tracker(uint8_t pad_index) {
     s_pad_drift_stable_since_ms[pad_index] = 0;
 }
 
-/* Called only for a pad just read via the background (untouched)
- * round-robin pass -- see this file's header comment above for the
- * full gating design. Nudges s_pad_baseline_z toward the current
- * reading once it's held consistent long enough; otherwise just tracks
- * the running "last stable read" state for next time. */
+/* For a pad just read by the background pass: nudges the baseline once
+ * the reading has held steady long enough, else updates the streak state. */
 static void update_drift_tracker(uint8_t pad_index) {
     if (!s_pad_init_ok[pad_index] || !s_pad_sample[pad_index].valid) {
         return;
     }
     if (tiles_touch_is_touched((uint8_t)(pad_index + 1u))) {
-        /* Shouldn't happen (background pass only reads untouched pads),
-         * but if it ever did, never drift-track while touched -- reset
-         * rather than let a stale streak resume once released. */
+        /* Can't normally happen (background reads are untouched pads); if it
+         * does, reset so a stale streak doesn't resume after release. */
         reset_drift_tracker(pad_index);
         return;
     }
@@ -134,11 +120,8 @@ static void update_drift_tracker(uint8_t pad_index) {
     if (step < 0) {
         step = (int16_t)(-step);
     }
-    /* The comparison point slides to this reading either way (whether
-     * or not it counted as stable) -- see the header comment on why a
-     * sliding reference, not a fixed one, is what lets real slow drift
-     * accumulate over many readings without ever looking like a single
-     * disqualifying jump. */
+    /* The reference slides to this reading whether or not it was stable (see
+     * above). */
     s_pad_drift_last_z[pad_index] = z;
 
     if (step > DRIFT_NOISE_THRESHOLD) {
@@ -150,10 +133,8 @@ static void update_drift_tracker(uint8_t pad_index) {
         return;
     }
 
-    /* Stable long enough -- nudge, don't snap. Once due, guarantee at
-     * least 1 count of progress even on a tiny remaining gap, so a
-     * long-stable pad with just a few counts left to close doesn't
-     * stall forever at integer-division-truncates-to-zero. */
+    /* Stable long enough: nudge, don't snap, but by at least 1 count so a
+     * small remaining gap doesn't stall at zero from integer division. */
     int32_t gap = (int32_t)z - (int32_t)s_pad_baseline_z[pad_index];
     int32_t nudge = gap / (int32_t)DRIFT_SLEW_DENOMINATOR;
     if (nudge == 0 && gap != 0) {
@@ -189,9 +170,7 @@ bool tiles_hall_init(void) {
             tiles_tmag5273_t dev;
             ok = tiles_tmag5273_init(&dev, i2c0, cfg->hall.sensor_i2c_addr);
 
-            /* Baseline capture: this pad is assumed at rest right now
-             * (see the header comment's caveat about power-on-time
-             * assembly state). */
+            /* Baseline: this pad is assumed at rest now (see the header). */
             if (ok) {
                 tiles_tmag5273_sample_t raw;
                 if (tiles_tmag5273_read_xyz(&dev, &raw)) {
@@ -217,33 +196,27 @@ bool tiles_hall_last_init_ok(uint8_t logical_pad) {
 }
 
 void tiles_hall_scan(void) {
-    /* Priority pass: every currently-touched, successfully-initialized
-     * pad gets read this call -- see the header comment for why a pure
-     * round-robin can't sample fast enough to catch a strike. */
+    /* Priority pass: every touched, initialized pad is read this call. */
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         if (s_pad_init_ok[i] && tiles_touch_is_touched((uint8_t)(i + 1u))) {
             read_pad(i);
         }
     }
 
-    /* Background pass: advance the round-robin by exactly one
-     * untouched, initialized pad, so idle pads still get periodic
-     * coverage without competing with the priority pass above. */
+    /* Background pass: one untouched, initialized pad per call. */
     for (uint8_t attempts = 0; attempts < TILES_NUM_PADS; attempts++) {
         uint8_t pad_index = s_scan_cursor;
         s_scan_cursor = (uint8_t)((s_scan_cursor + 1u) % TILES_NUM_PADS);
 
         if (!s_pad_init_ok[pad_index] || tiles_touch_is_touched((uint8_t)(pad_index + 1u))) {
-            continue; /* already covered by the priority pass, or not initialized */
+            continue; /* covered by the priority pass, or not initialized */
         }
 
         read_pad(pad_index);
         update_drift_tracker(pad_index);
         return;
     }
-    /* No untouched, initialized pad found (either everything is
-     * touched right now, or nothing initialized) -- nothing to do for
-     * the background pass this call. */
+    /* Everything touched or nothing initialized: no background read this call. */
 }
 
 tiles_hall_sample_t tiles_hall_get_sample(uint8_t logical_pad) {
@@ -262,9 +235,8 @@ bool tiles_hall_recapture_baseline(void) {
         read_pad(i);
         if (s_pad_sample[i].valid) {
             s_pad_baseline_z[i] = s_pad_sample[i].z;
-            /* Fresh baseline -- start the drift tracker clean rather
-             * than let stale pre-recapture stability state immediately
-             * nudge away from the value just forced here. */
+            /* Fresh baseline: restart the drift tracker so stale streak state can't
+             * nudge it away immediately. */
             reset_drift_tracker(i);
         } else {
             all_ok = false;

@@ -1,34 +1,20 @@
 #pragma once
 
-/*
- * Hall sensor scanning: sequences through all 24 pads' TMAG5273 sensors
- * via their TCA9548A mux channels (only one channel across all three
- * muxes enabled at a time, enforced structurally here -- every
- * selection disables all three muxes first), reading raw X/Y/Z into a
- * per-pad array.
+/* Hall sensor scanning: reads the 24 TMAG5273s through their TCA9548A
+ * channels (every selection disables all three muxes first, so only one
+ * channel is ever open) into a per-pad X/Y/Z array.
  *
- * Scan priority: a touched pad (per services/touch.h) is scanned every
- * call; untouched pads round-robin, one per call, in the background.
- * A pure round-robin only reaches a given pad roughly every 24 calls
- * (~240ms at the current main-loop rate) -- nowhere near fast enough to
- * see a 30-80ms finger strike happen, which is what
- * services/expression.c needs to derive velocity from. Prioritizing
- * touched pads concentrates sampling where a strike could actually be
- * in progress.
+ * Touched pads (services/touch.h) are read every call; untouched pads
+ * round-robin one per call. Round-robin alone reaches a pad only every ~24
+ * calls (~240 ms), far too slow to see a 30-80 ms strike, which
+ * services/expression.c needs for velocity.
  *
- * V1 scope: raw XYZ + a per-pad rest baseline (captured once at init,
- * manually re-capturable via tiles_hall_recapture_baseline(), and now
- * also continuously self-correcting for slow drift in the background --
- * see update_drift_tracker() in hall.c, implementing the "Pad baseline
- * calibration and drift compensation" design
- * docs/architecture/defaults-and-safeguards.md already specs) and a
- * derived depth magnitude from it. No axis selection (deciding whether Z
- * is really the right axis for every pad, vs X/Y) -- Z is assumed for
- * all pads per that same doc's "V1 sensing scope" (magnet motion is
- * expected to project mostly onto Z given the switch's straight
- * vertical travel and the sensor's flat mount below it). No per-pad
- * calibration curve, no tilt/lateral use of X/Y yet.
- */
+ * Provides raw XYZ, a per-pad rest baseline (captured at init,
+ * recapturable on demand, and slowly drift-corrected in the background per
+ * docs/architecture/defaults-and-safeguards.md "Pad baseline calibration
+ * and drift compensation"), and a depth magnitude from it. Depth uses Z
+ * for every pad (same doc, "V1 sensing scope": straight vertical travel,
+ * flat-mounted sensor). No per-pad calibration curve yet. */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -37,61 +23,40 @@ typedef struct {
     int16_t x;
     int16_t y;
     int16_t z;
-    uint32_t sample_time_ms; /* to_ms_since_boot() at the moment this sample was taken */
-    bool valid;              /* false if the last read for this pad failed, or it was never successfully initialized */
+    uint32_t sample_time_ms; /* to_ms_since_boot() when read */
+    bool valid;              /* false if the last read failed or the pad never initialized */
 } tiles_hall_sample_t;
 
-/* Disables all Hall mux channels, then configures all 24 physical
- * TMAG5273 sensors one at a time (select channel -> identify -> init ->
- * capture a rest-Z baseline -> deselect all). Must run after
- * board_i2c_init(). Returns false if any sensor failed identification
- * or configuration; check tiles_hall_last_init_ok() per pad to see
- * which ones. A pad that failed init is skipped by tiles_hall_scan()
- * rather than blocking the rest -- matches the "a failed subsystem
- * disables itself" principle.
+/* Disables all Hall mux channels, then sets up each sensor in turn
+ * (select, identify, init, capture rest-Z baseline, deselect). Call after
+ * board_i2c_init(). False if any sensor failed; see
+ * tiles_hall_last_init_ok(). Failed pads are skipped by the scan instead of
+ * blocking the rest.
  *
- * The baseline capture assumes every pad is at rest (untouched) at the
- * moment this runs -- true for a normal boot, not necessarily true if
- * something is resting on a pad right at power-on. Two re-baseline
- * mechanisms exist for that: an immediate manual one
- * (tiles_hall_recapture_baseline()) and a continuous, slow, gated
- * background tracker (tiles_hall_scan() below) that nudges each pad's
- * baseline to correct for ordinary thermal/mechanical drift during a
- * session -- see hall.c's update_drift_tracker() for the gating
- * conditions. */
+ * The baseline assumes nothing rests on the pads at power-on. If it did,
+ * tiles_hall_recapture_baseline() fixes it at once; the background drift
+ * tracker corrects slow thermal/mechanical drift over a session. */
 bool tiles_hall_init(void);
 
-/* True if pad (1-24)'s sensor was successfully identified and
- * configured during tiles_hall_init(). */
+/* True if pad (1-24)'s sensor was identified and configured at init. */
 bool tiles_hall_last_init_ok(uint8_t logical_pad);
 
-/* Services one pad per call if nothing is touched; if any pads are
- * touched, services every touched pad this call (in mux order) before
- * returning, then still advances the background round-robin by one
- * untouched pad -- and feeds that one background read into the drift
- * tracker (see hall.c's update_drift_tracker()), so baseline drift
- * correction only ever happens against untouched pads. Call every
- * main-loop iteration. */
+/* Reads every touched pad (in mux order), then advances the background
+ * round-robin by one untouched pad and feeds that read to the drift
+ * tracker (so drift is only ever corrected on untouched pads). Call every
+ * main-loop pass. */
 void tiles_hall_scan(void);
 
-/* Latest raw sample for one pad (1-24). Returns a zeroed, invalid
- * sample if the pad number is out of range. */
+/* Latest raw sample for pad 1-24. Zeroed and invalid if out of range. */
 tiles_hall_sample_t tiles_hall_get_sample(uint8_t logical_pad);
 
-/* Re-captures the rest-Z baseline for every successfully-initialized
- * pad from a fresh read taken right now -- same "this pad is at rest
- * right now" assumption tiles_hall_init() makes at boot, just
- * re-triggerable on demand instead of only once at power-on. Meant for
- * re-baselining after the boot-time capture is known stale (e.g. the
- * magnets weren't in their final position yet at boot) -- see
- * diagnostics/calibration.h for the serial-driven flow that calls this.
- * A pad whose sensor never initialized is skipped, not retried. Returns
- * false if any initialized pad's read failed (that pad's baseline is
- * left unchanged, not zeroed). */
+/* Recaptures every initialized pad's rest-Z baseline from a fresh read,
+ * like init does (same "at rest now" assumption). Used by the serial
+ * calibration flow (diagnostics/calibration.h). Uninitialized pads are
+ * skipped. False if any read failed; that pad keeps its old baseline. */
 bool tiles_hall_recapture_baseline(void);
 
-/* |current Z - rest-baseline Z| for one pad -- an uncalibrated
- * "how far from rest" magnitude, always >= 0 regardless of the sensor's
- * actual (currently unknown) polarity. 0 if the pad is out of range,
- * was never initialized, or has no valid sample yet. */
+/* |Z - rest Z| for one pad: an uncalibrated distance from rest, >= 0
+ * whatever the sensor's polarity. 0 if out of range, uninitialized or
+ * not yet sampled. */
 uint16_t tiles_hall_get_depth(uint8_t logical_pad);

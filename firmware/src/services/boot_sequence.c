@@ -14,22 +14,9 @@
 
 #define BOOT_FRAME_INTERVAL_MS 30u
 
-/* Real feedback, tracking down why a crash-recovery reboot felt so
- * disruptive: "why would it reboot if power is tabl[e]... it might
- * loose conection but not reboot." This file's own header claims
- * "TinyUSB's own background IRQ task keeps USB alive regardless of
- * what the main loop is doing" -- the EXACT same assumption main.c's
- * own tud_task() comment already found and corrected earlier this
- * session (PICO_STDIO_USB_ENABLE_IRQ_BACKGROUND_TASK defaults to 0
- * once tinyusb_device is linked directly, which this project does).
- * That means every plain sleep_ms(BOOT_FRAME_INTERVAL_MS) call this
- * file used to make (run_phase1_rain()/_phase2_fade()/_phase3_magenta_
- * pulse(), ~4.7s combined) left USB completely unserviced for that
- * entire span, on EVERY boot -- including a fresh power-on, exactly
- * when the host is actively trying to enumerate the device and USB
- * needs the MOST attention, not the least. Same 30ms pacing as before,
- * just pumping tud_task() throughout the wait instead of sleeping
- * through it blind. */
+/* Frame pacing that keeps USB alive: tud_task() runs throughout the wait
+ * (nothing services USB in the background in this build; a plain sleep
+ * here once left enumeration unserviced for the whole animation). */
 static void boot_frame_delay(void) {
     absolute_time_t deadline = make_timeout_time_ms(BOOT_FRAME_INTERVAL_MS);
     do {
@@ -47,11 +34,7 @@ static float clamp01(float v) {
     return v;
 }
 
-/* Ease-in/ease-out -- used everywhere below instead of a linear ramp.
- * The original version's edges were linear and fairly narrow relative
- * to how fast they crossed the grid, which read as "jumpy" rather than
- * flowing; smoothstep plus wider edges/longer durations (below) is the
- * fix. */
+/* Ease in/out, used instead of linear ramps everywhere below. */
 static float smoothstep01(float t) {
     t = clamp01(t);
     return t * t * (3.0f - 2.0f * t);
@@ -59,29 +42,23 @@ static float smoothstep01(float t) {
 
 /* ---- Phase 1: white "rain" flooding down from the function buttons ---- */
 
-/* Slower and with a much wider soft edge than the original version --
- * both were the likely source of "feels jumpy". Buttons (row 0) are the
- * source and light first; the flood works its way down through pad rows
- * 1-4, underglow off throughout (nothing to flood down into yet). */
+/* Buttons (row 0) light first as the source; the flood moves down through
+ * pad rows 1-4 with a wide soft edge. Underglow off. */
 #define RAIN_DURATION_MS 1600u
-#define RAIN_ORIGIN_ROW 0.0f /* the button row -- where the flood starts */
-#define RAIN_TARGET_ROW 4.0f /* the bottom pad row -- where it ends */
+#define RAIN_ORIGIN_ROW 0.0f /* the button row, where the flood starts */
+#define RAIN_TARGET_ROW 4.0f /* the bottom pad row, where it ends */
 #define RAIN_EDGE_WIDTH 1.6f /* wide, soft leading edge */
 #define RAIN_STEADY_LEVEL 0.85f
-/* Small per-column timing offset so the flood doesn't look like a single
- * robotic row-by-row wipe -- deterministic (not real randomness, same
- * "looks organic without an RNG" trick standby.c's animations use), so
- * every boot looks the same rather than needing a seed this early. */
+/* Small deterministic per-column offset so the flood isn't a mechanical
+ * row wipe (no RNG this early; every boot looks the same). */
 #define RAIN_COL_JITTER_MS 200.0f
 
 static float rain_col_jitter_ms(uint8_t col) {
     return sinf((float)col * 2.3f) * RAIN_COL_JITTER_MS;
 }
 
-/* 0 before the flood front reaches (row, col); ramps up to
- * RAIN_STEADY_LEVEL over RAIN_EDGE_WIDTH as the front passes, and stays
- * there behind it -- a level rising/flooding downward, not a thin band
- * that leaves darkness behind it. */
+/* 0 until the front reaches (row, col), then ramps to RAIN_STEADY_LEVEL
+ * across RAIN_EDGE_WIDTH and stays there: a rising flood, not a band. */
 static float rain_level(uint8_t row, uint8_t col, uint32_t elapsed_ms) {
     float local_elapsed = (float)elapsed_ms - rain_col_jitter_ms(col);
     if (local_elapsed < 0.0f) {
@@ -103,14 +80,9 @@ static float fade_level(uint32_t elapsed_ms) {
     return RAIN_STEADY_LEVEL * (1.0f - t);
 }
 
-/* ---- Phase 3: single, slow, elegant Sentia Instruments Magenta pulse ---- */
+/* ---- Phase 3: one slow Sentia magenta pulse ---- */
 
-/* Pads + underglow only -- function-button LEDs are plain monochrome
- * PWM, not addressable RGB, so they can't show magenta; including them
- * (even just pulsing their own brightness) read as visually wrong once
- * actually seen on hardware. Slower and smoothstep-eased on both the
- * rise and fall (not linear) for the "elegant" feel asked for, instead
- * of the original quick, mechanical-feeling ramp. */
+/* Pads + underglow only (buttons are monochrome). Smoothstep rise and fall. */
 #define PULSE_RISE_MS 700u
 #define PULSE_HOLD_MS 500u
 #define PULSE_FALL_MS 1200u
@@ -137,11 +109,8 @@ static float pulse_envelope(uint32_t elapsed_ms) {
 
 typedef float (*white_level_fn_t)(uint8_t row, uint8_t col, uint32_t elapsed_ms);
 
-/* Function buttons (row 0, monochrome PWM) ARE part of the rain and fade
- * -- they're the flood's source row, so they light first and fade last
- * along with everything else. They're only excluded from phase 3's
- * magenta pulse, which is RGB-only and gets its own explicit button
- * black-out right before it runs (see run_phase3_magenta_pulse()). */
+/* Buttons (row 0) take part in the rain and fade as the flood's source;
+ * they sit out only the magenta pulse. */
 static void write_frame_white(white_level_fn_t level_fn, uint32_t elapsed_ms) {
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         float button_v = level_fn(0u, col, elapsed_ms);
@@ -154,9 +123,7 @@ static void write_frame_white(white_level_fn_t level_fn, uint32_t elapsed_ms) {
         }
     }
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
-        /* Underglow off through both phase 1 and phase 2 -- "without the
-         * underglow" per the requested rain/flood, and there is nothing
-         * meaningful for it to fade from if it was never lit. */
+        /* Underglow stays off in phases 1-2. */
         tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
     }
 }
@@ -204,10 +171,8 @@ static void run_phase2_fade(void) {
 }
 
 static void run_phase3_magenta_pulse(void) {
-    /* Buttons are plain monochrome PWM, not addressable RGB, so they
-     * can't show magenta -- explicitly black them out here (phase 2's
-     * fade should already have brought them to 0, this just guarantees
-     * it) and never touch them again for the rest of this phase. */
+    /* Buttons can't show magenta: force them dark (the fade should already
+     * have) and leave them alone for this phase. */
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
     }
@@ -221,9 +186,7 @@ static void run_phase3_magenta_pulse(void) {
         }
         float env = pulse_envelope(elapsed);
 
-        /* Buttons deliberately untouched here -- they're already at 0
-         * from phase 2's fade, and stay there for the whole pulse. See
-         * the file header on why they don't participate. */
+        /* Buttons stay dark for the whole pulse. */
         for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
             for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
                 tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), MAGENTA_R * env,
@@ -252,9 +215,6 @@ bool tiles_boot_sequence_run(void) {
     tiles_lighting_set_standby_active(false);
     tiles_buttons_set_standby_active(false);
 
-    /* Use the couple of seconds this just took: re-capture the rest
-     * baseline now that power/thermals have had a moment to settle,
-     * instead of only ever trusting tiles_hall_init()'s very-first-
-     * instant capture. See the file header. */
+    /* Recapture the rest baseline now that things have settled (see header). */
     return tiles_hall_recapture_baseline();
 }

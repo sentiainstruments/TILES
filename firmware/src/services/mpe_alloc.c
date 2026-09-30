@@ -9,8 +9,8 @@ int tiles_mpe_alloc_pick_free(const tiles_mpe_slot_t *slots, const bool *eligibl
         if (!eligible[i] || slots[i].in_use) {
             continue;
         }
-        /* release_seq != 0: a never-used slot has no "last note" -- its
-         * zero-initialized note field must not match note 0. */
+        /* A never-used slot has no last note; its zeroed note field must not match
+         * note 0. */
         if (slots[i].release_seq != 0u && slots[i].note == note &&
             (same_note < 0 || slots[i].release_seq > slots[same_note].release_seq)) {
             same_note = (int)i;

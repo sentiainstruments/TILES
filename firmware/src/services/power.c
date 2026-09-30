@@ -8,52 +8,34 @@
 
 #include <stddef.h>
 
-/* Debounce window for the combined (GP22, tud_mounted()) raw state.
- * GP22 is a push-pull logic output from the TPS2121, not a mechanical
- * contact -- it won't bounce the way a button does -- but the mux
- * itself needs some settling time during an actual source transition
- * (unplug/replug), during which a reading could be transiently
- * ambiguous. 50ms is a safety margin against acting on that transient,
- * not a measured settling time. */
+/* Debounce for the combined (GP22, mounted) state. GP22 is a push-pull
+ * output and doesn't bounce, but the mux can read ambiguously mid-switch;
+ * 50 ms is a margin, not a measured settling time. */
 #define TILES_POWER_DEBOUNCE_MS 50u
 
 static tiles_power_mode_t raw_mode_from_pins(void) {
     bool external_selected = !gpio_get(TILES_GPIO_POWER_SOURCE_STATUS);
     bool usb_mounted = tud_mounted();
 
-    /* Exactly the truth table in
-     * docs/hardware/SENTIA_TILES_FIRMWARE_HANDOFF.md "Power/connection
-     * states" -- all four (GP22, mounted) combinations are meaningful,
-     * none left as "shouldn't happen". */
+    /* The truth table from SENTIA_TILES_FIRMWARE_HANDOFF.md "Power/connection
+     * states": all four combinations are meaningful. */
     if (external_selected) {
         return usb_mounted ? TILES_POWER_MODE_USB_AND_EXTERNAL : TILES_POWER_MODE_EXTERNAL_ONLY;
     }
     return usb_mounted ? TILES_POWER_MODE_USB_ONLY : TILES_POWER_MODE_FAULT;
 }
 
-/* Budgets/ceilings below are transcribed from the same handoff doc's
- * named-profile table and docs/architecture/defaults-and-safeguards.md
- * "LED color and brightness" -- not invented here. USB-only mirrors
- * USB_DEMO_SAFE (500mA, max 5 haptic voices, 35-40% LED ceiling);
- * external mirrors FULL_DEMO_EXTERNAL (2.5A 5V target, max 12 voices,
- * originally 70-80% LED ceiling, CV/gate permitted). USB_DEMO_VALIDATED_1P5A
- * is a manual-only override with no automatic trigger and isn't derived
- * here -- a future profiles/ module owns that choice, not this one.
+/* Budgets from the handoff's profile table and
+ * docs/architecture/defaults-and-safeguards.md. USB-only mirrors
+ * USB_DEMO_SAFE (500 mA); external mirrors FULL_DEMO_EXTERNAL (2.5 A,
+ * CV/gate allowed). USB_DEMO_VALIDATED_1P5A is a manual override, not
+ * derived here.
  *
- * External's ceiling raised 75 -> 90, real feedback: "calculate the safe
- * range again to make sure, acountign for ics lights and haptics and
- * sensors." Fuller accounting (see services/lighting.c's own "Pad
- * brightness ceiling" section for the full breakdown): ~448mA LED worst
- * case + ~220mA estimated MCU/sensor/IC/button-LED overhead + a
- * pessimistic 300-400mA haptics worst case (motor current itself is
- * genuinely unmeasured, both hardware docs flag this) still leaves
- * roughly 1.8A of margin against the 2500mA budget here -- real headroom
- * to raise, unlike USB-only below. USB-only's 37% is UNCHANGED by that
- * same accounting: 500mA total minus that same ~220mA overhead minus a
- * similarly pessimistic haptics worst case leaves little to no confirmed
- * margin beyond the existing ceiling, so it wasn't raised. Haptic motor
- * current is the actual highest-priority unknown to measure here, not
- * LED brightness on either profile. */
+ * External LED ceiling is 90%: worst case ~448 mA LEDs + ~220 mA MCU/ICs +
+ * a pessimistic 300-400 mA haptics still leaves ~1.8 A of margin (full
+ * breakdown in services/lighting.c). USB-only stays at 37%: the same
+ * accounting leaves no confirmed margin in 500 mA. Motor current is the
+ * biggest unmeasured number. */
 static tiles_power_state_t state_for_mode(tiles_power_mode_t mode) {
     tiles_power_state_t s = {0};
     s.mode = mode;
@@ -78,22 +60,9 @@ static tiles_power_state_t state_for_mode(tiles_power_mode_t mode) {
     case TILES_POWER_MODE_USB_ONLY:
         s.usb_operating_budget_ma = 500u;
         s.main_5v_budget_ma = 500u;
-        /* Lowered 5 -> 3, real feedback: "we might have gotten to close
-         * to max draw in usb mode," then raised back 3 -> 4, real
-         * feedback: "do 4 voices not 3." Motor current is genuinely
-         * unmeasured (see services/lighting.c's own fuller budget
-         * breakdown), but a rough typical-small-ERM-motor estimate
-         * (~80-100mA running each) puts 5 simultaneous voices alone at
-         * 400-500mA -- potentially the ENTIRE USB budget before the
-         * ~220mA of estimated MCU/sensor/IC/button-LED overhead or any
-         * LED brightness is even counted. 4 voices at that same estimate
-         * (~320-400mA) still leaves some margin for that overhead
-         * without cutting as close to the edge as 5 did. Still a
-         * conservative estimate pending real motor-current measurement,
-         * not a precise number -- the hardware handoff doc's own "Five
-         * voices is an allocation ceiling; a current governor must still
-         * reduce duty or concurrent starts" already anticipated needing
-         * exactly this kind of further tightening. */
+        /* 4 voices: at an estimated 80-100 mA per small ERM motor, 5 voices alone
+         * could take the whole 500 mA budget. Conservative until motor current is
+         * measured (the handoff expects a current governor on top of this). */
         s.max_haptic_voices = 4u;
         s.led_brightness_ceiling_percent = 37u;
         s.cv_gate_permitted = false;
@@ -101,13 +70,9 @@ static tiles_power_state_t state_for_mode(tiles_power_mode_t mode) {
 
     case TILES_POWER_MODE_FAULT:
     default:
-        /* "Fail outputs off and report a power fault" -- 0 haptic
-         * voices and no CV/gate already achieve "outputs off" for any
-         * future consumer that just respects these fields. LED ceiling
-         * stays at the USB-safe value rather than going dark: lighting
-         * isn't a safety concern and a fault here is most likely a
-         * brief boot/enumeration transient, not a reason to blank the
-         * board. */
+        /* "Fail outputs off and report a power fault": 0 haptic voices and no
+         * CV/gate. LEDs stay at the USB-safe ceiling rather than going dark; a
+         * fault is most likely a brief enumeration transient. */
         s.usb_operating_budget_ma = 500u;
         s.main_5v_budget_ma = 500u;
         s.max_haptic_voices = 0u;
@@ -129,10 +94,8 @@ static tiles_power_change_callback_t s_callbacks[TILES_POWER_MAX_CALLBACKS];
 static size_t s_callback_count;
 
 void tiles_power_init(void) {
-    /* Seeds from a single immediate read rather than starting in some
-     * default mode and waiting out the debounce window -- boot-time
-     * state should be correct from the first frame, since lighting
-     * reads it during its own init sweep. */
+    /* Seed from one immediate read, so the state is right from the first
+     * frame (lighting reads it during init). */
     s_state = state_for_mode(raw_mode_from_pins());
     s_pending_valid = false;
     s_callback_count = 0;

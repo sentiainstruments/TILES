@@ -1,29 +1,16 @@
 #pragma once
 
-/*
- * Shared tiny pixel font -- a fixed 4x4 grid per glyph (one pixel per
- * pad row 1-4, 4 columns wide), monochrome (a glyph is just which
- * pixels are lit; callers apply their own color/brightness). Used by
- * anything that draws text or a single big letter across the pad grid:
- * services/standby.c's scrolling marquee animation, and
- * services/octave_control.c's transpose-mode key-letter display.
+/* Tiny pixel font for the pad grid: 4x4 per glyph (one pixel per pad row,
+ * 4 columns), monochrome (callers pick the color). Used by the standby
+ * marquee (services/standby.c) and the transpose key letter
+ * (services/octave_control.c).
  *
- * Format: each glyph is an array of 4 column bytes, left to right;
- * bit0 = row 1 (top) ... bit3 = row 4 (bottom). Every glyph is exactly
- * 4 columns wide -- true monospacing, letters that don't need the full
- * width (I, T) just leave their unused columns dark rather than the
- * previous version's per-glyph variable widths + explicit gap columns.
+ * Format: 4 column bytes per glyph, left to right; bit0 = row 1 (top) ...
+ * bit3 = row 4. Monospaced: narrow letters (I, T) leave columns dark.
  *
- * Styled after the reference "FOUR BIT" pixel font (bold, blocky,
- * geometric strokes) -- hand-drawn to fit this board's actual 4x4
- * constraint rather than an off-the-shelf font shrunk down, since no
- * existing font is designed for exactly 4 rows. Reworked once already:
- * the original version used variable-width 3-column glyphs with a
- * separate gap column between letters. Only the letters actually needed
- * exist: A-G (the seven natural note names, for the transpose key
- * display) plus I/L/S/T (for the "TILES -" marquee message), a dash,
- * and a blank space.
- */
+ * Hand-drawn in the style of the "FOUR BIT" pixel font, since no existing
+ * font is designed for 4 rows. Only what's used exists: A-G (note names),
+ * I/L/S/T (the "TILES -" marquee), a dash and a space. */
 
 #include <stdint.h>
 
@@ -46,8 +33,6 @@ extern const tiles_glyph_t TILES_GLYPH_T;
 extern const tiles_glyph_t TILES_GLYPH_DASH;
 extern const tiles_glyph_t TILES_GLYPH_SPACE;
 
-/* Looks up one of the seven natural-note letter glyphs above (uppercase
- * 'A'-'G' only) -- convenience for a caller keying off a runtime note
- * letter (services/octave_control.c's transpose display) instead of a
- * fixed message. Returns NULL for anything else. */
+/* Glyph for a natural note letter ('A'-'G', uppercase), for runtime
+ * lookups (transpose display). NULL for anything else. */
 const tiles_glyph_t *tiles_pixel_font_glyph_for_note_letter(char letter);

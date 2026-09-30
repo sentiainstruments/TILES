@@ -3,16 +3,9 @@
 #include "board_layout.h"
 #include "buttons.h"
 
-/* Real feedback, after the first hardware pass: "dismiss is a single
- * shift click not a hold" -- corrects this module's original 2-second-
- * hold spec once it had actually been tried. A click fires on release,
- * requiring circle to have been the ONLY function button down for the
- * ENTIRE press, not just at the instant of release -- s_circle_was_
- * pressed_alone tracks that across the whole press so a hand lifting
- * off a multi-button combo (the debug-mode combo, the expression-mute
- * combo -- both also involve circle) one finger at a time, circle
- * last, can never be mistaken for this click just because circle
- * happened to be the only one still down at the exact release instant. */
+/* Dismiss is a click (fires on release) of circle ALONE for the whole
+ * press: s_circle_was_pressed_alone tracks that across the press, so a
+ * combo released circle-last doesn't count. */
 
 static bool s_active = false;
 static bool s_circle_pressed = false;
@@ -28,10 +21,7 @@ void tiles_crash_indicator_scan(void) {
         return;
     }
 
-    /* "on its own" -- every other function button must be up, so this
-     * can never fire mid-way through the debug-mode combo (diamond+
-     * square+circle) or the expression-mute combo (circle+square); see
-     * this module's header for why that matters. */
+    /* Any other function button down voids the click (see the header). */
     bool circle = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
     bool others_held = tiles_button_is_pressed(TILES_MINUS_BUTTON_ID) ||
                         tiles_button_is_pressed(TILES_PLUS_BUTTON_ID) ||

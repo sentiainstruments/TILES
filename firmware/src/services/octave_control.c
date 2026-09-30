@@ -16,22 +16,15 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define BUTTON_ID_MINUS 1u /* SW1, left capsule */
-#define BUTTON_ID_PLUS 2u  /* SW2, right capsule */
+#define BUTTON_ID_MINUS 1u /* SW1, "-" */
+#define BUTTON_ID_PLUS 2u  /* SW2, "+" */
 
 #define OCTAVE_CONTROL_PI 3.14159265358979323846f
 
-/* One shared building block, "a pulse": a raised-cosine bump rising
- * smoothly from the dim rest level up to full and back down -- no hard
- * edge anywhere. Every magnitude is built from repeats of this exact
- * same shape so the three animations read as one coherent family (just
- * "how many pulses, then how long a rest") instead of three unrelated
- * effects -- direct fix for real feedback that magnitude 2 and 3 didn't
- * pulse evenly with each other. Both periods below were slowed from an
- * initial pass that read as "too fast" across the board on real
- * hardware -- magnitude 1 especially, since it never rests between
- * pulses and so needs to be noticeably slower on its own to still read
- * as a calm single breath rather than a continuous flutter. */
+/* One building block, "a pulse": a raised-cosine bump from the dim rest
+ * level to full and back, no hard edges. Every magnitude repeats this
+ * shape, so the three read as one family. Magnitude 1 never rests, so it
+ * runs at its own slower period to read as a calm breath. */
 #define OCTAVE_PULSE1_PERIOD_MS 1400.0f
 #define OCTAVE_PULSE_UNIT_MS 650.0f
 #define OCTAVE_PULSE_REST_MS 650u
@@ -43,25 +36,14 @@ static float pulse_unit_level(float phase01) {
     return OCTAVE_PULSE_REST_LEVEL + (OCTAVE_PULSE_PEAK_LEVEL - OCTAVE_PULSE_REST_LEVEL) * raw;
 }
 
-/* Magnitude 1: the same pulse shape repeating back to back forever --
- * "pulses even," no burst/rest structure at all, just a steady regular
- * breathing -- but at its own, slower period (OCTAVE_PULSE1_PERIOD_MS)
- * rather than the burst unit magnitude 2/3 use, since a pulse that never
- * pauses reads as much faster than the same period would in a burst.
- * Replaces the earlier flat-solid magnitude-1 look per real feedback
- * that one click should read as pulsing too, not just lit. */
+/* Magnitude 1: the pulse repeating back to back at its own slower period. */
 static float magnitude1_level(uint32_t now_ms) {
     float phase = fmodf((float)now_ms / OCTAVE_PULSE1_PERIOD_MS, 1.0f);
     return pulse_unit_level(phase);
 }
 
-/* Magnitude 2 and 3: `magnitude` unit pulses (OCTAVE_PULSE_UNIT_MS each)
- * back to back, then a dim (not fully dark) rest, then the whole burst
- * repeats. Magnitude 3 is literally magnitude 2's shape plus one more
- * pulse appended before the same rest -- not a separately-tuned
- * animation -- per real feedback that the two should be "the same, just
- * with an additional pulse followed by a rest in dim." Unmeasured --
- * a starting guess at pacing. */
+/* Magnitudes 2 and 3: `magnitude` pulses back to back, then a dim rest,
+ * repeat (3 is 2 plus one more pulse). Pacing is a starting guess. */
 static float magnitude_burst_level(uint8_t magnitude, uint32_t now_ms) {
     uint32_t burst_ms = (uint32_t)((float)magnitude * OCTAVE_PULSE_UNIT_MS);
     uint32_t cycle_ms = burst_ms + OCTAVE_PULSE_REST_MS;
@@ -85,14 +67,11 @@ static float level_for_magnitude(uint8_t magnitude, uint32_t now_ms) {
     }
 }
 
-/* Both held together for this long counts as "click them together" --
- * short enough to still feel instantaneous, long enough to reliably
- * distinguish a deliberate combo from two independent presses that
- * happen to briefly overlap. Unmeasured -- a starting guess. */
+/* Both held this long = "clicked together": feels instant, but separates a
+ * deliberate combo from two overlapping presses. Starting guess. */
 #define TRANSPOSE_COMBO_HOLD_MS 120u
 
-/* Natural-note letter + whether that semitone is the sharp of it, one
- * entry per tiles_note_map_get_key_offset() value 0-11 (0 = C). */
+/* Note letter and sharp flag per key offset 0-11 (0 = C). */
 typedef struct {
     char letter;
     bool sharp;
@@ -103,26 +82,17 @@ static const tiles_key_info_t s_key_table[12] = {
     {'F', true},  {'G', false}, {'G', true},  {'A', false}, {'A', true}, {'B', false},
 };
 
-/* Sharp-key flash: show the letter first, then alternate with the
- * cross. Both re-anchored to now_ms whenever transpose mode is entered
- * or the key changes, so a fresh letter is never caught mid-cross.
- * Unmeasured -- a starting guess at pacing. */
+/* Sharp keys: letter first, then alternate with the cross. Re-anchored on
+ * entering the mode or changing key. Starting guess. */
 #define TRANSPOSE_FLASH_LETTER_MS 900u
 #define TRANSPOSE_FLASH_CROSS_MS 500u
 #define TRANSPOSE_LETTER_LEVEL 0.9f
-/* Warm amber rather than reusing white for the cross -- a deliberate,
- * if unrequested, color distinction so the sharp flash reads
- * unambiguously as a different signal from the letter itself rather
- * than as a glitch. */
+/* Amber cross so the sharp flash reads as a separate signal, not a glitch. */
 #define TRANSPOSE_CROSS_R 1.0f
 #define TRANSPOSE_CROSS_G 0.55f
 #define TRANSPOSE_CROSS_B 0.0f
-/* The cross: a proper plus sign contained in a 4x4 box (matching the
- * pixel font's own 4x4 glyph size), not a bar spanning the full 6-wide
- * grid -- real feedback that the horizontal arm was too long relative
- * to the vertical one. Vertical arm: the two middle columns (3, 4),
- * full 4-row height. Horizontal arm: row 2, but only cols 2-5 (4 wide,
- * centered) -- not the full 1-6 width. */
+/* The cross is a plus inside a 4x4 box (the font's glyph size): vertical
+ * arm = columns 3-4, all 4 rows; horizontal arm = row 2, columns 2-5. */
 #define TRANSPOSE_CROSS_ROW 2u
 #define TRANSPOSE_CROSS_COL_A 3u
 #define TRANSPOSE_CROSS_COL_B 4u
@@ -131,11 +101,9 @@ static const tiles_key_info_t s_key_table[12] = {
 
 static bool s_prev_minus_pressed;
 static bool s_prev_plus_pressed;
-/* True once the CURRENT press of that button has been part of both_held
- * at any point -- suppresses that press's eventual release from firing
- * a solo octave/key step. Reset on that button's own fresh press-edge.
- * See tiles_octave_control_scan()'s own comment on why the solo step
- * fires on release, not press, and why that's what this exists for. */
+/* Set once the CURRENT press of that button has been part of both_held;
+ * stops its release from also firing a solo step. Cleared on its next
+ * press edge. */
 static bool s_minus_became_combo;
 static bool s_plus_became_combo;
 
@@ -165,17 +133,12 @@ bool tiles_octave_control_is_transpose_active(void) {
 static void transpose_toggle(uint32_t now_ms) {
     s_transpose_mode = !s_transpose_mode;
     s_transpose_flash_anchor_ms = now_ms;
-    /* Claims/releases the pad grid exactly like standby.c's own
-     * animations and game_mode.c do -- see buttons/lighting's standby-
-     * active doc comments for why this also immediately repaints
-     * correctly on release. */
+    /* Claims/releases the pad grid the same way standby and game mode do. */
     tiles_lighting_set_standby_active(s_transpose_mode);
 }
 
-/* Centers a 4-row/N-col glyph in the 6-column grid and lights it via
- * the standby pad-RGB path; row 0 (buttons) is untouched here since
- * SW1/SW2's LEDs are driven separately below and the other 4 buttons
- * aren't part of this display. */
+/* Centers a 4-row glyph in the 6-column grid via the standby pad-RGB path.
+ * Buttons aren't drawn here. */
 static void render_transpose_letter(const tiles_glyph_t *glyph) {
     uint8_t grid_width = (uint8_t)(TILES_GRID_MAX_COL - TILES_GRID_MIN_COL + 1u);
     uint8_t col_start = (uint8_t)(TILES_GRID_MIN_COL + (grid_width - glyph->width) / 2u);
@@ -238,24 +201,10 @@ void tiles_octave_control_scan(void) {
 
     if (tiles_game_mode_is_active() || tiles_standby_owns_octave_buttons() ||
         tiles_expression_control_owns_pad_grid() || tiles_op_mode_owns_octave_buttons()) {
-        /* A game has claimed SW1/SW2 as its own controls -- see the
-         * "Deferring to game mode" section of the file header -- or a
-         * manually-entered screensaver has repurposed them as
-         * animation-scroll controls (see standby.h's
-         * tiles_standby_owns_octave_buttons()) -- or the expression
-         * sub-menu is showing (square held alone, adjusting haptic
-         * intensity via SW1/SW2 directly, or just passively visible with
-         * SW1/SW2 otherwise idle -- see expression_control.h's
-         * tiles_expression_control_owns_pad_grid()) -- or op_mode.h's
-         * mode-select menu/sequencer/guitar mode owns "-"/"+"
-         * (tiles_op_mode_owns_octave_buttons(), broader than that file's
-         * own tiles_op_mode_owns_pad_grid() specifically so guitar mode
-         * can take over just these two buttons without also suppressing
-         * real note playing the way full grid ownership would). Same fix
-         * either way: keep edge-tracking state current and do nothing
-         * else, so a scroll/game/intensity/mode-select/fret-shift press
-         * -- or a press meant only to dismiss the sub-menu -- doesn't
-         * *also* silently step the octave or transpose key underneath. */
+        /* Another module owns "-"/"+" (game mode, the manual screensaver's
+         * scrolling, the expression menu, or op_mode's menus/sequencer/bass guitar
+         * fret shift; see the header). Keep edge tracking current and do nothing
+         * else, so those presses don't also step the octave or key. */
         s_prev_minus_pressed = minus_pressed;
         s_prev_plus_pressed = plus_pressed;
         s_combo_was_held = minus_pressed && plus_pressed;
@@ -265,23 +214,10 @@ void tiles_octave_control_scan(void) {
     bool both_held = minus_pressed && plus_pressed;
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
-    /* Real feedback: "transpose menu enter and exit accidentally
-     * triggers octave up or down on enter or exit because button
-     * [presses land] before entering menu because simultaneous press is
-     * impossible." True: a human can never press SW1/SW2 in exactly the
-     * same tick, so the first of the two to register used to read as a
-     * genuine solo press (both_held still false at that instant) and
-     * fired a real octave/key step an instant before the second button
-     * joined and the combo took over -- both entering AND exiting
-     * transpose mode this way. Fixed by moving the solo step from the
-     * PRESS edge to the RELEASE edge, gated on whether this press ever
-     * became part of both_held at any point during its hold
-     * (s_minus_became_combo/s_plus_became_combo, reset on that button's
-     * own fresh press) -- so a press that's about to become half of a
-     * combo never fires its solo action first, no matter which button's
-     * press happened to land a few ms earlier. Same "click vs. long
-     * action" shape services/expression_control.c's own square-button
-     * handling already uses. */
+    /* Solo steps fire on RELEASE, and only if this press never became part of
+     * both_held. A human never presses both in the same tick, so firing on
+     * press made the first button of the combo step the octave on the way in
+     * and out of transpose mode. */
     if (minus_pressed && !s_prev_minus_pressed) {
         s_minus_became_combo = false;
     }
@@ -323,8 +259,7 @@ void tiles_octave_control_scan(void) {
     s_prev_plus_pressed = plus_pressed;
 
     if (s_transpose_mode) {
-        /* Both LEDs pulse together -- same phase, since both come from
-         * the same now_ms with no per-button offset. */
+        /* Same now_ms, so both LEDs pulse in phase. */
         float pulse = magnitude1_level(now_ms);
         tiles_buttons_set_override_led(BUTTON_ID_MINUS, pulse);
         tiles_buttons_set_override_led(BUTTON_ID_PLUS, pulse);

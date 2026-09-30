@@ -2,10 +2,9 @@
 
 #include <stddef.h>
 
-/* bit0 = row1 (top) ... bit3 = row4 (bottom), one byte per column --
- * see the header for the format. Every glyph below is exactly 4
- * columns wide except SPACE. Drawn out as a 4x4 grid in each comment
- * ('#' = lit) so the bit values can be checked by eye. */
+/* bit0 = row 1 (top) ... bit3 = row 4, one byte per column. Every glyph is
+ * 4 columns except SPACE. Each is drawn as a 4x4 grid ('#' = lit) so the
+ * values can be checked by eye. */
 
 /* .##.    #..#    ####    #..# */
 static const uint8_t COLS_A[] = {14u, 5u, 5u, 14u};
