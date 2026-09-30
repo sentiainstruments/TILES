@@ -9,13 +9,13 @@
  * round returns to the game menu.
  *
  * Menu: pad 1 (green) Snake, pad 2 (orange) Tile Breaker, pad 3 (cyan)
- * Tetris, pad 4 (blue) Paddle, pad 5 (white) Simon Says; touch one to start.
+ * Tile Drop, pad 4 (blue) Paddle, pad 5 (white) Echo; touch one to start.
  *   Snake: "-" left, "+" right, triangle up, diamond down (absolute
  *     directions; reversing into the neck is ignored). Wraps at the edges,
  *     dies only on self-collision.
  *   Tile Breaker: "-"/"+" move the 3-pad paddle. Same physics as the
  *     standby demo, player-controlled.
- *   Tetris: "-"/"+" move, triangle rotates (2 orientations per piece),
+ *   Tile Drop: "-"/"+" move, triangle rotates (2 orientations per piece),
  *     diamond hard-drops. A small custom piece set for a 4-row board: dot,
  *     domino, straight tromino, corner tromino, 2x2 square. Line clears
  *     flash the underglow white; topping out ends the round.
@@ -25,11 +25,11 @@
  *     re-serves. The score glows on each player's buttons (1 point: the
  *     "up" button; 2: both). A win freezes the board a couple of seconds,
  *     then returns to the menu.
- *   Simon Says: a growing pattern of pads flashes, each with a haptic
+ *   Echo: a growing pattern of pads flashes, each with a haptic
  *     and a color; repeat it by pressing (Hall depth, not touch). Each
  *     round adds one step; a wrong pad ends the game.
  * Round end: Snake and Tile Breaker flash the underglow red/purple,
- * Tetris and Simon Says red, then back to the menu.
+ * Tile Drop and Echo red, then back to the menu.
  *
  * Rendering uses the standby hooks (tiles_lighting_set_standby_active(),
  * tiles_buttons_set_standby_active(), the RGB setters). Button READS still

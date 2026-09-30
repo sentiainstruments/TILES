@@ -871,46 +871,46 @@ static tiles_standby_color_t anim_bounce(uint8_t row, uint8_t col, uint32_t now_
     return white(BOUNCE_PEAK_LEVEL * t * t);
 }
 
-/* ---- Animation: Tetris --------------------------------------------------
- * Self-playing counterpart of game_mode.c's Tetris: the same small piece
+/* ---- Animation: Tile Drop -----------------------------------------------
+ * Self-playing counterpart of game_mode.c's Tile Drop: the same small piece
  * set (dot, domino, straight and corner tromino, 2x2 square), separate
  * code and state. At spawn a greedy AI tries every rotation and column,
  * simulates the drop, and picks the one landing deepest (a cheap "keep
  * the stack low" proxy); the piece then falls one row at a time. Topping
  * out flashes red, then the well clears. Buttons off. */
 
-#define TETRIS_MIN_ROW 1u /* row 0 is buttons, not part of the well */
-#define TETRIS_MAX_ROW TILES_GRID_MAX_ROW
-#define TETRIS_MIN_COL TILES_GRID_MIN_COL
-#define TETRIS_MAX_COL TILES_GRID_MAX_COL
-#define TETRIS_ROWS 4u
-#define TETRIS_COLS 6u
-#define TETRIS_STEP_MS 260u /* faster than the game version: nobody is playing */
-#define TETRIS_LOCKED_LEVEL 0.8f
-#define TETRIS_FLASH_DURATION_MS 2200u
-#define TETRIS_FLASH_TOGGLE_MS 260u
+#define TD_MIN_ROW 1u /* row 0 is buttons, not part of the well */
+#define TD_MAX_ROW TILES_GRID_MAX_ROW
+#define TD_MIN_COL TILES_GRID_MIN_COL
+#define TD_MAX_COL TILES_GRID_MAX_COL
+#define TD_ROWS 4u
+#define TD_COLS 6u
+#define TD_STEP_MS 260u /* faster than the game version: nobody is playing */
+#define TD_LOCKED_LEVEL 0.8f
+#define TD_FLASH_DURATION_MS 2200u
+#define TD_FLASH_TOGGLE_MS 260u
 /* White underglow strobe on a line clear: fast and short. */
-#define TETRIS_LINE_CLEAR_FLASH_MS 450u
-#define TETRIS_LINE_CLEAR_TOGGLE_MS 90u
-#define TETRIS_NUM_PIECE_TYPES 5u
-#define TETRIS_MAX_CELLS 4u
+#define TD_LINE_CLEAR_FLASH_MS 450u
+#define TD_LINE_CLEAR_TOGGLE_MS 90u
+#define TD_NUM_PIECE_TYPES 5u
+#define TD_MAX_CELLS 4u
 
 typedef struct {
     int8_t dr;
     int8_t dc;
-} tetris_offset_t;
+} td_offset_t;
 
 /* Two rotation states per piece; only the first num_cells entries are
  * used. */
 typedef struct {
     uint8_t num_cells;
-    tetris_offset_t state0[TETRIS_MAX_CELLS];
-    tetris_offset_t state1[TETRIS_MAX_CELLS];
+    td_offset_t state0[TD_MAX_CELLS];
+    td_offset_t state1[TD_MAX_CELLS];
     float r, g, b;
-} tetris_piece_def_t;
+} td_piece_def_t;
 
 /* Same pieces as game_mode.c's GT_PIECES, duplicated on purpose. */
-static const tetris_piece_def_t TETRIS_PIECES[TETRIS_NUM_PIECE_TYPES] = {
+static const td_piece_def_t TD_PIECES[TD_NUM_PIECE_TYPES] = {
     /* Dot: 1 cell, rotation is a no-op. */
     {1u, {{0, 0}}, {{0, 0}}, 1.0f, 1.0f, 1.0f},
     /* Domino: horizontal/vertical. */
@@ -924,40 +924,40 @@ static const tetris_piece_def_t TETRIS_PIECES[TETRIS_NUM_PIECE_TYPES] = {
 };
 
 typedef enum {
-    TETRIS_PHASE_PLAYING = 0,
-    TETRIS_PHASE_ROUND_END,
-} tetris_phase_t;
+    TD_PHASE_PLAYING = 0,
+    TD_PHASE_ROUND_END,
+} td_phase_t;
 
-/* 0 = empty, else piece type + 1; [row - TETRIS_MIN_ROW][col - TETRIS_MIN_COL]. */
-static uint8_t s_tetris_board[TETRIS_ROWS][TETRIS_COLS];
-static uint8_t s_tetris_piece_type;
-static uint8_t s_tetris_rotation;
-static int8_t s_tetris_origin_row;
-static int8_t s_tetris_origin_col;
-static int8_t s_tetris_target_row; /* the AI's landing row for the current piece */
-static tetris_phase_t s_tetris_phase;
-static uint32_t s_tetris_last_step_ms;
-static uint32_t s_tetris_round_end_ms;
-static uint32_t s_tetris_line_clear_flash_ms;
-static bool s_tetris_inited;
+/* 0 = empty, else piece type + 1; [row - TD_MIN_ROW][col - TD_MIN_COL]. */
+static uint8_t s_td_board[TD_ROWS][TD_COLS];
+static uint8_t s_td_piece_type;
+static uint8_t s_td_rotation;
+static int8_t s_td_origin_row;
+static int8_t s_td_origin_col;
+static int8_t s_td_target_row; /* the AI's landing row for the current piece */
+static td_phase_t s_td_phase;
+static uint32_t s_td_last_step_ms;
+static uint32_t s_td_round_end_ms;
+static uint32_t s_td_line_clear_flash_ms;
+static bool s_td_inited;
 
-static const tetris_offset_t *tetris_offsets(uint8_t piece_type, uint8_t rotation) {
-    return (rotation == 0u) ? TETRIS_PIECES[piece_type].state0 : TETRIS_PIECES[piece_type].state1;
+static const td_offset_t *td_offsets(uint8_t piece_type, uint8_t rotation) {
+    return (rotation == 0u) ? TD_PIECES[piece_type].state0 : TD_PIECES[piece_type].state1;
 }
 
-static bool tetris_fits(uint8_t piece_type, uint8_t rotation, int8_t origin_row, int8_t origin_col) {
-    const tetris_offset_t *offsets = tetris_offsets(piece_type, rotation);
-    uint8_t num_cells = TETRIS_PIECES[piece_type].num_cells;
+static bool td_fits(uint8_t piece_type, uint8_t rotation, int8_t origin_row, int8_t origin_col) {
+    const td_offset_t *offsets = td_offsets(piece_type, rotation);
+    uint8_t num_cells = TD_PIECES[piece_type].num_cells;
     for (uint8_t i = 0; i < num_cells; i++) {
         int8_t r = (int8_t)(origin_row + offsets[i].dr);
         int8_t c = (int8_t)(origin_col + offsets[i].dc);
-        if (r < (int8_t)TETRIS_MIN_ROW || r > (int8_t)TETRIS_MAX_ROW) {
+        if (r < (int8_t)TD_MIN_ROW || r > (int8_t)TD_MAX_ROW) {
             return false;
         }
-        if (c < (int8_t)TETRIS_MIN_COL || c > (int8_t)TETRIS_MAX_COL) {
+        if (c < (int8_t)TD_MIN_COL || c > (int8_t)TD_MAX_COL) {
             return false;
         }
-        if (s_tetris_board[r - (int8_t)TETRIS_MIN_ROW][c - (int8_t)TETRIS_MIN_COL] != 0u) {
+        if (s_td_board[r - (int8_t)TD_MIN_ROW][c - (int8_t)TD_MIN_COL] != 0u) {
             return false;
         }
     }
@@ -966,12 +966,12 @@ static bool tetris_fits(uint8_t piece_type, uint8_t rotation, int8_t origin_row,
 
 /* Drops (piece, rotation, column) from the top and returns the landing
  * row, or false if it doesn't fit even at spawn height. */
-static bool tetris_simulate_drop(uint8_t piece_type, uint8_t rotation, int8_t origin_col, int8_t *out_row) {
-    if (!tetris_fits(piece_type, rotation, (int8_t)TETRIS_MIN_ROW, origin_col)) {
+static bool td_simulate_drop(uint8_t piece_type, uint8_t rotation, int8_t origin_col, int8_t *out_row) {
+    if (!td_fits(piece_type, rotation, (int8_t)TD_MIN_ROW, origin_col)) {
         return false;
     }
-    int8_t row = (int8_t)TETRIS_MIN_ROW;
-    while (tetris_fits(piece_type, rotation, (int8_t)(row + 1), origin_col)) {
+    int8_t row = (int8_t)TD_MIN_ROW;
+    while (td_fits(piece_type, rotation, (int8_t)(row + 1), origin_col)) {
         row++;
     }
     *out_row = row;
@@ -979,21 +979,21 @@ static bool tetris_simulate_drop(uint8_t piece_type, uint8_t rotation, int8_t or
 }
 
 /* Greedy placement (see the animation comment). */
-static void tetris_ai_place(uint8_t piece_type, uint8_t *out_rotation, int8_t *out_col, int8_t *out_row) {
+static void td_ai_place(uint8_t piece_type, uint8_t *out_rotation, int8_t *out_col, int8_t *out_row) {
     bool found = false;
     int8_t best_score = -1;
     uint8_t best_rotation = 0u;
-    int8_t best_col = (int8_t)TETRIS_MIN_COL;
-    int8_t best_row = (int8_t)TETRIS_MIN_ROW;
+    int8_t best_col = (int8_t)TD_MIN_COL;
+    int8_t best_row = (int8_t)TD_MIN_ROW;
 
     for (uint8_t rotation = 0u; rotation < 2u; rotation++) {
-        for (int8_t col = (int8_t)TETRIS_MIN_COL; col <= (int8_t)TETRIS_MAX_COL; col++) {
+        for (int8_t col = (int8_t)TD_MIN_COL; col <= (int8_t)TD_MAX_COL; col++) {
             int8_t landing_row;
-            if (!tetris_simulate_drop(piece_type, rotation, col, &landing_row)) {
+            if (!td_simulate_drop(piece_type, rotation, col, &landing_row)) {
                 continue;
             }
-            const tetris_offset_t *offsets = tetris_offsets(piece_type, rotation);
-            uint8_t num_cells = TETRIS_PIECES[piece_type].num_cells;
+            const td_offset_t *offsets = td_offsets(piece_type, rotation);
+            uint8_t num_cells = TD_PIECES[piece_type].num_cells;
             int8_t min_row = (int8_t)(landing_row + offsets[0].dr);
             for (uint8_t i = 1; i < num_cells; i++) {
                 int8_t r = (int8_t)(landing_row + offsets[i].dr);
@@ -1013,24 +1013,24 @@ static void tetris_ai_place(uint8_t piece_type, uint8_t *out_rotation, int8_t *o
 
     *out_rotation = best_rotation;
     *out_col = best_col;
-    *out_row = found ? best_row : (int8_t)TETRIS_MIN_ROW;
+    *out_row = found ? best_row : (int8_t)TD_MIN_ROW;
 }
 
-static void tetris_spawn(void) {
-    s_tetris_piece_type = (uint8_t)(rand() % TETRIS_NUM_PIECE_TYPES);
-    s_tetris_origin_row = (int8_t)TETRIS_MIN_ROW;
-    tetris_ai_place(s_tetris_piece_type, &s_tetris_rotation, &s_tetris_origin_col, &s_tetris_target_row);
+static void td_spawn(void) {
+    s_td_piece_type = (uint8_t)(rand() % TD_NUM_PIECE_TYPES);
+    s_td_origin_row = (int8_t)TD_MIN_ROW;
+    td_ai_place(s_td_piece_type, &s_td_rotation, &s_td_origin_col, &s_td_target_row);
 }
 
 /* Bottom-up, rechecking the same row after a shift (like game_mode.c
  * gt_clear_lines()). Returns rows cleared. */
-static uint8_t tetris_clear_lines(void) {
+static uint8_t td_clear_lines(void) {
     uint8_t cleared = 0u;
-    int8_t row = (int8_t)(TETRIS_ROWS - 1u);
+    int8_t row = (int8_t)(TD_ROWS - 1u);
     while (row >= 0) {
         bool full = true;
-        for (uint8_t c = 0; c < TETRIS_COLS; c++) {
-            if (s_tetris_board[row][c] == 0u) {
+        for (uint8_t c = 0; c < TD_COLS; c++) {
+            if (s_td_board[row][c] == 0u) {
                 full = false;
                 break;
             }
@@ -1041,117 +1041,117 @@ static uint8_t tetris_clear_lines(void) {
         }
         cleared++;
         for (int8_t r = row; r > 0; r--) {
-            for (uint8_t c = 0; c < TETRIS_COLS; c++) {
-                s_tetris_board[r][c] = s_tetris_board[r - 1][c];
+            for (uint8_t c = 0; c < TD_COLS; c++) {
+                s_td_board[r][c] = s_td_board[r - 1][c];
             }
         }
-        for (uint8_t c = 0; c < TETRIS_COLS; c++) {
-            s_tetris_board[0][c] = 0u;
+        for (uint8_t c = 0; c < TD_COLS; c++) {
+            s_td_board[0][c] = 0u;
         }
     }
     return cleared;
 }
 
-static void tetris_new_round(uint32_t now_ms) {
-    for (uint8_t r = 0; r < TETRIS_ROWS; r++) {
-        for (uint8_t c = 0; c < TETRIS_COLS; c++) {
-            s_tetris_board[r][c] = 0u;
+static void td_new_round(uint32_t now_ms) {
+    for (uint8_t r = 0; r < TD_ROWS; r++) {
+        for (uint8_t c = 0; c < TD_COLS; c++) {
+            s_td_board[r][c] = 0u;
         }
     }
-    s_tetris_phase = TETRIS_PHASE_PLAYING;
-    tetris_spawn();
-    s_tetris_last_step_ms = now_ms;
+    s_td_phase = TD_PHASE_PLAYING;
+    td_spawn();
+    s_td_last_step_ms = now_ms;
     /* "Long past", not 0, so a round starting right after boot doesn't flash. */
-    s_tetris_line_clear_flash_ms = now_ms - TETRIS_LINE_CLEAR_FLASH_MS - 1u;
+    s_td_line_clear_flash_ms = now_ms - TD_LINE_CLEAR_FLASH_MS - 1u;
 }
 
-static void tetris_lock(uint32_t now_ms) {
-    const tetris_offset_t *offsets = tetris_offsets(s_tetris_piece_type, s_tetris_rotation);
-    uint8_t num_cells = TETRIS_PIECES[s_tetris_piece_type].num_cells;
+static void td_lock(uint32_t now_ms) {
+    const td_offset_t *offsets = td_offsets(s_td_piece_type, s_td_rotation);
+    uint8_t num_cells = TD_PIECES[s_td_piece_type].num_cells;
     for (uint8_t i = 0; i < num_cells; i++) {
-        int8_t r = (int8_t)(s_tetris_origin_row + offsets[i].dr);
-        int8_t c = (int8_t)(s_tetris_origin_col + offsets[i].dc);
-        s_tetris_board[r - (int8_t)TETRIS_MIN_ROW][c - (int8_t)TETRIS_MIN_COL] = (uint8_t)(s_tetris_piece_type + 1u);
+        int8_t r = (int8_t)(s_td_origin_row + offsets[i].dr);
+        int8_t c = (int8_t)(s_td_origin_col + offsets[i].dc);
+        s_td_board[r - (int8_t)TD_MIN_ROW][c - (int8_t)TD_MIN_COL] = (uint8_t)(s_td_piece_type + 1u);
     }
-    if (tetris_clear_lines() > 0u) {
-        s_tetris_line_clear_flash_ms = now_ms;
+    if (td_clear_lines() > 0u) {
+        s_td_line_clear_flash_ms = now_ms;
     }
-    tetris_spawn();
-    if (!tetris_fits(s_tetris_piece_type, s_tetris_rotation, s_tetris_origin_row, s_tetris_origin_col)) {
+    td_spawn();
+    if (!td_fits(s_td_piece_type, s_td_rotation, s_td_origin_row, s_td_origin_col)) {
         /* Topped out. */
-        s_tetris_phase = TETRIS_PHASE_ROUND_END;
-        s_tetris_round_end_ms = now_ms;
+        s_td_phase = TD_PHASE_ROUND_END;
+        s_td_round_end_ms = now_ms;
     }
 }
 
-static void tetris_update(uint32_t now_ms) {
-    if (!s_tetris_inited) {
-        tetris_new_round(now_ms);
-        s_tetris_inited = true;
+static void td_update(uint32_t now_ms) {
+    if (!s_td_inited) {
+        td_new_round(now_ms);
+        s_td_inited = true;
         return;
     }
-    if (s_tetris_phase == TETRIS_PHASE_ROUND_END) {
-        if (now_ms - s_tetris_round_end_ms >= TETRIS_FLASH_DURATION_MS) {
-            tetris_new_round(now_ms);
+    if (s_td_phase == TD_PHASE_ROUND_END) {
+        if (now_ms - s_td_round_end_ms >= TD_FLASH_DURATION_MS) {
+            td_new_round(now_ms);
         }
         return;
     }
-    if (now_ms - s_tetris_last_step_ms < TETRIS_STEP_MS) {
+    if (now_ms - s_td_last_step_ms < TD_STEP_MS) {
         return;
     }
-    s_tetris_last_step_ms = now_ms;
-    if (s_tetris_origin_row < s_tetris_target_row) {
-        s_tetris_origin_row++;
+    s_td_last_step_ms = now_ms;
+    if (s_td_origin_row < s_td_target_row) {
+        s_td_origin_row++;
     } else {
-        tetris_lock(now_ms);
+        td_lock(now_ms);
     }
 }
 
-static tiles_standby_color_t anim_tetris(uint8_t row, uint8_t col, uint32_t now_ms) {
-    tetris_update(now_ms);
+static tiles_standby_color_t anim_tile_drop(uint8_t row, uint8_t col, uint32_t now_ms) {
+    td_update(now_ms);
 
     if (row == 0u) {
         return white(0.0f);
     }
 
-    if (s_tetris_phase == TETRIS_PHASE_PLAYING) {
-        const tetris_offset_t *offsets = tetris_offsets(s_tetris_piece_type, s_tetris_rotation);
-        uint8_t num_cells = TETRIS_PIECES[s_tetris_piece_type].num_cells;
+    if (s_td_phase == TD_PHASE_PLAYING) {
+        const td_offset_t *offsets = td_offsets(s_td_piece_type, s_td_rotation);
+        uint8_t num_cells = TD_PIECES[s_td_piece_type].num_cells;
         for (uint8_t i = 0; i < num_cells; i++) {
-            int8_t r = (int8_t)(s_tetris_origin_row + offsets[i].dr);
-            int8_t c = (int8_t)(s_tetris_origin_col + offsets[i].dc);
+            int8_t r = (int8_t)(s_td_origin_row + offsets[i].dr);
+            int8_t c = (int8_t)(s_td_origin_col + offsets[i].dc);
             if (r == (int8_t)row && c == (int8_t)col) {
                 /* The falling piece draws first, at full brightness. */
-                const tetris_piece_def_t *active = &TETRIS_PIECES[s_tetris_piece_type];
+                const td_piece_def_t *active = &TD_PIECES[s_td_piece_type];
                 tiles_standby_color_t c_active = {active->r, active->g, active->b};
                 return c_active;
             }
         }
     }
 
-    uint8_t v = s_tetris_board[row - (uint8_t)TETRIS_MIN_ROW][col - (uint8_t)TETRIS_MIN_COL];
+    uint8_t v = s_td_board[row - (uint8_t)TD_MIN_ROW][col - (uint8_t)TD_MIN_COL];
     if (v != 0u) {
-        const tetris_piece_def_t *def = &TETRIS_PIECES[v - 1u];
-        tiles_standby_color_t c_locked = {def->r * TETRIS_LOCKED_LEVEL, def->g * TETRIS_LOCKED_LEVEL,
-                                           def->b * TETRIS_LOCKED_LEVEL};
+        const td_piece_def_t *def = &TD_PIECES[v - 1u];
+        tiles_standby_color_t c_locked = {def->r * TD_LOCKED_LEVEL, def->g * TD_LOCKED_LEVEL,
+                                           def->b * TD_LOCKED_LEVEL};
         return c_locked;
     }
     return white(0.0f);
 }
 
 /* Topping out blinks plain red; a line clear is a short white strobe. */
-static tiles_standby_color_t tetris_underglow(uint8_t pixel_index, uint32_t now_ms) {
+static tiles_standby_color_t td_underglow(uint8_t pixel_index, uint32_t now_ms) {
     (void)pixel_index;
-    if (s_tetris_phase == TETRIS_PHASE_ROUND_END) {
-        uint32_t toggle = (now_ms - s_tetris_round_end_ms) / TETRIS_FLASH_TOGGLE_MS;
+    if (s_td_phase == TD_PHASE_ROUND_END) {
+        uint32_t toggle = (now_ms - s_td_round_end_ms) / TD_FLASH_TOGGLE_MS;
         if ((toggle % 2u) == 0u) {
             tiles_standby_color_t red = {1.0f, 0.0f, 0.0f};
             return red;
         }
         return white(0.0f);
     }
-    if (now_ms - s_tetris_line_clear_flash_ms < TETRIS_LINE_CLEAR_FLASH_MS) {
-        uint32_t toggle = (now_ms - s_tetris_line_clear_flash_ms) / TETRIS_LINE_CLEAR_TOGGLE_MS;
+    if (now_ms - s_td_line_clear_flash_ms < TD_LINE_CLEAR_FLASH_MS) {
+        uint32_t toggle = (now_ms - s_td_line_clear_flash_ms) / TD_LINE_CLEAR_TOGGLE_MS;
         if ((toggle % 2u) == 0u) {
             return white(1.0f);
         }
@@ -1200,7 +1200,7 @@ static void pd_new_round(uint32_t now_ms) {
     s_pd_left_paddle_top = 2;
     s_pd_right_paddle_top = 2;
     pd_serve(now_ms);
-    /* "Long past", as for Tetris's flash. */
+    /* "Long past", as for Tile Drop's flash. */
     s_pd_point_flash_ms = now_ms - PD_POINT_FLASH_MS - 1u;
 }
 
@@ -1516,15 +1516,15 @@ typedef tiles_standby_color_t (*underglow_fn_t)(uint8_t pixel_index, uint32_t no
 static const field_fn_t s_animations[] = {
     anim_wave,           anim_glow,     anim_shooting_stars, anim_snake,
     anim_rgb_showcase,   anim_equalizer, anim_underglow_circle,
-    anim_tile_breaker,  anim_marquee,  anim_bounce, anim_tetris, anim_paddle,
+    anim_tile_breaker,  anim_marquee,  anim_bounce, anim_tile_drop, anim_paddle,
     anim_fallingdots,
 };
 /* Parallel to s_animations[]: NULL = underglow samples the pad field at
  * its anchors; non-NULL = the animation draws its own underglow (EQ accent,
- * circular wave, tile breaker/Tetris/Paddle flashes, marquee off). */
+ * circular wave, Tile Breaker/Tile Drop/Paddle flashes, marquee off). */
 static const underglow_fn_t s_animation_underglow_override[] = {
     NULL, NULL, NULL, NULL, NULL, eq_underglow, circle_underglow, tb_underglow, marquee_underglow, NULL,
-    tetris_underglow, pd_underglow, NULL,
+    td_underglow, pd_underglow, NULL,
 };
 #define NUM_ANIMATIONS ((uint8_t)(sizeof(s_animations) / sizeof(s_animations[0])))
 
@@ -1543,7 +1543,7 @@ static const uint8_t s_animation_weight[] = {
     ANIM_WEIGHT_GAME,    /* tile breaker */
     ANIM_WEIGHT_REGULAR, /* marquee */
     ANIM_WEIGHT_REGULAR, /* bounce */
-    ANIM_WEIGHT_GAME,    /* Tetris */
+    ANIM_WEIGHT_GAME,    /* Tile Drop */
     ANIM_WEIGHT_GAME,    /* Paddle */
     ANIM_WEIGHT_REGULAR, /* falling dots */
 };
@@ -1881,7 +1881,7 @@ void tiles_standby_init(void) {
     s_deep_sleep_manual = false;
     s_scroll_prev_minus = false;
     s_scroll_prev_plus = false;
-    /* Seeds the ONE shared rand() stream (games, animations, Simon Says) from
+    /* Seeds the ONE shared rand() stream (games, animations, Echo) from
      * hardware entropy (get_rand_32(), pico_rand). Seeding from boot time,
      * which is nearly the same every boot, made "random" patterns repeat. */
     srand((unsigned int)get_rand_32());

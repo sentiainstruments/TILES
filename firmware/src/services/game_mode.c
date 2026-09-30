@@ -32,9 +32,9 @@ typedef enum {
     GM_STATE_MENU,
     GM_STATE_PLAYING_SNAKE,
     GM_STATE_PLAYING_TILE_BREAKER,
-    GM_STATE_PLAYING_TETRIS,
+    GM_STATE_PLAYING_TILE_DROP,
     GM_STATE_PLAYING_PADDLE,
-    GM_STATE_PLAYING_SIMON,
+    GM_STATE_PLAYING_ECHO,
     GM_STATE_ROUND_END,
 } gm_state_t;
 
@@ -46,7 +46,7 @@ static bool s_gm_round_end_red_only;
 /* ---- Win/lose melodies + menu-select haptic ----------------------------
  * Pads play no notes and no haptics in game mode (expression.c ignores
  * the grid while a game is active). The only sounds are these short
- * melodies, and the only haptics are the menu-select kick and Simon Says'
+ * melodies, and the only haptics are the menu-select kick and Echo's
  * pattern.
  *
  * Game mode's own fixed channel (services/midi_channels.h), outside the
@@ -201,7 +201,7 @@ static void gs_start(uint32_t now_ms) {
     s_gs_prev_down = false;
 }
 
-/* red_only: Tetris and Simon Says flash plain red; Snake and Tile Breaker
+/* red_only: Tile Drop and Echo flash plain red; Snake and Tile Breaker
  * alternate red/purple. is_win is separate (Snake and Tile Breaker send
  * both outcomes through here with red_only=false) and picks the melody. */
 static void gm_start_round_end(uint32_t now_ms, bool red_only, bool is_win) {
@@ -494,7 +494,7 @@ static void render_tile_breaker(uint32_t now_ms) {
     }
 }
 
-/* ---- Tetris --------------------------------------------------------------
+/* ---- Tile Drop -----------------------------------------------------------
  * A 4x6 well (the pad grid; buttons off) with a custom small-piece set
  * (GT_PIECES), since full tetrominoes are too big for 4 rows: dot, domino,
  * straight tromino, corner tromino, 2x2 square. Pieces have 1-4 cells
@@ -630,7 +630,7 @@ static void gt_lock(uint32_t now_ms) {
         s_gt_board[r - (int8_t)GT_MIN_ROW][c - (int8_t)GT_MIN_COL] = (uint8_t)(s_gt_piece_type + 1u);
     }
     if (gt_clear_lines() > 0u) {
-        /* Line-clear strobe (see render_tetris()). */
+        /* Line-clear strobe (see render_tile_drop()). */
         s_gt_line_clear_flash_ms = now_ms;
     }
     gt_spawn();
@@ -707,7 +707,7 @@ static void gt_update(uint32_t now_ms) {
 
 #define GT_LOCKED_LEVEL 0.8f
 
-static void render_tetris(uint32_t now_ms) {
+static void render_tile_drop(uint32_t now_ms) {
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
         tiles_buttons_set_standby_led(board_button_for_col(col), 0.0f);
     }
@@ -817,7 +817,7 @@ static void gp_start(uint32_t now_ms) {
     s_gp_right_score = 0u;
     s_gp_match_over = false;
     gp_serve(now_ms);
-    /* "Long past", as for Tetris's flash. */
+    /* "Long past", as for Tile Drop's flash. */
     s_gp_point_flash_ms = now_ms - GP_POINT_FLASH_MS - 1u;
     s_gp_prev_left_up = false;
     s_gp_prev_left_down = false;
@@ -961,30 +961,30 @@ static void render_paddle(uint32_t now_ms) {
     }
 }
 
-/* ---- Simon Says ------------------------------------------------------------
+/* ---- Echo ----------------------------------------------------------------
  * A pattern of pads flashes, each with a haptic kick and its own color
  * from a small palette; the player repeats it by PRESSING the pads (Hall
- * depth, GSIM_PRESS_DEPTH; touch is ignored). Like the real game it grows
+ * depth, GE_PRESS_DEPTH; touch is ignored). Like the real game it grows
  * by one step each round. A correct press re-flashes that pad's color with
  * a haptic; a wrong pad ends the round (red flash, back to the menu).
  * Pads may repeat across steps. */
 
-#define GSIM_MAX_LENGTH 32u
-#define GSIM_NUM_COLORS 6u
-#define GSIM_ROUND_START_DELAY_MS 700u /* pause before playback */
-#define GSIM_PLAYBACK_STEP_MS 550u     /* per pattern step, lit + gap */
-#define GSIM_PLAYBACK_FLASH_MS 380u    /* lit part of a step */
-#define GSIM_PLAYBACK_VELOCITY 110u    /* firm: this is what the player must remember */
-#define GSIM_FEEDBACK_VELOCITY 90u
-#define GSIM_FEEDBACK_FLASH_MS 220u /* correct-press flash length */
+#define GE_MAX_LENGTH 32u
+#define GE_NUM_COLORS 6u
+#define GE_ROUND_START_DELAY_MS 700u /* pause before playback */
+#define GE_PLAYBACK_STEP_MS 550u     /* per pattern step, lit + gap */
+#define GE_PLAYBACK_FLASH_MS 380u    /* lit part of a step */
+#define GE_PLAYBACK_VELOCITY 110u    /* firm: this is what the player must remember */
+#define GE_FEEDBACK_VELOCITY 90u
+#define GE_FEEDBACK_FLASH_MS 220u /* correct-press flash length */
 /* Same as expression.c's MIN_STRIKE_DEPTH_DELTA (300): a real push. */
-#define GSIM_PRESS_DEPTH 300.0f
+#define GE_PRESS_DEPTH 300.0f
 
 typedef struct {
     float r, g, b;
-} gsim_color_t;
+} ge_color_t;
 
-static const gsim_color_t GSIM_PALETTE[GSIM_NUM_COLORS] = {
+static const ge_color_t GE_PALETTE[GE_NUM_COLORS] = {
     {1.0f, 0.0f, 0.0f},  /* red */
     {0.0f, 1.0f, 0.0f},  /* green */
     {0.1f, 0.3f, 1.0f},  /* blue */
@@ -994,111 +994,111 @@ static const gsim_color_t GSIM_PALETTE[GSIM_NUM_COLORS] = {
 };
 
 typedef enum {
-    GSIM_PHASE_ROUND_START = 0,
-    GSIM_PHASE_PLAYBACK,
-    GSIM_PHASE_INPUT,
-} gsim_phase_t;
+    GE_PHASE_ROUND_START = 0,
+    GE_PHASE_PLAYBACK,
+    GE_PHASE_INPUT,
+} ge_phase_t;
 
-static uint8_t s_gsim_pattern_pad[GSIM_MAX_LENGTH];   /* 1-24 */
-static uint8_t s_gsim_pattern_color[GSIM_MAX_LENGTH]; /* index into GSIM_PALETTE */
-static uint8_t s_gsim_length;                         /* steps this round */
-static gsim_phase_t s_gsim_phase;
-static uint32_t s_gsim_phase_start_ms;
-static uint8_t s_gsim_playback_step;      /* step PLAYBACK is showing */
-static uint8_t s_gsim_last_haptic_step;   /* step whose haptic already fired; 0xFF = none this round */
-static uint8_t s_gsim_input_index;        /* correct steps reproduced so far this round */
-static bool s_gsim_prev_pressed[TILES_NUM_PADS];
-static uint8_t s_gsim_feedback_pad;    /* 0 = no confirmation flash */
-static uint32_t s_gsim_feedback_start_ms;
+static uint8_t s_ge_pattern_pad[GE_MAX_LENGTH];   /* 1-24 */
+static uint8_t s_ge_pattern_color[GE_MAX_LENGTH]; /* index into GE_PALETTE */
+static uint8_t s_ge_length;                         /* steps this round */
+static ge_phase_t s_ge_phase;
+static uint32_t s_ge_phase_start_ms;
+static uint8_t s_ge_playback_step;      /* step PLAYBACK is showing */
+static uint8_t s_ge_last_haptic_step;   /* step whose haptic already fired; 0xFF = none this round */
+static uint8_t s_ge_input_index;        /* correct steps reproduced so far this round */
+static bool s_ge_prev_pressed[TILES_NUM_PADS];
+static uint8_t s_ge_feedback_pad;    /* 0 = no confirmation flash */
+static uint32_t s_ge_feedback_start_ms;
 
-static void gsim_new_game(uint32_t now_ms) {
+static void ge_new_game(uint32_t now_ms) {
     /* Reseed per game so every game gets a new pattern (see standby.c's
      * seeding fix). */
     srand((unsigned int)get_rand_32());
-    s_gsim_length = 1u;
-    s_gsim_pattern_pad[0] = (uint8_t)(1u + (uint8_t)(rand() % TILES_NUM_PADS));
-    s_gsim_pattern_color[0] = (uint8_t)(rand() % GSIM_NUM_COLORS);
-    s_gsim_phase = GSIM_PHASE_ROUND_START;
-    s_gsim_phase_start_ms = now_ms;
-    s_gsim_feedback_pad = 0u;
+    s_ge_length = 1u;
+    s_ge_pattern_pad[0] = (uint8_t)(1u + (uint8_t)(rand() % TILES_NUM_PADS));
+    s_ge_pattern_color[0] = (uint8_t)(rand() % GE_NUM_COLORS);
+    s_ge_phase = GE_PHASE_ROUND_START;
+    s_ge_phase_start_ms = now_ms;
+    s_ge_feedback_pad = 0u;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        s_gsim_prev_pressed[i] = false;
+        s_ge_prev_pressed[i] = false;
     }
 }
 
-static void gsim_extend_pattern(void) {
-    if (s_gsim_length >= GSIM_MAX_LENGTH) {
+static void ge_extend_pattern(void) {
+    if (s_ge_length >= GE_MAX_LENGTH) {
         return; /* ceiling reached: keep replaying the longest pattern */
     }
-    s_gsim_pattern_pad[s_gsim_length] = (uint8_t)(1u + (uint8_t)(rand() % TILES_NUM_PADS));
-    s_gsim_pattern_color[s_gsim_length] = (uint8_t)(rand() % GSIM_NUM_COLORS);
-    s_gsim_length++;
+    s_ge_pattern_pad[s_ge_length] = (uint8_t)(1u + (uint8_t)(rand() % TILES_NUM_PADS));
+    s_ge_pattern_color[s_ge_length] = (uint8_t)(rand() % GE_NUM_COLORS);
+    s_ge_length++;
 }
 
-static void gsim_begin_round_start(uint32_t now_ms) {
-    s_gsim_phase = GSIM_PHASE_ROUND_START;
-    s_gsim_phase_start_ms = now_ms;
+static void ge_begin_round_start(uint32_t now_ms) {
+    s_ge_phase = GE_PHASE_ROUND_START;
+    s_ge_phase_start_ms = now_ms;
 }
 
-static void gsim_begin_playback(uint32_t now_ms) {
-    s_gsim_phase = GSIM_PHASE_PLAYBACK;
-    s_gsim_phase_start_ms = now_ms;
-    s_gsim_playback_step = 0u;
-    s_gsim_last_haptic_step = 0xFFu;
+static void ge_begin_playback(uint32_t now_ms) {
+    s_ge_phase = GE_PHASE_PLAYBACK;
+    s_ge_phase_start_ms = now_ms;
+    s_ge_playback_step = 0u;
+    s_ge_last_haptic_step = 0xFFu;
 }
 
-static void gsim_begin_input(uint32_t now_ms) {
-    s_gsim_phase = GSIM_PHASE_INPUT;
-    s_gsim_phase_start_ms = now_ms;
-    s_gsim_input_index = 0u;
+static void ge_begin_input(uint32_t now_ms) {
+    s_ge_phase = GE_PHASE_INPUT;
+    s_ge_phase_start_ms = now_ms;
+    s_ge_input_index = 0u;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         /* Seed with what's already pressed so a held pad isn't a new press. */
-        s_gsim_prev_pressed[i] = (float)tiles_hall_get_depth((uint8_t)(i + 1u)) > GSIM_PRESS_DEPTH;
+        s_ge_prev_pressed[i] = (float)tiles_hall_get_depth((uint8_t)(i + 1u)) > GE_PRESS_DEPTH;
     }
 }
 
-static void gsim_update(uint32_t now_ms) {
-    switch (s_gsim_phase) {
-    case GSIM_PHASE_ROUND_START:
-        if (now_ms - s_gsim_phase_start_ms >= GSIM_ROUND_START_DELAY_MS) {
-            gsim_begin_playback(now_ms);
+static void ge_update(uint32_t now_ms) {
+    switch (s_ge_phase) {
+    case GE_PHASE_ROUND_START:
+        if (now_ms - s_ge_phase_start_ms >= GE_ROUND_START_DELAY_MS) {
+            ge_begin_playback(now_ms);
         }
         break;
-    case GSIM_PHASE_PLAYBACK: {
-        uint32_t elapsed = now_ms - s_gsim_phase_start_ms;
-        uint32_t step = elapsed / GSIM_PLAYBACK_STEP_MS;
-        if (step >= s_gsim_length) {
-            gsim_begin_input(now_ms);
+    case GE_PHASE_PLAYBACK: {
+        uint32_t elapsed = now_ms - s_ge_phase_start_ms;
+        uint32_t step = elapsed / GE_PLAYBACK_STEP_MS;
+        if (step >= s_ge_length) {
+            ge_begin_input(now_ms);
             break;
         }
-        s_gsim_playback_step = (uint8_t)step;
-        if (s_gsim_playback_step != s_gsim_last_haptic_step) {
+        s_ge_playback_step = (uint8_t)step;
+        if (s_ge_playback_step != s_ge_last_haptic_step) {
             /* One haptic per step, as its flash starts. */
-            s_gsim_last_haptic_step = s_gsim_playback_step;
-            tiles_haptics_trigger_kick(s_gsim_pattern_pad[s_gsim_playback_step], GSIM_PLAYBACK_VELOCITY);
+            s_ge_last_haptic_step = s_ge_playback_step;
+            tiles_haptics_trigger_kick(s_ge_pattern_pad[s_ge_playback_step], GE_PLAYBACK_VELOCITY);
         }
         break;
     }
-    case GSIM_PHASE_INPUT:
-        /* Advanced by gsim_handle_input(), like the other games' input handlers. */
+    case GE_PHASE_INPUT:
+        /* Advanced by ge_handle_input(), like the other games' input handlers. */
         break;
     }
 }
 
 /* Reads Hall depth only (no touch) for the whole input phase. */
-static void gsim_handle_input(uint32_t now_ms) {
-    if (s_gsim_phase != GSIM_PHASE_INPUT) {
+static void ge_handle_input(uint32_t now_ms) {
+    if (s_ge_phase != GE_PHASE_INPUT) {
         return;
     }
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-        bool pressed = (float)tiles_hall_get_depth(pad) > GSIM_PRESS_DEPTH;
-        bool edge = pressed && !s_gsim_prev_pressed[pad - 1u];
-        s_gsim_prev_pressed[pad - 1u] = pressed;
+        bool pressed = (float)tiles_hall_get_depth(pad) > GE_PRESS_DEPTH;
+        bool edge = pressed && !s_ge_prev_pressed[pad - 1u];
+        s_ge_prev_pressed[pad - 1u] = pressed;
         if (!edge) {
             continue;
         }
 
-        uint8_t expected_pad = s_gsim_pattern_pad[s_gsim_input_index];
+        uint8_t expected_pad = s_ge_pattern_pad[s_ge_input_index];
         if (pad != expected_pad) {
             /* Wrong pad: plain red flash, back to the menu. */
             gm_start_round_end(now_ms, true, false);
@@ -1106,40 +1106,40 @@ static void gsim_handle_input(uint32_t now_ms) {
         }
 
         /* Correct: re-flash this pad's pattern color, plus a haptic. */
-        s_gsim_feedback_pad = pad;
-        s_gsim_feedback_start_ms = now_ms;
-        tiles_haptics_trigger_kick(pad, GSIM_FEEDBACK_VELOCITY);
+        s_ge_feedback_pad = pad;
+        s_ge_feedback_start_ms = now_ms;
+        tiles_haptics_trigger_kick(pad, GE_FEEDBACK_VELOCITY);
 
-        s_gsim_input_index++;
-        if (s_gsim_input_index >= s_gsim_length) {
+        s_ge_input_index++;
+        if (s_ge_input_index >= s_ge_length) {
             /* Whole pattern right: next round (a round end would leave the game). */
-            gsim_extend_pattern();
-            gsim_begin_round_start(now_ms);
+            ge_extend_pattern();
+            ge_begin_round_start(now_ms);
         }
         return; /* one pad per scan, so a brush across two isn't double-counted */
     }
 }
 
-static void render_simon(uint32_t now_ms) {
+static void render_echo(uint32_t now_ms) {
     for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
         for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
             tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), 0.0f, 0.0f, 0.0f);
         }
     }
 
-    if (s_gsim_phase == GSIM_PHASE_PLAYBACK) {
-        uint32_t elapsed = now_ms - s_gsim_phase_start_ms;
-        uint32_t within_step = elapsed - (uint32_t)s_gsim_playback_step * GSIM_PLAYBACK_STEP_MS;
-        if (within_step < GSIM_PLAYBACK_FLASH_MS) {
-            const gsim_color_t *c = &GSIM_PALETTE[s_gsim_pattern_color[s_gsim_playback_step]];
-            tiles_lighting_set_standby_pad_rgb(s_gsim_pattern_pad[s_gsim_playback_step], c->r, c->g, c->b);
+    if (s_ge_phase == GE_PHASE_PLAYBACK) {
+        uint32_t elapsed = now_ms - s_ge_phase_start_ms;
+        uint32_t within_step = elapsed - (uint32_t)s_ge_playback_step * GE_PLAYBACK_STEP_MS;
+        if (within_step < GE_PLAYBACK_FLASH_MS) {
+            const ge_color_t *c = &GE_PALETTE[s_ge_pattern_color[s_ge_playback_step]];
+            tiles_lighting_set_standby_pad_rgb(s_ge_pattern_pad[s_ge_playback_step], c->r, c->g, c->b);
         }
-    } else if (s_gsim_phase == GSIM_PHASE_INPUT && s_gsim_feedback_pad != 0u &&
-               (now_ms - s_gsim_feedback_start_ms) < GSIM_FEEDBACK_FLASH_MS) {
+    } else if (s_ge_phase == GE_PHASE_INPUT && s_ge_feedback_pad != 0u &&
+               (now_ms - s_ge_feedback_start_ms) < GE_FEEDBACK_FLASH_MS) {
         /* Confirmation flash: the step just confirmed is input_index - 1. */
-        uint8_t confirmed_step = (uint8_t)(s_gsim_input_index - 1u);
-        const gsim_color_t *c = &GSIM_PALETTE[s_gsim_pattern_color[confirmed_step]];
-        tiles_lighting_set_standby_pad_rgb(s_gsim_feedback_pad, c->r, c->g, c->b);
+        uint8_t confirmed_step = (uint8_t)(s_ge_input_index - 1u);
+        const ge_color_t *c = &GE_PALETTE[s_ge_pattern_color[confirmed_step]];
+        tiles_lighting_set_standby_pad_rgb(s_ge_feedback_pad, c->r, c->g, c->b);
     }
 
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
@@ -1165,11 +1165,11 @@ static void render_menu(uint32_t now_ms) {
             } else if (row == 1u && col == 2u) {
                 tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 0.4f, 0.0f); /* Tile Breaker = orange */
             } else if (row == 1u && col == 3u) {
-                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 1.0f, 1.0f); /* Tetris = cyan */
+                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 1.0f, 1.0f); /* Tile Drop = cyan */
             } else if (row == 1u && col == 4u) {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 1.0f); /* Paddle = blue, like its ball */
             } else if (row == 1u && col == 5u) {
-                tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f); /* Simon Says = white (its pattern is the colorful part) */
+                tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 1.0f, 1.0f); /* Echo = white (its pattern is the colorful part) */
             } else {
                 tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
             }
@@ -1185,7 +1185,7 @@ static void render_round_end(uint32_t now_ms) {
     bool on_phase = (toggle % 2u) == 0u;
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
         if (s_gm_round_end_red_only) {
-            /* Tetris/Simon: plain red blink. */
+            /* Tile Drop/Echo: plain red blink. */
             if (on_phase) {
                 tiles_lighting_set_standby_underglow_rgb(i, 1.0f, 0.0f, 0.0f);
             } else {
@@ -1220,8 +1220,8 @@ static void gm_start_tile_breaker(uint32_t now_ms) {
     gb_start(now_ms);
 }
 
-static void gm_start_tetris(uint32_t now_ms) {
-    s_gm_state = GM_STATE_PLAYING_TETRIS;
+static void gm_start_tile_drop(uint32_t now_ms) {
+    s_gm_state = GM_STATE_PLAYING_TILE_DROP;
     gt_start(now_ms);
 }
 
@@ -1230,9 +1230,9 @@ static void gm_start_paddle(uint32_t now_ms) {
     gp_start(now_ms);
 }
 
-static void gm_start_simon(uint32_t now_ms) {
-    s_gm_state = GM_STATE_PLAYING_SIMON;
-    gsim_new_game(now_ms);
+static void gm_start_echo(uint32_t now_ms) {
+    s_gm_state = GM_STATE_PLAYING_ECHO;
+    ge_new_game(now_ms);
 }
 
 static void gm_handle_menu_selection(void) {
@@ -1243,7 +1243,7 @@ static void gm_handle_menu_selection(void) {
     bool pad5 = tiles_touch_is_touched(5u);
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
-    /* The one haptic outside Simon Says: a felt confirmation a game started. */
+    /* The one haptic outside Echo: a felt confirmation a game started. */
     if (pad1 && !s_gm_prev_pad1_touched) {
         tiles_haptics_trigger_kick(1u, GM_MENU_SELECT_VELOCITY);
         gm_start_snake(now_ms);
@@ -1252,13 +1252,13 @@ static void gm_handle_menu_selection(void) {
         gm_start_tile_breaker(now_ms);
     } else if (pad3 && !s_gm_prev_pad3_touched) {
         tiles_haptics_trigger_kick(3u, GM_MENU_SELECT_VELOCITY);
-        gm_start_tetris(now_ms);
+        gm_start_tile_drop(now_ms);
     } else if (pad4 && !s_gm_prev_pad4_touched) {
         tiles_haptics_trigger_kick(4u, GM_MENU_SELECT_VELOCITY);
         gm_start_paddle(now_ms);
     } else if (pad5 && !s_gm_prev_pad5_touched) {
         tiles_haptics_trigger_kick(5u, GM_MENU_SELECT_VELOCITY);
-        gm_start_simon(now_ms);
+        gm_start_echo(now_ms);
     }
     s_gm_prev_pad1_touched = pad1;
     s_gm_prev_pad2_touched = pad2;
@@ -1358,7 +1358,7 @@ void tiles_game_mode_scan(void) {
     } else if (s_gm_state == GM_STATE_PLAYING_TILE_BREAKER) {
         gb_handle_input();
         gb_update(now_ms);
-    } else if (s_gm_state == GM_STATE_PLAYING_TETRIS) {
+    } else if (s_gm_state == GM_STATE_PLAYING_TILE_DROP) {
         gt_handle_input(now_ms);
         gt_update(now_ms);
     } else if (s_gm_state == GM_STATE_PLAYING_PADDLE) {
@@ -1372,9 +1372,9 @@ void tiles_game_mode_scan(void) {
             gp_handle_input();
             gp_update(now_ms);
         }
-    } else if (s_gm_state == GM_STATE_PLAYING_SIMON) {
-        gsim_handle_input(now_ms);
-        gsim_update(now_ms);
+    } else if (s_gm_state == GM_STATE_PLAYING_ECHO) {
+        ge_handle_input(now_ms);
+        ge_update(now_ms);
     } else if (s_gm_state == GM_STATE_ROUND_END) {
         if (now_ms - s_gm_round_end_ms >= GM_ROUND_END_FLASH_MS) {
             gm_enter_menu();
@@ -1388,12 +1388,12 @@ void tiles_game_mode_scan(void) {
             render_snake(now_ms);
         } else if (s_gm_state == GM_STATE_PLAYING_TILE_BREAKER) {
             render_tile_breaker(now_ms);
-        } else if (s_gm_state == GM_STATE_PLAYING_TETRIS) {
-            render_tetris(now_ms);
+        } else if (s_gm_state == GM_STATE_PLAYING_TILE_DROP) {
+            render_tile_drop(now_ms);
         } else if (s_gm_state == GM_STATE_PLAYING_PADDLE) {
             render_paddle(now_ms);
-        } else if (s_gm_state == GM_STATE_PLAYING_SIMON) {
-            render_simon(now_ms);
+        } else if (s_gm_state == GM_STATE_PLAYING_ECHO) {
+            render_echo(now_ms);
         } else if (s_gm_state == GM_STATE_ROUND_END) {
             render_round_end(now_ms);
         }
