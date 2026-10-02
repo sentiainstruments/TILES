@@ -30,8 +30,8 @@ expression pedal jack, 5-pin/TRS DIN MIDI, and CV/gate out.
   (shift/power).
 - **Underglow** LEDs, a **pedal jack**, **DIN MIDI** in/out, **CV/gate**
   out (only active on external power).
-- On USB it appears as: two MIDI ports ("SENTIA TILES MIDI" for playing,
-  "SENTIA TILES DAW" for the Ableton script), a serial console (debug
+- On USB it appears as: two MIDI ports ("SENTIA TILES 2 MIDI" for playing,
+  "SENTIA TILES 2 DAW" for the Ableton script, on unit 2), a serial console (debug
   only), and the **control interface** the app uses (section 5).
 
 ## 2. What the app is (and isn't)

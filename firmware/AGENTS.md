@@ -60,8 +60,8 @@ settings shell.
 
 **Checking MIDI on real hardware.** When a bug could be in the firmware
 or the host (DAW, plugin, routing), look at the bytes on the wire first:
-a small CoreMIDI monitor on the "SENTIA TILES MIDI" / "SENTIA TILES DAW"
-sources is what separated a host bug from a firmware bug in the sustain
+a small CoreMIDI monitor on the "SENTIA TILES N MIDI" / "SENTIA TILES N
+DAW" sources (N = unit number) is what separated a host bug from a firmware bug in the sustain
 pedal investigation. Temporary `printf()` traces on the USB-CDC console
 are fine for this, only on rare events (never per scan), with a host
 draining the port, and removed before committing.

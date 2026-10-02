@@ -201,17 +201,19 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
 
 /* ---- String descriptors ---- */
 
-/* The PRODUCT name is the same on every unit, like any shipping product:
- * hosts show it as the device, DAWs build the port names from it ("SENTIA
- * TILES MIDI" / "SENTIA TILES DAW" on macOS), and Ableton matches its
- * control surface script against it. Per-unit names would make a Live set
- * made with one board miss another. Which board it is comes from the
- * serial number (chip ID) and the unit label, which rides on the CDC
- * interface name and the settings INFO reply. */
+/* The PRODUCT name carries the unit number ("SENTIA TILES 2"). Hosts show
+ * it as the device and DAWs build the port names from it ("SENTIA TILES 2
+ * MIDI" / "SENTIA TILES 2 DAW" on macOS, "SENTIA TILES 2 (MIDI)" in Live),
+ * so two units played at once can't be mixed up. With one name for every
+ * unit, Live numbers the second one "#2" in plug-in order, and the two
+ * could swap tracks after a replug. The cost: a Live set made with one
+ * unit doesn't find another by itself (pick its ports again). The unit
+ * label also rides on the CDC interface name and the settings INFO reply;
+ * the serial number is the chip ID. */
 static char const *string_desc_arr[] = {
     NULL, /* 0: language ID, handled below */
     "SENTIA Instruments",
-    "SENTIA TILES",
+    NULL, /* 2: product, built with the unit number */
     NULL, /* 3: serial, from the RP2350 unique ID */
     NULL, /* 4: diagnostics interface, built with the unit label */
     "SENTIA TILES MIDI",
@@ -221,6 +223,19 @@ static char const *string_desc_arr[] = {
 };
 
 static uint16_t desc_str[40 + 1];
+
+/* Copies an ASCII string into desc_str, cut to fit; returns its length. */
+static size_t desc_str_set(const char *str) {
+    size_t chr_count = strlen(str);
+    const size_t max_count = sizeof(desc_str) / sizeof(desc_str[0]) - 1u;
+    if (chr_count > max_count) {
+        chr_count = max_count;
+    }
+    for (size_t i = 0; i < chr_count; i++) {
+        desc_str[1 + i] = (uint16_t)str[i];
+    }
+    return chr_count;
+}
 
 uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
     (void)langid;
@@ -232,18 +247,17 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
             chr_count = 1;
             break;
         }
+        case STRID_PRODUCT: {
+            char buf[24];
+            snprintf(buf, sizeof(buf), "SENTIA TILES %u", (unsigned)TILES_UNIT_NUMBER);
+            chr_count = desc_str_set(buf);
+            break;
+        }
         case STRID_CDC: {
             char buf[40];
-            int written = snprintf(buf, sizeof(buf), "SENTIA TILES Diagnostics (Unit %u/%u)",
-                                   (unsigned)TILES_UNIT_NUMBER, (unsigned)TILES_UNIT_COUNT);
-            chr_count = (written > 0) ? (size_t)written : 0u;
-            const size_t max_count = sizeof(desc_str) / sizeof(desc_str[0]) - 1u;
-            if (chr_count > max_count) {
-                chr_count = max_count;
-            }
-            for (size_t i = 0; i < chr_count; i++) {
-                desc_str[1 + i] = (uint16_t)buf[i];
-            }
+            snprintf(buf, sizeof(buf), "SENTIA TILES Diagnostics (Unit %u/%u)", (unsigned)TILES_UNIT_NUMBER,
+                     (unsigned)TILES_UNIT_COUNT);
+            chr_count = desc_str_set(buf);
             break;
         }
         case STRID_SERIAL: {
@@ -261,15 +275,7 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
             if (index >= sizeof(string_desc_arr) / sizeof(string_desc_arr[0]) || string_desc_arr[index] == NULL) {
                 return NULL;
             }
-            const char *str = string_desc_arr[index];
-            chr_count = strlen(str);
-            const size_t max_count = sizeof(desc_str) / sizeof(desc_str[0]) - 1u;
-            if (chr_count > max_count) {
-                chr_count = max_count;
-            }
-            for (size_t i = 0; i < chr_count; i++) {
-                desc_str[1 + i] = (uint16_t)str[i];
-            }
+            chr_count = desc_str_set(string_desc_arr[index]);
             break;
         }
     }

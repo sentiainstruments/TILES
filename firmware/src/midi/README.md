@@ -19,8 +19,8 @@ never goes over MIDI; that's `usb_vendor/`.
 
 | Port | Carries | macOS / Live name |
 |---|---|---|
-| MAIN | Notes, MPE, pedals, clock and transport Start/Stop, Identity | "SENTIA TILES MIDI" / "SENTIA TILES (MIDI)" |
-| DAW | Only the Ableton control surface script: Scene Launch and transport CCs out; clip/scene SysEx and TILES DISPLAY echo notes in | "SENTIA TILES DAW" / "SENTIA TILES (DAW)" |
+| MAIN | Notes, MPE, pedals, clock and transport Start/Stop, Identity | "SENTIA TILES 2 MIDI" / "SENTIA TILES 2 (MIDI)" (unit 2) |
+| DAW | Only the Ableton control surface script: Scene Launch and transport CCs out; clip/scene SysEx and TILES DISPLAY echo notes in | "SENTIA TILES 2 DAW" / "SENTIA TILES 2 (DAW)" (unit 2) |
 | DIN | Everything MAIN carries | TRS jack |
 
 The DAW port exists so script traffic never reaches an instrument track,

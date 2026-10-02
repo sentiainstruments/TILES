@@ -503,3 +503,18 @@ owner's feedback that prompted each change.
     two ports to Live (`get_capabilities()`, the same layout Ableton's own
     Launchkey MK3 script declares), with auto-load; setup and the macOS
     stale-device cleanup are in `daw-integration/README.md`.
+
+- **Unit number in the USB product name (`usb_descriptors.c`), firmware
+  0.2.1** -- 2026-10-02. Real feedback: "im performing using unt 2 and 4,
+  make sure btoh are up to date and flashed and that there will be no
+  conflit using both at once in ableton". With two units plugged in,
+  Live listed "SENTIA TILES (MIDI)" and "SENTIA TILES #2 (MIDI)", the #2
+  going to whichever enumerated second, so the units could swap tracks
+  after a replug. The product name is now "SENTIA TILES N" (N from
+  `board/unit_id.h`), so the ports are "SENTIA TILES 2 MIDI" / "SENTIA
+  TILES 2 DAW"; this reverses the one-name-for-every-unit choice above,
+  at the cost of a Live set made with one unit not finding another by
+  itself. macOS caches a USB MIDI device's name by serial number, so
+  boards 2 and 4 were renamed in its MIDI setup after flashing
+  (`daw-integration/README.md`, "stale device"). The string callback
+  builds the name with snprintf like the CDC one (`desc_str_set()`).
