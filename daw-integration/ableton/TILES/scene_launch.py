@@ -129,6 +129,33 @@ def _pad_to_col_row(pad):
     return col, row
 
 
+def _try_remove(live_object, method_name, callback):
+    """Removes one Live listener, ignoring failure. A deleted Live object
+    can raise any of several types (a slot of a deleted track raises
+    Boost.Python's ArgumentError, not RuntimeError), and one failed
+    removal must not skip the others."""
+    try:
+        getattr(live_object, method_name)(callback)
+    except Exception:  # noqa: BLE001 -- cleanup only
+        pass
+
+
+def _input_name(track):
+    try:
+        return track.input_routing_type.display_name
+    except Exception:  # noqa: BLE001 -- not every track has a MIDI input
+        return ""
+
+
+def _played_by_other_tiles(track, other):
+    """Whether `track` and `other` take their input from two different
+    TILES units (each unit has its own port name, "SENTIA TILES 2 (MIDI)").
+    Then disarming `other` would silence the other player, so it stays
+    armed. Any other routing (All Ins, a keyboard) is disarmed."""
+    mine, theirs = _input_name(track), _input_name(other)
+    return "SENTIA TILES" in mine and "SENTIA TILES" in theirs and mine != theirs
+
+
 class SceneLaunch(object):
     """Ableton mode's Live side. Owned by TILES (TILES.py); a separate
     object so the transport code doesn't depend on it.
@@ -284,22 +311,13 @@ class SceneLaunch(object):
         _on_has_clip_changed() added and empties their lists. Also used by
         disconnect()."""
         for clip_slot, has_clip_cb, playing_status_cb, is_triggered_cb in self._clip_slot_listeners:
-            try:
-                clip_slot.remove_has_clip_listener(has_clip_cb)
-                clip_slot.remove_playing_status_listener(playing_status_cb)
-                clip_slot.remove_is_triggered_listener(is_triggered_cb)
-            except RuntimeError:
-                pass
+            _try_remove(clip_slot, "remove_has_clip_listener", has_clip_cb)
+            _try_remove(clip_slot, "remove_playing_status_listener", playing_status_cb)
+            _try_remove(clip_slot, "remove_is_triggered_listener", is_triggered_cb)
         self._clip_slot_listeners = []
         for track, refresh_cb in self._track_listeners:
-            try:
-                track.remove_playing_slot_index_listener(refresh_cb)
-            except RuntimeError:
-                pass
-            try:
-                track.remove_fired_slot_index_listener(refresh_cb)
-            except RuntimeError:
-                pass
+            _try_remove(track, "remove_playing_slot_index_listener", refresh_cb)
+            _try_remove(track, "remove_fired_slot_index_listener", refresh_cb)
         self._track_listeners = []
         for clip, clip_cb in self._clip_color_listeners.values():
             self._remove_clip_listeners(clip, clip_cb)
@@ -401,16 +419,8 @@ class SceneLaunch(object):
 
     @staticmethod
     def _remove_clip_listeners(clip, clip_cb):
-        # Separate try blocks so one failing removal (e.g. the clip
-        # already deleted) can't skip the other.
-        try:
-            clip.remove_color_listener(clip_cb)
-        except Exception:  # noqa: BLE001 -- cleanup only; a deleted Live object can raise any of several types
-            pass
-        try:
-            clip.remove_playing_status_listener(clip_cb)
-        except Exception:  # noqa: BLE001
-            pass
+        _try_remove(clip, "remove_color_listener", clip_cb)
+        _try_remove(clip, "remove_playing_status_listener", clip_cb)
 
     # ---- TILES -> Live: pad clicks, master stop, track offset, end capture --
 
@@ -450,17 +460,23 @@ class SceneLaunch(object):
                     self._record_new_clip(track, clip_slot, track_index, scene_index)
 
     def _record_new_clip(self, track, clip_slot, track_index, scene_index):
-        """A click on an empty slot. Disarms every other armable track
-        (Live's Exclusive Arm preference can't be seen or relied on), arms
-        this one if it can be armed (group tracks can't), and fires the
-        slot, which records a new clip into it. If the track takes MIDI,
-        tells the firmware to open melodic mode so the player can play
-        into it; audio tracks still arm and record. (can_be_armed, arm and
+        """A click on an empty slot. Disarms the other armed tracks (Live's
+        Exclusive Arm preference can't be seen or relied on) except one
+        played by a different TILES (_played_by_other_tiles()), arms this
+        one if it can be armed (group tracks can't), and fires the slot,
+        which records a new clip into it. If the track takes MIDI, tells
+        the firmware to open melodic mode so the player can play into it;
+        audio tracks still arm and record. (can_be_armed, arm and
         has_midi_input as in AbletonOSC's track.py.)"""
         armed = False
         if track.can_be_armed:
             for other in self._song.tracks:
-                if other is not track and other.can_be_armed and other.arm:
+                if (
+                    other is not track
+                    and other.can_be_armed
+                    and other.arm
+                    and not _played_by_other_tiles(track, other)
+                ):
                     other.arm = False
             track.arm = True
             armed = True

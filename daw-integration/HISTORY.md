@@ -486,3 +486,26 @@ listening, so the fallback for any other DAW is exactly what this
 folder exists to avoid needing for Ableton specifically: a one-time
 manual MIDI-Map/MIDI-Learn of each CC to that DAW's own Play/Stop/
 Record, using whatever generic-mapping feature it provides.
+
+## Two units at once (2026-10-02)
+
+Real feedback: "im performing using unt 2 and 4, make sure btoh are up to
+date and flashed and that there will be no conflit using both at once in
+ableton". With both plugged in, Live's log showed the ports as "SENTIA
+TILES (...)" and "SENTIA TILES #2 (...)": one product name on every unit
+made Live number the second one in plug-in order, so the two could swap
+tracks after a replug. The firmware now names each unit "SENTIA TILES N"
+(`firmware/src/midi/HISTORY.md`); `__init__.py` lists those model names.
+macOS kept its cached name for both boards and they were renamed in its
+MIDI setup (README, "stale device").
+
+Two script fixes from the same session:
+
+- Deleting a track made `_disconnect_track_clip_listeners()` raise
+  Boost.Python's `ArgumentError` (a slot of a deleted track), which the
+  `except RuntimeError` didn't catch, so the listeners were never rebuilt
+  and the grid stopped updating. Every listener removal now goes through
+  `_try_remove()`, which ignores any failure.
+- Recording a new clip disarmed every other armed track, which would
+  silence the other unit's track. A track whose input is a different
+  TILES unit now stays armed (`_played_by_other_tiles()`).
