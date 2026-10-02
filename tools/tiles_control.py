@@ -29,12 +29,14 @@ Usage:
     python3 tools/tiles_control.py info                  # flash-store status
     python3 tools/tiles_control.py reboot bootsel         # reboot into the ROM bootloader (for picotool)
     python3 tools/tiles_control.py reboot app             # plain warm restart back into this firmware
+    TILES_SERIAL=F1A60E66E44C9D4B python3 tools/tiles_control.py info   # one of several boards (serial = chip ID)
 
 Changes apply immediately and are saved to flash automatically a couple of
 seconds after the last one (only while no pad is being touched); `save` just
 skips the wait. Settings survive reboots and reflashing.
 """
 
+import os
 import sys
 
 try:
@@ -60,13 +62,24 @@ VENDOR_INTERFACE_STRING = "SENTIA TILES Control"
 TIMEOUT_MS = 2000
 
 
+def serial_of(device):
+    try:
+        return usb.util.get_string(device, device.iSerialNumber)
+    except (usb.core.USBError, ValueError):
+        return None
+
+
 def find_device():
+    # TILES_SERIAL (the USB serial = chip ID, as for tools/flash.sh) picks
+    # one board when several are connected; otherwise the first one found.
+    want = os.environ.get("TILES_SERIAL", "").strip().upper()
     for vid, pid in USB_IDS:
-        device = usb.core.find(idVendor=vid, idProduct=pid)
-        if device is not None:
-            return device
+        for device in usb.core.find(find_all=True, idVendor=vid, idProduct=pid):
+            if not want or (serial_of(device) or "").upper() == want:
+                return device
     ids = ", ".join(f"{vid:04X}:{pid:04X}" for vid, pid in USB_IDS)
-    print(f"No SENTIA TILES device found (looked for USB IDs {ids}). Is it plugged in?", file=sys.stderr)
+    which = f" with serial {want}" if want else ""
+    print(f"No SENTIA TILES device found{which} (looked for USB IDs {ids}). Is it plugged in?", file=sys.stderr)
     sys.exit(1)
 
 

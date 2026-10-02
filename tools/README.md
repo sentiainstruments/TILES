@@ -37,6 +37,10 @@ tools/flash.sh                                   # default build output, one boa
 TILES_SERIAL=F1A60E66E44C9D4B tools/flash.sh     # one of several boards (serial = chip ID)
 ```
 
+With several boards running, picotool can't reboot just one, so given
+`TILES_SERIAL` the script first sends that board to BOOTSEL through
+`tiles_control.py` (needs its pyusb venv, below).
+
 It's `picotool load -f` with the board's USB ID spelled out (`--vid/--pid`).
 Without the ID, picotool only recognizes boards using Raspberry Pi's stock
 product IDs, which is why a plain `picotool load -f` never found board 2. See
@@ -65,6 +69,7 @@ Then run the script with that interpreter:
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py list
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py get cv_gate.enabled
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py set cv_gate.enabled 1
+TILES_SERIAL=D8D37A03B3B6CE95 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py info   # one of several boards
 ```
 
 Settings apply immediately and are saved to flash automatically. Ones

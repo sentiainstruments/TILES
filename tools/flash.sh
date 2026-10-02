@@ -34,6 +34,22 @@ if picotool info ${SER_ARGS[@]+"${SER_ARGS[@]}"} >/dev/null 2>&1; then
     exec picotool load ${SER_ARGS[@]+"${SER_ARGS[@]}"} -x -v --ignore-partitions "$UF2"
 fi
 
+# Several running boards: picotool -f can only reboot a lone one (its --ser
+# filters boards already in BOOTSEL, not running ones), so the chosen board
+# is sent to BOOTSEL over its settings shell (tiles_control.py, needs the
+# pyusb venv from tools/README.md; TILES_PYTHON overrides its path).
+if [ -n "${TILES_SERIAL:-}" ]; then
+    PY="${TILES_PYTHON:-$HOME/.venvs/tiles-tools/bin/python}"
+    if [ -x "$PY" ] && "$PY" "$(dirname "$0")/tiles_control.py" reboot bootsel >/dev/null 2>&1; then
+        echo "Sent board $TILES_SERIAL to BOOTSEL -- flashing it."
+        for _ in $(seq 1 20); do
+            picotool info --ser "$TILES_SERIAL" >/dev/null 2>&1 && break
+            sleep 0.5
+        done
+        exec picotool load --ser "$TILES_SERIAL" -x -v --ignore-partitions "$UF2"
+    fi
+fi
+
 for id in "${IDS[@]}"; do
     read -r vid pid <<<"$id"
     echo "Trying a running board with USB ID $vid:$pid ..."
