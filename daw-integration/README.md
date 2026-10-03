@@ -108,6 +108,22 @@ The diamond drives Live's transport outside the sequencer
 (`handle_diamond_transport()` in `firmware/src/services/op_mode.c`). On
 the DAW port, channel 1:
 
+**Performance layout (on now, `OP_TRANSPORT_SHIFT_STOP` in `op_mode.c`
+and `DIAMOND_IGNORED_WHILE_PLAYING` in `TILES.py`, set together):**
+
+| Gesture | CC | Script action |
+|---|---|---|
+| Click | 102 | `song.start_playing()`, only if Live is stopped |
+| Hold 2 s, release | 104 | `record_mode = True`, only if Live is stopped |
+| Circle + diamond | 103 | `record_mode = False`, then `song.stop_playing()` |
+
+While Live plays, diamond alone does nothing: the script checks Live's
+own state, so it holds when the other unit or the mouse started the
+transport. Circle + diamond's usual jobs (Ableton stop-all, Song capture)
+are off in this layout.
+
+**Toggle layout (both switches off):**
+
 | Gesture | CC | Script action |
 |---|---|---|
 | Click, stopped | 102 | `song.start_playing()` |

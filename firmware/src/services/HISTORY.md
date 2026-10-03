@@ -9329,4 +9329,18 @@ change. Search it by file or feature name.
   `tiles_op_mode_owns_pad()` claims, which also keeps touches under an
   open menu from plucking. (The same report's "harmonics dont seem to
   work" turned out to be the pedal's polarity.)
+- **Performance transport layout (0.2.4, 2026-10-02).** Real feedback:
+  "lets change the diamond stop to shift diamond for transport control
+  ableton, on both units, basically desabeling the other function that
+  lives there for now. so diamond plays, dianomd hold recxords, diamond
+  plus shift stop. if oplaying then diamond dosnt do anything no
+  retrigger no nothing". `OP_TRANSPORT_SHIFT_STOP 1`: outside the
+  sequencer, click = Play CC, hold = Record CC, circle + diamond = Stop
+  CC; Song capture, Ableton stop-all and ending an Ableton capture are
+  unreachable meanwhile. Play/Record go out whatever TILES believes (the
+  other unit may have started Live) and the Ableton script ignores them
+  while Live plays; Realtime Start only goes out from TILES's own stopped
+  state. With Song capture unreachable, GCC proved `s_song_capture_slot`
+  always 0 and warned on `slot - 1` in `song_capture_advance_clock()`,
+  which now returns early for slot 0.
 

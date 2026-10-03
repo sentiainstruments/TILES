@@ -2428,6 +2428,23 @@ static void handle_triangle_click(void) {
 #define OP_TRANSPORT_STOP_CC 103u
 #define OP_TRANSPORT_RECORD_CC 104u
 
+/* Performance transport layout (1 = on), outside the sequencer:
+ *   - diamond click: play; hold: record; circle + diamond: stop;
+ *   - while Live plays, diamond alone does nothing (no restart, no punch-in).
+ * The click and hold still send their CCs whatever TILES believes, since
+ * another unit or the mouse may have changed Live's transport; the Ableton
+ * script ignores them while Live plays (DIAMOND_IGNORED_WHILE_PLAYING in
+ * daw-integration/ableton/TILES/TILES.py, set to match). Circle + diamond's
+ * usual jobs (Ableton stop-all, Song capture, ending an Ableton capture)
+ * are off while this is on. 0 = the layout described above (click toggles
+ * play/stop). */
+#define OP_TRANSPORT_SHIFT_STOP 1
+
+static void transport_send_cc(uint8_t cc) {
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
+    tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
+}
+
 /* Song mode's slot count and capture slot, declared early for
  * handle_diamond_transport() and scan. */
 #define OP_SONG_NUM_SLOTS TILES_NUM_PADS
@@ -2506,6 +2523,31 @@ static void handle_diamond_transport(uint32_t now_ms) {
                     pattern_bank_exit();
                 } else {
                     pattern_bank_enter();
+                }
+            } else if (OP_TRANSPORT_SHIFT_STOP &&
+                       !(s_active_mode == OP_MODE_SONG && s_song_edit_active && !s_diamond_press_was_shift)) {
+                /* Performance layout (OP_TRANSPORT_SHIFT_STOP). Realtime Start/Stop as
+                 * in the toggle layout below; Start only from stopped, so a click
+                 * while playing never restarts synced gear. */
+                if (s_diamond_press_was_shift) {
+                    transport_send_cc(OP_TRANSPORT_STOP_CC);
+                    if (!tiles_midi_clock_external_active(now_ms)) {
+                        tiles_midi_send_stop();
+                    }
+                    s_transport_playing = false;
+                    s_transport_recording = false;
+                } else if (s_diamond_record_armed) {
+                    transport_send_cc(OP_TRANSPORT_RECORD_CC);
+                    if (!s_transport_playing) {
+                        s_transport_recording = true; /* playing: Live ignores it */
+                    }
+                    s_transport_playing = true;
+                } else {
+                    transport_send_cc(OP_TRANSPORT_PLAY_CC);
+                    if (!s_transport_playing && !tiles_midi_clock_external_active(now_ms)) {
+                        tiles_midi_send_start();
+                    }
+                    s_transport_playing = true;
                 }
             } else if (s_active_mode == OP_MODE_SCENE_LAUNCH && s_diamond_press_was_shift) {
                 /* Ableton mode: circle + diamond = stop all clips (Song capture isn't
@@ -4006,6 +4048,9 @@ static void song_capture_handle_taps(tiles_midi_clock_state_t clock) {
 }
 
 static void song_capture_advance_clock(tiles_midi_clock_state_t clock) {
+    if (s_song_capture_slot == 0u) {
+        return; /* no capture (callers check too; slot - 1 would wrap) */
+    }
     uint8_t slot = s_song_capture_slot - 1u;
     if (clock.start_edge) {
         s_song_current_step[slot] = 0u;

@@ -29,6 +29,14 @@ PLAY_CC = 102
 STOP_CC = 103
 RECORD_CC = 104
 
+# Matches OP_TRANSPORT_SHIFT_STOP in the firmware's op_mode.c (the
+# performance layout: diamond plays, hold records, circle + diamond stops).
+# While Live plays, Play and Record do nothing: no restart from the start
+# marker, no punch-in. Checked against Live's own state, so it holds when
+# another TILES or the mouse started the transport. Play is ignored while
+# playing either way (a restart is never what a Play button means).
+DIAMOND_IGNORED_WHILE_PLAYING = True
+
 
 class TILES(ControlSurface):
     def __init__(self, c_instance):
@@ -45,7 +53,7 @@ class TILES(ControlSurface):
             self._scene_launch = SceneLaunch(self)
 
     def _on_play(self, value):
-        if value > 0:
+        if value > 0 and not self.song().is_playing:
             self.song().start_playing()
 
     def _on_stop(self, value):
@@ -57,6 +65,8 @@ class TILES(ControlSurface):
 
     def _on_record(self, value):
         if value > 0:
+            if DIAMOND_IGNORED_WHILE_PLAYING and self.song().is_playing:
+                return
             # Set, not toggled: the firmware sends Record only to start a
             # recording (Stop ends one). Live's count-in preference
             # (Record/Warp/Launch) applies by itself.

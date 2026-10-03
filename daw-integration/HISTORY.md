@@ -518,3 +518,15 @@ stays, behind `RECORD_INTO_EMPTY_SLOTS = False` in `scene_launch.py`;
 the firmware stops sending the click (`OP_SCENE_RECORD_INTO_EMPTY_SLOTS`
 in `op_mode.c`). Turn both on together to bring it back.
 
+## Performance transport layout (2026-10-02)
+
+Real feedback, for a two-unit performance: "lets change the diamond stop
+to shift diamond for transport control ableton, on both units ...
+diamond plays, dianomd hold recxords, diamond plus shift stop. if
+oplaying then diamond dosnt do anything no retrigger no nothing". The
+firmware (`OP_TRANSPORT_SHIFT_STOP`) still sends Play/Record on every
+click/hold, because one unit can't know the other already started Live;
+the script drops them while `song.is_playing` (Play always, Record with
+`DIAMOND_IGNORED_WHILE_PLAYING`), so a second unit's click never restarts
+the song from the start marker.
+
