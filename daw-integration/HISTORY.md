@@ -509,3 +509,12 @@ Two script fixes from the same session:
 - Recording a new clip disarmed every other armed track, which would
   silence the other unit's track. A track whose input is a different
   TILES unit now stays armed (`_played_by_other_tiles()`).
+
+## Empty-slot recording switched off (2026-10-02)
+
+Real feedback: "lets get rid of the ableton record in place of emtpy
+track mode rn keep it as a feature thats off rn". `_record_new_clip()`
+stays, behind `RECORD_INTO_EMPTY_SLOTS = False` in `scene_launch.py`;
+the firmware stops sending the click (`OP_SCENE_RECORD_INTO_EMPTY_SLOTS`
+in `op_mode.c`). Turn both on together to bring it back.
+

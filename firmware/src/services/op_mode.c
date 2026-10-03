@@ -4152,6 +4152,12 @@ static void song_capture_exit(void) {
  * s_scene_pending_melodic. */
 #define OP_SCENE_MSG_OPEN_MELODIC 0x12u
 
+/* Recording a new clip by clicking an empty slot. Built but switched off:
+ * an empty slot ignores the click (no CC, no red flash). Turn it on
+ * together with RECORD_INTO_EMPTY_SLOTS in daw-integration/ableton/TILES/
+ * scene_launch.py. */
+#define OP_SCENE_RECORD_INTO_EMPTY_SLOTS 0
+
 /* CLIP_STATE/SCENE_STATE flag bits (one 7-bit byte). SCENE_STATE uses
  * only IS_TRIGGERED (a scene has no playing state of its own). */
 #define OP_SCENE_FLAG_HAS_CLIP 0x01u
@@ -4508,8 +4514,9 @@ static void scene_update_haptics(uint8_t pad, bool touched, bool was_touched, bo
  *   - column 6: launch the scene (magenta flash);
  *   - a playing clip: stop it (the clip's color);
  *   - a stopped clip: fire it (the clip's color);
- *   - an empty slot: the same fire CC; the script arms the track and
- *     records into the slot (and opens melodic mode for a MIDI track; see
+ *   - an empty slot: nothing, unless OP_SCENE_RECORD_INTO_EMPTY_SLOTS:
+ *     then the same fire CC, the script arms the track and records into
+ *     the slot (and opens melodic mode for a MIDI track; see
  *     OP_SCENE_MSG_OPEN_MELODIC). Red flash (no clip color yet). */
 static void scene_handle_click(uint8_t pad, uint8_t col, const op_scene_cell_state_t *cell, uint32_t now_ms) {
     if (col == OP_SCENE_LAUNCH_COL) {
@@ -4522,8 +4529,10 @@ static void scene_handle_click(uint8_t pad, uint8_t col, const op_scene_cell_sta
         return;
     }
     if (!cell->has_clip) {
-        scene_send_grid_touch(pad);
-        scene_start_flash(1.0f, 0.0f, 0.0f, now_ms);
+        if (OP_SCENE_RECORD_INTO_EMPTY_SLOTS) {
+            scene_send_grid_touch(pad);
+            scene_start_flash(1.0f, 0.0f, 0.0f, now_ms);
+        }
         return;
     }
     if (cell->is_playing) {

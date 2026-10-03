@@ -9311,3 +9311,22 @@ change. Search it by file or feature name.
   hardware-verified yet.
 - Everything else (per-pad Hall calibration) is not built
   yet.
+- **Ableton mode: recording into an empty slot switched off (0.2.2,
+  2026-10-02).** Real feedback: "lets get rid of the ableton record in
+  place of emtpy track mode rn keep it as a feature thats off rn". A
+  pressure click on an empty slot now does nothing (no CC, no red flash).
+  The code stays, behind `OP_SCENE_RECORD_INTO_EMPTY_SLOTS` (`op_mode.c`)
+  and `RECORD_INTO_EMPTY_SLOTS` in the Ableton script; both must be
+  turned on together. The OPEN_MELODIC and end-capture paths are
+  unreachable while it's off.
+- **Harmonics: only melody pads pluck (0.2.2, 2026-10-02).** Real
+  feedback: "add harmonic feature to melodic side of chord mode".
+  Harmonics already ran in chord mode's melody grid (entry above), but
+  the pluck loop also scanned the chord strip: its pads never enter the
+  strike state machine, so `harmonic_pad_is_pressing()` couldn't see a
+  chord press and every chord pressed over a held melody note (pedal
+  down) plucked a harmonic too. The loop now skips any pad
+  `tiles_op_mode_owns_pad()` claims, which also keeps touches under an
+  open menu from plucking. (The same report's "harmonics dont seem to
+  work" turned out to be the pedal's polarity.)
+

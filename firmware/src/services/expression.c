@@ -522,8 +522,8 @@ static bool slot_is_held_note(uint8_t idx) {
  *   - A touched pad pressed into a real strike becomes a real note; with
  *     two notes held the session ends and every harmonic stops ("not in
  *     polyphony").
- *   - Melodic and chord mode (the melody grid), not bass guitar
- *     (tiles_op_mode_melodic_harmonics_may_play()).
+ *   - Melodic mode and chord mode's melody pads (the chord strip never
+ *     plucks), not bass guitar (tiles_op_mode_melodic_harmonics_may_play()).
  *   - Channels: harmonics never take a real note's channel; see
  *     harmonic_channel_is_reserved(). */
 
@@ -816,6 +816,13 @@ static void scan_melodic_harmonics(uint32_t now_ms) {
         pad_expr_t *ps = &s_pads[pad - 1u];
 
         if (pad == fundamental) {
+            s_harmonic_pending[pad - 1u] = false;
+            continue;
+        }
+        /* Only pads that play notes here pluck: not chord mode's chord strip
+         * (op_mode plays it, and its presses aren't tracked here, so a chord
+         * would read as a light touch) nor a pad under an open menu. */
+        if (tiles_op_mode_owns_pad(pad)) {
             s_harmonic_pending[pad - 1u] = false;
             continue;
         }

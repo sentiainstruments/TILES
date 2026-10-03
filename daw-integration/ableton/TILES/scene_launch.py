@@ -13,7 +13,8 @@ on the hardware.
 
     CC_GRID_TOUCH   (108) value = pad 1-24, then 0: fire that clip
                     (columns 1-5), launch that scene (column 6), or on an
-                    empty slot record a new clip (_record_new_clip())
+                    empty slot record a new clip (_record_new_clip(), off:
+                    RECORD_INTO_EMPTY_SLOTS)
     CC_STOP_TOUCH   (109) value = pad, then 0: stop that playing clip
     CC_DELETE_TOUCH (110) value = pad, then 0: delete that clip (circle
                     held + pad for 3 s; the firmware times the hold)
@@ -109,6 +110,12 @@ NUM_SCENES = 4
 # op_mode.c: the track columns shown at once. Sizes the session ring only;
 # the clip/scene state covers every MAX_TRACKS track.
 NUM_VISIBLE_TRACKS = 5
+
+# Recording a new clip by clicking an empty slot (_record_new_clip()).
+# Built but switched off: a click on an empty slot does nothing. Turn it
+# on together with OP_SCENE_RECORD_INTO_EMPTY_SLOTS in the firmware
+# (firmware/src/services/op_mode.c), which also stops sending the click.
+RECORD_INTO_EMPTY_SLOTS = False
 
 
 def _color_to_wire_rgb(color_int):
@@ -456,7 +463,7 @@ class SceneLaunch(object):
                 clip_slot = track.clip_slots[scene_index]
                 if clip_slot.has_clip:
                     clip_slot.fire()
-                else:
+                elif RECORD_INTO_EMPTY_SLOTS:
                     self._record_new_clip(track, clip_slot, track_index, scene_index)
 
     def _record_new_clip(self, track, clip_slot, track_index, scene_index):

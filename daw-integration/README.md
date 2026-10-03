@@ -96,9 +96,9 @@ Then:
 - Both units drive the same Live set: either diamond starts and stops
   the transport, and each unit's Ableton mode has its own five-track
   window.
-- Recording a new clip from one unit disarms the other armed tracks,
-  except a track whose input is the other unit, so the other player
-  keeps playing.
+- Recording a new clip from one unit (when empty-slot recording is on)
+  disarms the other armed tracks, except a track whose input is the
+  other unit, so the other player keeps playing.
 - TILES DISPLAY shows notes on one unit only: its auto-find picks the
   first loaded TILES row in Preferences.
 
@@ -132,13 +132,16 @@ View:
   half way, like picking in a menu) acts:
   - on a clip: fire it; on a playing clip: stop it;
   - on column 6: launch the scene;
-  - on an empty slot: record a new clip. The script disarms the other
+  - on an empty slot: nothing. Recording a new clip there is built but
+    switched off; to turn it on, set `OP_SCENE_RECORD_INTO_EMPTY_SLOTS`
+    (firmware, `op_mode.c`) and `RECORD_INTO_EMPTY_SLOTS`
+    (`scene_launch.py`) together. When on: the script disarms the other
     armed tracks (except one played by another TILES unit, see "Two
-    units at once"), arms this one and fires the slot. If the track takes MIDI,
-    TILES switches to melodic mode once your fingers are off the pads,
-    so you can play straight into the recording. **Circle + diamond**
-    then ends the recording (the clip starts looping) and returns to
-    Ableton mode.
+    units at once"), arms this one and fires the slot. If the track
+    takes MIDI, TILES switches to melodic mode once your fingers are off
+    the pads, so you can play straight into the recording. **Circle +
+    diamond** then ends the recording (the clip starts looping) and
+    returns to Ableton mode.
 - **Circle + diamond** (not recording): stop all clips.
 - **Circle held + a clip's pad touched for 3 s**: delete the clip (the
   pad blinks red, the underglow goes red). Releasing either cancels;
@@ -147,7 +150,7 @@ View:
   = pulsing, queued = blinking. Column 6 is Sentia magenta while any
   track has a clip in that scene. The underglow is teal, flashing
   magenta on a scene launch, the clip's color on a clip action, or red
-  when recording into an empty slot.
+  when recording into an empty slot (when that's on).
 - Ableton's session-ring box follows the five-track window in Session
   View (built; not yet confirmed that Live draws it for this script).
 

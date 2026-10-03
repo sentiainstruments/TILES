@@ -223,7 +223,7 @@ real-hardware delivery.
 
 | Direction | Transport | Meaning |
 |---|---|---|
-| TILES -> Ableton | CC `CC_GRID_TOUCH` (108), value = pad, then 0 | Pressure click: fire that pad's clip (track columns 1-5), launch that pad's whole scene (column 6), or -- on an EMPTY slot -- arm the track and record into it |
+| TILES -> Ableton | CC `CC_GRID_TOUCH` (108), value = pad, then 0 | Pressure click: fire that pad's clip (track columns 1-5), launch that pad's whole scene (column 6), or -- on an EMPTY slot, switched off for now (`OP_SCENE_RECORD_INTO_EMPTY_SLOTS` / `RECORD_INTO_EMPTY_SLOTS`) -- arm the track and record into it |
 | TILES -> Ableton | CC `CC_STOP_TOUCH` (109), value = pad, then 0 | Pressure click on a clip that's already playing: stop that one clip (track columns 1-5 only) |
 | TILES -> Ableton | CC `CC_MASTER_STOP` (105), 127 then 0 | Stop all clips (master stop) -- circle + diamond in Ableton mode |
 | TILES -> Ableton | CC `CC_TRACK_OFFSET` (106), value = offset | Visible track window changed -- keeps the session-ring overlay and the pad-to-track mapping in sync |
