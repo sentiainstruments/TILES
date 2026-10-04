@@ -2524,6 +2524,11 @@ static void handle_diamond_transport(uint32_t now_ms) {
                 } else {
                     pattern_bank_enter();
                 }
+            } else if (s_ableton_capture_active && s_diamond_press_was_shift) {
+                /* Recording a Live clip from melodic mode (s_ableton_capture_active):
+                 * circle + diamond ends it and returns to Ableton mode, in either
+                 * transport layout (ending the clip, not stopping the song). */
+                scene_end_capture();
             } else if (OP_TRANSPORT_SHIFT_STOP &&
                        !(s_active_mode == OP_MODE_SONG && s_song_edit_active && !s_diamond_press_was_shift)) {
                 /* Performance layout (OP_TRANSPORT_SHIFT_STOP). Realtime Start/Stop as
@@ -2553,10 +2558,6 @@ static void handle_diamond_transport(uint32_t now_ms) {
                 /* Ableton mode: circle + diamond = stop all clips (Song capture isn't
                  * used there). Checked before the generic Song-capture branch. */
                 scene_send_stop_all();
-            } else if (s_ableton_capture_active && s_diamond_press_was_shift) {
-                /* Recording a Live clip from melodic mode (s_ableton_capture_active):
-                 * circle + diamond ends it and returns to Ableton mode. */
-                scene_end_capture();
             } else if (s_diamond_press_was_shift) {
                 /* Circle + diamond elsewhere (melodic, chord, bass guitar, or Song mode
                  * itself): toggle Song capture, which records into the next empty Song
@@ -4192,16 +4193,10 @@ static void song_capture_exit(void) {
 /* Live -> TILES only. TILES -> Live uses CCs (see OP_SCENE_CC_*). */
 #define OP_SCENE_MSG_CLIP_STATE 0x10u
 #define OP_SCENE_MSG_SCENE_STATE 0x11u
-/* Sent by the script after a click on an EMPTY slot armed the track and
- * started recording, only if the track takes MIDI (only Live knows). See
- * s_scene_pending_melodic. */
+/* Sent by the script after circle + a click on an EMPTY slot armed the
+ * track and started recording, only if the track takes MIDI (only Live
+ * knows). See s_scene_pending_melodic. */
 #define OP_SCENE_MSG_OPEN_MELODIC 0x12u
-
-/* Recording a new clip by clicking an empty slot. Built but switched off:
- * an empty slot ignores the click (no CC, no red flash). Turn it on
- * together with RECORD_INTO_EMPTY_SLOTS in daw-integration/ableton/TILES/
- * scene_launch.py. */
-#define OP_SCENE_RECORD_INTO_EMPTY_SLOTS 0
 
 /* CLIP_STATE/SCENE_STATE flag bits (one 7-bit byte). SCENE_STATE uses
  * only IS_TRIGGERED (a scene has no playing state of its own). */
@@ -4321,8 +4316,9 @@ static float scene_playing_pulse_level(uint32_t now_ms) {
  * playable notes, so a note would also reach the instrument track).
  *
  * Pad actions are ONE CC whose value is the pad (1-24), then 0:
- * grid (fire a clip / launch a scene), stop (column 1-5), delete. All
- * Scene Launch CCs are 105-110, in the MIDI spec's undefined range. Never
+ * grid (fire a clip / launch a scene), stop (column 1-5), delete, record
+ * (circle + an empty slot). All Scene Launch CCs are 105-111, in the MIDI
+ * spec's undefined range. Never
  * use performance CCs: per-pad CCs once used 11-94, so CC 64 (pad 24's
  * stop) was claimed by the script and the sustain pedal never reached
  * the instrument. */
@@ -4332,6 +4328,7 @@ static float scene_playing_pulse_level(uint32_t now_ms) {
 #define OP_SCENE_CC_GRID_TOUCH 108u
 #define OP_SCENE_CC_STOP_TOUCH 109u
 #define OP_SCENE_CC_DELETE_TOUCH 110u
+#define OP_SCENE_CC_RECORD_TOUCH 111u
 
 /* One pad event: `cc` = pad, then 0 (so two taps of the same pad aren't
  * two identical values in a row). */
@@ -4342,6 +4339,10 @@ static void scene_send_pad_event(uint8_t cc, uint8_t pad) {
 
 static void scene_send_grid_touch(uint8_t pad) {
     scene_send_pad_event(OP_SCENE_CC_GRID_TOUCH, pad);
+}
+
+static void scene_send_record_touch(uint8_t pad) {
+    scene_send_pad_event(OP_SCENE_CC_RECORD_TOUCH, pad);
 }
 
 /* Circle + diamond in Ableton mode: stop all clips (separate from the
@@ -4559,10 +4560,8 @@ static void scene_update_haptics(uint8_t pad, bool touched, bool was_touched, bo
  *   - column 6: launch the scene (magenta flash);
  *   - a playing clip: stop it (the clip's color);
  *   - a stopped clip: fire it (the clip's color);
- *   - an empty slot: nothing, unless OP_SCENE_RECORD_INTO_EMPTY_SLOTS:
- *     then the same fire CC, the script arms the track and records into
- *     the slot (and opens melodic mode for a MIDI track; see
- *     OP_SCENE_MSG_OPEN_MELODIC). Red flash (no clip color yet). */
+ *   - an empty slot: nothing (circle + click records there; see
+ *     scene_handle_shift_click()). */
 static void scene_handle_click(uint8_t pad, uint8_t col, const op_scene_cell_state_t *cell, uint32_t now_ms) {
     if (col == OP_SCENE_LAUNCH_COL) {
         scene_send_grid_touch(pad);
@@ -4574,10 +4573,6 @@ static void scene_handle_click(uint8_t pad, uint8_t col, const op_scene_cell_sta
         return;
     }
     if (!cell->has_clip) {
-        if (OP_SCENE_RECORD_INTO_EMPTY_SLOTS) {
-            scene_send_grid_touch(pad);
-            scene_start_flash(1.0f, 0.0f, 0.0f, now_ms);
-        }
         return;
     }
     if (cell->is_playing) {
@@ -4586,6 +4581,19 @@ static void scene_handle_click(uint8_t pad, uint8_t col, const op_scene_cell_sta
         scene_send_grid_touch(pad);
     }
     scene_start_flash((float)cell->r / 255.0f, (float)cell->g / 255.0f, (float)cell->b / 255.0f, now_ms);
+}
+
+/* Circle + a pressure click on an EMPTY track slot: record a new clip
+ * there. The script arms the track and fires the slot (and opens melodic
+ * mode for a MIDI track; see OP_SCENE_MSG_OPEN_MELODIC). Red flash (no
+ * clip color yet). On a clip, circle is the delete hold instead, and a
+ * click does nothing. */
+static void scene_handle_shift_click(uint8_t pad, uint8_t col, const op_scene_cell_state_t *cell, uint32_t now_ms) {
+    if (col == OP_SCENE_LAUNCH_COL || cell == NULL || cell->has_clip) {
+        return;
+    }
+    scene_send_record_touch(pad);
+    scene_start_flash(1.0f, 0.0f, 0.0f, now_ms);
 }
 
 /* True if it switched modes (see s_scene_pending_melodic); the caller
@@ -4646,10 +4654,12 @@ static bool handle_scene_launch_taps(uint32_t now_ms) {
             s_scene_click_latched[idx] = false;
         } else if (!s_scene_click_latched[idx] && depth > OP_SCENE_CLICK_DEPTH_THRESHOLD) {
             s_scene_click_latched[idx] = true;
-            /* Latched either way, but only acts without circle, so the delete
-             * gesture never also fires or stops the clip. */
+            /* With circle held a click only records into an empty slot, so the
+             * delete gesture never also fires or stops a clip. */
             if (!shift) {
                 scene_handle_click(pad, col, cell, now_ms);
+            } else {
+                scene_handle_shift_click(pad, col, cell, now_ms);
             }
         }
 

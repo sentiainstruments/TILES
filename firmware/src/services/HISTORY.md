@@ -9343,4 +9343,17 @@ change. Search it by file or feature name.
   state. With Song capture unreachable, GCC proved `s_song_capture_slot`
   always 0 and warned on `slot - 1` in `song_capture_advance_clock()`,
   which now returns early for slot 0.
+- **Ableton mode: circle + an empty slot records a new clip (0.2.5,
+  2026-10-04).** Real feedback, picking from the suggested gestures:
+  "build option 1, circle plus empty slot". A plain press on an empty
+  slot still does nothing; with circle held, a pressure click on an
+  empty track slot sends `OP_SCENE_CC_RECORD_TOUCH` (111), a new CC
+  rather than the grid CC, so the script (which checks Live's own slot
+  state) never records from a plain press even if TILES's copy of the
+  clip state lags. `OP_SCENE_RECORD_INTO_EMPTY_SLOTS` is gone. Circle +
+  diamond during the recording ends it before the performance
+  transport's Stop is considered, so it ends the clip rather than
+  stopping the song. Built only as a syntax check (clang against the SDK
+  headers): macOS 27 dropped Rosetta and this Mac's arm-none-eabi-gcc is
+  Intel-only (`firmware/BUILD.md`).
 

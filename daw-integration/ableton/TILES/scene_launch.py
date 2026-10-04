@@ -12,12 +12,14 @@ events are sent only on a pressure click; a bare touch is haptics-only
 on the hardware.
 
     CC_GRID_TOUCH   (108) value = pad 1-24, then 0: fire that clip
-                    (columns 1-5), launch that scene (column 6), or on an
-                    empty slot record a new clip (_record_new_clip(), off:
-                    RECORD_INTO_EMPTY_SLOTS)
+                    (columns 1-5) or launch that scene (column 6); an
+                    empty slot does nothing
     CC_STOP_TOUCH   (109) value = pad, then 0: stop that playing clip
     CC_DELETE_TOUCH (110) value = pad, then 0: delete that clip (circle
                     held + pad for 3 s; the firmware times the hold)
+    CC_RECORD_TOUCH (111) value = pad, then 0: record a new clip into that
+                    empty slot (circle held + pressure click;
+                    _record_new_clip())
     CC_MASTER_STOP  (105) 127 then 0: stop all clips
     CC_TRACK_OFFSET (106) value = first visible track (the "-"/"+" pan)
     CC_END_CAPTURE  (107) 127 then 0: end the recording that
@@ -79,6 +81,7 @@ CC_END_CAPTURE = 107
 CC_GRID_TOUCH = 108
 CC_STOP_TOUCH = 109
 CC_DELETE_TOUCH = 110
+CC_RECORD_TOUCH = 111
 
 # Must match TILES_NUM_PADS (firmware/src/board/board_pins.h). Pad values
 # outside 1..NUM_GRID_PADS are ignored.
@@ -111,11 +114,6 @@ NUM_SCENES = 4
 # the clip/scene state covers every MAX_TRACKS track.
 NUM_VISIBLE_TRACKS = 5
 
-# Recording a new clip by clicking an empty slot (_record_new_clip()).
-# Built but switched off: a click on an empty slot does nothing. Turn it
-# on together with OP_SCENE_RECORD_INTO_EMPTY_SLOTS in the firmware
-# (firmware/src/services/op_mode.c), which also stops sending the click.
-RECORD_INTO_EMPTY_SLOTS = False
 
 
 def _color_to_wire_rgb(color_int):
@@ -186,6 +184,7 @@ class SceneLaunch(object):
         self._track_offset_button = None
         self._end_capture_button = None
         self._delete_button_listeners = []  # list of (button, callback), pad 1..NUM_GRID_PADS
+        self._record_button_listeners = []  # list of (button, callback), pad 1..NUM_GRID_PADS
         # The slot _record_new_clip() last armed and started recording
         # into -- what CC_END_CAPTURE ends. None when nothing's recording.
         self._capture_slot = None
@@ -377,6 +376,7 @@ class SceneLaunch(object):
             (CC_GRID_TOUCH, self._on_grid_touch, self._grid_button_listeners),
             (CC_STOP_TOUCH, self._on_stop_touch, self._stop_button_listeners),
             (CC_DELETE_TOUCH, self._on_delete_touch, self._delete_button_listeners),
+            (CC_RECORD_TOUCH, self._on_record_touch, self._record_button_listeners),
         ):
             button = ButtonElement(True, MIDI_CC_TYPE, TILES_MASTER_CHANNEL, cc)
             callback = self._make_pad_event_callback(handler)
@@ -463,18 +463,35 @@ class SceneLaunch(object):
                 clip_slot = track.clip_slots[scene_index]
                 if clip_slot.has_clip:
                     clip_slot.fire()
-                elif RECORD_INTO_EMPTY_SLOTS:
-                    self._record_new_clip(track, clip_slot, track_index, scene_index)
+
+    def _on_record_touch(self, pad, value):
+        """Circle held + a pressure click on an empty slot: record a new
+        clip there. Checked against Live's own state, so a slot that has
+        a clip by now (the firmware's copy can lag) is left alone."""
+        if value <= 0:
+            return
+        col, track_index, scene_index = self._pad_to_col_track_scene(pad)
+        if col == 6:
+            return
+        tracks = self._song.tracks
+        scenes = self._song.scenes
+        if track_index < len(tracks) and scene_index < len(scenes):
+            track = tracks[track_index]
+            clip_slot = track.clip_slots[scene_index]
+            self._log("record_touch pad=%d track=%d scene=%d has_clip=%d" % (pad, track_index, scene_index, clip_slot.has_clip))
+            if not clip_slot.has_clip:
+                self._record_new_clip(track, clip_slot, track_index, scene_index)
 
     def _record_new_clip(self, track, clip_slot, track_index, scene_index):
-        """A click on an empty slot. Disarms the other armed tracks (Live's
-        Exclusive Arm preference can't be seen or relied on) except one
-        played by a different TILES (_played_by_other_tiles()), arms this
-        one if it can be armed (group tracks can't), and fires the slot,
-        which records a new clip into it. If the track takes MIDI, tells
-        the firmware to open melodic mode so the player can play into it;
-        audio tracks still arm and record. (can_be_armed, arm and
-        has_midi_input as in AbletonOSC's track.py.)"""
+        """Circle + a click on an empty slot. Disarms the other armed
+        tracks (Live's Exclusive Arm preference can't be seen or relied
+        on) except one played by a different TILES
+        (_played_by_other_tiles()), arms this one if it can be armed
+        (group tracks can't), and fires the slot, which records a new
+        clip into it. If the track takes MIDI, tells the firmware to open
+        melodic mode so the player can play into it; audio tracks still
+        arm and record. (can_be_armed, arm and has_midi_input as in
+        AbletonOSC's track.py.)"""
         armed = False
         if track.can_be_armed:
             for other in self._song.tracks:
@@ -610,7 +627,7 @@ class SceneLaunch(object):
                 self._end_capture_button.remove_value_listener(self._on_end_capture)
             except RuntimeError:
                 pass
-        for button, callback in self._delete_button_listeners:
+        for button, callback in self._delete_button_listeners + self._record_button_listeners:
             try:
                 button.remove_value_listener(callback)
             except RuntimeError:
