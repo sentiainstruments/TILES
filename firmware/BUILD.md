@@ -18,10 +18,11 @@ from the SDK you build against rather than editing it.
 
 On an Apple-silicon Mac use a native (arm64) `arm-none-eabi-gcc`, e.g. Arm's
 own toolchain (`brew install --cask gcc-arm-embedded`, which includes the
-newlib C library the SDK needs). An Intel-only build of the compiler needs
-Rosetta, which macOS 27 no longer has: the build then fails with "Bad CPU
-type in executable". After switching compilers, delete `firmware/build`
-(CMake caches the compiler path) and configure again.
+newlib C library the SDK needs). An Intel-only build of the compiler only
+runs under Rosetta; without it the build fails with "Bad CPU type in
+executable", and Apple is phasing Rosetta out after macOS 27. After
+switching compilers, delete `firmware/build` (CMake caches the compiler
+path) and configure again.
 
 ## Build
 

@@ -9354,6 +9354,6 @@ change. Search it by file or feature name.
   diamond during the recording ends it before the performance
   transport's Stop is considered, so it ends the clip rather than
   stopping the song. Built only as a syntax check (clang against the SDK
-  headers): macOS 27 dropped Rosetta and this Mac's arm-none-eabi-gcc is
-  Intel-only (`firmware/BUILD.md`).
+  headers): this Mac's arm-none-eabi-gcc is Intel-only and Rosetta isn't
+  installed (`firmware/BUILD.md`).
 
