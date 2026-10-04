@@ -16,15 +16,18 @@ on the TILES control surface writes to that script's MIDI output (the
 DAW port, which scene_launch.py also uses). No network, no extra script
 code.
 
-Finding TILES: a control surface is addressed by its position among
-LOADED surfaces, not its Preferences row (Live's _MxDCore/LomTypes.py
-get_control_surfaces() filters out empty slots), so a hand-set number
-breaks whenever that list changes. Each surface reports its script's
-class name as the LOM property type_name (_MxDCore/ControlSurfaceWrapper
-.py; "TILES", from TILES.py), so the device scans for the first "TILES"
-on load and on every VIEW arm ("Auto-find" in build_patcher()). SURFACE
-shows the result and is the manual fallback. Pads on TILES flash whenever
-the route could have changed, as a visible "connected" signal.
+Finding TILES: with several units connected, TILES (1-4) picks which:
+the Nth "TILES" row among Live's control surfaces, top to bottom. A
+surface is addressed by its position among LOADED surfaces, not its
+Preferences row (Live's _MxDCore/LomTypes.py get_control_surfaces()
+filters out empty slots), and each reports its script's class name as
+the LOM property type_name (_MxDCore/ControlSurfaceWrapper.py; "TILES",
+from TILES.py), so the device scans for the Nth "TILES" on load, on
+every VIEW arm and whenever TILES changes ("Auto-find" in
+build_patcher()). If the scan finds no TILES at all (a Live without
+type_name), the number is used as the loaded-surface position instead:
+the manual fallback. Pads on the chosen TILES flash whenever the route
+could have changed, as a visible "connected" signal.
 
 MPE: the device is a pure tap. The thru is one direct midiin -> midiout
 patchline with nothing parsed or filtered (midiparse/midiformat truncate
@@ -32,23 +35,30 @@ per-note pitch bend to semitones); everything else runs beside the
 chain. The patcher declares is_mpe = 1, without which Live doesn't pass
 the per-note MPE stream through the device at all.
 
-Two instances: up to two can be armed. The first armed is the PRIMARY:
-MIDI channel 1, green pads on TILES, pink VIEW. The second is the
-SECONDARY: channel 2, soft red pads and VIEW (firmware: services/
-op_mode.c echo layers, services/lighting.c). Arming a third replaces the
-secondary; disarming the primary promotes the secondary, so a lone armed
-device is never red.
+Two instances per TILES: up to two can be armed for each unit. The
+first armed is that unit's PRIMARY: MIDI channel 1, green pads, pink
+VIEW. The second is its SECONDARY: channel 2, soft red pads and VIEW
+(firmware: services/op_mode.c echo layers, services/lighting.c). Arming
+a third on the same unit replaces its secondary; disarming the primary
+promotes the secondary, so a lone armed device is never red. Instances
+on different units never affect each other. Changing TILES while armed
+disarms (clearing the old unit's pads) so the player re-arms on the new
+one.
 
 How instances agree without shared state: all instances share Max's
 global name space (send/receive names without the "---" prefix), and
 each keeps its own slot (0 = not armed, 1 = primary, 2 = secondary).
-Arming asks "who holds slot 1?" on tiles_display_who; a send is
-synchronous, so the answer (tiles_display_taken) is in before it
-returns. No answer -> slot 1, else slot 2, announced on
-tiles_display_bump so the previous secondary steps down. Disarming slot
-1 announces tiles_display_freed so the secondary promotes itself. No
-stored ids: the live instances are the state, so a device deleted while
-armed (Live sends no notification) can never wedge a slot.
+Every message on the buses carries the sender's TILES number, and each
+receiver only listens to its own unit's ([select] with the unit in its
+right inlet). Arming asks "who holds slot 1 on unit N?" on BUS_WHO; a
+send is synchronous, so the answer (BUS_TAKEN) is in before it returns.
+No answer -> slot 1, else slot 2, announced on BUS_BUMP so that unit's
+previous secondary steps down. Disarming slot 1 announces BUS_FREED so
+that unit's secondary promotes itself. No stored ids: the live instances
+are the state, so a device deleted while armed (Live sends no
+notification) can never wedge a slot. The bus names changed with the
+per-unit messages (v2), so an old instance left in a set can't confuse
+new ones.
 
 Checks here: every connection must point at a real inlet/outlet of a
 real object, and the output must parse back through the container
@@ -71,10 +81,12 @@ TEXT_ON_PINK = [0.04, 0.04, 0.05, 1.0]
 
 DEVICE_WIDTH = 160.0
 # NO "---" prefix on any of these: they must be global across instances.
-BUS_WHO = "tiles_display_who"  # "does anyone hold slot 1?"
-BUS_TAKEN = "tiles_display_taken"  # ...yes (sent by the slot-1 holder)
-BUS_BUMP = "tiles_display_bump"  # "I just took slot 2" (previous slot 2 steps down)
-BUS_FREED = "tiles_display_freed"  # "slot 1 just opened up" (slot 2 promotes)
+# WHO, BUMP and FREED carry the sender's TILES number (1-4).
+BUS_WHO = "tiles_display2_who"  # "does anyone hold slot 1 on unit N?"
+BUS_TAKEN = "tiles_display2_taken"  # ...yes (sent by that unit's slot-1 holder)
+BUS_BUMP = "tiles_display2_bump"  # "I just took slot 2 on unit N" (its previous slot 2 steps down)
+BUS_FREED = "tiles_display2_freed"  # "slot 1 on unit N just opened up" (its slot 2 promotes)
+UNITS = 4  # pre-production units; TILES picks 1..UNITS
 # The secondary's VIEW color: a soft warm red (coral) matching its pads on
 # TILES (services/lighting.c TILES_LIGHTING_ECHO_SECONDARY_G/_B). Blue
 # stays well under green so it can't drift toward PINK.
@@ -189,7 +201,7 @@ def build_patcher():
             "activebgoncolor": PINK,
             "activetextcolor": TEXT_DIM,
             "activetextoncolor": TEXT_ON_PINK,
-            "annotation": "Arm this track's notes to show on TILES' pads. Two can be armed at once: the first is pink (green pads), the second soft red.",
+            "annotation": "Arm this track's notes to show on TILES' pads. Two can be armed per TILES unit: the first is pink (green pads), the second soft red.",
             "bgcolor": [0.10, 0.10, 0.11, 1.0],
             "bgoncolor": PINK_DIM,
             "bordercolor": PINK_DIM,
@@ -225,13 +237,14 @@ def build_patcher():
         },
     )
 
-    comment("surface_label", "SURFACE", [600.0, 120.0, 60.0, 16.0], [12.0, 106.0, 70.0, 16.0], 10.0, TEXT_DIM)
-    # SURFACE: which LOADED control surface TILES is, 1-based here (0-based
-    # to the LOM, see the "- 1" below). Not the Preferences row: Live skips
-    # empty slots, so N counts loaded scripts only. Saved with the set.
+    comment("unit_label", "TILES", [600.0, 120.0, 60.0, 16.0], [12.0, 106.0, 70.0, 16.0], 10.0, TEXT_DIM)
+    # TILES: which unit, the Nth "TILES" row among the control surfaces (see
+    # the module docstring; the scan resolves it to a surface). Saved with
+    # the set.
     _add(
-        "surface",
+        "unit",
         {
+            "annotation": "Which TILES shows this track: 1 = the first TILES row in Live's Control Surface list, 2 = the second... Its pads flash when you change it.",
             "activebgcolor": BUTTON_OFF_BG,
             "activetricolor2": PINK,
             "appearance": 1,
@@ -248,22 +261,22 @@ def build_patcher():
             "presentation_rect": [96.0, 104.0, 52.0, 18.0],
             "saved_attribute_attributes": {
                 "valueof": {
-                    "parameter_longname": "SURFACE",
-                    "parameter_shortname": "SURFACE",
+                    "parameter_longname": "TILES",
+                    "parameter_shortname": "TILES",
                     "parameter_type": 1,
                     "parameter_mmin": 1.0,
-                    "parameter_mmax": 7.0,
+                    "parameter_mmax": float(UNITS),
                     "parameter_initial_enable": 1,
                     "parameter_initial": [1],
                     "parameter_unitstyle": 0,
                 }
             },
-            "varname": "SURFACE",
+            "varname": "TILES",
         },
     )
     comment(
         "hint",
-        "Finds TILES by itself; pads flash when connected. SURFACE: manual override. 2nd armed = soft red.",
+        "TILES: which unit (its order in Live's list); its pads flash. Two per unit.",
         [600.0, 150.0, 200.0, 30.0],
         [12.0, 128.0, 136.0, 34.0],
         9.0,
@@ -304,13 +317,12 @@ def build_patcher():
     conn("prep_send_a", 0, "lobj", 0)
     conn("prep_send_b", 0, "lobj", 0)
 
-    # ---- Which control_surfaces slot is TILES: SURFACE (1-7) -> 0-based
-    # LOM path -> live.path resolves it to an id -> live.object's right
-    # inlet. ----------------------------------------------------------------
+    # ---- Which control_surfaces slot to talk to: the scan's answer (1-7,
+    # see Auto-find) -> 0-based LOM path -> live.path resolves it to an id
+    # -> live.object's right inlet. -------------------------------------------
     newobj("surface_zero", "- 1", [232.0, 64.0, 32.0, 20.0], 2, 1, ["int"])
     newobj("prep_path", "prepend path control_surfaces", [320.0, 64.0, 180.0, 20.0], 1, 1)
     newobj("lpath_surface", "live.path", [320.0, 128.0, 62.0, 20.0], 1, 3, ["", "", ""])
-    conn("surface", 0, "surface_zero", 0)
     conn("surface_zero", 0, "prep_path", 0)
     conn("prep_path", 0, "lpath_surface", 0)
     # Both outlets, on purpose: the left sends the id in direct response to
@@ -322,7 +334,20 @@ def build_patcher():
     conn("lpath_surface", 0, "lobj", 1)
     conn("lpath_surface", 1, "lobj", 1)
 
-    # ---- Two instances at once: slots, see the module docstring ------------
+    # ---- This instance's TILES number, kept in one [t i] that feeds every
+    # copy: the bus senders' [int]s, the bus receivers' [select]s (right
+    # inlets), the scan's target and its fallback. Changing TILES: [t b i b]
+    # right to left -- disarm first (on the old unit, whose number the
+    # copies still hold), then store the new number, then find that unit. --
+    newobj("unit_change_t", "t b i b", [1000.0, 16.0, 60.0, 20.0], 1, 3, ["bang", "int", "bang"])
+    newobj("unit_store", "t i", [1000.0, 48.0, 30.0, 20.0], 1, 1, ["int"])
+    for name, y in (("unit_who", 80.0), ("unit_bump", 112.0), ("unit_freed", 144.0), ("unit_fallback", 176.0)):
+        newobj(name, "int 1", [1000.0, y, 32.0, 20.0], 2, 1, ["int"])
+        conn("unit_store", 0, name, 1)
+    conn("unit", 0, "unit_change_t", 0)
+    conn("unit_change_t", 1, "unit_store", 0)
+
+    # ---- Two instances per unit: slots, see the module docstring -----------
     # thisdev is still needed further down (the route flash's load guard).
     newobj("thisdev", "live.thisdevice", [32.0, 328.0, 83.0, 20.0], 1, 3, ["bang", "int", "int"])
 
@@ -353,23 +378,27 @@ def build_patcher():
     newobj("arm_t", "t b b b b b", [32.0, 392.0, 80.0, 20.0], 1, 5, ["bang", "bang", "bang", "bang", "bang"])
     message("msg_t1_reset", "0", [120.0, 392.0, 24.0, 20.0])
     newobj("taken_flag", "int 0", [120.0, 424.0, 32.0, 20.0], 2, 1, ["int"])
-    newobj("send_who", "s " + BUS_WHO, [160.0, 392.0, 120.0, 20.0], 1, 0)
+    newobj("send_who", "s " + BUS_WHO, [160.0, 424.0, 120.0, 20.0], 1, 0)
     newobj("plus1", "+ 1", [120.0, 456.0, 32.0, 20.0], 2, 1, ["int"])
     conn("sel_view", 0, "arm_t", 0)
     conn("arm_t", 3, "msg_t1_reset", 0)
     conn("msg_t1_reset", 0, "taken_flag", 1)
-    conn("arm_t", 2, "send_who", 0)
+    conn("arm_t", 2, "unit_who", 0)  # ask with our unit number
+    conn("unit_who", 0, "send_who", 0)
     conn("arm_t", 1, "taken_flag", 0)
     conn("taken_flag", 0, "plus1", 0)
 
     # Slot 1's holder answers the question; everyone's receiver sets their
     # taken_flag, but only the asker (who just cleared it) reads it.
-    newobj("recv_who", "r " + BUS_WHO, [800.0, 60.0, 110.0, 20.0], 1, 1)
+    newobj("recv_who", "r " + BUS_WHO, [800.0, 28.0, 110.0, 20.0], 1, 1)
+    newobj("who_mine", "select 1", [920.0, 28.0, 52.0, 20.0], 2, 2, ["bang", ""])
     newobj("sel_who", "select 1", [800.0, 92.0, 52.0, 20.0], 2, 2, ["bang", ""])
     newobj("send_taken", "s " + BUS_TAKEN, [800.0, 124.0, 120.0, 20.0], 1, 0)
     newobj("recv_taken", "r " + BUS_TAKEN, [800.0, 156.0, 120.0, 20.0], 1, 1)
     message("msg_t1_set", "1", [800.0, 188.0, 24.0, 20.0])
-    conn("recv_who", 0, "slot_who", 0)
+    conn("unit_store", 0, "who_mine", 1)
+    conn("recv_who", 0, "who_mine", 0)  # only questions about our unit
+    conn("who_mine", 0, "slot_who", 0)
     conn("slot_who", 0, "sel_who", 0)
     conn("sel_who", 0, "send_taken", 0)
     conn("recv_taken", 0, "msg_t1_set", 0)
@@ -386,7 +415,8 @@ def build_patcher():
     message("msg_pink", "activebgoncolor 1. 0. 1. 1.", [120.0, 584.0, 170.0, 20.0])
     conn("plus1", 0, "slot_t", 0)
     conn("slot_t", 3, "sel_bump_send", 0)
-    conn("sel_bump_send", 0, "send_bump", 0)
+    conn("sel_bump_send", 0, "unit_bump", 0)
+    conn("unit_bump", 0, "send_bump", 0)
     conn("slot_t", 2, "slot_store", 0)
     conn("slot_t", 1, "status_gate", 0)
     conn("slot_t", 0, "sel_color", 0)
@@ -398,12 +428,16 @@ def build_patcher():
     # Hearing "someone took slot 2": if that was us before, turn VIEW off
     # (msg_zero -> view -> change -> the disarm chain below flushes).
     newobj("recv_bump", "r " + BUS_BUMP, [800.0, 232.0, 120.0, 20.0], 1, 1)
+    newobj("bump_mine", "select 1", [930.0, 232.0, 52.0, 20.0], 2, 2, ["bang", ""])
     newobj("sel_bump_me", "select 2", [800.0, 264.0, 52.0, 20.0], 2, 2, ["bang", ""])
     message("msg_zero", "0", [800.0, 296.0, 24.0, 20.0])
-    conn("recv_bump", 0, "slot_bump", 0)
+    conn("unit_store", 0, "bump_mine", 1)
+    conn("recv_bump", 0, "bump_mine", 0)  # only our unit's secondary steps down
+    conn("bump_mine", 0, "slot_bump", 0)
     conn("slot_bump", 0, "sel_bump_me", 0)
     conn("sel_bump_me", 0, "msg_zero", 0)
     conn("msg_zero", 0, "view", 0)
+    conn("unit_change_t", 2, "msg_zero", 0)  # TILES changed: disarm on the old unit first
 
     # DISARM (VIEW just turned off). [t b b b] right to left: flush every
     # pitch (still on our own channel), tell the others if we held slot 1,
@@ -415,17 +449,21 @@ def build_patcher():
     conn("sel_view", 1, "disarm_t", 0)
     conn("disarm_t", 1, "slot_free", 0)
     conn("slot_free", 0, "sel_was1", 0)
-    conn("sel_was1", 0, "send_freed", 0)
+    conn("sel_was1", 0, "unit_freed", 0)
+    conn("unit_freed", 0, "send_freed", 0)
     conn("disarm_t", 0, "msg_slot0", 0)
     conn("msg_slot0", 0, "slot_store", 0)
 
     # PROMOTE (slot 1 just freed, and we hold slot 2). [t b b b]: flush our
     # notes on the old channel, switch to channel 1 + slot 1, recolor pink.
     newobj("recv_freed", "r " + BUS_FREED, [800.0, 340.0, 120.0, 20.0], 1, 1)
+    newobj("freed_mine", "select 1", [930.0, 340.0, 52.0, 20.0], 2, 2, ["bang", ""])
     newobj("sel_prom", "select 2", [800.0, 372.0, 52.0, 20.0], 2, 2, ["bang", ""])
     newobj("prom_t", "t b b b", [800.0, 404.0, 52.0, 20.0], 1, 3, ["bang", "bang", "bang"])
     message("msg_p1", "1", [860.0, 436.0, 24.0, 20.0])
-    conn("recv_freed", 0, "slot_prom", 0)
+    conn("unit_store", 0, "freed_mine", 1)
+    conn("recv_freed", 0, "freed_mine", 0)  # only our unit's secondary promotes
+    conn("freed_mine", 0, "slot_prom", 0)
     conn("slot_prom", 0, "sel_prom", 0)
     conn("sel_prom", 0, "prom_t", 0)
     conn("prom_t", 1, "msg_p1", 0)
@@ -445,24 +483,33 @@ def build_patcher():
     conn("uzi_zero", 0, "pack_flush", 0)
     conn("pack_flush", 0, "status_gate", 1)
 
-    # ---- Auto-find: which loaded control surface is TILES -----------------
+    # ---- Auto-find: which loaded control surface is our TILES --------------
     # Asks control_surfaces 0..6 for their type_name (the script's class
-    # name) and takes the first "TILES". Runs 1.5 s after load (load_delay,
-    # below -- the control surfaces are up by then) and first thing on every
-    # arm. On the load path [deferlow] moves the scan to Max's low-priority thread,
+    # name) and takes the Nth "TILES", N = this instance's TILES number.
+    # Runs 1.5 s after load (load_delay, below -- the control surfaces are
+    # up by then), first thing on every arm, and when TILES changes. On the load path [deferlow] moves the scan to Max's low-priority thread,
     # where live.path/live.object answer synchronously, so each probe's
     # answer arrives while cand_idx still holds that probe's index (a
     # [delay] fires in the high-priority thread, where the LOM objects would
     # defer and the loop would race ahead). onebang lets only the first
-    # match through (a duplicate TILES row can't win over the first).
-    # A found index goes to surface_zero (drives the live.path/live.object
-    # route directly) and to the SURFACE box with "set" (display + saved
-    # value, no output) -- so finding TILES never triggers the SURFACE-
-    # edited flash, and a set full of instances doesn't flash TILES on open.
-    # Not found (TILES not loaded, or a Live without type_name): SURFACE is
-    # left as it was, the manual fallback.
+    # match through. Matches are counted (match_n; match_read is the copy the
+    # end-of-scan check reads, so reading it can't count again), and the
+    # match whose count equals N routes there (surface_zero drives the
+    # live.path/live.object route). When the scan ends with no match at all
+    # (TILES not loaded, or a Live without type_name), N itself is used as
+    # the loaded-surface position: the manual fallback. Each scan first
+    # drops the old route, so with fewer TILES than N nothing is sent.
     newobj("scan_defer", "deferlow", [40.0, 700.0, 56.0, 20.0], 1, 1)
-    newobj("scan_t", "t b b", [40.0, 732.0, 40.0, 20.0], 1, 2, ["bang", "bang"])
+    newobj("scan_t", "t b b b b", [40.0, 732.0, 64.0, 20.0], 1, 4, ["bang", "bang", "bang", "bang"])
+    message("match_reset", "0", [120.0, 732.0, 24.0, 20.0])
+    message("route_clear", "id 0", [160.0, 732.0, 34.0, 20.0])
+    newobj("match_n", "int 0", [240.0, 1116.0, 32.0, 20.0], 2, 1, ["int"])
+    newobj("match_read", "int 0", [300.0, 764.0, 32.0, 20.0], 2, 1, ["int"])
+    newobj("match_inc", "+ 1", [240.0, 1148.0, 32.0, 20.0], 2, 1, ["int"])
+    newobj("match_t", "t i i", [240.0, 1180.0, 40.0, 20.0], 1, 2, ["int", "int"])
+    newobj("match_eq", "== 1", [240.0, 1212.0, 40.0, 20.0], 2, 1, ["int"])
+    newobj("match_sel", "select 1", [240.0, 1244.0, 52.0, 20.0], 2, 2, ["bang", ""])
+    newobj("none_sel", "select 0", [300.0, 796.0, 52.0, 20.0], 2, 2, ["bang", ""])
     newobj("scan_once", "onebang", [360.0, 860.0, 56.0, 20.0], 2, 2, ["bang", "bang"])
     newobj("scan_uzi", "uzi 7", [40.0, 764.0, 46.0, 20.0], 2, 3, ["bang", "bang", "int"])
     newobj("scan_idx_t", "t i i", [40.0, 796.0, 40.0, 20.0], 1, 2, ["int", "int"])
@@ -478,16 +525,23 @@ def build_patcher():
     newobj("probe_obj", "live.object", [40.0, 1052.0, 68.0, 20.0], 2, 1)
     newobj("probe_route", "route type_name", [40.0, 1084.0, 86.0, 20.0], 2, 2, ["", ""])
     newobj("probe_sel", "select TILES", [40.0, 1116.0, 70.0, 20.0], 2, 2, ["bang", ""])
-    newobj("found_t", "t i i", [200.0, 892.0, 40.0, 20.0], 1, 2, ["int", "int"])
-    newobj("found_set", "prepend set", [260.0, 924.0, 68.0, 20.0], 1, 1)
     # Arm runs the scan directly: a VIEW click already arrives on Max's
     # low-priority thread, and a deferlow here would postpone the scan until
     # after arm_t's route-confirmation flash, which would then go out on the
     # OLD route. Only the load path (a [delay], high-priority) needs deferlow.
     conn("arm_t", 4, "scan_t", 0)
     conn("scan_defer", 0, "scan_t", 0)
-    conn("scan_t", 1, "scan_once", 1)  # first: re-arm onebang for this scan
+    conn("scan_t", 3, "scan_once", 1)  # first: re-arm onebang for this scan
+    conn("scan_t", 2, "match_reset", 0)  # zero the match count
+    conn("scan_t", 1, "route_clear", 0)  # and drop the old route (a unit that isn't there gets nothing)
+    conn("route_clear", 0, "lobj", 1)
+    conn("match_reset", 0, "match_n", 1)
+    conn("match_reset", 0, "match_read", 1)
     conn("scan_t", 0, "scan_uzi", 0)
+    conn("scan_uzi", 1, "match_read", 0)  # scan done: any TILES at all?
+    conn("match_read", 0, "none_sel", 0)
+    conn("none_sel", 0, "unit_fallback", 0)  # none: N is the surface position
+    conn("unit_fallback", 0, "surface_zero", 0)
     conn("scan_uzi", 2, "scan_idx_t", 0)  # 1..7
     conn("scan_idx_t", 1, "cand_idx", 1)  # first: remember which index this probe is
     conn("scan_idx_t", 0, "scan_zero", 0)
@@ -502,16 +556,22 @@ def build_patcher():
     conn("probe_get", 0, "probe_obj", 0)
     conn("probe_obj", 0, "probe_route", 0)
     conn("probe_route", 0, "probe_sel", 0)
-    conn("probe_sel", 0, "scan_once", 0)
+    conn("probe_sel", 0, "match_n", 0)  # a TILES: count it
+    conn("match_n", 0, "match_inc", 0)
+    conn("match_inc", 0, "match_t", 0)
+    conn("match_t", 1, "match_n", 1)  # first: store the new count
+    conn("match_t", 1, "match_read", 1)
+    conn("match_t", 0, "match_eq", 0)  # then: is it the Nth?
+    conn("unit_store", 0, "match_eq", 1)
+    conn("match_eq", 0, "match_sel", 0)
+    conn("match_sel", 0, "scan_once", 0)
     conn("scan_once", 0, "cand_idx", 0)
-    conn("cand_idx", 0, "found_t", 0)
-    conn("found_t", 1, "found_set", 0)  # first: show it in SURFACE (no output)
-    conn("found_set", 0, "surface", 0)
-    conn("found_t", 0, "surface_zero", 0)  # then route to it
+    conn("cand_idx", 0, "surface_zero", 0)  # route to it
+    conn("unit_change_t", 0, "scan_defer", 0)  # TILES changed: find that unit
 
     # ---- Route confirmation: a brief flash of pads on TILES whenever the
-    # route could have just changed (SURFACE edited, or VIEW turned on), so
-    # setting SURFACE by hand is "step it until pads flash". Notes 36-96 all
+    # route could have just changed (TILES edited, or VIEW turned on), so
+    # the chosen unit shows which one it is. Notes 36-96 all
     # at once (any scale maps some of them to pads), held 300 ms, then
     # Note-Off. Bypasses the VIEW gate on purpose (straight into the status
     # gate, like the flush), so it works before VIEW is armed. A load guard
@@ -533,7 +593,7 @@ def build_patcher():
     conn("load_delay", 0, "msg_one", 0)
     conn("load_delay", 0, "scan_defer", 0)  # auto-find, once the surfaces are up
     conn("msg_one", 0, "flash_gate", 0)  # gate opens 1.5 s after load
-    conn("surface", 0, "surf_delay", 0)  # let the new id land first
+    conn("unit", 0, "surf_delay", 0)  # TILES edited: let the new id land first
     conn("surf_delay", 0, "flash_gate", 1)
     conn("arm_t", 0, "flash_gate", 1)  # VIEW just turned on (after the slot is taken)
     conn("flash_gate", 0, "flash_go", 0)
