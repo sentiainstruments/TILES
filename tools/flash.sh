@@ -42,7 +42,8 @@ if [ -n "${TILES_SERIAL:-}" ]; then
     PY="${TILES_PYTHON:-$HOME/.venvs/tiles-tools/bin/python}"
     if [ -x "$PY" ] && "$PY" "$(dirname "$0")/tiles_control.py" reboot bootsel >/dev/null 2>&1; then
         echo "Sent board $TILES_SERIAL to BOOTSEL -- flashing it."
-        for _ in $(seq 1 20); do
+        # Up to 20 s: a board behind a hub can take over 10 s to show up.
+        for _ in $(seq 1 40); do
             picotool info --ser "$TILES_SERIAL" >/dev/null 2>&1 && break
             sleep 0.5
         done

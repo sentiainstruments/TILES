@@ -32,7 +32,9 @@ static size_t s_out_sent; /* of those, bytes already handed to TinyUSB */
 
 static void out_append(const char *text) {
     size_t n = strlen(text);
-    if (s_out_len + n + 1u > sizeof(s_out)) {
+    /* Written so the sum can't wrap (s_out_len + n + 1 could, in principle,
+     * which GCC 15 flags): room for n bytes plus a spare one. */
+    if (s_out_len >= sizeof(s_out) || n >= sizeof(s_out) - s_out_len) {
         return; /* never happens for any reply built here; truncates rather than overrun */
     }
     memcpy(&s_out[s_out_len], text, n);

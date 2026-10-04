@@ -22,7 +22,12 @@ newlib C library the SDK needs). An Intel-only build of the compiler only
 runs under Rosetta; without it the build fails with "Bad CPU type in
 executable", and Apple is phasing Rosetta out after macOS 27. After
 switching compilers, delete `firmware/build` (CMake caches the compiler
-path) and configure again.
+path) and configure again, pointing at the one to use if several are
+installed:
+
+```bash
+PICO_TOOLCHAIN_PATH=/Applications/ArmGNUToolchain/15.3.rel1/arm-none-eabi cmake -DPICO_BOARD=pico2 ..
+```
 
 ## Build
 

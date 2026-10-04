@@ -9356,4 +9356,9 @@ change. Search it by file or feature name.
   stopping the song. Built only as a syntax check (clang against the SDK
   headers): this Mac's arm-none-eabi-gcc is Intel-only and Rosetta isn't
   installed (`firmware/BUILD.md`).
+  Built and flashed to units 2 and 4 the same day, after installing Arm's
+  native toolchain (GCC 15.3). GCC 15 flagged `out_append()` in
+  `usb_vendor/usb_vendor.c`: its bound check `s_out_len + n + 1 >
+  sizeof(s_out)` could in principle wrap, so it's now written as a
+  subtraction that can't. Zero warnings again.
 
