@@ -225,9 +225,9 @@ real-hardware delivery.
 |---|---|---|
 | TILES -> Ableton | CC `CC_GRID_TOUCH` (108), value = pad, then 0 | Pressure click: fire that pad's clip (track columns 1-5), launch that pad's whole scene (column 6), or -- on an EMPTY slot, switched off for now (`OP_SCENE_RECORD_INTO_EMPTY_SLOTS` / `RECORD_INTO_EMPTY_SLOTS`) -- arm the track and record into it |
 | TILES -> Ableton | CC `CC_STOP_TOUCH` (109), value = pad, then 0 | Pressure click on a clip that's already playing: stop that one clip (track columns 1-5 only) |
-| TILES -> Ableton | CC `CC_MASTER_STOP` (105), 127 then 0 | Stop all clips (master stop) -- circle + diamond in Ableton mode |
+| TILES -> Ableton | CC `CC_MASTER_STOP` (105), 127 then 0 | Stop all clips (master stop) -- circle + diamond in Ableton mode, toggle transport layout only (the performance layout, on now, sends CC 103 Stop instead; `OP_TRANSPORT_SHIFT_STOP` in `op_mode.c`) |
 | TILES -> Ableton | CC `CC_TRACK_OFFSET` (106), value = offset | Visible track window changed -- keeps the session-ring overlay and the pad-to-track mapping in sync |
-| TILES -> Ableton | CC `CC_END_CAPTURE` (107), 127 then 0 | Circle + diamond during a live capture (melodic mode opened by a record-a-new-clip click): end that recording; the firmware returns to Ableton mode itself |
+| TILES -> Ableton | CC `CC_END_CAPTURE` (107), 127 then 0 | Circle + diamond during a live capture (melodic mode opened by a record-a-new-clip click): end that recording; the firmware returns to Ableton mode itself. Unused while empty-slot recording and the toggle layout are off |
 | TILES -> Ableton | CC `CC_DELETE_TOUCH` (110), value = pad, then 0 | Circle held + pad touched 3 seconds on a clip: delete that clip (track columns 1-5 only; the firmware times the hold) |
 | Ableton -> TILES | SysEx `F0 7D 01 10 track scene flags r7 g7 b7 F7` | One clip slot's current state |
 | Ableton -> TILES | SysEx `F0 7D 01 11 scene flags r7 g7 b7 F7` | One scene's current state |

@@ -157,8 +157,11 @@ View:
     takes MIDI, TILES switches to melodic mode once your fingers are off
     the pads, so you can play straight into the recording. **Circle +
     diamond** then ends the recording (the clip starts looping) and
-    returns to Ableton mode.
-- **Circle + diamond** (not recording): stop all clips.
+    returns to Ableton mode (toggle transport layout only; the
+    performance layout's circle + diamond is Stop).
+- **Circle + diamond**: with the performance transport layout (on now),
+  stops Live's transport, which also stops every clip; with the toggle
+  layout, stop all clips and leave the transport running.
 - **Circle held + a clip's pad touched for 3 s**: delete the clip (the
   pad blinks red, the underglow goes red). Releasing either cancels;
   Live's undo brings it back.

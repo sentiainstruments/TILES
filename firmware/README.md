@@ -51,9 +51,20 @@ print-only steps and the boot animation.
   code prints periodically from the main loop (a blocked USB-CDC print
   stalls everything).
 
-## Status (2026-09-30)
+## Status (2026-10-04)
 
-Running on two Rev A0 boards; firmware 0.2.0 (`src/midi/product_identity.h`).
+Four pre-production units (Rev A0), firmware 0.2.4 (`src/midi/product_identity.h`);
+units 2 and 4 carry the latest build. Each unit names itself "SENTIA TILES N" over
+USB (`src/board/unit_id.h`), so several can play in one DAW session.
+
+Set for now (compile-time switches, see `daw-integration/README.md`):
+
+- Performance transport (`OP_TRANSPORT_SHIFT_STOP 1` in `services/op_mode.c`):
+  diamond plays, hold records, circle + diamond stops; while Live plays,
+  diamond alone does nothing. Circle + diamond's other jobs (Ableton stop-all,
+  Song capture) are off meanwhile.
+- Ableton mode: recording a new clip by pressing an empty slot is off
+  (`OP_SCENE_RECORD_INTO_EMPTY_SLOTS 0`).
 
 - Played and working on hardware: melodic, chord, bass guitar,
   sequencer (4 lanes, pattern bank, capture), Ableton mode with the
