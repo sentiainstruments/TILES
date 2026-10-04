@@ -530,3 +530,25 @@ the script drops them while `song.is_playing` (Play always, Record with
 `DIAMOND_IGNORED_WHILE_PLAYING`), so a second unit's click never restarts
 the song from the start marker.
 
+## Circle + empty slot records; TILES DISPLAY per unit (2026-10-04)
+
+Real feedback: "build option 1, circle plus empty slot. lets make the
+max for live device allow to select different tiles if more than one is
+conected and each tile can be asigned to a max of 2 channels at a time
+for tiles view."
+
+- Recording: a new CC, `CC_RECORD_TOUCH` (111), sent on circle + an
+  empty slot; `_on_record_touch()` checks the slot is still empty and
+  calls `_record_new_clip()`. The plain grid CC never records any more,
+  and `RECORD_INTO_EMPTY_SLOTS` is gone.
+- TILES DISPLAY: SURFACE (a loaded-surface position) became **TILES**
+  (1-4): the Nth "TILES" row, found by counting `type_name` matches in
+  the scan; with no TILES found at all, the number is used as the
+  position (the old manual fallback). Slots are per unit: every message
+  on the coordination buses carries the sender's unit and receivers
+  filter with `[select]` (unit in the right inlet), so each unit has its
+  own primary/secondary. Bus names moved to `tiles_display2_*` so an old
+  instance in a set can't interfere. Changing TILES while armed disarms
+  first (flushing the old unit). Each scan drops the old route first, so
+  a unit number with no TILES behind it sends nothing.
+

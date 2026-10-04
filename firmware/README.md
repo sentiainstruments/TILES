@@ -53,8 +53,9 @@ print-only steps and the boot animation.
 
 ## Status (2026-10-04)
 
-Four pre-production units (Rev A0), firmware 0.2.4 (`src/midi/product_identity.h`);
-units 2 and 4 carry the latest build. Each unit names itself "SENTIA TILES N" over
+Four pre-production units (Rev A0), firmware 0.2.5 in this tree
+(`src/midi/product_identity.h`); units 2 and 4 run 0.2.4 (0.2.5 adds circle +
+empty slot recording and is waiting on a native ARM toolchain, see `BUILD.md`). Each unit names itself "SENTIA TILES N" over
 USB (`src/board/unit_id.h`), so several can play in one DAW session.
 
 Set for now (compile-time switches, see `daw-integration/README.md`):
@@ -63,8 +64,8 @@ Set for now (compile-time switches, see `daw-integration/README.md`):
   diamond plays, hold records, circle + diamond stops; while Live plays,
   diamond alone does nothing. Circle + diamond's other jobs (Ableton stop-all,
   Song capture) are off meanwhile.
-- Ableton mode: recording a new clip by pressing an empty slot is off
-  (`OP_SCENE_RECORD_INTO_EMPTY_SLOTS 0`).
+- Ableton mode: a plain press on an empty slot does nothing; circle +
+  press records a new clip there.
 
 - Played and working on hardware: melodic, chord, bass guitar,
   sequencer (4 lanes, pattern bank, capture), Ableton mode with the
@@ -73,8 +74,8 @@ Set for now (compile-time switches, see `daw-integration/README.md`):
   melodic harmonics, haptics, lighting, standby and deep sleep, games,
   settings saved to flash.
 - **Song mode is beta**: built, not yet played on hardware.
-- Not yet verified on hardware: DIN MIDI's electrical side (jacks, TRS
-  polarity; the logic is tested), CV/gate (and the DAC80502 driver), the
+- DIN MIDI (TRS jacks) works on hardware (confirmed 2026-10-04).
+- Not yet verified on hardware: CV/gate (and the DAC80502 driver), the
   Windows WinUSB descriptors, an expression pedal.
 - **Before any unit leaves the building**: replace the test USB ID (see
   `src/midi/product_identity.h` and the root `README.md` checklist).

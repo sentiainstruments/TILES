@@ -96,11 +96,12 @@ Then:
 - Both units drive the same Live set: either diamond starts and stops
   the transport, and each unit's Ableton mode has its own five-track
   window.
-- Recording a new clip from one unit (when empty-slot recording is on)
-  disarms the other armed tracks, except a track whose input is the
-  other unit, so the other player keeps playing.
-- TILES DISPLAY shows notes on one unit only: its auto-find picks the
-  first loaded TILES row in Preferences.
+- Recording a new clip from one unit (circle + an empty slot) disarms
+  the other armed tracks, except a track whose input is the other unit,
+  so the other player keeps playing.
+- TILES DISPLAY: each device's **TILES** box picks the unit (1 = the
+  first TILES row in Preferences, 2 = the second), and each unit shows
+  up to two tracks.
 
 ## Transport (diamond)
 
@@ -148,20 +149,19 @@ View:
   half way, like picking in a menu) acts:
   - on a clip: fire it; on a playing clip: stop it;
   - on column 6: launch the scene;
-  - on an empty slot: nothing. Recording a new clip there is built but
-    switched off; to turn it on, set `OP_SCENE_RECORD_INTO_EMPTY_SLOTS`
-    (firmware, `op_mode.c`) and `RECORD_INTO_EMPTY_SLOTS`
-    (`scene_launch.py`) together. When on: the script disarms the other
-    armed tracks (except one played by another TILES unit, see "Two
-    units at once"), arms this one and fires the slot. If the track
-    takes MIDI, TILES switches to melodic mode once your fingers are off
-    the pads, so you can play straight into the recording. **Circle +
-    diamond** then ends the recording (the clip starts looping) and
-    returns to Ableton mode (toggle transport layout only; the
-    performance layout's circle + diamond is Stop).
-- **Circle + diamond**: with the performance transport layout (on now),
-  stops Live's transport, which also stops every clip; with the toggle
-  layout, stop all clips and leave the transport running.
+  - on an empty slot: nothing (a plain press never records).
+- **Circle held + a pressure click on an empty slot**: record a new
+  clip there. The script disarms the other armed tracks (except one
+  played by another TILES unit, see "Two units at once"), arms this one
+  and fires the slot. If the track takes MIDI, TILES switches to melodic
+  mode once your fingers are off the pads, so you can play straight into
+  the recording. **Circle + diamond** then ends the recording (the clip
+  starts looping) and returns to Ableton mode, in either transport
+  layout.
+- **Circle + diamond** (not recording): with the performance transport
+  layout (on now), stops Live's transport, which also stops every clip;
+  with the toggle layout, stop all clips and leave the transport
+  running.
 - **Circle held + a clip's pad touched for 3 s**: delete the clip (the
   pad blinks red, the underglow goes red). Releasing either cancels;
   Live's undo brings it back.
@@ -230,20 +230,23 @@ patcher, and old and new instances don't coordinate.
 ### Use
 
 - **VIEW** arms the device: that track's notes show on TILES. Up to two
-  can be armed at once. The first armed is the primary (pink button,
-  green pads, MIDI channel 1); the second is the secondary (soft red
-  button and pads, channel 2). Arming a third replaces the secondary;
-  turning the primary off promotes the secondary. Instances coordinate
-  through Max's global send/receive names, with no setup. Turning VIEW
-  off clears any lit pad. VIEW is a normal Live parameter (saved with
-  the set, mappable; always loads off).
-- **SURFACE** shows which loaded control surface is TILES. The device
-  finds it by itself, 1.5 s after loading and on every VIEW arm, by
-  asking each loaded surface for its script name (the LOM `type_name`,
-  "TILES"). It's the position among *loaded* surfaces, not the
-  Preferences row. Set it by hand only if the scan found nothing: step
-  it until TILES's pads flash (they flash for about 0.3 s whenever the
-  route changes or VIEW is armed).
+  can be armed per TILES unit. The first armed is that unit's primary
+  (pink button, green pads, MIDI channel 1); the second is its secondary
+  (soft red button and pads, channel 2). Arming a third on the same
+  unit replaces its secondary; turning the primary off promotes the
+  secondary. Instances on different units never affect each other.
+  They coordinate through Max's global send/receive names, with no
+  setup. Turning VIEW off clears any lit pad. VIEW is a normal Live
+  parameter (saved with the set, mappable; always loads off).
+- **TILES** (1-4) picks the unit: 1 = the first TILES row in
+  Preferences' Control Surface list, 2 = the second, top to bottom. The
+  device resolves it by asking each loaded surface for its script name
+  (the LOM `type_name`, "TILES"), 1.5 s after loading, on every VIEW arm
+  and when TILES changes; the chosen unit's pads flash for about 0.3 s
+  so you can see which one it is. Changing TILES while armed disarms
+  (clearing the old unit's pads); arm again. If Live can't name the
+  surfaces, the number is used as the loaded-surface position instead:
+  step it until the right unit's pads flash.
 - TILES must be in melodic mode (not chord mode's melody grid). A note
   with no pad in the current scale/octave/key isn't shown.
 - The secondary's red is set by `look.echo_secondary_g_percent` /
@@ -266,28 +269,29 @@ connection points at a real inlet/outlet before writing.
 
 ### Status and first-run checklist
 
-Used in Live, including two instances at once. The SURFACE auto-find is
-built and structurally checked but not yet confirmed in Live.
+The single-unit version was used in Live, including two instances at
+once. The per-unit version (the TILES box, two tracks per unit) is built
+and structurally checked but not yet confirmed in Live.
 
 1. Drop the device on a MIDI track before an instrument: no errors in
-   Max's console; a dark panel with a pink line, **VIEW** and
-   **SURFACE**.
-2. TILES in melodic mode, click **VIEW**: the button turns pink,
-   SURFACE jumps to TILES's position, pads flash on TILES. Notes on that
-   track light green pads, dark again on release. (No flash: step
-   SURFACE by hand until pads flash; the auto-find didn't work there.)
-3. Arm a second instance on another track: its button is soft red and
-   its notes light soft red pads, while the first stays pink/green.
-4. Arm a third: the soft-red one switches off and clears its pads; the
-   pink one is untouched. Turn the pink one off: the other turns pink,
-   its notes go green.
-5. Stop the transport or disarm mid-note: no pad stays lit.
+   Max's console; a dark panel with a pink line, **VIEW** and **TILES**.
+2. TILES in melodic mode, click **VIEW**: the button turns pink, pads
+   flash on unit 1. Notes on that track light green pads, dark again on
+   release.
+3. Set **TILES** to 2: unit 2's pads flash (and VIEW turns off). Arm
+   again: notes now light unit 2.
+4. On unit 1, arm a second instance: soft red, while the first stays
+   pink/green. Arm a third on unit 1: the soft-red one switches off; an
+   instance on unit 2 is untouched throughout.
+5. Turn unit 1's pink one off: its soft-red one turns pink, notes go
+   green.
+6. Stop the transport or disarm mid-note: no pad stays lit.
 
 If the device loads but nothing lights: check the TILES slot's
-**Output** is the unit's (DAW) port, then SURFACE, then that TILES is in
-melodic mode. In Live's log, `call send_midi 144 60 100: no valid object
-set` means notes are tapped but SURFACE points at nothing (is the
-script loaded?).
+**Output** is the unit's (DAW) port, then the TILES number, then that
+TILES is in melodic mode. In Live's log, `call send_midi 144 60 100: no
+valid object set` means notes are tapped but no TILES was found for that
+number (is the script loaded, and are there that many TILES rows?).
 
 ## Other DAWs
 

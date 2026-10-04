@@ -16,6 +16,13 @@ cp "$PICO_SDK_PATH/external/pico_sdk_import.cmake" firmware/pico_sdk_import.cmak
 `pico_sdk_import.cmake` is SDK boilerplate and `.gitignore`d: copy it
 from the SDK you build against rather than editing it.
 
+On an Apple-silicon Mac use a native (arm64) `arm-none-eabi-gcc`, e.g. Arm's
+own toolchain (`brew install --cask gcc-arm-embedded`, which includes the
+newlib C library the SDK needs). An Intel-only build of the compiler needs
+Rosetta, which macOS 27 no longer has: the build then fails with "Bad CPU
+type in executable". After switching compilers, delete `firmware/build`
+(CMake caches the compiler path) and configure again.
+
 ## Build
 
 ```bash
