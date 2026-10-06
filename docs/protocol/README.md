@@ -1,5 +1,11 @@
 # USB vendor protocol — design notes
 
+> **Current state:** a text settings shell (GET/SET/LIST/RESET/SAVE/SCHEMA/INFO) over a
+> settings table with flash saving is built -- see `../../shared/protocol/README.md`. The
+> direction for the binary protocol, layouts, and the app stack is in
+> `../architecture/control-software.md`. The open questions below still stand for the binary
+> version.
+
 Working notes ahead of formalizing the wire protocol in
 `../../shared/protocol/`. The device exposes a custom USB vendor interface
 (separate from USB-MIDI) for:

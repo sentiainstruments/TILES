@@ -32,7 +32,7 @@ Implement in safe phases and keep the project building after each phase:
 
 Hard safety requirements:
 
-- Never drive GP20; it is a PCA9685 address strap.
+- GP20 is the shared PCA9685 output enable (active low), not an address strap: keep it input/high-Z until every PCA9685 channel is configured, then drive it low. Never drive it high. (Corrected 2026-08-21; see the handoff's Corrections note.)
 - Close all Hall mux channels before selecting one sensor.
 - Keep all LED mux banks disabled while changing selectors.
 - Initialize both PCA9685 devices to all-off before enabling any other output service.

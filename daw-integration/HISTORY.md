@@ -1,0 +1,554 @@
+# daw-integration/ history
+
+The README as it stood on 2026-09-30, moved here verbatim when the README
+was rewritten as a description of the current design. It records the
+feedback, dead ends and bugs behind each part of the Ableton script and
+TILES DISPLAY (why CCs rather than SysEx or Note-On, why a separate DAW
+port, the listener bugs). The long-form code comments from the same date
+are at git tag `archive/full-comments-2026-09-30`.
+
+---
+
+# daw-integration/
+
+Companion software that runs on the computer, not the board -- distinct
+from `firmware/` (runs on the Pico 2) and `companion-app/` (the
+configurator). This is what lets TILES's diamond transport remote (play/
+stop/record -- see `firmware/src/services/op_mode.c`'s own
+`handle_diamond_transport()`) control a DAW's transport directly, the
+way a factory-recognized controller does, instead of needing a manual
+per-button MIDI Map.
+
+## Why this exists
+
+Real feedback, in order:
+
+1. "the diamond for now will play and stop in ableton like a toggle...
+   if we hold it for 2 sec it arms record" -- first attempt sent plain
+   MIDI Start/Stop (System Realtime bytes), which need the DAW's MIDI
+   input to be in full external-sync mode (a continuous MIDI Clock
+   stream, not just isolated Start/Stop) -- TILES never sent clock, so
+   "diamond is still not doing anything."
+2. Researched how a real Novation Launchkey does it instead of
+   re-guessing: its transport buttons send plain MIDI CCs that Ableton
+   recognizes and turns into transport actions because Ableton BUNDLES
+   a Launchkey-specific Control Surface script -- not because CCs are
+   inherently special. Rebuilt TILES's own side to send the same kind
+   of dedicated, mappable CC per action (102/103/104 for Play/Stop/
+   Record, see `OP_TRANSPORT_PLAY_CC`'s own comment in op_mode.c).
+3. That still needed the user to manually MIDI-Map each of the three
+   CCs by hand in Ableton's own Map Mode, once per project/setup: "i
+   dont want to map manually, this should just work like it does for
+   launchkey out of the box."
+
+The honest technical ceiling: Ableton only *auto-loads* a script for
+controllers it ships bundled support for. There's no way for
+third-party hardware to make Ableton auto-select an unbundled script
+with truly zero user action -- a brand-new Launchkey model doesn't work
+out of the box either, until Ableton has been updated to include it.
+What's actually achievable, and what this folder provides, is the
+closest real equivalent: **one manual step, done once, ever** -- copy a
+folder in, pick "TILES" from a dropdown -- not a MIDI-Map dance per
+button, and nothing to redo after restarts, DAW updates, or new
+projects.
+
+## Ableton Live: one-time install
+
+1. Copy the `ableton/TILES/` folder from this repo into Ableton's
+   **User** Remote Scripts folder (this is the officially-supported
+   location for third-party scripts -- no admin permission needed, and
+   it survives Ableton version updates, unlike copying into the app
+   bundle itself):
+   - macOS: `~/Music/Ableton/User Library/Remote Scripts/`
+   - Windows: `Documents\Ableton\User Library\Remote Scripts\`
+
+   (Create the `Remote Scripts` folder if it doesn't already exist.)
+   The result should be a `.../Remote Scripts/TILES/` folder containing
+   `__init__.py` and `TILES.py`.
+2. Restart Ableton Live if it was already open.
+3. Preferences -> Link, Tempo & MIDI -> in a free Control Surface slot,
+   choose **TILES** from the dropdown, then set that slot's Input and
+   Output to **SENTIA TILES (DAW)** -- Live's name for the port; other
+   apps call it "SENTIA TILES DAW". Not another controller's DAW port: a
+   first real test had the TILES slot pointed at "Launchkey MK4 61 (DAW
+   Out)" (the only "(DAW)" entries in the list look alike), and the
+   transport button did nothing, because the script never heard TILES.
+   In the MIDI Ports list:
+   - **In: SENTIA TILES (MIDI)**: Track **on**, MPE **on** (see "Sustain
+     pedal and MPE"), Sync **off** (TILES's play button works through
+     the script; Sync here plus Live's EXT button makes a clock loop),
+     Remote on only if you MIDI-map something from TILES.
+   - **Out: SENTIA TILES (MIDI)**: Sync **on** if TILES's sequencer
+     should follow Live's clock.
+   - **In: SENTIA TILES (DAW)**: Track **off** (if the script isn't
+     loaded, the button messages would otherwise record into clips);
+     the other boxes don't matter.
+   - **Out: SENTIA TILES (DAW)**: nothing needed.
+4. Done. Diamond's short click (play/stop) and 2-second-hold-then-
+   release (record) now directly drive Ableton's transport -- no MIDI
+   Map Mode, no per-button setup, and nothing to repeat next session.
+
+See `ableton/TILES/TILES.py`'s own module docstring for exactly what it
+listens for and why, and `firmware/src/services/op_mode.c`'s
+`handle_diamond_transport()` for the hardware side sending it.
+
+## Two MIDI ports: "MIDI" and "DAW"
+
+Real feedback: "do 8 as how standardized stuff works. production ready
+industry stuff." TILES shows up as two MIDI ports, the way Launchkey,
+Push and KeyLab do:
+
+- **SENTIA TILES (MIDI)** in Live ("SENTIA TILES MIDI" elsewhere) -- the
+  instrument: notes, MPE, pedals, and clock/Start/Stop for sync. This is
+  the one to record from and play synths with. The DIN jack carries the
+  same.
+- **SENTIA TILES (DAW)** in Live ("SENTIA TILES DAW" elsewhere) -- the
+  TILES Control Surface script's private port: the transport button and Scene Launch messages go out on it, clip
+  colours and the TILES DISPLAY melody echo come back on it. Never on
+  DIN, and never meant for a track.
+
+Before this, both shared one port and channel 1, so the script's
+controls could reach an instrument track and the script once claimed the
+sustain pedal (see "Scene Launch CCs renumbered" below). The script now
+declares the two ports to Live (`ableton/TILES/__init__.py`,
+`get_capabilities()`, the same declaration Ableton's own Launchkey MK3
+script makes). In the first real test Live did NOT set the TILES slot up
+by itself, so set it by hand as in step 3 above. In Live's list, TILES
+looks like any two-port controller -- one Control Surface entry, two
+ports, exactly like a Launchkey ("Launchkey MK4 61 (MIDI Out)" / "(DAW
+Out)"). **Firmware and script must
+match**: firmware from this change on needs the updated script (re-copy
+`ableton/TILES/`, restart Live), and the Control Surface slot moves from
+the old single "SENTIA TILES" port to "SENTIA TILES (DAW)".
+
+**macOS: stale device after a firmware update.** macOS remembers a USB
+MIDI device's ports by its USB ID and the socket it's plugged into, and
+doesn't always notice the port layout changed. If after updating you
+still see one port (or the old "SENTIA TILES (Unit 2/4)" name): quit Live,
+unplug TILES, open **Audio MIDI Setup -> Window -> Show MIDI Studio**,
+select every greyed-out **SENTIA TILES** icon and press Delete, then
+plug TILES back in. (Firmware from 2026-09-29 on also names the device
+plain "SENTIA TILES" on every unit, so a Live setup made with one board
+works with any other -- the unit number moved to the settings shell's
+`INFO` and the USB listing's "Diagnostics" interface name.)
+
+## Scene Launch mode
+
+Real feedback: "lets implemebt a new mode that triggers scenes in
+ableton live... can we pull the colors of the scenes from ableton?"
+The same `TILES/` script folder now also carries `scene_launch.py`
+(imported by `TILES.py`), which fires clips/scenes on TILES's own
+button presses and pushes real clip/scene colors and playing/queued
+state back to the hardware -- see `shared/protocol/README.md`'s own
+"Scene Launch" section for the wire format and
+`firmware/src/services/op_mode.c`'s own "Scene Launch mode" section for
+the hardware side.
+
+**If you installed the Ableton script before this feature existed,
+re-copy the `ableton/TILES/` folder** (step 1 above) to pick up the new
+`scene_launch.py` file, then restart Ableton -- the existing Control
+Surface slot picked in step 3 doesn't need reselecting, just a fresh
+copy of the folder and a restart so Ableton reloads it.
+
+**Master stop**: shift+diamond in Scene Launch mode sends Ableton's own
+"stop all clips" action -- real feedback, "a master stop in this app
+should be shift diamond." Distinct from the diamond's own plain click
+(transport play/stop), which still works unchanged in this mode.
+
+**Touch vs. click**: a bare capacitive touch never does anything in
+Ableton -- it only gives haptics (a strong "ready" click on a pad with a
+clip, a continuous buzz while that clip is playing). A pressure click
+(push the pad ~half way down, the same "push to select" feel as the
+mode menu) is what acts: fire a clip, launch a scene (right-hand
+column), or stop a clip that's already playing. Underglow flashes Sentia
+purple for a scene, the clip's own color for a clip.
+
+**Delete a clip**: hold shift and touch a clip's pad for 3 seconds (pad
+and underglow go red); the clip is deleted in Ableton (Cmd+Z undoes
+it). Releasing either early cancels. The right-hand scene column glows
+Sentia purple whenever anything in that scene has a clip, on any track.
+
+**Record a new clip**: a pressure click on an EMPTY slot arms that track
+and starts recording into the slot; if the track takes MIDI, TILES then
+opens melodic mode (once your fingers are off the pads) so you can play
+straight into it. The script itself disarms every other track first (it
+used to rely on Live's own Exclusive Arm preference, which it can't
+see or guarantee is on -- see "Exclusive arm fixed" below). Shift+diamond
+while in that melodic capture ends the recording (the clip starts
+looping) and returns to Scene Launch mode -- it never enters Song mode
+capture from this flow.
+
+**Session-ring outline**: Scene Launch mode now shows Ableton's own
+built-in session-ring box in Session View, sized to the same 5-track x
+4-scene window the hardware shows and following the same "-"/"+" pan --
+real feedback, "i need that outline for tiles as well," after finding
+out the box the user had seen previously was actually their other
+(Novation) controller's own overlay, not anything TILES's script drew.
+
+**Architecture change**: after several real-hardware rounds with no
+confirmed successful delivery of master stop, fire, or individual stop
+-- "master stop doesnt work at all, individual start and stop doesnt
+work and hasent for the past few pushes. i need you to look at how a
+lounchapd works or abletoun push works to pull the exxact same
+standardizre behaviour" -- every TILES -> Ableton message (fire clip,
+launch scene, stop all, stop one clip, track-offset sync) moved off a
+custom SysEx sub-protocol onto plain CC. A first attempt used Note-On
+instead (matching how a real Launchpad sends its own grid), but real
+feedback caught the actual problem: "you fully broke how clip
+lounching works now its just sending regular midi notes for me to
+map. thats not how this feature operates ever in any device." A real
+Launchpad never sends musical notes at all, so nobody enables its
+port's Track input in Ableton -- TILES's port ALSO carries real notes
+for melodic play, so the user's own instrument track (listening on
+"All Channels" for MPE) receives those "button" Note-Ons too, as
+ordinary playable content. CC has no such conflict, matching this
+project's own already-working transport CCs exactly. Ableton -> TILES
+color feedback is still SysEx, unchanged. See `scene_launch.py`'s own
+module docstring and `shared/protocol/README.md`'s "Scene Launch"
+section for the full wire format.
+
+**Scene Launch CCs renumbered -- re-copy the script after updating
+firmware.** Launch, stop and delete used to be one CC per pad (11-34,
+41-64, 71-94 on channel 1), which claimed three standard performance
+controllers on the instrument's own channel: CC 64 (sustain) was pad 24's
+stop button, CC 11 (expression) pad 1's launch, CC 74 (MPE slide) pad 4's
+delete. With the TILES control surface active, Ableton hands a CC the
+script claims to the script instead of the track, so the sustain pedal
+never reached the instrument in MPE mode -- real feedback that pinned it:
+"equator as strandalone dosnt have the issues wirthg sustain, it wo4rks
+flawlesslyt." They are now one CC each with the pad (1-24) as the value --
+108 launch, 109 stop, 110 delete -- and every TILES -> Ableton CC sits in
+the MIDI spec's undefined 102-119 range. **Firmware and script must
+match**: after flashing firmware from 2026-09-29 on, re-copy the
+`ableton/TILES/` folder (step 1 above) and restart Ableton (or set the
+TILES Control Surface slot to None and back), or Scene Launch pads won't
+act. Real feedback once both were updated: "sustain works now in
+ableton."
+
+## Sustain pedal and MPE
+
+TILES sends the sustain pedal (CC 64) the standard MPE way: on channel 1,
+the zone's Master Channel, only -- a real decision after a long stuck-note
+investigation (`firmware/src/services/HISTORY.md`, "SUPERSEDES the two
+sustain entries" and the entries after it). That means **in MPE mode the
+receiving side must actually be set up as MPE**, like any MPE controller:
+
+- Ableton: Preferences -> Link, Tempo & MIDI -> tick **MPE** (and Track)
+  on the **SENTIA TILES (MIDI)** input; use an MPE-enabled instrument (Serum: its MPE
+  switch on; Equator: MPE by default).
+- Anything not set up for MPE: switch TILES to non-MPE mode (circle+
+  square) -- every note and the pedal go on channel 1, which any synth
+  handles with no setup.
+
+`pedal.sustain_style` (settings shell, `tools/README.md`) chooses who does
+the sustaining: `synth` (default, standard CC 64) or `hold` (TILES keeps
+notes on itself and sends no CC 64 -- lets harmonic plucks ring out
+instead of being held with everything else).
+
+**Debugging**: real feedback found colors weren't showing on first
+try -- root cause was `scene_launch.py` monkey-patching an attribute
+directly onto Ableton's own native `Clip` object, which isn't
+guaranteed to support that and could silently abort the whole script's
+setup (fixed: it now tracks state in a plain dict it owns instead).
+A second round found colors STILL not updating and clip fires not
+reaching Ableton either -- two more real bugs, root-caused against
+Ableton's own bundled Remote Script source rather than guessed at a
+third time: `handle_sysex` doesn't actually receive the `0xF0`/`0xF7`
+SysEx framing (Ableton's framework strips it first), and `ClipSlot` has
+no `add_is_playing_listener` (the real listener is `add_playing_status_
+listener`). A third round found master stop and individual stop STILL
+not working with no further bug findable by inspection -- see the
+architecture change above for how that direction was rebuilt entirely.
+`scene_launch.py` logs every real action it takes (connecting, each
+clip/scene color push, every grid touch/stop/master-stop it receives)
+to Ableton's own log -- if something still isn't updating, check there
+first:
+
+- macOS: `~/Library/Preferences/Ableton/Live <version>/Log.txt`, or
+  Ableton's own Help menu -> Show Log.
+- Look for lines starting `[TILES scene_launch]`. No lines at all means
+  the script never even loaded/connected (check step 3's Control
+  Surface slot is actually set to TILES); a `failed to connect` line
+  names the real error; `connected` with no further `clip_state`/
+  `scene_state` lines after touching a clip means the listeners aren't
+  firing (a genuinely open question against a real session, see
+  `scene_launch.py`'s own module docstring).
+
+**Exclusive arm fixed.** Real feedback: "automation arm is not
+switching exclusively to the track thats going to get the new clip."
+`_record_new_clip()` (fired on a pressure click into an empty slot,
+per "if were recording a new clip make it open melodic mode
+automatically and arm that channel") used to arm only the target
+track and rely on Live's own Exclusive Arm preference to disarm every
+other track -- a per-user Live setting this script has no way to see
+or guarantee is on. With it off, every previously-armed track stayed
+armed too, so the new recording wasn't landing on just the one track
+the player picked. Fixed by having `_record_new_clip()` explicitly
+disarm every other currently-armed track itself before arming the
+target, independent of that Live preference.
+
+**New tracks now get tracked too.** Real feedback: "when a pattern is
+edited within ableton without the instrument it doesnt register that
+it happened and acts like its not there. it tryes to recoed but it
+dosnt because theres soemthing so it shouldnt." Root cause: `_connect()`
+used to enumerate `self._song.tracks` exactly once, at script load --
+a track created afterward (a fresh, not-yet-instrumented one is the
+obvious way to get one) never had its clip slots' `has_clip`/
+`playing_status`/`is_triggered` listeners wired up at all, so a clip
+added there (editing directly in Ableton, same as any other way) never
+sent a `clip_state` SysEx message and the pad for that slot kept
+showing empty on the hardware. Confirmed this wasn't actually a
+record-vs-playback bug: `_on_grid_touch()` checks `clip_slot.has_clip`
+LIVE off Ableton at touch time, so it always correctly fired the
+existing clip rather than trying to record over it -- the reported
+"tries to record but doesn't" was the pad's stale, never-updated LED
+lying about the slot being empty, not a wrong action being taken.
+Fixed with `Song.add_tracks_listener()` (fires on any track added,
+removed, or reordered), which now tears down and rebuilds every
+per-track/per-slot listener against the current track list whenever
+tracks change -- the connect-time setup loop was extracted into
+`_connect_track_clip_listeners()`/`_disconnect_track_clip_listeners()`
+so both the initial connect and this resync share the exact same code.
+
+## Melodic mode: echoing a track's melody (TILES DISPLAY)
+
+Real feedback: "in midi melodic mode is there any way we could read the
+playing melody of the armed track and display it back on tiles?" -- then,
+once the first version's instructions met a real Ableton setup: "ableton
+instruments send either midi or audio after the vst... we need to build
+a max for live device that slots in between... we can call it VIEW...
+the plugin is called TILES DISPLAY."
+
+**Why a device, not just routing.** The first version of this section
+told you to point the armed track's MIDI *output* at TILES. That only
+works for a track with NO instrument on it -- the moment a track has a
+VST/instrument, everything after that instrument is AUDIO, so there's no
+MIDI output left to route. And a Remote Script (`TILES.py`/
+`scene_launch.py`) can't fill the gap: it only ever sees its own MIDI
+port, not a track's MIDI. A Max for Live **MIDI Effect placed before the
+instrument** sees every note that actually reaches it -- clip playback,
+live input, anything an earlier arp/chord/scale device produced -- and
+passes all of it through untouched, so it changes nothing about how the
+track sounds.
+
+**How it reaches TILES.** The device calls the Live Object Model's
+`ControlSurface.send_midi` on the TILES control surface, which writes
+straight to that script's MIDI *output* port -- the same port
+`scene_launch.py` already uses for its SysEx feedback (confirmed against
+Cycling '74's LOM docs and forum reports of the same technique lighting
+Push pads). No network layer, no extra Remote Script code, negligible
+latency. Firmware side is unchanged from before: TILES lights the pad
+that note maps to (bright green) while melodic mode is active, and
+clears it on the Note-Off.
+
+### Install (one time)
+
+1. Copy `ableton/TILES_DISPLAY/TILES DISPLAY.amxd` into your User
+   Library, e.g. `~/Music/Ableton/User Library/Presets/MIDI Effects/Max
+   MIDI Effect/` (Live's browser: *Max for Live > Max MIDI Effect >
+   User Library*), or just drag it from Finder onto a track. Needs Max
+   for Live (included in Live Suite).
+2. Put it on the MIDI track **before the instrument** (MIDI effects sit
+   to the left of the instrument in the device chain).
+
+### Use
+
+- **VIEW** -- the arm toggle. Sentia pink when armed: that track's notes
+  show on TILES (green pads). **Two TILES DISPLAYs can be armed at once**
+  (real feedback: "make the device work on 2 channels at once, if 2
+  devices are on then the secondary does color red"): the first one armed
+  is the primary -- pink button, green pads, MIDI channel 1 -- and the
+  second is the secondary -- **soft red** button, **soft red** pads, MIDI
+  channel 2 (real feedback: "not pure red but more of a soft red aligned
+  witht he pallet but still separete from thern sentia pink" -- a warm
+  coral-leaning red with little blue in it, so it can't read as pink).
+  Arming a third replaces the secondary (the primary is never bumped).
+  Turning the primary off promotes the secondary to primary (its button
+  goes pink, its pads green) so a lone armed device is never left soft
+  red.
+  The instances coordinate through Max's global name space, so no
+  configuration is needed. Turning VIEW off clears any pad still lit.
+  VIEW is a normal Live parameter, so it's saved with the set and can be
+  MIDI/key mapped (it always loads off).
+  **Needs the matching firmware** -- an older board would show the
+  secondary's notes in green too (it doesn't know channel 2 is special).
+  **Replace any device already in a set** with this version (delete it and
+  drag the updated one in): a saved instance keeps its old patcher, and an
+  old and a new instance don't talk to each other.
+- **SURFACE** -- which control surface TILES is. **The device finds it by
+  itself** (added 2026-09-29): 1.5 s after it loads, and every time VIEW is
+  armed, it asks each loaded control surface for its script name (the Live
+  Object Model's `type_name`, which is the script's class name, "TILES")
+  and uses the first match. SURFACE then shows which one it found. Real
+  feedback that prompted it: "one thing that broke is the lit up thing with
+  ableton live" -- after the Preferences rows were reshuffled for TILES's
+  new DAW port, the hand-set number pointed at nothing and every send was
+  rejected ("no valid object set" in Live's Log.txt) -> "yes build the
+  auto-find for tiles display." The number is the position among *loaded*
+  control surfaces, not the Preferences row (Live skips empty rows), which
+  is why a hand-set value broke whenever the list changed. You only need
+  SURFACE as a manual override: if TILES isn't found (script not loaded
+  when the device scanned, or a Live version without `type_name`), step it
+  by hand -- pads on TILES flash for about a third of a second whenever it
+  changes or VIEW is armed, and the value that flashes them green (TILES
+  in melodic mode) is TILES. Replace instances already in a set with the
+  new device to get this.
+
+TILES must be in melodic mode, and a note outside the currently selected
+scale/octave/key has no pad to light (same accepted tradeoffs as the
+firmware entry in `firmware/src/services/HISTORY.md`).
+
+### MPE / expression pass-through
+
+Real feedback: "the plugin is killing mpe behaviour can we make it even
+more pass through so theres no mpe or expression loss." The device's MIDI
+thru was already a single direct `midiin` -> `midiout` patchline with
+nothing parsed or filtered on it, so the wiring wasn't the problem. The
+cause was that a Max for Live device has to **declare** MPE support -- the
+patcher's `is_mpe` property ("Patch Supports MPE" in Max's patcher
+inspector) -- or Live doesn't hand it the per-note MPE stream (per-note
+pitch bend, slide, channel pressure on member channels 2-16) at all; the
+generator simply never set it, so it defaulted to 0. Max's own help text
+says so ("To receive MPE, make sure the 'Patch Supports MPE' (is_mpe)
+attribute is set to 1 for the device"), as does a Cycling '74 forum
+thread on passing MPE through a MIDI effect, and real devices serialize
+it next to `"latency"`. The generator now sets `is_mpe: 1`. Nothing else
+about the thru changed -- deliberately no `midiparse`/`midiformat`/
+`mpeparse` on it (the first two are documented to truncate per-note pitch
+bend to semitones), and everything the device does beyond passing MIDI
+through (the note tap, the route flash, the disarm flush) runs off to the
+side and never writes back into the chain.
+
+**Replace any device already in a set:** a saved instance keeps the old
+patcher, so delete it and drag the updated one in (or re-drag from the
+browser). Then check MPE end to end: play with pitch bend/pressure on a
+track whose MIDI input has MPE enabled, with the device armed and
+disarmed -- expression should be identical either way. Not tested in Live
+from here; if it still flattens, tell me exactly what's lost (bend, slide,
+pressure) and whether the instrument after it has MPE turned on.
+
+### The device's source
+
+`ableton/TILES_DISPLAY/build_tiles_display.py` generates the `.amxd`
+(same container format Ableton's own factory "Max MIDI Effect" template
+uses) -- edit the device there and re-run `python3 build_tiles_display.py`
+rather than hand-editing the binary-wrapped file. The generator checks
+every connection points at a real inlet/outlet before writing.
+
+### Verification status -- read this first time
+
+Used in Live since the first version (two-instance mode confirmed). The
+auto-find added 2026-09-29 is built and structurally validated but not yet
+confirmed in Live. First-run checklist:
+
+1. Drop the device on a MIDI track before an instrument; it should load
+   with no red/errors in Max's console and show the dark panel, a pink
+   underline, the **VIEW** button, and **SURFACE**.
+2. TILES in melodic mode: click **VIEW** -- the button turns Sentia pink,
+   **SURFACE jumps to TILES's position by itself**, and pads flash on
+   TILES; play a note on that track and the matching pad should light
+   green, then go dark on release. (No flash: step SURFACE by hand until
+   pads flash, and tell us -- the auto-find didn't work in that setup.)
+3. Add a second instance on another track and arm it -- both VIEW
+   buttons stay on: the first pink, the second **soft red**, and the
+   second track's notes light **soft red** pads while the first's stay
+   green (pads also flash soft red when the second one arms). Check the
+   soft red really reads as red and not pink or orange -- if not, the
+   two knobs are `TILES_LIGHTING_ECHO_SECONDARY_G/_B` in `lighting.c`.
+4. Arm a third instance -- the soft-red one switches itself off and its pads
+   clear; the pink one is untouched. Then turn the pink one off -- the
+   remaining device turns pink and its notes go green.
+5. Stop transport / disarm mid-note -- no pad should stay lit.
+
+If step 2 fails but 1 loads clean, the likely culprits, in order: the
+TILES script not selected in a Control Surface row with its **Output**
+set to "SENTIA TILES (DAW)", the SURFACE number (above), or TILES not in
+melodic mode.
+Live's own log is the fastest way to see which:
+`~/Library/Preferences/Ableton/Live <version>/Log.txt`. A line like
+`call send_midi 144 60 100: no valid object set` means the device is
+tapping notes fine but SURFACE points at nothing (auto-find found no
+TILES -- is the script loaded?); no such lines while
+nothing lights means the send is reaching a control surface and the
+problem is that surface's output port or TILES's own mode.
+
+## Other DAWs
+
+This specific script is Ableton-only -- Logic, Cubase, Reaper, Bitwig,
+and others each have their own, completely different control-surface/
+scripting architectures, and a real "just works" integration for any of
+them would need its own separate script written against that DAW's own
+API, not something this Ableton script (or TILES's firmware) can cover
+for free. Until/unless one of those gets built, TILES's firmware still
+sends the same three CCs (102/103/104, on the "SENTIA TILES DAW" port)
+regardless of which DAW is
+listening, so the fallback for any other DAW is exactly what this
+folder exists to avoid needing for Ableton specifically: a one-time
+manual MIDI-Map/MIDI-Learn of each CC to that DAW's own Play/Stop/
+Record, using whatever generic-mapping feature it provides.
+
+## Two units at once (2026-10-02)
+
+Real feedback: "im performing using unt 2 and 4, make sure btoh are up to
+date and flashed and that there will be no conflit using both at once in
+ableton". With both plugged in, Live's log showed the ports as "SENTIA
+TILES (...)" and "SENTIA TILES #2 (...)": one product name on every unit
+made Live number the second one in plug-in order, so the two could swap
+tracks after a replug. The firmware now names each unit "SENTIA TILES N"
+(`firmware/src/midi/HISTORY.md`); `__init__.py` lists those model names.
+macOS kept its cached name for both boards and they were renamed in its
+MIDI setup (README, "stale device").
+
+Two script fixes from the same session:
+
+- Deleting a track made `_disconnect_track_clip_listeners()` raise
+  Boost.Python's `ArgumentError` (a slot of a deleted track), which the
+  `except RuntimeError` didn't catch, so the listeners were never rebuilt
+  and the grid stopped updating. Every listener removal now goes through
+  `_try_remove()`, which ignores any failure.
+- Recording a new clip disarmed every other armed track, which would
+  silence the other unit's track. A track whose input is a different
+  TILES unit now stays armed (`_played_by_other_tiles()`).
+
+## Empty-slot recording switched off (2026-10-02)
+
+Real feedback: "lets get rid of the ableton record in place of emtpy
+track mode rn keep it as a feature thats off rn". `_record_new_clip()`
+stays, behind `RECORD_INTO_EMPTY_SLOTS = False` in `scene_launch.py`;
+the firmware stops sending the click (`OP_SCENE_RECORD_INTO_EMPTY_SLOTS`
+in `op_mode.c`). Turn both on together to bring it back.
+
+## Performance transport layout (2026-10-02)
+
+Real feedback, for a two-unit performance: "lets change the diamond stop
+to shift diamond for transport control ableton, on both units ...
+diamond plays, dianomd hold recxords, diamond plus shift stop. if
+oplaying then diamond dosnt do anything no retrigger no nothing". The
+firmware (`OP_TRANSPORT_SHIFT_STOP`) still sends Play/Record on every
+click/hold, because one unit can't know the other already started Live;
+the script drops them while `song.is_playing` (Play always, Record with
+`DIAMOND_IGNORED_WHILE_PLAYING`), so a second unit's click never restarts
+the song from the start marker.
+
+## Circle + empty slot records; TILES DISPLAY per unit (2026-10-04)
+
+Real feedback: "build option 1, circle plus empty slot. lets make the
+max for live device allow to select different tiles if more than one is
+conected and each tile can be asigned to a max of 2 channels at a time
+for tiles view."
+
+- Recording: a new CC, `CC_RECORD_TOUCH` (111), sent on circle + an
+  empty slot; `_on_record_touch()` checks the slot is still empty and
+  calls `_record_new_clip()`. The plain grid CC never records any more,
+  and `RECORD_INTO_EMPTY_SLOTS` is gone.
+- TILES DISPLAY: SURFACE (a loaded-surface position) became **TILES**
+  (1-4): the Nth "TILES" row, found by counting `type_name` matches in
+  the scan; with no TILES found at all, the number is used as the
+  position (the old manual fallback). Slots are per unit: every message
+  on the coordination buses carries the sender's unit and receivers
+  filter with `[select]` (unit in the right inlet), so each unit has its
+  own primary/secondary. Bus names moved to `tiles_display2_*` so an old
+  instance in a set can't interfere. Changing TILES while armed disarms
+  first (flushing the old unit). Each scan drops the old route first, so
+  a unit number with no TILES behind it sends nothing.
+

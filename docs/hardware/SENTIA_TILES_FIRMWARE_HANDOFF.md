@@ -6,13 +6,15 @@
 
 > Treat the pad table and GPIO table below as the hardware truth for this PCB revision. Do not copy mappings from the older design chat. If hardware changes, change the JSON first and regenerate/replace this handoff.
 
+> **Corrections, verified on hardware (2026-08-21):** this handoff first called GP20 a PCA9685 A5 address strap, said PCA9685 OE is tied low, and gave the PCA9685 addresses as 0x60/0x61. The fabricated board's flying-probe netlist shows GP20 (`NET_25`) on pin 23 of both chips, which is **OE** (active low, 10k pull-up R66; A5 is pin 24), and A1–A5 tied to GND with A0 low on U_HAPTIC1 and high on U_HAPTIC2: addresses **0x40/0x41**, which is what the board answers at. Everything below is corrected. Details: TILES repo commit `be55ebe` and `firmware/src/board/README.md`.
+
 ## Non-negotiable rules
 
-- GP20 is electrically connected to the PCA9685 A5 address strap. Configure it as input/high-impedance and never drive it.
+- GP20 is the shared PCA9685 OE (pin 23 on both chips, active low, 10k pull-up). Leave it input/high-Z at boot, which keeps every PCA9685 output off, and drive it low only after every PCA9685 channel is configured. Never drive it high.
 - Pico VBUS pin 40 is not connected. USB data still uses TP2/TP3; use TinyUSB mounted state for a real USB connection, not GPIO24.
 - Only one TMAG5273 channel across all three TCA9548A muxes may be enabled at once; every sensor has address 0x35.
 - Disable all three LED mux banks before changing their select bits, and enable exactly one bank for each one-pixel update.
-- PCA9685 OE is tied low. Motors must fail off through all-zero PWM plus their hardware 100k gate pulldowns.
+- PCA9685 OE is GP20 (above), not tied low. Motors must still fail off through all-zero PWM plus their hardware 100k gate pulldowns.
 - CV and gate require external 12V power. They must remain off in USB-only mode.
 - The USB eFuse limit is not the USB operating budget. Unknown USB sources start in the 500mA-safe profile.
 - No module may own raw pins directly. A board/HAL layer owns pins and the single 24-entry pad table owns every physical mapping.
@@ -41,7 +43,7 @@
 | GP17 | 22 | `NET_54` | SW4 diamond | input; active low |
 | GP18 | 24 | `NET_52` | SW2 right capsule | input; active low |
 | GP19 | 25 | `NET_51` | SW1 left capsule | input; active low |
-| GP20 | 26 | `NET_25` | PCA9685 A5 address strap | input/high-Z; **NEVER DRIVE** |
+| GP20 | 26 | `NET_25` | PCA9685 OE, shared (active low) | input/high-Z at boot; drive low only after every PCA9685 channel is configured; **never drive high** |
 | GP21 | 27 | `TOUCH_IRQ` | shared MPR121 active-low IRQ | input; active low |
 | GP22 | 29 | `GP22` | TPS2121 ST power-source status | input; low means external IN2 selected |
 | GP26 | 31 | `PEDAL_ADC` | pedal analog input ADC0 | input |
@@ -76,7 +78,7 @@ A full 24-pad XYZ Hall scan at 400kHz has a practical ceiling around 120–150 f
 
 ### I2C1 — GP6 SDA / GP7 SCL, 400kHz
 
-- U_HAPTIC1 PCA9685 `0x60`; U_HAPTIC2 `0x61`.
+- U_HAPTIC1 PCA9685 `0x40`; U_HAPTIC2 `0x41`.
 - U12 TCA9554 LED-mux controller `0x20`.
 - Set PCA9685 MODE2.OUTDRV=1/totem-pole. Motor outputs are active-high; function LEDs are active-low.
 
@@ -110,30 +112,30 @@ Pads are row-major: 1–6 top row, then 7–12, 13–18, and 19–24 bottom row.
 
 | Pad | Grid | Center mm (X,Y) | Touch | Hall mux/ch | LED mux/ch | Haptic PCA/ch | FPC |
 |---:|---|---|---|---|---|---|---:|
-| 1 | R1C1 | -65.000, 38.886 | 0x5A/ELE11 | 0x70/CH4 | MUX1/CH4 | 0x60/CH3 | 1 |
-| 2 | R1C2 | -39.000, 38.886 | 0x5A/ELE10 | 0x70/CH3 | MUX1/CH2 | 0x60/CH4 | 2 |
-| 3 | R1C3 | -13.000, 38.886 | 0x5A/ELE8 | 0x71/CH4 | MUX2/CH4 | 0x60/CH5 | 3 |
-| 4 | R1C4 | 13.000, 38.886 | 0x5B/ELE3 | 0x71/CH3 | MUX2/CH2 | 0x61/CH0 | 4 |
-| 5 | R1C5 | 39.000, 38.886 | 0x5B/ELE2 | 0x72/CH4 | MUX3/CH4 | 0x61/CH1 | 5 |
-| 6 | R1C6 | 65.000, 38.886 | 0x5B/ELE1 | 0x72/CH3 | MUX3/CH2 | 0x61/CH6 | 6 |
-| 7 | R2C1 | -65.000, 12.886 | 0x5A/ELE9 | 0x70/CH5 | MUX1/CH6 | 0x60/CH2 | 7 |
-| 8 | R2C2 | -39.000, 12.886 | 0x5A/ELE6 | 0x70/CH2 | MUX1/CH1 | 0x60/CH15 | 8 |
-| 9 | R2C3 | -13.000, 12.886 | 0x5A/ELE7 | 0x71/CH5 | MUX2/CH6 | 0x60/CH7 | 9 |
-| 10 | R2C4 | 13.000, 12.886 | 0x5B/ELE5 | 0x71/CH2 | MUX2/CH1 | 0x61/CH15 | 10 |
-| 11 | R2C5 | 39.000, 12.886 | 0x5B/ELE4 | 0x72/CH5 | MUX3/CH6 | 0x61/CH14 | 11 |
-| 12 | R2C6 | 65.000, 12.886 | 0x5B/ELE0 | 0x72/CH2 | MUX3/CH1 | 0x61/CH7 | 12 |
-| 13 | R3C1 | -65.000, -13.114 | 0x5A/ELE3 | 0x70/CH6 | MUX1/CH7 | 0x60/CH14 | 13 |
-| 14 | R3C2 | -39.000, -13.114 | 0x5A/ELE4 | 0x70/CH1 | MUX1/CH0 | 0x60/CH13 | 14 |
-| 15 | R3C3 | -13.000, -13.114 | 0x5A/ELE5 | 0x71/CH6 | MUX2/CH7 | 0x60/CH8 | 15 |
-| 16 | R3C4 | 13.000, -13.114 | 0x5B/ELE6 | 0x71/CH1 | MUX2/CH0 | 0x61/CH13 | 16 |
-| 17 | R3C5 | 39.000, -13.114 | 0x5B/ELE8 | 0x72/CH6 | MUX3/CH7 | 0x61/CH11 | 17 |
-| 18 | R3C6 | 65.000, -13.114 | 0x5B/ELE10 | 0x72/CH1 | MUX3/CH0 | 0x61/CH9 | 18 |
-| 19 | R4C1 | -65.000, -39.114 | 0x5A/ELE0 | 0x70/CH7 | MUX1/CH5 | 0x60/CH12 | 19 |
-| 20 | R4C2 | -39.000, -39.114 | 0x5A/ELE1 | 0x70/CH0 | MUX1/CH3 | 0x60/CH11 | 20 |
-| 21 | R4C3 | -13.000, -39.114 | 0x5A/ELE2 | 0x71/CH7 | MUX2/CH5 | 0x60/CH9 | 21 |
-| 22 | R4C4 | 13.000, -39.114 | 0x5B/ELE7 | 0x71/CH0 | MUX2/CH3 | 0x61/CH12 | 22 |
-| 23 | R4C5 | 39.000, -39.114 | 0x5B/ELE9 | 0x72/CH7 | MUX3/CH5 | 0x61/CH10 | 23 |
-| 24 | R4C6 | 65.000, -39.114 | 0x5B/ELE11 | 0x72/CH0 | MUX3/CH3 | 0x61/CH8 | 24 |
+| 1 | R1C1 | -65.000, 38.886 | 0x5A/ELE11 | 0x70/CH4 | MUX1/CH4 | 0x40/CH3 | 1 |
+| 2 | R1C2 | -39.000, 38.886 | 0x5A/ELE10 | 0x70/CH3 | MUX1/CH2 | 0x40/CH4 | 2 |
+| 3 | R1C3 | -13.000, 38.886 | 0x5A/ELE8 | 0x71/CH4 | MUX2/CH4 | 0x40/CH5 | 3 |
+| 4 | R1C4 | 13.000, 38.886 | 0x5B/ELE3 | 0x71/CH3 | MUX2/CH2 | 0x41/CH0 | 4 |
+| 5 | R1C5 | 39.000, 38.886 | 0x5B/ELE2 | 0x72/CH4 | MUX3/CH4 | 0x41/CH1 | 5 |
+| 6 | R1C6 | 65.000, 38.886 | 0x5B/ELE1 | 0x72/CH3 | MUX3/CH2 | 0x41/CH6 | 6 |
+| 7 | R2C1 | -65.000, 12.886 | 0x5A/ELE9 | 0x70/CH5 | MUX1/CH6 | 0x40/CH2 | 7 |
+| 8 | R2C2 | -39.000, 12.886 | 0x5A/ELE6 | 0x70/CH2 | MUX1/CH1 | 0x40/CH15 | 8 |
+| 9 | R2C3 | -13.000, 12.886 | 0x5A/ELE7 | 0x71/CH5 | MUX2/CH6 | 0x40/CH7 | 9 |
+| 10 | R2C4 | 13.000, 12.886 | 0x5B/ELE5 | 0x71/CH2 | MUX2/CH1 | 0x41/CH15 | 10 |
+| 11 | R2C5 | 39.000, 12.886 | 0x5B/ELE4 | 0x72/CH5 | MUX3/CH6 | 0x41/CH14 | 11 |
+| 12 | R2C6 | 65.000, 12.886 | 0x5B/ELE0 | 0x72/CH2 | MUX3/CH1 | 0x41/CH7 | 12 |
+| 13 | R3C1 | -65.000, -13.114 | 0x5A/ELE3 | 0x70/CH6 | MUX1/CH7 | 0x40/CH14 | 13 |
+| 14 | R3C2 | -39.000, -13.114 | 0x5A/ELE4 | 0x70/CH1 | MUX1/CH0 | 0x40/CH13 | 14 |
+| 15 | R3C3 | -13.000, -13.114 | 0x5A/ELE5 | 0x71/CH6 | MUX2/CH7 | 0x40/CH8 | 15 |
+| 16 | R3C4 | 13.000, -13.114 | 0x5B/ELE6 | 0x71/CH1 | MUX2/CH0 | 0x41/CH13 | 16 |
+| 17 | R3C5 | 39.000, -13.114 | 0x5B/ELE8 | 0x72/CH6 | MUX3/CH7 | 0x41/CH11 | 17 |
+| 18 | R3C6 | 65.000, -13.114 | 0x5B/ELE10 | 0x72/CH1 | MUX3/CH0 | 0x41/CH9 | 18 |
+| 19 | R4C1 | -65.000, -39.114 | 0x5A/ELE0 | 0x70/CH7 | MUX1/CH5 | 0x40/CH12 | 19 |
+| 20 | R4C2 | -39.000, -39.114 | 0x5A/ELE1 | 0x70/CH0 | MUX1/CH3 | 0x40/CH11 | 20 |
+| 21 | R4C3 | -13.000, -39.114 | 0x5A/ELE2 | 0x71/CH7 | MUX2/CH5 | 0x40/CH9 | 21 |
+| 22 | R4C4 | 13.000, -39.114 | 0x5B/ELE7 | 0x71/CH0 | MUX2/CH3 | 0x41/CH12 | 22 |
+| 23 | R4C5 | 39.000, -39.114 | 0x5B/ELE9 | 0x72/CH7 | MUX3/CH5 | 0x41/CH10 | 23 |
+| 24 | R4C6 | 65.000, -39.114 | 0x5B/ELE11 | 0x72/CH0 | MUX3/CH3 | 0x41/CH8 | 24 |
 
 Each FPC uses: pin 1 TOUCH, pin 2 GND, pin 3 pad LED data, pin 4 +5V, pin 5 MOTOR_V+ (~3.30V), pin 6 switched MOTOR−, shells 7/8 GND. The daughterboard adds 1k in the touch path, 150Ω in LED DIN, a 10k DIN pulldown, and one 100nF +5V bypass capacitor.
 
@@ -141,12 +143,12 @@ Each FPC uses: pin 1 TOUCH, pin 2 GND, pin 3 pad LED data, pin 4 +5V, pin 5 MOTO
 
 | Button | Physical shape/order | Input | LED PWM | Polarity |
 |---:|---|---|---|---|
-| SW1 | left capsule | GP19 | 0x60/CH0 | input low; LED low = on |
-| SW2 | right capsule | GP18 | 0x60/CH1 | input low; LED low = on |
-| SW3 | triangle | GP16 | 0x61/CH2 | input low; LED low = on |
-| SW4 | diamond | GP17 | 0x61/CH3 | input low; LED low = on |
-| SW5 | square | GP15 | 0x61/CH4 | input low; LED low = on |
-| SW6 | circle | GP14 | 0x61/CH5 | input low; LED low = on |
+| SW1 | left capsule | GP19 | 0x40/CH0 | input low; LED low = on |
+| SW2 | right capsule | GP18 | 0x40/CH1 | input low; LED low = on |
+| SW3 | triangle | GP16 | 0x41/CH2 | input low; LED low = on |
+| SW4 | diamond | GP17 | 0x41/CH3 | input low; LED low = on |
+| SW5 | square | GP15 | 0x41/CH4 | input low; LED low = on |
+| SW6 | circle | GP14 | 0x41/CH5 | input low; LED low = on |
 
 The symbols do not hard-code behavior. A reasonable demo assignment is previous, next, haptics toggle, pad-LED toggle, underglow toggle, and panic/all-notes-off, but keep this in a profile table so it can be changed without touching drivers.
 
@@ -220,12 +222,12 @@ Every module must be independently startable/stoppable. Disabling a module first
 
 ## Safe boot sequence
 
-1. Set GP0/GP2 high; GP3/GP8/GP12 low; GP13 high; GP20 input/high-Z.
+1. Set GP0/GP2 high; GP3/GP8/GP12 low; GP13 high; GP20 input/high-Z (PCA9685 outputs off).
 2. Start watchdog and diagnostics transport.
 3. Initialize I2C buses at 100kHz for detection, then raise to 400kHz after all expected devices ACK.
 4. Disable every TCA9548A Hall channel.
 5. Set TCA9554 P3/P4/P5 high so all LED mux banks are disabled, then set selector bits.
-6. Initialize both PCA9685 devices with all channels at zero/off and MODE2.OUTDRV=1.
+6. Initialize both PCA9685 devices with all channels at zero/off and MODE2.OUTDRV=1, then drive GP20 low to enable their outputs.
 7. Read GP22 and TinyUSB state; select the safe profile unless a stored, CRC-valid explicit override exists.
 8. Initialize sensors and outputs module-by-module; a failed module remains disabled without blocking USB diagnostics.
 
@@ -244,8 +246,8 @@ These are calibration/characterization tasks, not missing PCB mappings. The firm
 The net mappings were reconstructed from the final 2026-08-01 motherboard and daughterboard flying-probe netlists and reconciled with their BOM/PnP exports. Manufacturer behavior/rating sources to keep with the firmware repository:
 
 - Raspberry Pi Pico 2 datasheet: https://datasheets.raspberrypi.com/pico/pico-2-datasheet.pdf
-- TI TMAG5273 datasheet: local `/Users/matiascevallos/Downloads/tmag5273.pdf`
-- TI TPS2121 datasheet: local `/Users/matiascevallos/Downloads/tps2121.pdf`
+- TI TMAG5273 datasheet: https://www.ti.com/lit/ds/symlink/tmag5273.pdf
+- TI TPS2121 datasheet: https://www.ti.com/lit/ds/symlink/tps2121.pdf
 - NXP MPR121: https://www.nxp.com/docs/en/data-sheet/MPR121.pdf
 - NXP PCA9685: https://www.nxp.com/docs/en/data-sheet/PCA9685.pdf
 - Gateron KS-20UO10B045NW-X14 specification: https://www.gateron.com/u_file/2506/10/file/GATERONDual-railMagneticOrangeSwitchSPEC-KS-20U-005KS-20UO10B045NW-X14.pdf

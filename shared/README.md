@@ -19,5 +19,11 @@ types, so there is exactly one place each fact is authored.
 
 ## Status
 
-Not yet authored — this is a placeholder pending designing the runtime
-board-map schema and protocol together in a follow-up pass.
+- `protocol/`: v1, a plain-text settings protocol, implemented in
+  `firmware/src/usb_vendor/` and used by `tools/tiles_control.py`. The
+  larger binary protocol (remap, calibration, streaming, firmware
+  update) is still at the design-notes stage (`docs/protocol/`).
+- `board-map/`: not authored yet. No codegen exists; the firmware's
+  `board/pad_config.c` is kept in sync with
+  `docs/hardware/sentia_tiles_board_map_v1.json` by hand and checked by
+  `firmware/test/test_pad_config.c`.
