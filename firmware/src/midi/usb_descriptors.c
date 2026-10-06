@@ -103,7 +103,10 @@ TU_VERIFY_STATIC(MIDI_NUM_CABLES == TILES_USB_MIDI_NUM_CABLES, "descriptor cable
 
 uint8_t const desc_fs_configuration[] = {
     /* config number, interface count, string index, total length, attributes, mA */
-    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
+    /* 500 mA, the USB 2.0 maximum: TILES draws ~0.15 A idle and up to
+     * ~0.42 A on USB (docs/hardware/current-measurements.md), so the old
+     * 100 mA undersold it to hubs and hosts. */
+    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 500),
 
     /* interface, string, notification EP + size, data EPs (out, in) + size */
     TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, STRID_CDC, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),

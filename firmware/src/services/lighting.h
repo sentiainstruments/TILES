@@ -3,7 +3,7 @@
 /* Pad LEDs and underglow.
  *
  * Pad brightness is a flat fraction of services/power.h's
- * led_brightness_ceiling_percent (37% USB-only, 90% with external power;
+ * led_brightness_ceiling_percent (50% USB-only, 90% with external power;
  * budget in power.c). Deliberately NOT load-aware: a ceiling that rose when
  * fewer pads were lit made the whole board's brightness shift with
  * playing, which looked like a brownout. A pad's brightness for a given
@@ -76,3 +76,10 @@ void tiles_lighting_set_standby_pad_rgb(uint8_t logical_pad, float r, float g, f
 /* Sets underglow pixel 0-3 (chain order), each channel 0.0-1.0 scaled by
  * TILES_LIGHTING_UNDERGLOW_LEVEL. No-op unless standby is active. */
 void tiles_lighting_set_standby_underglow_rgb(uint8_t pixel_index, float r, float g, float b);
+
+/* Bench test (settings shell `TEST LEDS`): every pad and underglow pixel
+ * plain white at percent_0_to_100 of full scale, NOT the power ceiling, for
+ * measuring LED current. 0 ends it and normal rendering resumes. Bypasses
+ * standby and every override while on. */
+void tiles_lighting_set_test_white(uint8_t percent_0_to_100);
+uint8_t tiles_lighting_get_test_white(void);

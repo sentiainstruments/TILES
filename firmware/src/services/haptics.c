@@ -137,12 +137,13 @@ void tiles_haptics_set_sleep_silenced(bool silenced) {
 
 /* Like buttons.c's set_button_led_level() but honoring active_level: motor
  * channels are active high (pin high = NMOS on), button LEDs active low. */
-static void set_motor_level(const tiles_pad_config_t *cfg, float level_0_to_1) {
+/* Drives one motor at level_0_to_1 as given (set_motor_level() applies the
+ * haptic strength first). */
+static void set_motor_level_raw(const tiles_pad_config_t *cfg, float level_0_to_1) {
     tiles_pca9685_t *pca = tiles_buttons_pca9685_for_addr(cfg->haptic.pca9685_i2c_addr);
     if (pca == NULL) {
         return;
     }
-    level_0_to_1 *= s_haptic_intensity;
     if (level_0_to_1 < 0.0f) {
         level_0_to_1 = 0.0f;
     }
@@ -171,6 +172,45 @@ static void set_motor_level(const tiles_pad_config_t *cfg, float level_0_to_1) {
         off_count = 4094u;
     }
     tiles_pca9685_set_pwm(pca, channel, 0u, off_count);
+}
+
+static void set_motor_level(const tiles_pad_config_t *cfg, float level_0_to_1) {
+    set_motor_level_raw(cfg, level_0_to_1 * s_haptic_intensity);
+}
+
+/* Bench test state (tiles_haptics_test_motors()): pads 1..s_test_count run
+ * until s_test_until_ms. */
+static uint8_t s_test_count;
+static uint32_t s_test_until_ms;
+
+void tiles_haptics_test_stop(void) {
+    for (uint8_t pad = 1u; pad <= s_test_count; pad++) {
+        const tiles_pad_config_t *cfg = board_pad_config(pad);
+        if (cfg != NULL) {
+            set_motor_level_raw(cfg, 0.0f);
+        }
+    }
+    s_test_count = 0u;
+}
+
+uint8_t tiles_haptics_test_motors(uint8_t count, float duty_0_to_1) {
+    tiles_haptics_test_stop();
+    uint8_t ceiling = tiles_power_get_state().max_haptic_voices;
+    if (count > ceiling) {
+        count = ceiling;
+    }
+    if (count > TILES_NUM_PADS) {
+        count = TILES_NUM_PADS;
+    }
+    for (uint8_t pad = 1u; pad <= count; pad++) {
+        const tiles_pad_config_t *cfg = board_pad_config(pad);
+        if (cfg != NULL) {
+            set_motor_level_raw(cfg, duty_0_to_1);
+        }
+    }
+    s_test_count = count;
+    s_test_until_ms = to_ms_since_boot(get_absolute_time()) + TILES_HAPTICS_TEST_MAX_MS;
+    return count;
 }
 
 static float kick_duty_from_velocity(uint8_t velocity_0_127) {
@@ -395,6 +435,10 @@ void tiles_haptics_resync_hardware(void) {
 
 void tiles_haptics_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+
+    if (s_test_count != 0u && (int32_t)(now_ms - s_test_until_ms) >= 0) {
+        tiles_haptics_test_stop(); /* bench test timed out */
+    }
 
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         haptic_pad_state_t *s = &s_pads[i];

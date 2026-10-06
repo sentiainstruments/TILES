@@ -9361,4 +9361,17 @@ change. Search it by file or feature name.
   `usb_vendor/usb_vendor.c`: its bound check `s_out_len + n + 1 >
   sizeof(s_out)` could in principle wrap, so it's now written as a
   subtraction that can't. Zero warnings again.
+- **Current measured; USB ceiling 50%, 500 mA declared, bench tests
+  (0.2.6, 2026-10-06).** Real feedback: "lets do the usbc testing for power
+  n stuff im ready". With an inline meter on unit 4 (USB only): board
+  ~80 mA, LEDs ~4.1 mA per percent with all 28 white, motors ~28 mA each
+  running (estimates were 220 mA, 16 mA/pixel and 60-100 mA). The user
+  picked a 50% USB ceiling (worst case ~0.42 A); FAULT keeps 37%. The
+  configuration descriptor said 100 mA while TILES draws 0.15 A idle: now
+  500 mA. Settings shell bench tests (`TEST LEDS`, `TEST MOTORS`, `TEST
+  OFF`; `lighting.c` test white, `haptics.c` test motors capped at the
+  power mode's voices with an 8 s timeout) and `INFO` power fields, driven
+  by `tools/current_test.py`. A first worst-case reading of 0.53 A was the
+  motors spinning up; held 3 s it read 0.35 A, the parts' sum. Data:
+  `docs/hardware/current-measurements.md`.
 

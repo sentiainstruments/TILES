@@ -30,6 +30,9 @@ Usage:
     python3 tools/tiles_control.py reboot bootsel         # reboot into the ROM bootloader (for picotool)
     python3 tools/tiles_control.py reboot app             # plain warm restart back into this firmware
     TILES_SERIAL=F1A60E66E44C9D4B python3 tools/tiles_control.py info   # one of several boards (serial = chip ID)
+    python3 tools/tiles_control.py test leds 50          # bench: every LED white at 50% (current tests)
+    python3 tools/tiles_control.py test motors 4 100     # bench: pads 1-4's motors at 100% for 8 s
+    python3 tools/tiles_control.py test off              # bench: back to normal
 
 Changes apply immediately and are saved to flash automatically a couple of
 seconds after the last one (only while no pad is being touched); `save` just
@@ -189,6 +192,9 @@ def main():
         request, multi = f"RESET {sys.argv[2]}", False
     elif command == "reboot" and argc == 3 and sys.argv[2].lower() in ("bootsel", "app"):
         request, multi = f"REBOOT {sys.argv[2].upper()}", False
+    elif command == "test" and argc >= 3:
+        # Bench tests for current measurement: test leds 37 | test motors 4 [duty%] | test off
+        request, multi = "TEST " + " ".join(a.upper() for a in sys.argv[2:]), sys.argv[2].lower() == "motors"
     else:
         print(__doc__)
         sys.exit(1)

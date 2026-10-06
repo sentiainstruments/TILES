@@ -31,11 +31,11 @@ static tiles_power_mode_t raw_mode_from_pins(void) {
  * CV/gate allowed). USB_DEMO_VALIDATED_1P5A is a manual override, not
  * derived here.
  *
- * External LED ceiling is 90%: worst case ~448 mA LEDs + ~220 mA MCU/ICs +
- * a pessimistic 300-400 mA haptics still leaves ~1.8 A of margin (full
- * breakdown in services/lighting.c). USB-only stays at 37%: the same
- * accounting leaves no confirmed margin in 500 mA. Motor current is the
- * biggest unmeasured number. */
+ * Ceilings from measured current (docs/hardware/current-measurements.md,
+ * breakdown in services/lighting.c): USB-only 50% puts the worst case
+ * (every LED white at the ceiling, underglow at its fixed level, 4 motors)
+ * at ~0.42 A, inside 500 mA with margin. External 90%: ~0.6 A of 2.5 A.
+ * FAULT keeps the old 37%: the source is unknown. */
 static tiles_power_state_t state_for_mode(tiles_power_mode_t mode) {
     tiles_power_state_t s = {0};
     s.mode = mode;
@@ -60,11 +60,10 @@ static tiles_power_state_t state_for_mode(tiles_power_mode_t mode) {
     case TILES_POWER_MODE_USB_ONLY:
         s.usb_operating_budget_ma = 500u;
         s.main_5v_budget_ma = 500u;
-        /* 4 voices: at an estimated 80-100 mA per small ERM motor, 5 voices alone
-         * could take the whole 500 mA budget. Conservative until motor current is
-         * measured (the handoff expects a current governor on top of this). */
+        /* 4 voices: ~28 mA per motor running (measured), so ~0.11 A for all
+         * four; start-up surges are short and unmeasured. 50%: see above. */
         s.max_haptic_voices = 4u;
-        s.led_brightness_ceiling_percent = 37u;
+        s.led_brightness_ceiling_percent = 50u;
         s.cv_gate_permitted = false;
         break;
 

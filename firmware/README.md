@@ -53,8 +53,8 @@ print-only steps and the boot animation.
 
 ## Status (2026-10-04)
 
-Four pre-production units (Rev A0), firmware 0.2.5 (`src/midi/product_identity.h`),
-built with Arm GNU Toolchain 15.3 (native arm64); units 2 and 4 run it. Each unit names itself "SENTIA TILES N" over
+Four pre-production units (Rev A0), firmware 0.2.6 (`src/midi/product_identity.h`),
+built with Arm GNU Toolchain 15.3 (native arm64). Each unit names itself "SENTIA TILES N" over
 USB (`src/board/unit_id.h`), so several can play in one DAW session.
 
 Set for now (compile-time switches, see `daw-integration/README.md`):
@@ -74,6 +74,9 @@ Set for now (compile-time switches, see `daw-integration/README.md`):
   settings saved to flash.
 - **Song mode is beta**: built, not yet played on hardware.
 - DIN MIDI (TRS jacks) works on hardware (confirmed 2026-10-04).
+- Supply current measured on USB (2026-10-06, `docs/hardware/current-measurements.md`):
+  0.15 A idle, 0.34 A mashing every pad, ~0.42 A worst case at the USB LED
+  ceiling (now 50%). TILES declares 500 mA to the USB host.
 - Not yet verified on hardware: CV/gate (and the DAC80502 driver), the
   Windows WinUSB descriptors, an expression pedal.
 - **Before any unit leaves the building**: replace the test USB ID (see

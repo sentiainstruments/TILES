@@ -103,7 +103,7 @@ void tiles_lighting_set_look(tiles_look_param_t param, uint16_t value) {
 }
 
 /* Underglow's own fixed brightness (out of 255), NOT scaled by the power
- * ceiling: at 37% of the USB ceiling it barely glowed. 4 LEDs are a small
+ * ceiling: at the USB ceiling it barely glowed. 4 LEDs are a small
  * share of the budget (included in the accounting below), and a steady
  * halo doesn't compete with pad feedback. */
 #define TILES_LIGHTING_UNDERGLOW_LEVEL 230u
@@ -115,17 +115,17 @@ void tiles_lighting_set_look(tiles_look_param_t param, uint16_t value) {
  * pads are lit (a load-aware ceiling made the whole board's brightness
  * shift with playing, which looks like a brownout).
  *
- * Budget (worst case):
- *   - LEDs: 16 mA/pixel at full white incl. ~1 mA controller overhead
- *     (board map current_model) x 28 pixels = 448 mA; ~28 mA idle floor.
- *   - MCU + sensors + ICs + button LEDs (datasheet estimates): RP2350
- *     ~60 mA, 24 x TMAG5273 ~72 mA, MPR121s ~4 mA, muxes/expander ~2 mA,
- *     PCA9685 ICs ~2 mA, 6 button LEDs ~80 mA: ~220 mA.
- *   - Haptic motors: UNMEASURED. ~60-100 mA each while spinning, so
- *     300-400 mA for the USB voice limit: possibly the largest term.
- * USB-only (500 mA) leaves no confirmed room above 37%. External (2500 mA)
- * keeps ~1.8 A of margin, so its ceiling is 90% (power.c). Measure motor
- * current before changing either. */
+ * Budget, measured on unit 4 over USB with an inline meter (2026-10-06,
+ * docs/hardware/current-measurements.md; tools/current_test.py):
+ *   - Board without LEDs or motors (MCU, sensors, ICs, button LEDs):
+ *     ~80 mA (the datasheet estimate was ~220 mA).
+ *   - LEDs: ~4.1 mA per percent with all 28 white, ~0.41 A at 100%
+ *     (~14.6 mA per pixel; the board map's model said 16).
+ *   - Motors: ~28 mA each running at full duty, ~0.11 A for 4 (estimated
+ *     60-100 mA each). Start-up surges are short and not captured.
+ * Worst case at the USB ceiling (50%): 80 + 205 (pads) + ~24 (underglow at
+ * its fixed level) + 110 (4 motors) = ~0.42 A of 500 mA. External (2500
+ * mA) at 90%: ~0.6 A. Normal playing measured 0.15-0.35 A on USB (37%). */
 static uint8_t static_ceiling_level(void) {
     uint8_t ceiling_percent = tiles_power_get_state().led_brightness_ceiling_percent;
     return (uint8_t)((255u * ceiling_percent) / 100u);
@@ -145,6 +145,9 @@ static tiles_rgb01_t s_pad_standby_rgb[TILES_NUM_PADS]; /* standby color, no flo
 static tiles_rgb01_t s_underglow_rgb[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
 static uint8_t s_service_cursor;
 static bool s_initialized;
+/* Bench test white level (0-255), 0 = off. See tiles_lighting_set_test_white(). */
+static uint8_t s_test_white_level;
+static uint8_t s_test_white_percent;
 static bool s_standby_active;
 /* Whether a crash/debug/pattern/capture override owned the underglow last
  * frame (restore on release; see tiles_lighting_service()). */
@@ -265,12 +268,17 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
         return;
     }
 
-    tiles_rgb01_t desired = pad_desired_rgb(pad_index);
-    uint8_t ceiling = static_ceiling_level();
-    uint8_t r = (uint8_t)((float)ceiling * clamp01(desired.r));
-    uint8_t g = (uint8_t)((float)ceiling * clamp01(desired.g));
-    uint8_t b = (uint8_t)((float)ceiling * clamp01(desired.b));
-    uint32_t pixel = tiles_sk6805_pack_rgb(r, g, b);
+    uint32_t pixel;
+    if (s_test_white_level != 0u) {
+        pixel = tiles_sk6805_pack_rgb(s_test_white_level, s_test_white_level, s_test_white_level);
+    } else {
+        tiles_rgb01_t desired = pad_desired_rgb(pad_index);
+        uint8_t ceiling = static_ceiling_level();
+        uint8_t r = (uint8_t)((float)ceiling * clamp01(desired.r));
+        uint8_t g = (uint8_t)((float)ceiling * clamp01(desired.g));
+        uint8_t b = (uint8_t)((float)ceiling * clamp01(desired.b));
+        pixel = tiles_sk6805_pack_rgb(r, g, b);
+    }
 
     /* Crash-recorder marks ('i' before the mux, 'w'/'x' around the pixel
      * write) so a report shows which blocking step a hang was in. Both steps
@@ -472,8 +480,55 @@ void tiles_lighting_set_pad_press(uint8_t logical_pad, float press_0_to_1) {
     set_pad_press_internal(logical_pad, press_0_to_1);
 }
 
+static void write_test_underglow(void) {
+    uint32_t pixel = tiles_sk6805_pack_rgb(s_test_white_level, s_test_white_level, s_test_white_level);
+    uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
+    for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
+        pixels[i] = pixel;
+    }
+    tiles_debug_trace('w');
+    tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
+    tiles_debug_trace('x');
+}
+
+void tiles_lighting_set_test_white(uint8_t percent_0_to_100) {
+    if (percent_0_to_100 > 100u) {
+        percent_0_to_100 = 100u;
+    }
+    s_test_white_percent = percent_0_to_100;
+    s_test_white_level = (uint8_t)((255u * percent_0_to_100) / 100u);
+    if (percent_0_to_100 != 0u && s_test_white_level == 0u) {
+        s_test_white_level = 1u;
+    }
+    if (!s_initialized) {
+        return;
+    }
+    /* Apply at once (all 24 pads), so the meter settles without waiting on
+     * the round-robin; on the way out, normal colors and the underglow. */
+    if (s_test_white_level != 0u) {
+        write_test_underglow();
+    } else {
+        write_underglow();
+    }
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        write_pad(i);
+    }
+}
+
+uint8_t tiles_lighting_get_test_white(void) {
+    return s_test_white_percent;
+}
+
 void tiles_lighting_service(void) {
     if (!s_initialized) {
+        return;
+    }
+
+    /* Bench test: hold everything white; nothing else draws. */
+    if (s_test_white_level != 0u) {
+        write_test_underglow();
+        write_pad(s_service_cursor);
+        s_service_cursor = (uint8_t)((s_service_cursor + 1u) % TILES_NUM_PADS);
         return;
     }
 

@@ -1,6 +1,9 @@
 #include "usb_vendor.h"
 
 #include "board/unit_id.h"
+#include "haptics.h"
+#include "lighting.h"
+#include "power.h"
 #include "product_identity.h"
 #include "settings.h"
 #include "settings_persist.h"
@@ -13,6 +16,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define USB_VENDOR_LINE_MAX 128u
@@ -139,6 +143,16 @@ static void handle_line(char *line) {
         reply(text);
         snprintf(text, sizeof(text), "settings=%u", (unsigned)tiles_settings_count());
         reply(text);
+        tiles_power_state_t power = tiles_power_get_state();
+        static const char *const k_power_names[] = {"usb_only", "external_only", "usb_and_external", "fault"};
+        snprintf(text, sizeof(text), "power=%s", (unsigned)power.mode < 4u ? k_power_names[power.mode] : "unknown");
+        reply(text);
+        snprintf(text, sizeof(text), "power.budget_ma=%lu", (unsigned long)power.main_5v_budget_ma);
+        reply(text);
+        snprintf(text, sizeof(text), "power.led_ceiling_percent=%u", (unsigned)power.led_brightness_ceiling_percent);
+        reply(text);
+        snprintf(text, sizeof(text), "power.haptic_voices=%u", (unsigned)power.max_haptic_voices);
+        reply(text);
         snprintf(text, sizeof(text), "store.loaded=%d", info.loaded ? 1 : 0);
         reply(text);
         snprintf(text, sizeof(text), "store.restored=%u", (unsigned)info.applied);
@@ -158,6 +172,48 @@ static void handle_line(char *line) {
         snprintf(text, sizeof(text), "store.failures=%lu", (unsigned long)info.save_failures);
         reply(text);
         reply_ok();
+        return;
+    }
+
+    /* Bench tests for measuring current (tools/README.md "Current tests"):
+     *   TEST LEDS <0-100>         every LED white at that % of full scale
+     *   TEST MOTORS <n> [duty%]   pads 1..n's motors (capped at the power
+     *                             mode's voices) for 8 s; duty default 100
+     *   TEST OFF                  both off, normal rendering back */
+    if (strcmp(cmd, "TEST") == 0) {
+        char *what = strtok(NULL, " ");
+        char *arg = strtok(NULL, " ");
+        char *arg2 = strtok(NULL, " ");
+        if (what != NULL && strcmp(what, "LEDS") == 0 && arg != NULL) {
+            int percent = atoi(arg);
+            if (percent < 0 || percent > 100) {
+                reply_err("percent-0-100");
+                return;
+            }
+            tiles_lighting_set_test_white((uint8_t)percent);
+            reply_ok();
+            return;
+        }
+        if (what != NULL && strcmp(what, "MOTORS") == 0 && arg != NULL) {
+            int count = atoi(arg);
+            int duty = arg2 != NULL ? atoi(arg2) : 100;
+            if (count < 0 || count > 24 || duty < 0 || duty > 100) {
+                reply_err("motors-0-24-duty-0-100");
+                return;
+            }
+            uint8_t started = tiles_haptics_test_motors((uint8_t)count, (float)duty / 100.0f);
+            snprintf(text, sizeof(text), "motors=%u", (unsigned)started);
+            reply(text);
+            reply_ok();
+            return;
+        }
+        if (what != NULL && strcmp(what, "OFF") == 0) {
+            tiles_haptics_test_stop();
+            tiles_lighting_set_test_white(0u);
+            reply_ok();
+            return;
+        }
+        reply_err("usage-TEST-LEDS-n|MOTORS-n-[duty]|OFF");
         return;
     }
 

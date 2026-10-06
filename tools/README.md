@@ -1,8 +1,8 @@
 # tools/
 
 Host-side helper scripts: `flash.sh` (flash a running board),
-`tiles_control.py` (the settings CLI over USB) and
-`bootloader_watchdog.sh`. Planned: codegen from `shared/board-map/` and
+`tiles_control.py` (the settings CLI over USB), `current_test.py`
+(guided current measurement) and `bootloader_watchdog.sh`. Planned: codegen from `shared/board-map/` and
 `shared/protocol/` into the firmware's C headers and the companion app's
 TypeScript types, and manufacturing scripts once they're needed.
 
@@ -109,3 +109,29 @@ it a couple of seconds before the first command.
 Not the real companion app (`companion-app/` -- not built yet) -- this is
 the plain script that proves the protocol and USB vendor interface
 actually work before investing in that.
+
+## current_test.py
+
+Guided supply-current measurement with an inline USB-C meter between the
+computer and the unit. It steps the unit through fixed states with the
+settings shell's bench tests and asks for the meter reading at each,
+saving a CSV:
+
+```
+TILES_SERIAL=D8D37A03B3B6CE95 ~/.venvs/tiles-tools/bin/python tools/current_test.py results.csv
+TILES_SERIAL=D8D37A03B3B6CE95 ~/.venvs/tiles-tools/bin/python tools/current_test.py results.csv --recheck
+```
+
+The full pass covers LED brightness steps, 1 and 4 motors, and the USB
+worst case; `--recheck` repeats just the combined steps, holding each 3 s
+so a motor's start-up current is over before you read. Leave the pads
+alone while it runs. The bench tests themselves (firmware 0.2.6+):
+
+```
+tiles_control.py test leds 50        # every LED white at 50% of full scale
+tiles_control.py test motors 4 100   # pads 1-4's motors at 100% for 8 s (capped at the power mode's voices)
+tiles_control.py test off            # back to normal
+```
+
+Results and what they changed: `docs/hardware/current-measurements.md`.
+

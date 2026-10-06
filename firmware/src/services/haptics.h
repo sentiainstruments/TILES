@@ -93,3 +93,13 @@ void tiles_haptics_set_sleep_silenced(bool silenced);
  * main.c's power-change callback, right AFTER
  * tiles_buttons_resync_pca9685(). */
 void tiles_haptics_resync_hardware(void);
+
+/* Bench test (settings shell `TEST MOTORS`): runs pads 1..count's motors at
+ * duty_0_to_1 (raw, not scaled by the haptic strength) for
+ * TILES_HAPTICS_TEST_MAX_MS, then stops them. count is capped at the power
+ * mode's max_haptic_voices, so the test never asks for more than the
+ * product would. Don't touch the pads meanwhile (a pad event takes its
+ * motor back). Returns the count actually started. */
+#define TILES_HAPTICS_TEST_MAX_MS 8000u
+uint8_t tiles_haptics_test_motors(uint8_t count, float duty_0_to_1);
+void tiles_haptics_test_stop(void);
