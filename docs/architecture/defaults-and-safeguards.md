@@ -54,14 +54,15 @@ from `services/power.h`):
 
 | Mode | 5 V budget | Pad LED ceiling | Haptic voices | CV/gate |
 |---|---|---|---|---|
-| USB only | 500 mA | 37% | 4 | not allowed |
+| USB only | 500 mA | 50% | 4 | not allowed |
 | External (with or without USB) | 2.5 A | 90% | 12 | allowed, still off until enabled |
 | Fault (no external power, USB not mounted: usually a brief enumeration transient) | 500 mA | 37% | 0 | not allowed |
 
-These are planning figures, not measurements. Full-white on all 28
-pixels is ~448 mA (the board map's current model); motor current is the
-biggest unmeasured number, which is why USB-only stays at 37% and 4
-voices.
+Ceilings from measured current (`docs/hardware/current-measurements.md`):
+the board draws ~80 mA, all 28 LEDs ~4.1 mA per percent of brightness, a
+motor ~28 mA running. At USB-only's 50% the worst case (every LED white,
+4 motors) is ~0.42 A; normal playing measured 0.15-0.35 A. TILES declares
+500 mA to the USB host. Fault keeps the old 37%: the source is unknown.
 
 ## LED color and brightness
 

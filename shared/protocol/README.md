@@ -139,7 +139,7 @@ refused, not clamped); the default is whatever the owning module boots with --
 | 0x0603 | `features.harmonics.press_depth` | uint | 1 - 1000 (Hall depth, rest 0 / strike 150, above which a touch counts as a real press, not a harmonic) | `128` | yes |
 
 The `look.*` values are whole percent of the **fixed** LED brightness ceiling
-(37% USB-only / 90% external power) -- no setting can raise the ceiling itself.
+(50% USB-only / 90% external power) -- no setting can raise the ceiling itself.
 See `firmware/src/services/lighting.h` for what each tier is.
 
 `cv_gate.enabled` being true here does **not** mean CV/gate is actually
