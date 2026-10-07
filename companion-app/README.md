@@ -1,40 +1,75 @@
-# companion-app/
+# React + TypeScript + Vite
 
-Self-contained desktop configurator (Electron + TypeScript), in the spirit
-of ROLI Dashboard / Roland's hardware editors — installed, branded,
-offline-capable, not a browser tab. Talks to the device over the USB
-vendor interface defined in `../shared/protocol/`.
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
-## Structure
+Currently, two official plugins are available:
 
-- `src/main/` — Electron main process. Owns the USB device connection
-  (device discovery, connect/disconnect, the protocol client), file I/O
-  for saved presets, and anything needing OS/native access. The renderer
-  never touches USB directly — it only talks to main over IPC.
-- `src/renderer/` — The UI (React/TS): pad-mapping grid, per-pad
-  calibration wizard + live sensor view, scale/note layout editor, scene
-  and profile management, power/haptic budget indicators, firmware update
-  flow.
-- `src/shared/` — TypeScript types generated from (or hand-kept in sync
-  with) `../shared/protocol/` and `../shared/board-map/`. Anything the
-  main and renderer processes both need to agree on about wire format or
-  pad identity lives here, not duplicated in each.
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
-## Planned feature areas
+## React Compiler
 
-- Pad remap: note/scale assignment, MPE channel behavior, per-axis
-  gesture-to-CC/parameter mapping.
-- Calibration: guided per-pad rest/half/bottom/tilt capture, live raw XYZ
-  monitor, saturation warnings.
-- Profiles/scenes: edit and switch the same profile concept the device
-  itself uses (see `firmware/src/profiles/`), so on-device button toggles
-  and app edits stay consistent.
-- Diagnostics: I2C enumeration, per-key test, power-state readout —
-  surfaces the same commands `firmware/src/diagnostics/` exposes.
-- Firmware update.
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
-## Status
+## Expanding the ESLint configuration
 
-Not yet scaffolded as a buildable Electron project. `package.json` below
-is a placeholder pending confirming the exact stack (Electron + Vite +
-React + TypeScript is the working assumption).
+If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+
+```js
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      // Other configs...
+
+      // Remove tseslint.configs.recommended and replace with this
+      tseslint.configs.recommendedTypeChecked,
+      // Alternatively, use this for stricter rules
+      tseslint.configs.strictTypeChecked,
+      // Optionally, add this for stylistic rules
+      tseslint.configs.stylisticTypeChecked,
+
+      // Other configs...
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+      // other options...
+    },
+  },
+])
+
+```
+
+You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+
+```js
+// eslint.config.js
+import reactX from 'eslint-plugin-react-x'
+import reactDom from 'eslint-plugin-react-dom'
+
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      // Other configs...
+      // Enable lint rules for React
+      reactX.configs['recommended-typescript'],
+      // Enable lint rules for React DOM
+      reactDom.configs.recommended,
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+      // other options...
+    },
+  },
+])
+
+```
