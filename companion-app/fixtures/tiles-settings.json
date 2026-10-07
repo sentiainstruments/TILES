@@ -1,0 +1,288 @@
+{
+  "_comment": "Captured from a real SENTIA TILES (board 2, firmware 0.2.0) with tools/tiles_control.py schema + list on 2026-09-29. For the companion app's fake device -- see ../BRIEF.md. 'value' is that board's current value; the real app must read it from the device.",
+  "firmware": "0.2.0",
+  "settings": [
+    {
+      "id": 256,
+      "key": "pedal.mode",
+      "type": "enum",
+      "values": [
+        "sustain",
+        "expression"
+      ],
+      "default": "sustain",
+      "value": "sustain",
+      "persist": true
+    },
+    {
+      "id": 257,
+      "key": "pedal.polarity",
+      "type": "enum",
+      "values": [
+        "normally_open",
+        "normally_closed"
+      ],
+      "default": "normally_open",
+      "value": "normally_open",
+      "persist": true
+    },
+    {
+      "id": 258,
+      "key": "pedal.sustain_style",
+      "type": "enum",
+      "values": [
+        "synth",
+        "hold"
+      ],
+      "default": "synth",
+      "value": "synth",
+      "persist": true
+    },
+    {
+      "id": 512,
+      "key": "expression.mpe_enabled",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 513,
+      "key": "expression.pitch_bend_sensitivity",
+      "type": "float",
+      "min": 0.001,
+      "max": 1.0,
+      "default": 0.065,
+      "value": 0.1,
+      "persist": true
+    },
+    {
+      "id": 514,
+      "key": "expression.aftertouch_sensitivity",
+      "type": "uint",
+      "min": 1,
+      "max": 65535,
+      "default": 900,
+      "value": 1300,
+      "persist": true
+    },
+    {
+      "id": 768,
+      "key": "cv_gate.enabled",
+      "type": "bool",
+      "default": false,
+      "value": false,
+      "persist": false
+    },
+    {
+      "id": 769,
+      "key": "cv_gate.pitch.volts_per_semitone",
+      "type": "float",
+      "min": 0.001,
+      "max": 1.0,
+      "default": 0.083333,
+      "value": 0.083333,
+      "persist": true
+    },
+    {
+      "id": 770,
+      "key": "cv_gate.pitch.reference_note",
+      "type": "int",
+      "min": 0,
+      "max": 127,
+      "default": 0,
+      "value": 0,
+      "persist": true
+    },
+    {
+      "id": 771,
+      "key": "cv_gate.pitch.zero_trim_volts",
+      "type": "float",
+      "min": -2.5,
+      "max": 2.5,
+      "default": 0.0,
+      "value": 0.0,
+      "persist": true
+    },
+    {
+      "id": 772,
+      "key": "cv_gate.pitch.gain_trim",
+      "type": "float",
+      "min": 0.5,
+      "max": 2.0,
+      "default": 1.0,
+      "value": 1.0,
+      "persist": true
+    },
+    {
+      "id": 773,
+      "key": "cv_gate.pressure.full_scale_volts",
+      "type": "float",
+      "min": 0.1,
+      "max": 10.0,
+      "default": 10.0,
+      "value": 10.0,
+      "persist": true
+    },
+    {
+      "id": 774,
+      "key": "cv_gate.pressure.zero_trim_volts",
+      "type": "float",
+      "min": -2.5,
+      "max": 2.5,
+      "default": 0.0,
+      "value": 0.0,
+      "persist": true
+    },
+    {
+      "id": 775,
+      "key": "cv_gate.pressure.gain_trim",
+      "type": "float",
+      "min": 0.5,
+      "max": 2.0,
+      "default": 1.0,
+      "value": 1.0,
+      "persist": true
+    },
+    {
+      "id": 1024,
+      "key": "look.idle_baseline_percent",
+      "type": "uint",
+      "min": 0,
+      "max": 100,
+      "default": 50,
+      "value": 50,
+      "persist": true
+    },
+    {
+      "id": 1025,
+      "key": "look.natural_pad_percent",
+      "type": "uint",
+      "min": 0,
+      "max": 100,
+      "default": 21,
+      "value": 21,
+      "persist": true
+    },
+    {
+      "id": 1026,
+      "key": "look.root_pad_percent",
+      "type": "uint",
+      "min": 0,
+      "max": 100,
+      "default": 40,
+      "value": 40,
+      "persist": true
+    },
+    {
+      "id": 1027,
+      "key": "look.fifth_pad_percent",
+      "type": "uint",
+      "min": 0,
+      "max": 100,
+      "default": 40,
+      "value": 40,
+      "persist": true
+    },
+    {
+      "id": 1028,
+      "key": "look.fifth_red_tint_percent",
+      "type": "uint",
+      "min": 0,
+      "max": 100,
+      "default": 35,
+      "value": 35,
+      "persist": true
+    },
+    {
+      "id": 1029,
+      "key": "look.echo_sustain_tint_percent",
+      "type": "uint",
+      "min": 0,
+      "max": 100,
+      "default": 35,
+      "value": 35,
+      "persist": true
+    },
+    {
+      "id": 1030,
+      "key": "look.echo_secondary_g_percent",
+      "type": "uint",
+      "min": 0,
+      "max": 100,
+      "default": 18,
+      "value": 18,
+      "persist": true
+    },
+    {
+      "id": 1031,
+      "key": "look.echo_secondary_b_percent",
+      "type": "uint",
+      "min": 0,
+      "max": 100,
+      "default": 12,
+      "value": 12,
+      "persist": true
+    },
+    {
+      "id": 1032,
+      "key": "look.echo_flash_ms",
+      "type": "uint",
+      "min": 0,
+      "max": 2000,
+      "default": 180,
+      "value": 180,
+      "persist": true
+    },
+    {
+      "id": 1280,
+      "key": "midi.din_trs_type",
+      "type": "enum",
+      "values": [
+        "a",
+        "b"
+      ],
+      "default": "a",
+      "value": "a",
+      "persist": true
+    },
+    {
+      "id": 1536,
+      "key": "features.melodic_harmonics",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 1537,
+      "key": "features.harmonics.arm_ms",
+      "type": "uint",
+      "min": 0,
+      "max": 1000,
+      "default": 150,
+      "value": 150,
+      "persist": true
+    },
+    {
+      "id": 1538,
+      "key": "features.harmonics.confirm_ms",
+      "type": "uint",
+      "min": 0,
+      "max": 500,
+      "default": 40,
+      "value": 40,
+      "persist": true
+    },
+    {
+      "id": 1539,
+      "key": "features.harmonics.press_depth",
+      "type": "uint",
+      "min": 1,
+      "max": 1000,
+      "default": 128,
+      "value": 128,
+      "persist": true
+    }
+  ]
+}

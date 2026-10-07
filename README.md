@@ -30,8 +30,13 @@ the shared definitions that keep them in sync.
   protocol, ahead of it being formalized in `shared/protocol/`.
 - **`docs/architecture/`** — Cross-cutting system design notes that don't
   belong to firmware or companion-app alone.
-- **`tools/`** — Codegen and build helper scripts (e.g. board-map JSON →
-  generated `PadConfig[24]` C header + companion-app TypeScript types).
+- **`tools/`** — Host scripts: `flash.sh`, the settings CLI
+  (`tiles_control.py`) and the bootloader watchdog. Board-map codegen is
+  planned. See `tools/README.md`.
+- **`daw-integration/`** — Software on the computer that makes TILES a
+  dedicated controller in Ableton Live: a Control Surface script (diamond
+  transport, the Ableton-mode clip grid with Live's colors) and the TILES
+  DISPLAY Max for Live device. See `daw-integration/README.md`.
 
 ## Core principle
 
@@ -42,5 +47,40 @@ companion-app UI, diagnostics — hand-rolls its own copy of either.
 
 ## Status
 
-Scaffolding only. Modules currently contain placeholder READMEs describing
-intent; implementation starts once each piece is designed in conversation.
+- **`firmware/`** — running on Rev A0 hardware, under active development.
+  Current state: `firmware/README.md`; development history: the
+  `HISTORY.md` files under `firmware/`.
+- **`daw-integration/`** — the Ableton Live Control Surface script and
+  the TILES DISPLAY Max for Live device, both in use.
+- **`tools/`** — flash script, settings CLI (`tiles_control.py`) and the
+  bootloader watchdog. Board-map codegen not started.
+- **`shared/`** — `protocol/` documents the v1 text settings protocol the
+  firmware implements. `board-map/` is not authored yet; the firmware's
+  `board/pad_config.c` is kept by hand against `docs/hardware/`.
+- **`companion-app/`** — planned (brief, package manifest, settings
+  fixture); no app code yet.
+
+## Before any unit leaves the building
+
+TILES is pre-production and identifies itself with placeholders that are
+only allowed for in-house testing (details, and how to replace each, in
+`firmware/src/midi/product_identity.h`):
+
+- **USB ID `1209:0001`** — pid.codes' shared *test* ID. Its rules forbid it
+  on any device that's given out, sold or manufactured, beta units
+  included. Replace it with a real product ID first: Raspberry Pi gives
+  them out free for RP2350-based products (application form linked from
+  github.com/raspberrypi/usb-pid). The ID lives in `product_identity.h`
+  plus the host copies listed there (settings tool, flash script, Ableton
+  script).
+- **MIDI SysEx ID `0x7D`** — the MIDI Association's non-commercial/
+  development ID. Fine for pre-production; a shipping product should
+  register its own.
+- **Windows** — driverless access to the settings interface (for the
+  companion app) is implemented but has never been tried on a Windows
+  machine.
+
+## For agents
+
+Start at `AGENTS.md` — it routes to the module-specific doc you actually
+need instead of duplicating it here.
