@@ -1,6 +1,6 @@
 {
-  "_comment": "Captured from a real SENTIA TILES (board 2, firmware 0.2.0) with tools/tiles_control.py schema + list on 2026-09-29. For the companion app's fake device -- see ../BRIEF.md. 'value' is that board's current value; the real app must read it from the device.",
-  "firmware": "0.2.0",
+  "_comment": "Captured from a real SENTIA TILES (board 2, firmware 0.2.0) with tools/tiles_control.py schema + list on 2026-09-29; the color.* rows, the retired look.* rows and the scales/content sections were updated by hand for firmware 0.2.7 (from firmware/src/profiles/settings_table.c, not yet re-captured from a board). For the companion app's fake device -- see ../BRIEF.md. 'value' is that board's current value; the real app must read it from the device.",
+  "firmware": "0.2.7",
   "settings": [
     {
       "id": 256,
@@ -155,46 +155,6 @@
       "persist": true
     },
     {
-      "id": 1025,
-      "key": "look.natural_pad_percent",
-      "type": "uint",
-      "min": 0,
-      "max": 100,
-      "default": 21,
-      "value": 21,
-      "persist": true
-    },
-    {
-      "id": 1026,
-      "key": "look.root_pad_percent",
-      "type": "uint",
-      "min": 0,
-      "max": 100,
-      "default": 40,
-      "value": 40,
-      "persist": true
-    },
-    {
-      "id": 1027,
-      "key": "look.fifth_pad_percent",
-      "type": "uint",
-      "min": 0,
-      "max": 100,
-      "default": 40,
-      "value": 40,
-      "persist": true
-    },
-    {
-      "id": 1028,
-      "key": "look.fifth_red_tint_percent",
-      "type": "uint",
-      "min": 0,
-      "max": 100,
-      "default": 35,
-      "value": 35,
-      "persist": true
-    },
-    {
       "id": 1029,
       "key": "look.echo_sustain_tint_percent",
       "type": "uint",
@@ -283,6 +243,281 @@
       "default": 128,
       "value": 128,
       "persist": true
+    },
+    {
+      "id": 1792,
+      "key": "color.root",
+      "type": "color",
+      "default": "660066",
+      "value": "660066",
+      "persist": true
+    },
+    {
+      "id": 1793,
+      "key": "color.third",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1794,
+      "key": "color.fifth",
+      "type": "color",
+      "default": "240066",
+      "value": "240066",
+      "persist": true
+    },
+    {
+      "id": 1795,
+      "key": "color.note",
+      "type": "color",
+      "default": "363636",
+      "value": "363636",
+      "persist": true
+    },
+    {
+      "id": 1796,
+      "key": "color.accidental",
+      "type": "color",
+      "default": "000000",
+      "value": "000000",
+      "persist": true
+    },
+    {
+      "id": 1797,
+      "key": "color.custom_pads",
+      "type": "bool",
+      "default": false,
+      "value": false,
+      "persist": true
+    },
+    {
+      "id": 1808,
+      "key": "color.pad.01",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1809,
+      "key": "color.pad.02",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1810,
+      "key": "color.pad.03",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1811,
+      "key": "color.pad.04",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1812,
+      "key": "color.pad.05",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1813,
+      "key": "color.pad.06",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1814,
+      "key": "color.pad.07",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1815,
+      "key": "color.pad.08",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1816,
+      "key": "color.pad.09",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1817,
+      "key": "color.pad.10",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1818,
+      "key": "color.pad.11",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1819,
+      "key": "color.pad.12",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1820,
+      "key": "color.pad.13",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1821,
+      "key": "color.pad.14",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1822,
+      "key": "color.pad.15",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1823,
+      "key": "color.pad.16",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1824,
+      "key": "color.pad.17",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1825,
+      "key": "color.pad.18",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1826,
+      "key": "color.pad.19",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1827,
+      "key": "color.pad.20",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1828,
+      "key": "color.pad.21",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1829,
+      "key": "color.pad.22",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1830,
+      "key": "color.pad.23",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
+    },
+    {
+      "id": 1831,
+      "key": "color.pad.24",
+      "type": "color",
+      "default": "none",
+      "value": "none",
+      "persist": true
     }
-  ]
+  ],
+  "scales": {
+    "_comment": "SCALES output (custom slots 1-9; empty slots aren't listed). Example data, not from a board.",
+    "slots": 9,
+    "items": [
+      {
+        "slot": 1,
+        "name": "Hirajoshi",
+        "intervals": [
+          0,
+          2,
+          3,
+          7,
+          8
+        ],
+        "pack": "japan",
+        "item": "hirajoshi",
+        "version": 1
+      },
+      {
+        "slot": 4,
+        "name": "My_Blues",
+        "intervals": [
+          0,
+          3,
+          5,
+          6,
+          7,
+          10
+        ],
+        "pack": "",
+        "item": "",
+        "version": 0
+      }
+    ]
+  }
 }

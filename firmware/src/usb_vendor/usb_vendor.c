@@ -1,8 +1,10 @@
 #include "usb_vendor.h"
 
 #include "board/unit_id.h"
+#include "content.h"
 #include "haptics.h"
 #include "lighting.h"
+#include "note_map.h"
 #include "power.h"
 #include "product_identity.h"
 #include "settings.h"
@@ -22,9 +24,11 @@
 #define USB_VENDOR_LINE_MAX 128u
 
 /* Replies are queued here and drained into the 64-byte TinyUSB FIFO as it
- * has room (pump_out()), so multi-line replies (LIST/SCHEMA/INFO) never
- * lose their tail. SCHEMA, the largest (~3 KB), fits whole: the next
- * command is read only once the previous reply is fully sent. */
+ * has room (pump_out()); the next command is read only once the previous
+ * reply is fully sent. Listings that can outgrow it (LIST, SCHEMA -- ~5 KB
+ * with the colour rows -- SCALES, CONTENT LIST) are streamed instead: rows
+ * are added as the buffer drains (fill_listing()), so their size is
+ * unbounded. Single replies (INFO, ~1 KB) are built whole. */
 #define USB_VENDOR_OUT_MAX 4096u
 
 static char s_rx_line[USB_VENDOR_LINE_MAX];
@@ -33,6 +37,11 @@ static size_t s_rx_len;
 static char s_out[USB_VENDOR_OUT_MAX];
 static size_t s_out_len;  /* bytes queued */
 static size_t s_out_sent; /* of those, bytes already handed to TinyUSB */
+
+/* The listing being streamed, and the next row/slot to produce. */
+typedef enum { LISTING_NONE = 0, LISTING_SETTINGS, LISTING_SCHEMA, LISTING_SCALES, LISTING_CONTENT } listing_t;
+static listing_t s_listing;
+static size_t s_listing_next;
 
 static void out_append(const char *text) {
     size_t n = strlen(text);
@@ -103,6 +112,238 @@ static const char *kv_result_name(tiles_kv_result_t r) {
     return "unknown";
 }
 
+/* "0,2,3,7,8" -- the form SCALE PUT takes and SCALES prints. */
+static void format_intervals(const int8_t *intervals, uint8_t count, char *out, size_t cap) {
+    size_t at = 0u;
+    out[0] = '\0';
+    for (uint8_t i = 0u; i < count && at < cap; i++) {
+        int n = snprintf(&out[at], cap - at, i == 0u ? "%d" : ",%d", (int)intervals[i]);
+        if (n < 0) {
+            break;
+        }
+        at += (size_t)n;
+    }
+}
+
+static bool parse_intervals(char *text, int8_t *out, uint8_t *count) {
+    *count = 0u;
+    for (char *tok = strtok(text, ","); tok != NULL; tok = strtok(NULL, ",")) {
+        char *end;
+        long v = strtol(tok, &end, 10);
+        if (*tok == '\0' || *end != '\0' || v < 0 || v > 11 || *count >= TILES_NOTE_MAP_MAX_SCALE_NOTES) {
+            return false;
+        }
+        out[(*count)++] = (int8_t)v;
+    }
+    return *count > 0u;
+}
+
+/* One SCALES row: "<slot> <name> <intervals> [pack=..] [item=..] version=N",
+ * which is exactly SCALE PUT's arguments, so a pulled scale pushes back. */
+static void format_scale(const tiles_content_scale_t *s, char *out, size_t cap) {
+    char intervals[40];
+    format_intervals(s->intervals, s->count, intervals, sizeof(intervals));
+    int n = snprintf(out, cap, "%u %s %s", (unsigned)s->slot, s->name, intervals);
+    if (n > 0 && (size_t)n < cap && s->pack[0] != '\0') {
+        n += snprintf(&out[n], cap - (size_t)n, " pack=%s", s->pack);
+    }
+    if (n > 0 && (size_t)n < cap && s->item[0] != '\0') {
+        n += snprintf(&out[n], cap - (size_t)n, " item=%s", s->item);
+    }
+    if (n > 0 && (size_t)n < cap) {
+        snprintf(&out[n], cap - (size_t)n, " version=%u", (unsigned)s->version);
+    }
+}
+
+/* Produces the current listing's next row into `text`; false when done. */
+static bool listing_row(char *text, size_t cap) {
+    switch (s_listing) {
+    case LISTING_SETTINGS:
+        if (s_listing_next < tiles_settings_count()) {
+            const tiles_setting_def_t *def = tiles_settings_at(s_listing_next++);
+            char value[48];
+            tiles_settings_format(def, def->get(), value, sizeof(value));
+            snprintf(text, cap, "%s=%s", def->key, value);
+            return true;
+        }
+        return false;
+    case LISTING_SCHEMA:
+        if (s_listing_next < tiles_settings_count()) {
+            tiles_settings_describe(tiles_settings_at(s_listing_next++), text, cap);
+            return true;
+        }
+        return false;
+    case LISTING_SCALES:
+        while (s_listing_next < TILES_NOTE_MAP_NUM_CUSTOM_SCALES) {
+            tiles_content_scale_t s;
+            if (tiles_content_get_scale((uint8_t)(++s_listing_next), &s)) {
+                format_scale(&s, text, cap);
+                return true;
+            }
+        }
+        return false;
+    case LISTING_CONTENT: {
+        tiles_content_record_t r;
+        if (!tiles_content_record_at(s_listing_next++, &r)) {
+            return false;
+        }
+        if (r.type == TILES_CONTENT_TYPE_SCALE) {
+            int n = snprintf(text, cap, "scale %u bytes=%u version=%u", (unsigned)r.slot, (unsigned)r.bytes,
+                             (unsigned)r.version);
+            if (n > 0 && (size_t)n < cap && r.pack[0] != '\0') {
+                n += snprintf(&text[n], cap - (size_t)n, " pack=%s", r.pack);
+            }
+            if (n > 0 && (size_t)n < cap && r.item[0] != '\0') {
+                snprintf(&text[n], cap - (size_t)n, " item=%s", r.item);
+            }
+        } else {
+            snprintf(text, cap, "type%u %u bytes=%u", (unsigned)r.type, (unsigned)r.slot, (unsigned)r.bytes);
+        }
+        return true;
+    }
+    case LISTING_NONE:
+    default:
+        return false;
+    }
+}
+
+/* Adds listing rows while there's room for another full line, then "OK"
+ * when the listing runs out. */
+static void fill_listing(void) {
+    char text[USB_VENDOR_LINE_MAX];
+    while (s_listing != LISTING_NONE && sizeof(s_out) - s_out_len > USB_VENDOR_LINE_MAX + 4u) {
+        if (listing_row(text, sizeof(text))) {
+            reply(text);
+        } else {
+            reply_ok();
+            s_listing = LISTING_NONE;
+        }
+    }
+}
+
+static void start_listing(listing_t kind) {
+    s_listing = kind;
+    s_listing_next = 0u;
+    fill_listing();
+}
+
+static void reply_content_result(tiles_content_result_t r) {
+    char text[48];
+    switch (r) {
+    case TILES_CONTENT_OK:
+        reply_ok();
+        return;
+    case TILES_CONTENT_BAD_SLOT:
+        reply_err("bad-slot");
+        return;
+    case TILES_CONTENT_BAD_INTERVALS:
+        reply_err("bad-intervals");
+        return;
+    case TILES_CONTENT_BAD_TEXT:
+        reply_err("bad-name");
+        return;
+    case TILES_CONTENT_FULL:
+        reply_err("content-full");
+        return;
+    case TILES_CONTENT_NEWER_FORMAT:
+        reply_err("newer-format");
+        return;
+    case TILES_CONTENT_NO_STORAGE:
+        reply_err("no-storage");
+        return;
+    case TILES_CONTENT_SAVE_FAILED:
+        snprintf(text, sizeof(text), "save-failed-%s", kv_result_name(tiles_content_get_info().kv.last_result));
+        reply_err(text);
+        return;
+    }
+    reply_err("unknown");
+}
+
+static uint8_t parse_slot(const char *text) {
+    if (text == NULL) {
+        return 0u;
+    }
+    char *end;
+    long v = strtol(text, &end, 10);
+    return (*text != '\0' && *end == '\0' && v >= 1 && v <= (long)TILES_NOTE_MAP_NUM_CUSTOM_SCALES) ? (uint8_t)v : 0u;
+}
+
+/* SCALE PUT <slot> <name> <intervals> [pack=<id>] [item=<id>] [version=<n>]
+ * SCALE GET <slot> | SCALE DELETE <slot> */
+static void handle_scale(void) {
+    char *what = strtok(NULL, " ");
+    if (what == NULL) {
+        reply_err("missing-key");
+        return;
+    }
+    if (strcmp(what, "GET") == 0) {
+        tiles_content_scale_t s;
+        uint8_t slot = parse_slot(strtok(NULL, " "));
+        if (slot == 0u) {
+            reply_err("bad-slot");
+        } else if (!tiles_content_get_scale(slot, &s)) {
+            reply_err("empty");
+        } else {
+            char text[USB_VENDOR_LINE_MAX];
+            format_scale(&s, text, sizeof(text));
+            reply(text);
+            reply_ok();
+        }
+        return;
+    }
+    if (strcmp(what, "DELETE") == 0) {
+        uint8_t slot = parse_slot(strtok(NULL, " "));
+        reply_content_result(slot == 0u ? TILES_CONTENT_BAD_SLOT : tiles_content_delete_scale(slot));
+        return;
+    }
+    if (strcmp(what, "PUT") != 0) {
+        reply_err("unknown-key");
+        return;
+    }
+    tiles_content_scale_t s;
+    memset(&s, 0, sizeof(s));
+    s.slot = parse_slot(strtok(NULL, " "));
+    char *name = strtok(NULL, " ");
+    char *intervals = strtok(NULL, " ");
+    if (s.slot == 0u) {
+        reply_err("bad-slot");
+        return;
+    }
+    if (name == NULL || strlen(name) > TILES_CONTENT_TEXT_MAX) {
+        reply_err("bad-name");
+        return;
+    }
+    strcpy(s.name, name);
+    /* Optional fields first (strtok can't be nested: parse_intervals uses it). */
+    for (char *field = strtok(NULL, " "); field != NULL; field = strtok(NULL, " ")) {
+        char *value = strchr(field, '=');
+        if (value == NULL) {
+            reply_err("bad-field");
+            return;
+        }
+        *value++ = '\0';
+        if ((strcmp(field, "pack") == 0 || strcmp(field, "item") == 0) && strlen(value) <= TILES_CONTENT_TEXT_MAX) {
+            strcpy(strcmp(field, "pack") == 0 ? s.pack : s.item, value);
+        } else if (strcmp(field, "version") == 0) {
+            char *end;
+            long v = strtol(value, &end, 10);
+            if (*value == '\0' || *end != '\0' || v < 0 || v > 65535) {
+                reply_err("bad-field");
+                return;
+            }
+            s.version = (uint16_t)v;
+        } else {
+            reply_err("bad-field");
+            return;
+        }
+    }
+    if (intervals == NULL || !parse_intervals(intervals, s.intervals, &s.count)) {
+        reply_err("bad-intervals");
+        return;
+    }
+    reply_content_result(tiles_content_put_scale(&s));
+}
+
 static void handle_line(char *line) {
     char *cmd = strtok(line, " ");
     if (cmd == NULL) {
@@ -111,25 +352,39 @@ static void handle_line(char *line) {
     char text[USB_VENDOR_LINE_MAX];
 
     if (strcmp(cmd, "LIST") == 0) {
-        for (size_t i = 0; i < tiles_settings_count(); i++) {
-            const tiles_setting_def_t *def = tiles_settings_at(i);
-            char value[48];
-            tiles_settings_format(def, def->get(), value, sizeof(value));
-            snprintf(text, sizeof(text), "%s=%s", def->key, value);
-            reply(text);
-        }
-        reply_ok();
+        start_listing(LISTING_SETTINGS);
         return;
     }
 
     /* One line per setting (id, key, type, range/values, default): enough for
      * a UI to build a control without a hard-coded list. */
     if (strcmp(cmd, "SCHEMA") == 0) {
-        for (size_t i = 0; i < tiles_settings_count(); i++) {
-            tiles_settings_describe(tiles_settings_at(i), text, sizeof(text));
-            reply(text);
+        start_listing(LISTING_SCHEMA);
+        return;
+    }
+
+    /* Custom scales (profiles/content.h): SCALES lists the filled slots, one
+     * SCALE PUT-shaped line each; SCALE GET/PUT/DELETE edit one slot. */
+    if (strcmp(cmd, "SCALES") == 0) {
+        start_listing(LISTING_SCALES);
+        return;
+    }
+    if (strcmp(cmd, "SCALE") == 0) {
+        handle_scale();
+        return;
+    }
+
+    /* CONTENT LIST: every record in the content store (packs show here);
+     * CONTENT CLEAR: wipe it (all custom scales, everything). */
+    if (strcmp(cmd, "CONTENT") == 0) {
+        char *what = strtok(NULL, " ");
+        if (what != NULL && strcmp(what, "LIST") == 0) {
+            start_listing(LISTING_CONTENT);
+        } else if (what != NULL && strcmp(what, "CLEAR") == 0) {
+            reply_content_result(tiles_content_clear());
+        } else {
+            reply_err(what == NULL ? "missing-key" : "unknown-key");
         }
-        reply_ok();
         return;
     }
 
@@ -170,6 +425,22 @@ static void handle_line(char *line) {
         snprintf(text, sizeof(text), "store.pending=%d", info.pending ? 1 : 0);
         reply(text);
         snprintf(text, sizeof(text), "store.failures=%lu", (unsigned long)info.save_failures);
+        reply(text);
+        tiles_content_info_t content = tiles_content_get_info();
+        snprintf(text, sizeof(text), "content.storage=%s",
+                 !content.storage ? "none" : (content.newer_format ? "newer-format" : "ok"));
+        reply(text);
+        snprintf(text, sizeof(text), "content.scales=%u/%u", (unsigned)content.scales,
+                 (unsigned)TILES_NOTE_MAP_NUM_CUSTOM_SCALES);
+        reply(text);
+        snprintf(text, sizeof(text), "content.records=%u", (unsigned)content.records);
+        reply(text);
+        snprintf(text, sizeof(text), "content.bytes=%u/%u", (unsigned)content.used_bytes,
+                 (unsigned)content.capacity_bytes);
+        reply(text);
+        snprintf(text, sizeof(text), "content.writes=%lu", (unsigned long)content.kv.writes);
+        reply(text);
+        snprintf(text, sizeof(text), "content.last_result=%s", kv_result_name(content.kv.last_result));
         reply(text);
         reply_ok();
         return;
@@ -310,6 +581,7 @@ static void handle_line(char *line) {
 }
 
 void tiles_usb_vendor_init(void) {
+    s_listing = LISTING_NONE;
     s_rx_len = 0u;
     s_out_len = 0u;
     s_out_sent = 0u;
@@ -319,10 +591,15 @@ void tiles_usb_vendor_scan(void) {
     if (!tud_vendor_mounted()) {
         s_out_len = 0u; /* host gone: drop the reply rather than hand it to the next host */
         s_out_sent = 0u;
+        s_listing = LISTING_NONE;
         return;
     }
     pump_out();
-    if (s_out_len > 0u) {
+    if (s_out_len == 0u && s_listing != LISTING_NONE) {
+        fill_listing(); /* buffer drained: the listing's next rows */
+        pump_out();
+    }
+    if (s_out_len > 0u || s_listing != LISTING_NONE) {
         return; /* still sending the previous reply: wait before the next command */
     }
     while (tud_vendor_available()) {

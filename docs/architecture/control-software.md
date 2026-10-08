@@ -28,8 +28,16 @@ system's USB; layouts downloadable from an online store eventually.
 - **Driverless on Windows:** Microsoft OS 2.0 (BOS) descriptors bind
   WinUSB to the vendor interface automatically. Not yet tried on a
   Windows machine.
-- **Not built:** the binary protocol, layouts/profiles as stored
-  objects, calibration streaming, a Linux udev rule, the app itself.
+- **Colour schemes and custom scales (0.2.7).** The idle note-role
+  colours (root, fifth, third, note, accidental) and per-pad colours are
+  settings (`color.*`); custom scales live in a second flash store, the
+  content store (`firmware/src/profiles/content.h`), pushed and pulled with
+  `SCALES` / `SCALE PUT|GET|DELETE`. Each pushed item records its pack,
+  item and version, for selling content in packs
+  ([`content-packs.md`](content-packs.md)).
+- **Not built:** the binary protocol, layouts as stored objects,
+  entitlements for paid modes/games, calibration streaming, a Linux udev
+  rule, the app itself.
 
 ## Decisions
 
@@ -71,8 +79,9 @@ system's USB; layouts downloadable from an online store eventually.
    one udev rule for non-root access; macOS needs nothing. A WebUSB
    descriptor is only worth adding if a browser build of the app
    happens.
-3. **Layout/profile object** in flash (its own region via `storage/`)
-   plus the revision counter.
+3. **Layout object** as a new record type in the content store (the
+   region exists; see [`content-packs.md`](content-packs.md)) plus the
+   revision counter.
 4. The app.
 
 ## App stack

@@ -9375,3 +9375,36 @@ change. Search it by file or feature name.
   motors spinning up; held 3 s it read 0.35 A, the parts' sum. Data:
   `docs/hardware/current-measurements.md`.
 
+- **Colour schemes, per-pad colours, custom scales, content store (0.2.7,
+  2026-10-08).** Real feedback: "lets make color porfiles that he can access
+  and map like root note color, fifth color, third color, scale note color
+  ... not individaul pads but schemes, also we shoudl be able to modify
+  individual pad colors ... like an advanced feature. sam should also access
+  other parameters like pushing new scales or pulling scales off the device
+  ... we will sell these layouts in packs so keep that in mind." Built for
+  Sam's companion app:
+  - **Colour scheme** (`lighting.c`): melodic idle pads are coloured by
+    role, root > fifth > third > accidental > note, each a `color` setting
+    (`RRGGBB` before the power ceiling, or `none` = fall through).
+    Defaults are the old look, as colours: root `660066` (magenta at 40%),
+    fifth `240066` (violet at 40%), note `363636` (white at 21%),
+    accidental dark, third `none` (a third landmark was tried and dropped
+    before; the app can turn it on). The third is the scale's major third
+    if it has one, else its minor (`tiles_note_map_is_third_pad`). The four
+    look rows it replaces (`0x0401`-`0x0404`) are retired.
+  - **Per-pad colours** (advanced): `color.custom_pads` + `color.pad.01`-`24`,
+    melodic mode only (chord mode's grid keeps the scheme). Sequencer edit
+    views keep their own menu colours.
+  - **New settings type `color`** (`profiles/settings.c`), `SETTINGS_MAX`
+    128, sparse blob cap 1 KB.
+  - **Content store** (`profiles/content.c`): a second kv region below the
+    settings (`kv_store` became a per-instance `tiles_kv_t`), a blob of
+    typed records. Custom scales fill the picker's CUSTOM_1..9 (which had
+    no tables), each with pack / item / version. Saved before `OK`; unknown
+    record types kept; a newer blob format is read-only until `CONTENT
+    CLEAR`. USB: `SCALES`, `SCALE GET/PUT/DELETE`, `CONTENT LIST/CLEAR`,
+    `INFO` content fields.
+  - LIST and SCHEMA now stream: with the colour rows SCHEMA is ~5 KB, over
+    the 4 KB reply buffer, which would have cut it off silently.
+  - Packs plan (data pushed, code unlocked per unit by signed
+    entitlements): `docs/architecture/content-packs.md`.

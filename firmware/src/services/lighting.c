@@ -23,28 +23,23 @@
  * ceiling, like every level here. */
 #define TILES_LIGHTING_IDLE_BASELINE_PERCENT 50u
 
-/* Melodic mode's plain pad: a natural key that isn't root, fifth or
- * sounding. Kept separate from the idle baseline so only this pad dims.
- * Set below root and fifth (40) so the landmarks and the echo stand out
- * (tried 30, then "dim 30% the white": 21).
- *
- * Brightness order, keep it: pressed (100% white) > echoing (100% of its
- * color, flash to white) > root and fifth (40) > plain pad (this). Root,
- * fifth, pressed and echo must not be dimmed by changes to this. */
-#define TILES_LIGHTING_NATURAL_BASELINE_PERCENT 21u
-
-/* Idle melodic coloring by note role: root = Sentia magenta (#FF00FF) at
- * this level, sharps/black keys dark (see pad_desired_rgb()). A touched
- * pad is always plain white. Raised with the other levels (6 -> 20 -> 40). */
-#define TILES_LIGHTING_ROOT_BASELINE_PERCENT 40u
-
-/* Perfect fifth: violet, i.e. blue with some red mixed in
- * (TILES_LIGHTING_FIFTH_RED_TINT), nearer the root's magenta than pure
- * blue but still distinct (hue ~261 deg vs root 300, blue 240). Raise the
- * tint to pull it toward magenta. (A third-degree landmark was tried and
- * removed: root and fifth only.) Unmeasured on the real diffusers. */
-#define TILES_LIGHTING_FIFTH_BASELINE_PERCENT 40u
-#define TILES_LIGHTING_FIFTH_RED_TINT 0.35f
+/* Default colour scheme: the original melodic look, as colours.
+ *   - root: Sentia magenta (#FF00FF) at 40% -> 0x660066;
+ *   - fifth: violet, blue with 35% red (hue ~261 deg vs root 300, blue
+ *     240), at 40% -> 0x240066;
+ *   - other notes: white at 21% ("dim 30% the white", after 30) ->
+ *     0x363636, below root and fifth so the landmarks and the echo stand out;
+ *   - accidentals (sharps/black keys) dark: the one exception to "pads never
+ *     go fully dark";
+ *   - third: no highlight (a third landmark was tried and dropped; the
+ *     app can turn it on).
+ * Brightness order to keep: pressed (100% white) > echo (100% of its
+ * colour, flash to white) > root and fifth > other notes. */
+#define TILES_LIGHTING_SCHEME_ROOT 0x660066u
+#define TILES_LIGHTING_SCHEME_THIRD TILES_LIGHTING_COLOR_NONE
+#define TILES_LIGHTING_SCHEME_FIFTH 0x240066u
+#define TILES_LIGHTING_SCHEME_NOTE 0x363636u
+#define TILES_LIGHTING_SCHEME_ACCIDENTAL 0x000000u
 
 /* Melodic echo (op_mode.c "live echo of an incoming melody"). The color is
  * already full-scale, and the power ceiling isn't raised, so it gets
@@ -74,10 +69,6 @@
 #define LOOK_PCT(fraction) ((uint16_t)((fraction) * 100.0f + 0.5f))
 static uint16_t s_look[TILES_LOOK_COUNT] = {
     [TILES_LOOK_IDLE_BASELINE_PERCENT] = TILES_LIGHTING_IDLE_BASELINE_PERCENT,
-    [TILES_LOOK_NATURAL_PERCENT] = TILES_LIGHTING_NATURAL_BASELINE_PERCENT,
-    [TILES_LOOK_ROOT_PERCENT] = TILES_LIGHTING_ROOT_BASELINE_PERCENT,
-    [TILES_LOOK_FIFTH_PERCENT] = TILES_LIGHTING_FIFTH_BASELINE_PERCENT,
-    [TILES_LOOK_FIFTH_RED_TINT_PERCENT] = LOOK_PCT(TILES_LIGHTING_FIFTH_RED_TINT),
     [TILES_LOOK_ECHO_SUSTAIN_TINT_PERCENT] = LOOK_PCT(TILES_LIGHTING_ECHO_SUSTAIN_TINT),
     [TILES_LOOK_ECHO_SECONDARY_G_PERCENT] = LOOK_PCT(TILES_LIGHTING_ECHO_SECONDARY_G),
     [TILES_LOOK_ECHO_SECONDARY_B_PERCENT] = LOOK_PCT(TILES_LIGHTING_ECHO_SECONDARY_B),
@@ -88,6 +79,80 @@ static uint16_t s_look[TILES_LOOK_COUNT] = {
 
 static float look_fraction(tiles_look_param_t param) {
     return (float)s_look[param] / 100.0f;
+}
+
+static uint32_t s_scheme[TILES_SCHEME_COUNT] = {
+    [TILES_SCHEME_ROOT] = TILES_LIGHTING_SCHEME_ROOT,
+    [TILES_SCHEME_THIRD] = TILES_LIGHTING_SCHEME_THIRD,
+    [TILES_SCHEME_FIFTH] = TILES_LIGHTING_SCHEME_FIFTH,
+    [TILES_SCHEME_NOTE] = TILES_LIGHTING_SCHEME_NOTE,
+    [TILES_SCHEME_ACCIDENTAL] = TILES_LIGHTING_SCHEME_ACCIDENTAL,
+};
+static bool s_custom_pads_enabled;
+static uint32_t s_pad_color[TILES_NUM_PADS]; /* TILES_LIGHTING_COLOR_NONE = use the scheme */
+static bool s_pad_colors_initialized;
+
+static bool color_valid(uint32_t c) {
+    return c <= 0xFFFFFFu || c == TILES_LIGHTING_COLOR_NONE;
+}
+
+static void init_pad_colors(void) {
+    if (!s_pad_colors_initialized) {
+        for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+            s_pad_color[i] = TILES_LIGHTING_COLOR_NONE;
+        }
+        s_pad_colors_initialized = true;
+    }
+}
+
+void tiles_lighting_set_scheme_color(tiles_scheme_role_t role, uint32_t rgb_or_none) {
+    if (role < TILES_SCHEME_COUNT && color_valid(rgb_or_none)) {
+        s_scheme[role] = rgb_or_none;
+    }
+}
+
+uint32_t tiles_lighting_get_scheme_color(tiles_scheme_role_t role) {
+    return role < TILES_SCHEME_COUNT ? s_scheme[role] : TILES_LIGHTING_COLOR_NONE;
+}
+
+void tiles_lighting_set_custom_pads_enabled(bool enabled) {
+    s_custom_pads_enabled = enabled;
+}
+
+bool tiles_lighting_get_custom_pads_enabled(void) {
+    return s_custom_pads_enabled;
+}
+
+void tiles_lighting_set_pad_color(uint8_t logical_pad, uint32_t rgb_or_none) {
+    init_pad_colors();
+    if (logical_pad >= 1u && logical_pad <= TILES_NUM_PADS && color_valid(rgb_or_none)) {
+        s_pad_color[logical_pad - 1u] = rgb_or_none;
+    }
+}
+
+uint32_t tiles_lighting_get_pad_color(uint8_t logical_pad) {
+    init_pad_colors();
+    if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
+        return TILES_LIGHTING_COLOR_NONE;
+    }
+    return s_pad_color[logical_pad - 1u];
+}
+
+/* The scheme colour for a melodic pad, by role priority; NONE skips a role. */
+static uint32_t scheme_color_for_pad(uint8_t logical_pad) {
+    if (s_scheme[TILES_SCHEME_ROOT] != TILES_LIGHTING_COLOR_NONE && tiles_note_map_is_root_pad(logical_pad)) {
+        return s_scheme[TILES_SCHEME_ROOT]; /* first: a root can be a sharp in some keys, and root wins */
+    }
+    if (s_scheme[TILES_SCHEME_FIFTH] != TILES_LIGHTING_COLOR_NONE && tiles_note_map_is_fifth_pad(logical_pad)) {
+        return s_scheme[TILES_SCHEME_FIFTH];
+    }
+    if (s_scheme[TILES_SCHEME_THIRD] != TILES_LIGHTING_COLOR_NONE && tiles_note_map_is_third_pad(logical_pad)) {
+        return s_scheme[TILES_SCHEME_THIRD];
+    }
+    if (s_scheme[TILES_SCHEME_ACCIDENTAL] != TILES_LIGHTING_COLOR_NONE && !tiles_note_map_is_natural_pad(logical_pad)) {
+        return s_scheme[TILES_SCHEME_ACCIDENTAL];
+    }
+    return s_scheme[TILES_SCHEME_NOTE] != TILES_LIGHTING_COLOR_NONE ? s_scheme[TILES_SCHEME_NOTE] : 0x000000u;
 }
 
 uint16_t tiles_lighting_get_look(tiles_look_param_t param) {
@@ -136,6 +201,11 @@ typedef struct {
     float g;
     float b;
 } tiles_rgb01_t;
+
+static tiles_rgb01_t rgb01_from_color(uint32_t c) {
+    return (tiles_rgb01_t){(float)((c >> 16) & 0xFFu) / 255.0f, (float)((c >> 8) & 0xFFu) / 255.0f,
+                           (float)(c & 0xFFu) / 255.0f};
+}
 
 static tiles_sk6805_chain_t s_underglow_chain;
 static tiles_sk6805_chain_t s_pad_chain;
@@ -241,25 +311,17 @@ static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
         return (tiles_rgb01_t){0.0f, 0.0f, level};
     }
 
-    /* Idle melodic coloring by note role. Root first: a root pad can be a
-     * sharp in some keys, and root wins. */
-    if (tiles_note_map_is_root_pad(logical_pad)) {
-        /* Sentia magenta: R and B only. */
-        float level = look_fraction(TILES_LOOK_ROOT_PERCENT);
-        return (tiles_rgb01_t){level, 0.0f, level};
+    /* Custom pad colours (advanced), melodic mode only: the map is drawn for
+     * melodic mode's layout, so chord mode's melody grid keeps the scheme. */
+    if (s_custom_pads_enabled && !tiles_note_map_is_chord_mode_active()) {
+        uint32_t own = tiles_lighting_get_pad_color(logical_pad);
+        if (own != TILES_LIGHTING_COLOR_NONE) {
+            return rgb01_from_color(own);
+        }
     }
-    if (tiles_note_map_is_fifth_pad(logical_pad)) {
-        /* Violet: blue with a little red (see TILES_LIGHTING_FIFTH_RED_TINT). */
-        float level = look_fraction(TILES_LOOK_FIFTH_PERCENT);
-        return (tiles_rgb01_t){level * look_fraction(TILES_LOOK_FIFTH_RED_TINT_PERCENT), 0.0f, level};
-    }
-    if (tiles_note_map_is_natural_pad(logical_pad)) {
-        float level = look_fraction(TILES_LOOK_NATURAL_PERCENT);
-        return (tiles_rgb01_t){level, level, level};
-    }
-    /* Sharp/black key at rest: true black, the one exception to "pads never
-     * go fully dark". */
-    return (tiles_rgb01_t){0.0f, 0.0f, 0.0f};
+
+    /* Idle melodic colouring by note role: the colour scheme. */
+    return rgb01_from_color(scheme_color_for_pad(logical_pad));
 }
 
 static void write_pad(uint8_t pad_index /* 0-23 */) {

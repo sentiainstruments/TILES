@@ -1,7 +1,8 @@
 #pragma once
 
 /* Two-slot, CRC-protected blob store: the hardware-free half of storage/,
- * used under the settings table (profiles/settings.h).
+ * used under the settings table (profiles/settings.h) and the content store
+ * (profiles/content.h), one tiles_kv_t each on its own flash region.
  *
  * Guarantee: one caller-defined payload (up to TILES_KV_MAX_PAYLOAD) lives
  * in one of two flash sectors. A save goes to the OTHER slot and only
@@ -64,18 +65,25 @@ typedef struct {
     tiles_kv_result_t last_result;
 } tiles_kv_info_t;
 
+/* One store: its region's ops and what the last scan/save found. Owned by
+ * the caller (a static in the module using it); fields are private. */
+typedef struct {
+    const tiles_kv_ops_t *ops;
+    tiles_kv_info_t info;
+} tiles_kv_t;
+
 /* Scans both slots. Call once at boot; safe with blank (all-0xFF) flash. */
-void tiles_kv_init(const tiles_kv_ops_t *ops);
+void tiles_kv_init(tiles_kv_t *kv, const tiles_kv_ops_t *ops);
 
 /* Copies the current payload into `out` (capacity `cap`). Returns false if
  * there is no valid payload or it doesn't fit. */
-bool tiles_kv_read(uint8_t *out, uint16_t cap, uint16_t *len, uint16_t *payload_version);
+bool tiles_kv_read(tiles_kv_t *kv, uint8_t *out, uint16_t cap, uint16_t *len, uint16_t *payload_version);
 
 /* Saves a new payload to the slot that is NOT the current one, then verifies
  * it. On any failure the current payload is left exactly as it was. */
-tiles_kv_result_t tiles_kv_write(const uint8_t *payload, uint16_t len, uint16_t payload_version);
+tiles_kv_result_t tiles_kv_write(tiles_kv_t *kv, const uint8_t *payload, uint16_t len, uint16_t payload_version);
 
-tiles_kv_info_t tiles_kv_get_info(void);
+tiles_kv_info_t tiles_kv_get_info(const tiles_kv_t *kv);
 
 /* CRC-32 (IEEE 802.3, the zlib/PNG one). Exposed for the tests. */
 uint32_t tiles_kv_crc32(uint32_t crc, const uint8_t *data, uint32_t len);

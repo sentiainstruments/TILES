@@ -85,6 +85,21 @@ worth knowing about:
   40 / 150, set from a recorded playing session). Raise `press_depth` if
   light harmonic touches get missed, lower it if chords leak harmonics;
   see `firmware/src/services/HISTORY.md` for the data behind the defaults.
+- `color.root` / `.fifth` / `.third` / `.note` / `.accidental` -- the
+  colour scheme for idle melodic pads (`RRGGBB` before the power ceiling,
+  or `none`); `color.custom_pads 1` plus `color.pad.01`...`24` paints
+  single pads. `reset color.root` brings back a default. See
+  `shared/protocol/README.md` ("Colour schemes and pad colours").
+
+**Custom scales** (firmware 0.2.7+), into the scale picker's 9 custom
+slots (pads 16-24), saved to flash before the `OK`:
+
+```
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py scale put 1 Hirajoshi 0,2,3,7,8 pack=japan item=hirajoshi version=1
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py scales          # what's on the device
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py scale delete 1
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py content list    # every record, with its pack
+```
 
 **Rebooting into the bootloader for flashing**, no BOOTSEL button --
 `flash.sh` (below) is the usual way now; this still works as a fallback:

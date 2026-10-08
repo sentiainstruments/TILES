@@ -232,6 +232,10 @@ typedef struct {
 
 #define SCALE_TABLE(arr) {(arr), (uint8_t)(sizeof(arr) / sizeof((arr)[0]))}
 
+/* CUSTOM_1..9's tables (count 0 = empty), set by the content store. */
+static int8_t s_custom_intervals[TILES_NOTE_MAP_NUM_CUSTOM_SCALES][TILES_NOTE_MAP_MAX_SCALE_NOTES];
+static uint8_t s_custom_count[TILES_NOTE_MAP_NUM_CUSTOM_SCALES];
+
 static tiles_scale_table_t scale_table(tiles_scale_mode_t scale) {
     switch (scale) {
     case TILES_SCALE_IONIAN:
@@ -273,10 +277,53 @@ static tiles_scale_table_t scale_table(tiles_scale_mode_t scale) {
     case TILES_SCALE_CHROMATIC:
         return (tiles_scale_table_t)SCALE_TABLE(CHROMATIC_INTERVALS);
     default:
-        /* CUSTOM_1..9: no table yet (see tiles_note_map_scale_is_defined()). The
-         * four scales off the picker still resolve above if called directly. */
+        /* CUSTOM_1..9: whatever the content store pushed (count 0 if empty).
+         * The four scales off the picker still resolve above if called
+         * directly. */
+        if (scale >= TILES_SCALE_CUSTOM_1 && scale <= TILES_SCALE_CUSTOM_9) {
+            uint8_t i = (uint8_t)(scale - TILES_SCALE_CUSTOM_1);
+            return (tiles_scale_table_t){s_custom_intervals[i], s_custom_count[i]};
+        }
         return (tiles_scale_table_t){NULL, 0u};
     }
+}
+
+bool tiles_note_map_custom_scale_valid(const int8_t *intervals, uint8_t count) {
+    if (intervals == NULL || count == 0u || count > TILES_NOTE_MAP_MAX_SCALE_NOTES || intervals[0] != 0) {
+        return false;
+    }
+    for (uint8_t i = 1u; i < count; i++) {
+        if (intervals[i] <= intervals[i - 1u] || intervals[i] >= 12) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool tiles_note_map_set_custom_scale(uint8_t slot_1_to_9, const int8_t *intervals, uint8_t count) {
+    if (slot_1_to_9 < 1u || slot_1_to_9 > TILES_NOTE_MAP_NUM_CUSTOM_SCALES) {
+        return false;
+    }
+    if (count != 0u && !tiles_note_map_custom_scale_valid(intervals, count)) {
+        return false;
+    }
+    uint8_t i = (uint8_t)(slot_1_to_9 - 1u);
+    for (uint8_t n = 0u; n < count; n++) {
+        s_custom_intervals[i][n] = intervals[n];
+    }
+    s_custom_count[i] = count;
+    return true;
+}
+
+uint8_t tiles_note_map_get_custom_scale(uint8_t slot_1_to_9, int8_t *out) {
+    if (slot_1_to_9 < 1u || slot_1_to_9 > TILES_NOTE_MAP_NUM_CUSTOM_SCALES) {
+        return 0u;
+    }
+    uint8_t i = (uint8_t)(slot_1_to_9 - 1u);
+    for (uint8_t n = 0u; n < s_custom_count[i]; n++) {
+        out[n] = s_custom_intervals[i][n];
+    }
+    return s_custom_count[i];
 }
 
 /* Picker order: chromatic (the way back), major, minor, then the rest.
@@ -524,6 +571,22 @@ bool tiles_note_map_is_fifth_pad(uint8_t logical_pad) {
     uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : pad_degree(cfg);
     tiles_scale_table_t table = current_scale_table();
     return table.intervals[degree % table.count] == 7;
+}
+
+bool tiles_note_map_is_third_pad(uint8_t logical_pad) {
+    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
+    if (cfg == NULL) {
+        return false;
+    }
+    uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : pad_degree(cfg);
+    tiles_scale_table_t table = current_scale_table();
+    bool has_major = false;
+    for (uint8_t i = 0u; i < table.count; i++) {
+        if (table.intervals[i] == 4) {
+            has_major = true;
+        }
+    }
+    return table.intervals[degree % table.count] == (has_major ? 4 : 3);
 }
 
 bool tiles_note_map_is_natural_pad(uint8_t logical_pad) {

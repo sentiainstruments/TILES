@@ -12,7 +12,8 @@ of `../storage/`).
 **A setting is one row** -- `id`, `key`, type, range, and two functions: how to
 read the value from the module that owns it, and how to apply a new one. From
 that single row it gets GET/SET/LIST/SCHEMA/RESET over USB, range checking and
-saving to flash, with no protocol change. Types: bool, uint, int, float, enum.
+saving to flash, with no protocol change. Types: bool, uint, int, float, enum,
+color (`RRGGBB` or `none`).
 
 **Rules the design depends on**
 - **The modules stay the source of truth.** Rows call into pedal, expression,
@@ -29,7 +30,8 @@ saving to flash, with no protocol change. Types: bool, uint, int, float, enum.
   future binary protocol will use; never reuse or renumber one. The text key is
   for humans and scripts. Ids are grouped by hundreds: `0x01xx` pedal, `0x02xx`
   expression, `0x03xx` CV/gate, `0x04xx` LED look, `0x05xx` MIDI, `0x06xx`
-  features.
+  features, `0x07xx` colours (scheme and per-pad). Retired: `0x0401`-`0x0404`
+  (the old root/fifth/natural levels, replaced by the colour scheme in 0.2.7).
 - **`TILES_SETTING_VOLATILE`** rows are settable but never saved or restored --
   used for `cv_gate.enabled`, which must stay an explicit per-session switch
   that boots off. Everything else is saved.
@@ -54,10 +56,24 @@ the schema text, sparse encode/decode incl. bad/unknown/volatile entries,
 debounce, idle-gating, retry, RESET, "new build changed a default", plus
 `test_kv_store.c` for the flash store's power-loss behaviour.
 
+## The content store
+
+Things the companion app *pushes* rather than tunes (`content.{h,c}`): today
+custom scales for the picker's 9 custom slots, each with the pack, item and
+version it came from. Its own two-sector flash region (`../storage/flash_map.h`),
+one blob of typed records, so layouts and other data join later as new record
+types. Unlike settings, a change is written to flash before it's applied or
+acknowledged (the app pushes deliberately; no debounce). Records of an unknown
+type are kept; a blob from a newer format makes the store read-only until
+`CONTENT CLEAR`. Commands: `SCALES`, `SCALE GET/PUT/DELETE`, `CONTENT
+LIST/CLEAR` (`shared/protocol/README.md`). Where it's heading (layouts, paid
+packs, unlocking modes): `docs/architecture/content-packs.md`. Tested natively
+in `firmware/test/test_content.c`, against the real note map.
+
 ## Not built yet
 
 The fuller "profile" this directory was always meant to hold -- feature flags,
-per-mode layouts (pad->note maps, scales), button bindings, themes, and the
+per-mode layouts (pad->note maps), button bindings, and the
 power-budget demo profiles (SAFE_BRINGUP, USB_DEMO_SAFE, ...). Those become more
 rows and, for layouts, their own stored region. Firmware-side "next scale" style
 button actions will mutate the same settings through the module setters, so app

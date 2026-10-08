@@ -4,9 +4,10 @@
 
 #include <string.h>
 
-/* 64 settings x 7 bytes is the registry's own ceiling (see settings.c). */
-#define BLOB_CAP 512u
+/* 128 settings x 7 bytes is the registry's own ceiling (see settings.c). */
+#define BLOB_CAP 1024u
 
+static tiles_kv_t s_kv;
 static bool s_ready;
 static tiles_settings_idle_fn s_idle;
 
@@ -34,10 +35,10 @@ void tiles_settings_persist_init(const tiles_kv_ops_t *ops, tiles_settings_idle_
     s_applied = 0u;
     s_save_failures = 0u;
 
-    tiles_kv_init(ops);
+    tiles_kv_init(&s_kv, ops);
     uint16_t len = 0u;
     uint16_t version = 0u;
-    if (tiles_kv_read(s_saved, sizeof(s_saved), &len, &version) && version == TILES_SETTINGS_BLOB_VERSION) {
+    if (tiles_kv_read(&s_kv, s_saved, sizeof(s_saved), &len, &version) && version == TILES_SETTINGS_BLOB_VERSION) {
         s_saved_len = len;
         s_applied = tiles_settings_apply_blob(s_saved, len);
         s_loaded = true;
@@ -52,7 +53,7 @@ static bool same(const uint8_t *a, uint16_t alen, const uint8_t *b, uint16_t ble
 }
 
 static tiles_kv_result_t write_snapshot(const uint8_t *blob, uint16_t len) {
-    tiles_kv_result_t r = tiles_kv_write(blob, len, TILES_SETTINGS_BLOB_VERSION);
+    tiles_kv_result_t r = tiles_kv_write(&s_kv, blob, len, TILES_SETTINGS_BLOB_VERSION);
     if (r == TILES_KV_OK) {
         memcpy(s_saved, blob, len);
         s_saved_len = len;
@@ -129,7 +130,7 @@ tiles_kv_result_t tiles_settings_persist_save_now(void) {
 
 tiles_settings_persist_info_t tiles_settings_persist_get_info(void) {
     tiles_settings_persist_info_t i;
-    i.kv = tiles_kv_get_info();
+    i.kv = tiles_kv_get_info(&s_kv);
     i.loaded = s_loaded;
     i.applied = s_applied;
     i.pending = s_pending_valid;

@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SETTINGS_MAX 64u
+#define SETTINGS_MAX 128u
 #define BLOB_ENTRY_SIZE 7u
 
 static const tiles_setting_def_t *s_defs;
@@ -83,6 +83,13 @@ void tiles_settings_format(const tiles_setting_def_t *def, tiles_setting_value_t
     case TILES_SETTING_ENUM:
         snprintf(out, cap, "%s", value.u <= def->max.u ? def->enum_names[value.u] : "?");
         break;
+    case TILES_SETTING_COLOR:
+        if (value.u == TILES_COLOR_NONE) {
+            snprintf(out, cap, "none");
+        } else {
+            snprintf(out, cap, "%06lX", (unsigned long)(value.u & 0xFFFFFFu));
+        }
+        break;
     }
 }
 
@@ -157,6 +164,26 @@ tiles_settings_result_t tiles_settings_parse(const tiles_setting_def_t *def, con
             }
         }
         return TILES_SETTINGS_OUT_OF_RANGE;
+    case TILES_SETTING_COLOR: {
+        if (strcmp(text, "none") == 0) {
+            out->u = TILES_COLOR_NONE;
+            return TILES_SETTINGS_OK;
+        }
+        if (*text == '#') {
+            text++; /* "#RRGGBB" is accepted too */
+        }
+        if (strlen(text) != 6u) {
+            return TILES_SETTINGS_BAD_VALUE;
+        }
+        for (const char *c = text; *c != '\0'; c++) {
+            bool hex = (*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'f') || (*c >= 'A' && *c <= 'F');
+            if (!hex) {
+                return TILES_SETTINGS_BAD_VALUE;
+            }
+        }
+        out->u = (uint32_t)strtoul(text, &end, 16);
+        return TILES_SETTINGS_OK;
+    }
     }
     return TILES_SETTINGS_BAD_VALUE;
 }
@@ -207,7 +234,7 @@ static void append(char *out, size_t cap, size_t *len, const char *fmt, ...) {
 }
 
 void tiles_settings_describe(const tiles_setting_def_t *def, char *out, size_t cap) {
-    static const char *const TYPE_NAMES[] = {"bool", "uint", "int", "float", "enum"};
+    static const char *const TYPE_NAMES[] = {"bool", "uint", "int", "float", "enum", "color"};
     char def_text[32];
     tiles_settings_format(def, tiles_settings_default_of(def), def_text, sizeof(def_text));
     size_t len = 0u;
@@ -230,6 +257,8 @@ void tiles_settings_describe(const tiles_setting_def_t *def, char *out, size_t c
         for (uint32_t i = 0u; i <= def->max.u; i++) {
             append(out, cap, &len, "%s%s", i == 0u ? "" : "|", def->enum_names[i]);
         }
+        break;
+    case TILES_SETTING_COLOR:
         break;
     }
     append(out, cap, &len, " default=%s", def_text);
@@ -296,6 +325,8 @@ static bool value_in_range(const tiles_setting_def_t *def, tiles_setting_value_t
         return v.i >= def->min.i && v.i <= def->max.i;
     case TILES_SETTING_FLOAT:
         return !isnan(v.f) && v.f >= def->min.f && v.f <= def->max.f;
+    case TILES_SETTING_COLOR:
+        return v.u <= 0xFFFFFFu || v.u == TILES_COLOR_NONE;
     }
     return false;
 }

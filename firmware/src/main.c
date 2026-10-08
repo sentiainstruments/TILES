@@ -24,6 +24,7 @@
 #include "midi/midi_in.h"
 #include "midi/midi_out.h"
 #include "midi/usb_device.h"
+#include "profiles/content.h"
 #include "profiles/settings_table.h"
 #include "services/boot_sequence.h"
 #include "services/buttons.h"
@@ -45,6 +46,7 @@
 #include "services/power.h"
 #include "services/standby.h"
 #include "services/touch.h"
+#include "storage/storage_flash.h"
 #include "usb_vendor/usb_vendor.h"
 
 /* Power-change callback (registered below): a power-source switch can
@@ -213,6 +215,10 @@ int main(void) {
     /* Settings table: captures each module's defaults, then applies what was
      * saved to flash. Must follow every module init. */
     tiles_settings_boot();
+
+    /* Content store: custom scales the companion app pushed, into the note
+     * map's CUSTOM_1..9 (after tiles_note_map_init()). */
+    tiles_content_init(tiles_storage_content_region_safe() ? tiles_storage_content_ops() : NULL);
 
     /* MPE zone declaration for DIN (USB repeats it on mount), after settings,
      * so a saved "MPE off" announces a withdrawn zone. */

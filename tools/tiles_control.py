@@ -20,10 +20,10 @@ Setup (see tools/README.md):
 Usage:
     python3 tools/tiles_control.py list                  # every setting's current value
     python3 tools/tiles_control.py schema                # id / type / range / default of every setting
-    python3 tools/tiles_control.py get look.natural_pad_percent
-    python3 tools/tiles_control.py set look.natural_pad_percent 30
+    python3 tools/tiles_control.py get color.root
+    python3 tools/tiles_control.py set color.third 00FF66           # colour scheme: RRGGBB, or none
     python3 tools/tiles_control.py set pedal.mode expression
-    python3 tools/tiles_control.py reset look.natural_pad_percent   # one setting back to its default
+    python3 tools/tiles_control.py reset color.root                 # one setting back to its default
     python3 tools/tiles_control.py reset ALL
     python3 tools/tiles_control.py save                  # write unsaved changes to flash now
     python3 tools/tiles_control.py info                  # flash-store status
@@ -33,10 +33,17 @@ Usage:
     python3 tools/tiles_control.py test leds 50          # bench: every LED white at 50% (current tests)
     python3 tools/tiles_control.py test motors 4 100     # bench: pads 1-4's motors at 100% for 8 s
     python3 tools/tiles_control.py test off              # bench: back to normal
+    python3 tools/tiles_control.py scales                # custom scales on the device (picker pads 16-24)
+    python3 tools/tiles_control.py scale get 1
+    python3 tools/tiles_control.py scale put 1 Hirajoshi 0,2,3,7,8 pack=japan item=hirajoshi version=1
+    python3 tools/tiles_control.py scale delete 1
+    python3 tools/tiles_control.py content list          # everything in the content store
+    python3 tools/tiles_control.py content clear         # wipe it (all custom scales)
 
 Changes apply immediately and are saved to flash automatically a couple of
 seconds after the last one (only while no pad is being touched); `save` just
-skips the wait. Settings survive reboots and reflashing.
+skips the wait. Settings survive reboots and reflashing. Scale and content
+changes are saved before the device answers OK.
 """
 
 import os
@@ -156,8 +163,8 @@ class Session:
                 return
 
     def command(self, line, multi_line=False):
-        """Sends one command. multi_line: LIST/SCHEMA/INFO send many lines then a final OK; everything else
-        is answered by exactly one line (a value, OK, or ERR ...)."""
+        """Sends one command. multi_line: LIST/SCHEMA/INFO/SCALES/SCALE GET/CONTENT LIST send lines then a
+        final OK; everything else is answered by exactly one line (a value, OK, or ERR ...)."""
         self.drain()
         self.buf = b""
         self.ep_out.write((line + "\n").encode("ascii"), timeout=TIMEOUT_MS)
@@ -195,6 +202,14 @@ def main():
     elif command == "test" and argc >= 3:
         # Bench tests for current measurement: test leds 37 | test motors 4 [duty%] | test off
         request, multi = "TEST " + " ".join(a.upper() for a in sys.argv[2:]), sys.argv[2].lower() == "motors"
+    elif command == "scales" and argc == 2:
+        request, multi = "SCALES", True
+    elif command == "scale" and argc >= 4 and sys.argv[2].lower() in ("get", "put", "delete"):
+        # Names, packs and items keep their case; only the verb is upper-cased.
+        request = f"SCALE {sys.argv[2].upper()} " + " ".join(sys.argv[3:])
+        multi = sys.argv[2].lower() == "get"
+    elif command == "content" and argc == 3 and sys.argv[2].lower() in ("list", "clear"):
+        request, multi = f"CONTENT {sys.argv[2].upper()}", sys.argv[2].lower() == "list"
     else:
         print(__doc__)
         sys.exit(1)

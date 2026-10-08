@@ -44,6 +44,7 @@ add_executable(sentia_tiles_firmware
     midi/din_midi_queue.c
     storage/kv_store.c
     storage/storage_flash.c
+    profiles/content.c
     profiles/settings.c
     profiles/settings_persist.c
     profiles/settings_table.c

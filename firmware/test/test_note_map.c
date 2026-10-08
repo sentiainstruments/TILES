@@ -95,6 +95,30 @@ static void check_out_of_range(void) {
     CHECK(tiles_note_map_get_note(25) == 0, "pad 25 should return 0");
 }
 
+/* The third (colour scheme role): the major third (pitch class 4 above C,
+ * key offset 0) when the scale has one, else the minor third (3). */
+static void check_third_in(tiles_scale_mode_t scale, uint8_t want_pc, const char *name) {
+    tiles_note_map_set_scale(scale);
+    unsigned found = 0u;
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        bool is_third = tiles_note_map_is_third_pad(pad);
+        bool want = (tiles_note_map_get_note(pad) % 12u) == want_pc;
+        CHECK(is_third == want, "%s: pad %u third=%d, want %d", name, (unsigned)pad, is_third, want);
+        found += is_third ? 1u : 0u;
+    }
+    CHECK(found > 0u, "%s: no third pad lit", name);
+}
+
+static void check_thirds(void) {
+    check_third_in(TILES_SCALE_CHROMATIC, 4u, "chromatic");
+    check_third_in(TILES_SCALE_IONIAN, 4u, "ionian");
+    check_third_in(TILES_SCALE_AEOLIAN, 3u, "aeolian");
+    check_third_in(TILES_SCALE_PENTATONIC_MINOR, 3u, "pentatonic minor");
+    check_third_in(TILES_SCALE_WHOLE_TONE, 4u, "whole tone");
+    check_third_in(TILES_SCALE_DIMINISHED, 3u, "diminished");
+    tiles_note_map_set_scale(TILES_SCALE_CHROMATIC);
+}
+
 int main(void) {
     CHECK(tiles_note_map_get_scale() == TILES_SCALE_CHROMATIC, "default scale should be chromatic");
 
@@ -103,6 +127,7 @@ int main(void) {
     check_endpoints();
     check_all_unique();
     check_out_of_range();
+    check_thirds();
 
     if (g_failures == 0) {
         printf("PASS: note map layout (%u pads checked)\n", (unsigned)TILES_NUM_PADS);
