@@ -2,6 +2,7 @@
 
 #include "board/unit_id.h"
 #include "content.h"
+#include "drum_seq.h"
 #include "haptics.h"
 #include "lighting.h"
 #include "note_map.h"
@@ -441,6 +442,15 @@ static void handle_line(char *line) {
         snprintf(text, sizeof(text), "content.writes=%lu", (unsigned long)content.kv.writes);
         reply(text);
         snprintf(text, sizeof(text), "content.last_result=%s", kv_result_name(content.kv.last_result));
+        reply(text);
+        tiles_drum_seq_store_info_t drums = tiles_drum_seq_get_store_info();
+        snprintf(text, sizeof(text), "drums.storage=%s", drums.storage ? "ok" : "none");
+        reply(text);
+        snprintf(text, sizeof(text), "drums.saved_bytes=%u", (unsigned)drums.saved_bytes);
+        reply(text);
+        snprintf(text, sizeof(text), "drums.saves=%lu", (unsigned long)drums.saves);
+        reply(text);
+        snprintf(text, sizeof(text), "drums.pending=%d", drums.pending ? 1 : 0);
         reply(text);
         reply_ok();
         return;

@@ -9439,3 +9439,24 @@ change. Search it by file or feature name.
     sequencer's own pending start waits in the first half and starts
     unaligned in the second; not changed there.
   - The pattern lives in RAM (lost at power-off); saving it is a next step.
+- **Drum patterns save themselves; whole-pattern clear; sequencer start
+  fix (0.2.8, 2026-10-09).** Real feedback: "make it so patterns save on
+  drum sequencer always, to clear pattern or part shift plus hold desired
+  pad down. fix the bug you found".
+  - Drum pattern in its own two-slot flash region (`TILES_FLASH_DRUM_*`),
+    written 2 s after the last change with no pad touched. While the beat
+    plays, only just after a step starts with no repeat due and steps of at
+    least 80 ms (below 188 BPM), so the tens-of-ms flash stall falls in a
+    gap; faster tempos save at the next stop. Sparse format in
+    `drum_pattern.c` (5 bytes per plain drum). INFO reports `drums.*`.
+  - Circle + hold a drum: 3 s clears its part (that pad flashes red), keep
+    holding to 6 s clears the whole pattern, every bank (the grid flashes
+    red).
+  - The sequencer's quantized start (lanes and capture) was inverted from
+    its own design note above ("past the halfway point ... waits for the
+    next one; within the first half, snaps to the one that just passed"): it
+    waited through the first half of a beat and started unaligned in the
+    second, so a "+" start could land half a beat off. Now it does what
+    that note says, on the beat's grid, like drum mode.
+  - Flashed to units 2 and 4.
+

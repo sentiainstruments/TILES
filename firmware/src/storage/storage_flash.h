@@ -20,3 +20,7 @@ const tiles_kv_ops_t *tiles_storage_settings_ops(void);
 /* The same pair for the content store (custom scales), just below settings. */
 bool tiles_storage_content_region_safe(void);
 const tiles_kv_ops_t *tiles_storage_content_ops(void);
+
+/* And for drum mode's pattern, below the content store. */
+bool tiles_storage_drum_region_safe(void);
+const tiles_kv_ops_t *tiles_storage_drum_ops(void);

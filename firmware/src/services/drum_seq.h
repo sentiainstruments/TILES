@@ -11,7 +11,8 @@
  *                 (push in for more), like the sequencer.
  *   columns 5-6   8 drums (C1-G1 in Live's names on the first bank). Tap:
  *                 select (its steps show on the left). Push: play it, with
- *                 the strike's velocity. Circle + hold 3 s: clear its steps.
+ *                 the strike's velocity. Circle + hold 3 s: clear its
+ *                 steps; keep holding to 6 s: clear the whole pattern.
  *   "-" / "+"     stop / start, like the sequencer ("-" twice rewinds).
  *   circle + "-"/"+"  the previous / next 8 drums.
  *   circle        tap tempo (no external clock).
@@ -20,8 +21,10 @@
  * Colors: lime (the mode's color, its underglow too); the playhead white;
  * a drum flashes white as it plays. The beat keeps playing in the
  * background in every other mode, like the sequencer's lanes. The pattern
- * lives in RAM: it's lost at power-off. */
+ * saves itself to flash after every change (its own region,
+ * storage/flash_map.h) and comes back at power-on. */
 
+#include "kv_store.h"
 #include "midi_clock.h"
 
 #include <stdbool.h>
@@ -33,7 +36,20 @@
 #define TILES_DRUM_SEQ_COLOR_G 1.0f
 #define TILES_DRUM_SEQ_COLOR_B 0.0f
 
-void tiles_drum_seq_init(void);
+/* Loads the saved pattern. ops NULL: no flash region, nothing saved. */
+void tiles_drum_seq_init(const tiles_kv_ops_t *ops);
+
+/* Every scan: writes a changed pattern to flash at a safe moment (see
+ * DRUM_SAVE_QUIET_MS in drum_seq.c). */
+void tiles_drum_seq_persist_service(uint32_t now_ms, bool clock_running);
+
+typedef struct {
+    bool storage;
+    bool pending; /* changed, not saved yet */
+    uint16_t saved_bytes;
+    uint32_t saves; /* since boot */
+} tiles_drum_seq_store_info_t;
+tiles_drum_seq_store_info_t tiles_drum_seq_get_store_info(void);
 
 /* Entering / leaving the mode (services/op_mode.c set_active_mode()). */
 void tiles_drum_seq_enter(void);

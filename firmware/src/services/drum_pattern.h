@@ -61,6 +61,18 @@ bool tiles_drum_pattern_note_has_steps(const tiles_drum_pattern_t *p, uint8_t no
 void tiles_drum_pattern_set_probability(tiles_drum_pattern_t *p, uint8_t note, uint8_t step, uint8_t percent);
 void tiles_drum_pattern_set_ratchet(tiles_drum_pattern_t *p, uint8_t note, uint8_t step, uint8_t hits);
 
+/* Saving (services/drum_seq.c keeps it in its own flash region). Sparse:
+ * only notes with steps or edited chance/repeats, each as
+ *   u8 note, u16 armed, u16 edited (steps whose chance or repeats aren't
+ *   the default), then per edited step: u8 chance, u8 repeats
+ * (little-endian). A plain beat is 5 bytes per drum. Encoding stops before
+ * a note that wouldn't fit and says so (`truncated`; needs ~110 drums with
+ * every step edited). Decoding clears first, clamps values and stops at a
+ * damaged record. */
+#define TILES_DRUM_BLOB_VERSION 1u
+uint16_t tiles_drum_pattern_encode(const tiles_drum_pattern_t *p, uint8_t *out, uint16_t cap, bool *truncated);
+void tiles_drum_pattern_decode(tiles_drum_pattern_t *p, const uint8_t *in, uint16_t len);
+
 /* ---- player ----
  * Follows MIDI clock pulses like a sequencer lane (services/op_mode.c):
  * runs only while both its own `running` flag and the shared clock run; a
@@ -96,6 +108,8 @@ void tiles_drum_player_pause(tiles_drum_player_t *pl);
 /* Parks on step 1 (when stopped). */
 void tiles_drum_player_rewind(tiles_drum_player_t *pl);
 void tiles_drum_player_end_all(tiles_drum_player_t *pl, const tiles_drum_output_t *out);
+/* True while a repeat is still due within the current step. */
+bool tiles_drum_player_repeats_pending(const tiles_drum_player_t *pl);
 /* Call every scan with the clock snapshot (pulse count, running,
  * start_edge). */
 void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat, const tiles_drum_output_t *out,

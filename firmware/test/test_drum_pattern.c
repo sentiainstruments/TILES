@@ -183,6 +183,49 @@ int main(void) {
     tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
     assert(rec.events == 0);
 
+    /* 12. saving: sparse, round-trips, clamps, survives damage */
+    fresh();
+    uint8_t blob[4076];
+    bool truncated = true;
+    assert(tiles_drum_pattern_encode(&pat, blob, sizeof(blob), &truncated) == 0 && !truncated);
+    for (uint8_t s = 0; s < 16; s += 4) tiles_drum_pattern_toggle(&pat, 36, s);
+    assert(tiles_drum_pattern_encode(&pat, blob, sizeof(blob), &truncated) == 5);   /* a plain beat: 5 bytes */
+    tiles_drum_pattern_toggle(&pat, 42, 2);
+    tiles_drum_pattern_set_probability(&pat, 42, 2, 40);
+    tiles_drum_pattern_set_ratchet(&pat, 42, 9, 3);                                  /* edited but not armed: kept */
+    tiles_drum_pattern_toggle(&pat, 120, 15);
+    uint16_t len = tiles_drum_pattern_encode(&pat, blob, sizeof(blob), &truncated);
+    assert(len == 5 + (5 + 4) + 5 && !truncated);
+    tiles_drum_pattern_t back;
+    tiles_drum_pattern_decode(&back, blob, len);
+    assert(memcmp(&back, &pat, sizeof(pat)) == 0);
+    /* truncation: stops before a note that doesn't fit, never mid-record */
+    len = tiles_drum_pattern_encode(&pat, blob, 12, &truncated);
+    assert(truncated && len == 5);
+    /* damage: a record cut short keeps what came before */
+    len = tiles_drum_pattern_encode(&pat, blob, sizeof(blob), &truncated);
+    tiles_drum_pattern_decode(&back, blob, (uint16_t)(len - 1));
+    assert(back.armed[36] == pat.armed[36] && back.armed[42] == pat.armed[42] && back.armed[120] == 0);
+    /* out-of-range values clamp */
+    uint8_t bad[] = {50, 0x01, 0x00, 0x01, 0x00, 250, 9};
+    tiles_drum_pattern_decode(&back, bad, sizeof(bad));
+    assert(back.armed[50] == 1 && back.probability[50][0] == 100 && back.ratchet[50][0] == TILES_DRUM_MAX_RATCHET);
+    /* every reachable note with every step edited doesn't fit; the cut is clean */
+    for (uint16_t n = 4; n <= 123; n++)
+        for (uint8_t s = 0; s < 16; s++) { tiles_drum_pattern_toggle(&pat, (uint8_t)n, s); tiles_drum_pattern_set_ratchet(&pat, (uint8_t)n, s, 2); }
+    len = tiles_drum_pattern_encode(&pat, blob, sizeof(blob), &truncated);
+    assert(truncated && len <= sizeof(blob) && len % 37 == 0);
+
+    /* 13. repeats pending within a step */
+    fresh();
+    tiles_drum_pattern_toggle(&pat, 40, 0);
+    tiles_drum_pattern_set_ratchet(&pat, 40, 0, 2);
+    tiles_drum_player_start(&pl, true);
+    tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
+    assert(tiles_drum_player_repeats_pending(&pl));
+    run(1, 3);
+    assert(!tiles_drum_player_repeats_pending(&pl));
+
     printf("drum_pattern: all tests pass\n");
     return 0;
 }

@@ -14,6 +14,8 @@
  *   -2 sectors  Settings (two alternating slots) profiles/settings_persist.c
  *   -2 sectors  Content: custom scales, later    profiles/content.c
  *               layouts (two alternating slots)
+ *   -2 sectors  Drum mode's pattern              services/drum_seq.c
+ *               (two alternating slots)
  *   ...         free
  *   0           application image */
 
@@ -29,3 +31,6 @@
 
 #define TILES_FLASH_CONTENT_SLOTS 2u
 #define TILES_FLASH_CONTENT_OFFSET (TILES_FLASH_SETTINGS_OFFSET - FLASH_SECTOR_SIZE * TILES_FLASH_CONTENT_SLOTS)
+
+#define TILES_FLASH_DRUM_SLOTS 2u
+#define TILES_FLASH_DRUM_OFFSET (TILES_FLASH_CONTENT_OFFSET - FLASH_SECTOR_SIZE * TILES_FLASH_DRUM_SLOTS)

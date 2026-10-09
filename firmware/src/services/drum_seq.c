@@ -7,6 +7,7 @@
 #include "expression.h"
 #include "hall.h"
 #include "haptics.h"
+#include "kv_store.h"
 #include "lighting.h"
 #include "midi_channels.h"
 #include "midi_out.h"
@@ -15,15 +16,26 @@
 #include "pico/time.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 /* A step held this long opens its chance dial (the sequencer's pitch-pick
  * hold, services/op_mode.c OP_SEQ_PITCH_ASSIGN_HOLD_MS). */
 #define DRUM_STEP_HOLD_MS 350u
 /* Circle + a drum held this long clears its steps (the pattern bank's
- * delete hold). */
+ * delete hold); held on to DRUM_CLEAR_ALL_HOLD_MS, the whole pattern. */
 #define DRUM_CLEAR_HOLD_MS 3000u
+#define DRUM_CLEAR_ALL_HOLD_MS 6000u
 #define DRUM_CLEAR_FLASH_MS 400u
+/* Saving: every change goes to flash on its own, DRUM_SAVE_QUIET_MS after
+ * the last one, with no pad touched (a flash write stalls everything for
+ * tens of ms). While the beat plays, only right after a step starts, with
+ * no repeat due, and only if steps are at least DRUM_SAVE_MIN_STEP_MS long
+ * (below 188 BPM), so the stall lands in a gap; faster, it waits for a
+ * stop. A failed write retries after DRUM_SAVE_RETRY_MS. */
+#define DRUM_SAVE_QUIET_MS 2000u
+#define DRUM_SAVE_MIN_STEP_MS 80.0f
+#define DRUM_SAVE_RETRY_MS 30000u
 /* How long a drum pad flashes white when its drum plays. First guess. */
 #define DRUM_FIRE_FLASH_MS 90u
 /* Depth dials: ~900 is full-scale depth; below the guard (the tail of a
@@ -66,6 +78,19 @@ static uint32_t s_drum_clear_ms[TILES_DRUM_VOICES]; /* circle + hold started, 0 
 static uint32_t s_drum_cleared_ms[TILES_DRUM_VOICES];
 static uint32_t s_drum_fired_ms[TILES_DRUM_VOICES];
 static bool s_drum_fired_any[TILES_DRUM_VOICES];
+static uint8_t s_drum_clear_stage[TILES_DRUM_VOICES]; /* 0, 1 = part cleared, 2 = all cleared */
+static uint32_t s_all_cleared_ms;
+
+/* Saving (see DRUM_SAVE_QUIET_MS). */
+static tiles_kv_t s_kv;
+static bool s_storage;
+static bool s_dirty;
+static uint32_t s_changed_ms;
+static uint32_t s_retry_after_ms;
+static bool s_step_entered; /* the player started a step this scan */
+static uint32_t s_saves;
+static uint16_t s_saved_bytes;
+static uint8_t s_blob[TILES_KV_MAX_PAYLOAD];
 
 static uint32_t now_ms(void) {
     return to_ms_since_boot(get_absolute_time());
@@ -127,8 +152,26 @@ static void end_live_notes(void) {
     }
 }
 
-void tiles_drum_seq_init(void) {
+static void mark_changed(void) {
+    s_dirty = true;
+    s_changed_ms = now_ms();
+}
+
+void tiles_drum_seq_init(const tiles_kv_ops_t *ops) {
     tiles_drum_pattern_clear(&s_pattern);
+    s_storage = ops != 0;
+    s_dirty = false;
+    s_retry_after_ms = 0u;
+    s_saves = 0u;
+    s_saved_bytes = 0u;
+    tiles_kv_init(&s_kv, ops);
+    if (s_storage) {
+        uint16_t len = 0u, version = 0u;
+        if (tiles_kv_read(&s_kv, s_blob, sizeof(s_blob), &len, &version) && version == TILES_DRUM_BLOB_VERSION) {
+            tiles_drum_pattern_decode(&s_pattern, s_blob, len);
+            s_saved_bytes = len;
+        }
+    }
     tiles_drum_player_init(&s_player);
     s_bank = 0;
     s_voice = 0u;
@@ -139,6 +182,7 @@ void tiles_drum_seq_init(void) {
         s_drum_cleared_ms[v] = 0u;
         s_drum_fired_any[v] = false;
     }
+    s_all_cleared_ms = 0u;
     resync_touches();
 }
 
@@ -193,7 +237,58 @@ void tiles_drum_seq_advance(tiles_midi_clock_state_t clock, bool shown) {
         resync_touches();
     }
     s_shown = shown;
+    uint32_t started = s_player.step_started_pulse;
+    uint8_t step = s_player.step;
     tiles_drum_player_advance(&s_player, &s_pattern, &s_out, clock.pulse_count, clock.running, clock.start_edge);
+    s_step_entered = s_player.step_started_pulse != started || s_player.step != step;
+}
+
+static bool any_pad_touched(void) {
+    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+        if (tiles_touch_is_touched(pad)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void tiles_drum_seq_persist_service(uint32_t now, bool clock_running) {
+    if (!s_dirty || !s_storage || now - s_changed_ms < DRUM_SAVE_QUIET_MS) {
+        return;
+    }
+    if (s_retry_after_ms != 0u && (int32_t)(now - s_retry_after_ms) < 0) {
+        return;
+    }
+    if (any_pad_touched()) {
+        return;
+    }
+    if (s_player.running && clock_running) {
+        float step_ms = tiles_midi_clock_get_ms_per_beat() / 4.0f;
+        if (!s_step_entered || tiles_drum_player_repeats_pending(&s_player) || step_ms < DRUM_SAVE_MIN_STEP_MS) {
+            return;
+        }
+    }
+    bool truncated = false;
+    uint16_t len = tiles_drum_pattern_encode(&s_pattern, s_blob, sizeof(s_blob), &truncated);
+    if (tiles_kv_write(&s_kv, s_blob, len, TILES_DRUM_BLOB_VERSION) != TILES_KV_OK) {
+        s_retry_after_ms = now + DRUM_SAVE_RETRY_MS;
+        if (s_retry_after_ms == 0u) {
+            s_retry_after_ms = 1u;
+        }
+        return;
+    }
+    if (truncated) {
+        printf("[drums] pattern too big to save whole: kept %u bytes\n", (unsigned)len);
+    }
+    s_dirty = false;
+    s_retry_after_ms = 0u;
+    s_saves++;
+    s_saved_bytes = len;
+}
+
+tiles_drum_seq_store_info_t tiles_drum_seq_get_store_info(void) {
+    tiles_drum_seq_store_info_t info = {s_storage, s_dirty, s_saved_bytes, s_saves};
+    return info;
 }
 
 /* ---- edits: chance and repeats ---- */
@@ -230,10 +325,17 @@ static void handle_edit(void) {
     uint8_t note = tiles_drum_note(s_bank, s_voice);
     float f = dial_fraction(depth);
     if (s_edit == DRUM_EDIT_CHANCE) {
-        tiles_drum_pattern_set_probability(&s_pattern, note, s_edit_step, (uint8_t)(f * 100.0f + 0.5f));
+        uint8_t percent = (uint8_t)(f * 100.0f + 0.5f);
+        if (s_pattern.probability[note][s_edit_step] != percent) {
+            tiles_drum_pattern_set_probability(&s_pattern, note, s_edit_step, percent);
+            mark_changed();
+        }
     } else {
-        tiles_drum_pattern_set_ratchet(&s_pattern, note, s_edit_step,
-                                       (uint8_t)(1u + (uint32_t)(f * (float)(TILES_DRUM_MAX_RATCHET - 1u) + 0.5f)));
+        uint8_t hits = (uint8_t)(1u + (uint32_t)(f * (float)(TILES_DRUM_MAX_RATCHET - 1u) + 0.5f));
+        if (s_pattern.ratchet[note][s_edit_step] != hits) {
+            tiles_drum_pattern_set_ratchet(&s_pattern, note, s_edit_step, hits);
+            mark_changed();
+        }
     }
 }
 
@@ -246,6 +348,7 @@ static void handle_drum_pad(uint8_t voice, uint8_t pad, bool touched, bool was, 
         if (circle) {
             /* Circle first: a clear-hold, never a hit. */
             s_drum_clear_ms[voice] = now == 0u ? 1u : now;
+            s_drum_clear_stage[voice] = 0u;
             s_drum_awaiting[voice] = false;
         } else {
             s_drum_clear_ms[voice] = 0u;
@@ -254,11 +357,24 @@ static void handle_drum_pad(uint8_t voice, uint8_t pad, bool touched, bool was, 
             s_drum_peak[voice] = (float)tiles_hall_get_depth(pad);
         }
     } else if (touched) {
-        if (s_drum_clear_ms[voice] != 0u && now - s_drum_clear_ms[voice] >= DRUM_CLEAR_HOLD_MS) {
-            tiles_drum_pattern_clear_note(&s_pattern, tiles_drum_note(s_bank, voice));
-            tiles_haptics_trigger_touch_pulse(pad);
-            s_drum_cleared_ms[voice] = now;
-            s_drum_clear_ms[voice] = 0u;
+        if (s_drum_clear_ms[voice] != 0u) {
+            uint32_t held = now - s_drum_clear_ms[voice];
+            if (s_drum_clear_stage[voice] == 0u && held >= DRUM_CLEAR_HOLD_MS) {
+                /* 3 s: this drum's part. */
+                tiles_drum_pattern_clear_note(&s_pattern, tiles_drum_note(s_bank, voice));
+                tiles_haptics_trigger_touch_pulse(pad);
+                s_drum_cleared_ms[voice] = now;
+                s_drum_clear_stage[voice] = 1u;
+                mark_changed();
+            } else if (s_drum_clear_stage[voice] == 1u && held >= DRUM_CLEAR_ALL_HOLD_MS) {
+                /* Held on to 6 s: the whole pattern, every bank. */
+                tiles_drum_pattern_clear(&s_pattern);
+                tiles_haptics_trigger_kick(pad, 127u);
+                s_all_cleared_ms = now;
+                s_drum_clear_stage[voice] = 2u;
+                s_drum_clear_ms[voice] = 0u;
+                mark_changed();
+            }
         }
         if (s_drum_awaiting[voice]) {
             /* A push: past the strike depth (as melodic and chord mode), not a
@@ -325,6 +441,7 @@ void tiles_drum_seq_handle_input(uint32_t now) {
             /* A tap toggles on release, so a hold never flips the step first. */
             if (s_step_touch_ms[step] != 0u) {
                 tiles_drum_pattern_toggle(&s_pattern, note, step);
+                mark_changed();
             }
             s_step_touch_ms[step] = 0u;
         }
@@ -395,6 +512,12 @@ void tiles_drum_seq_render(uint32_t now, float beat_flash, float diamond_led, bo
     render_underglow();
     if (s_edit != DRUM_EDIT_NONE) {
         render_edit();
+        return;
+    }
+    if (s_all_cleared_ms != 0u && now - s_all_cleared_ms < DRUM_CLEAR_FLASH_MS) {
+        for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
+            tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 0.0f, 0.0f); /* everything cleared */
+        }
         return;
     }
     uint8_t note = tiles_drum_note(s_bank, s_voice);

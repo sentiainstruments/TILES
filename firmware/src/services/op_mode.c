@@ -20,6 +20,7 @@
 #include "octave_control.h"
 #include "product_identity.h"
 #include "standby.h"
+#include "storage_flash.h"
 #include "touch.h"
 
 #include "flash_map.h"
@@ -699,13 +700,6 @@ static void seq_reset(uint8_t lane, uint32_t now_pulse) {
     seq_enter_step(lane, 0u);
 }
 
-/* Resume on the step the playhead was parked on (a fresh occurrence: new
- * probability roll and ratchet), instead of step 0. */
-static void seq_resume_current_step(uint8_t lane, uint32_t now_pulse) {
-    s_seq_step_started_at_pulse[lane] = now_pulse;
-    seq_enter_step(lane, s_seq_current_step[lane]);
-}
-
 /* Called on (re)entering sequencer mode. Never clears patterns (only boot
  * does). Arms a quantized start so entering mid-phrase lands on the beat. */
 static void seq_start(void) {
@@ -804,21 +798,23 @@ static void seq_advance_clock(uint8_t lane, tiles_midi_clock_state_t clock) {
 
     if (s_seq_pending_start[lane]) {
         /* Pending (quantized) start: snap to the NEAREST beat. In the first half
-         * of a beat, start now (snapped to the beat just passed); past halfway,
-         * wait for the next one. (Waiting for an exact boundary meant up to a
-         * beat of dead air.) A fresh Start/tap-tempo start is already at phase 0
-         * and took the branch above. s_seq_pending_restart decides restart
-         * (step 0) vs. resume. */
+         * of a beat, start now on the grid of the beat just passed (the steps
+         * already behind it counted, so the lane lands on the beat); past
+         * halfway, wait for the next one. (Waiting for an exact boundary meant
+         * up to a beat of dead air.) A fresh Start/tap-tempo start is already at
+         * phase 0 and took the branch above. s_seq_pending_restart decides
+         * restart (step 0) vs. resume. A scan that skips pulses still lands in
+         * the first half after the boundary. */
         uint32_t phase_in_beat = clock.pulse_count % OP_CLOCK_PULSES_PER_BEAT;
-        if (phase_in_beat != 0u && (phase_in_beat * 2u) < OP_CLOCK_PULSES_PER_BEAT) {
+        if (phase_in_beat * 2u >= OP_CLOCK_PULSES_PER_BEAT) {
             return;
         }
         s_seq_pending_start[lane] = false;
-        if (s_seq_pending_restart[lane]) {
-            seq_reset(lane, clock.pulse_count);
-        } else {
-            seq_resume_current_step(lane, clock.pulse_count);
-        }
+        uint32_t steps_in = phase_in_beat / OP_SEQ_CLOCKS_PER_STEP;
+        uint8_t first = s_seq_pending_restart[lane] ? 0u : s_seq_current_step[lane];
+        uint8_t length = pattern_for_lane(lane)->length;
+        s_seq_step_started_at_pulse[lane] = clock.pulse_count - phase_in_beat + steps_in * OP_SEQ_CLOCKS_PER_STEP;
+        seq_enter_step(lane, (uint8_t)((first + steps_in) % length));
         return;
     }
 
@@ -2222,12 +2218,13 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
     if (s_seq_pending_start[lane]) {
         /* Nearest-beat pending start, as in seq_advance_clock(). */
         uint32_t phase_in_beat = clock.pulse_count % OP_CLOCK_PULSES_PER_BEAT;
-        if (phase_in_beat != 0u && (phase_in_beat * 2u) < OP_CLOCK_PULSES_PER_BEAT) {
+        if (phase_in_beat * 2u >= OP_CLOCK_PULSES_PER_BEAT) {
             return;
         }
         s_seq_pending_start[lane] = false;
-        s_seq_current_step[lane] = 0u;
-        s_seq_step_started_at_pulse[lane] = clock.pulse_count;
+        uint32_t steps_in = phase_in_beat / OP_SEQ_CLOCKS_PER_STEP;
+        s_seq_current_step[lane] = (uint8_t)(steps_in % active_pattern()->length);
+        s_seq_step_started_at_pulse[lane] = clock.pulse_count - phase_in_beat + steps_in * OP_SEQ_CLOCKS_PER_STEP;
         s_seq_capture_armed_count = 0u;
         return;
     }
@@ -3021,8 +3018,9 @@ void tiles_op_mode_init(bool crash_recovered) {
      * the sequencer's lanes). */
     song_store_load_all();
 
-    /* Drum sequencer: empty pattern, stopped (not kept across a crash). */
-    tiles_drum_seq_init();
+    /* Drum sequencer: its saved pattern, stopped (running isn't kept across a
+     * crash). */
+    tiles_drum_seq_init(tiles_storage_drum_region_safe() ? tiles_storage_drum_ops() : NULL);
 
     /* Register Ableton mode's SysEx callback (harmless if never used). */
     scene_launch_init();
@@ -3127,6 +3125,8 @@ void tiles_op_mode_scan(void) {
     }
     /* The drum sequencer too, shown or not. */
     tiles_drum_seq_advance(clock, s_active_mode == OP_MODE_DRUM && !s_menu_visible && !s_scale_menu_visible);
+    /* Right after the advance: it saves just after a step starts. */
+    tiles_drum_seq_persist_service(now_ms, clock.running);
 
     if (s_menu_visible) {
         handle_menu_taps();

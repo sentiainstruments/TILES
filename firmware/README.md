@@ -73,8 +73,8 @@ Set for now (compile-time switches, see `daw-integration/README.md`):
   melodic harmonics, haptics, lighting, standby and deep sleep, games,
   settings saved to flash.
 - **Song mode is beta**: built, not yet played on hardware.
-- **Drum mode** (menu pad 7, 0.2.8): built and tested natively, not yet
-  played on hardware. Colour schemes and custom scales (0.2.7) likewise.
+- **Drum mode** (menu pad 7, 0.2.8, on units 2 and 4): built and tested
+  natively, not yet played. Colour schemes and custom scales (0.2.7) likewise.
 - DIN MIDI (TRS jacks) works on hardware (confirmed 2026-10-04).
 - Supply current measured on USB (2026-10-06, `docs/hardware/current-measurements.md`):
   0.15 A idle, 0.34 A mashing every pad, ~0.42 A worst case at the USB LED

@@ -99,6 +99,76 @@ void tiles_drum_pattern_set_ratchet(tiles_drum_pattern_t *p, uint8_t note, uint8
     }
 }
 
+/* ---- saving ---- */
+
+static uint16_t edited_mask(const tiles_drum_pattern_t *p, uint8_t note) {
+    uint16_t mask = 0u;
+    for (uint8_t s = 0; s < TILES_DRUM_STEPS; s++) {
+        if (p->probability[note][s] != 100u || p->ratchet[note][s] != 1u) {
+            mask |= (uint16_t)(1u << s);
+        }
+    }
+    return mask;
+}
+
+uint16_t tiles_drum_pattern_encode(const tiles_drum_pattern_t *p, uint8_t *out, uint16_t cap, bool *truncated) {
+    uint16_t len = 0u;
+    *truncated = false;
+    for (uint16_t n = 0; n < TILES_DRUM_NOTES; n++) {
+        uint16_t edited = edited_mask(p, (uint8_t)n);
+        if (p->armed[n] == 0u && edited == 0u) {
+            continue;
+        }
+        uint16_t need = 5u;
+        for (uint8_t s = 0; s < TILES_DRUM_STEPS; s++) {
+            need = (uint16_t)(need + ((edited >> s) & 1u) * 2u);
+        }
+        if ((uint32_t)len + need > cap) {
+            *truncated = true;
+            break;
+        }
+        out[len++] = (uint8_t)n;
+        out[len++] = (uint8_t)(p->armed[n] & 0xFFu);
+        out[len++] = (uint8_t)(p->armed[n] >> 8);
+        out[len++] = (uint8_t)(edited & 0xFFu);
+        out[len++] = (uint8_t)(edited >> 8);
+        for (uint8_t s = 0; s < TILES_DRUM_STEPS; s++) {
+            if ((edited >> s) & 1u) {
+                out[len++] = p->probability[n][s];
+                out[len++] = p->ratchet[n][s];
+            }
+        }
+    }
+    return len;
+}
+
+void tiles_drum_pattern_decode(tiles_drum_pattern_t *p, const uint8_t *in, uint16_t len) {
+    tiles_drum_pattern_clear(p);
+    uint16_t pos = 0u;
+    while ((uint32_t)pos + 5u <= len) {
+        uint8_t note = in[pos];
+        uint16_t armed = (uint16_t)(in[pos + 1u] | (in[pos + 2u] << 8));
+        uint16_t edited = (uint16_t)(in[pos + 3u] | (in[pos + 4u] << 8));
+        uint16_t need = 5u;
+        for (uint8_t s = 0; s < TILES_DRUM_STEPS; s++) {
+            need = (uint16_t)(need + ((edited >> s) & 1u) * 2u);
+        }
+        if (note >= TILES_DRUM_NOTES || (uint32_t)pos + need > len) {
+            return; /* damaged: keep what came before */
+        }
+        p->armed[note] = armed;
+        uint16_t at = (uint16_t)(pos + 5u);
+        for (uint8_t s = 0; s < TILES_DRUM_STEPS; s++) {
+            if ((edited >> s) & 1u) {
+                tiles_drum_pattern_set_probability(p, note, s, in[at]);
+                tiles_drum_pattern_set_ratchet(p, note, s, in[at + 1u]);
+                at = (uint16_t)(at + 2u);
+            }
+        }
+        pos = (uint16_t)(pos + need);
+    }
+}
+
 /* ---- player ---- */
 
 void tiles_drum_player_init(tiles_drum_player_t *pl) {
@@ -129,6 +199,15 @@ void tiles_drum_player_end_all(tiles_drum_player_t *pl, const tiles_drum_output_
         }
         pl->hits_total[n] = 0u;
     }
+}
+
+bool tiles_drum_player_repeats_pending(const tiles_drum_player_t *pl) {
+    for (uint16_t n = 0; n < TILES_DRUM_NOTES; n++) {
+        if (pl->hits_total[n] > pl->hits_done[n]) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void hit(tiles_drum_player_t *pl, const tiles_drum_output_t *out, uint8_t note) {
