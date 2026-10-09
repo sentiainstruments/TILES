@@ -9408,3 +9408,34 @@ change. Search it by file or feature name.
     the 4 KB reply buffer, which would have cut it off silently.
   - Packs plan (data pushed, code unlocked per unit by signed
     entitlements): `docs/architecture/content-packs.md`.
+- **Drum mode (0.2.8, 2026-10-09).** Real feedback: "lets create a new app
+  called drum sequencer for now. the left 4 columns are the 16 step
+  sequencer, the right 2 columns are the drum sounds. tap selects the drum
+  sound, push triggers sound, when drum selected we view the sequence for
+  that drum sound, how we assign midi to this is like the drum rack in
+  ableton ... c1 is pad 5 c#1 is pad 6, pad 11 is d1, d#1 is pad 12 ...
+  shift + moves to the next 8 sounds and back with - give this mode a
+  different color with underglow that we havent used yet. the sequencer
+  operates similar to regular sequencer including tap tempo. diamond does
+  daw transport controls". Built as:
+  - `drum_pattern.{h,c}`: layout, notes, pattern and step player, no
+    hardware, tested natively (`test/test_drum_pattern.c`). Notes are Live's
+    names: C1 = MIDI 36 (Drum Rack's first pad, GM kick); banks of 8 go from
+    notes 4-11 up to 116-123. Every note has its own 16-step row, so a beat
+    in one bank keeps playing while another bank is shown.
+  - `drum_seq.{h,c}`: the hardware side. Tap a drum: select; push (past the
+    strike depth, as melodic): play with the strike's velocity; circle +
+    hold 3 s: clear its steps. Steps: tap on/off (on release), hold = chance
+    dial, circle + step = repeats dial (the sequencer's gestures, minus
+    pitch). "-"/"+" stop/start as the sequencer; circle + "-"/"+" banks.
+    Diamond: the performance transport, unchanged.
+  - MIDI channel 10, which had been kept free for exactly this (GM
+    percussion); `TILES_MIDI_CH_PERCUSSION_EXCLUDED` became
+    `TILES_MIDI_CH_DRUMS`.
+  - Lime (0.5, 1, 0): no mode or indicator used it. Mode menu pad 7 (row 1
+    is full).
+  - The quantized start snaps to the nearest beat's grid (first half of a
+    beat: start now on that beat's grid; second half: wait). The
+    sequencer's own pending start waits in the first half and starts
+    unaligned in the second; not changed there.
+  - The pattern lives in RAM (lost at power-off); saving it is a next step.

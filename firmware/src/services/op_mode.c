@@ -5,6 +5,7 @@
 #include "buttons.h"
 #include "cv_gate.h"
 #include "debug_mode.h"
+#include "drum_seq.h"
 #include "expression.h"
 #include "expression_control.h"
 #include "game_mode.h"
@@ -46,6 +47,7 @@ typedef enum {
     OP_MODE_GUITAR,
     OP_MODE_SONG,
     OP_MODE_SCENE_LAUNCH,
+    OP_MODE_DRUM,
 } tiles_op_mode_t;
 
 /* Mode menu: one pad per mode on row 1 (nearest the buttons), each its own
@@ -58,6 +60,9 @@ typedef enum {
 #define OP_MENU_COL_CHORD 4u
 #define OP_MENU_COL_SONG 5u
 #define OP_MENU_COL_SCENE_LAUNCH 6u
+/* Row 1 is full: drums are the first pad of row 2 (pad 7). */
+#define OP_MENU_DRUM_ROW 2u
+#define OP_MENU_DRUM_COL 1u
 
 /* Mode colors: melodic = Sentia magenta, sequencer = red, bass guitar =
  * amber (matches its fretboard), chord = blue (matches its chord strip). */
@@ -1181,8 +1186,9 @@ static bool mode_owns_standby_grid(tiles_op_mode_t mode) {
     if (mode == OP_MODE_SONG) {
         return !s_song_capture_active && !s_song_edit_pick_active;
     }
-    /* Ableton mode's grid is all launch pads; no live-play exception. */
-    return mode == OP_MODE_SEQUENCER || mode == OP_MODE_SCENE_LAUNCH;
+    /* Ableton mode's grid is all launch pads, drum mode's steps and drums;
+     * no live-play exception. */
+    return mode == OP_MODE_SEQUENCER || mode == OP_MODE_SCENE_LAUNCH || mode == OP_MODE_DRUM;
 }
 
 /* ---- Mode menu ------------------------------------------------------------ */
@@ -1303,6 +1309,15 @@ static void render_menu(uint32_t now_ms) {
                     r *= OP_SCALE_AVAILABLE_LEVEL;
                     g *= OP_SCALE_AVAILABLE_LEVEL;
                     b *= OP_SCALE_AVAILABLE_LEVEL;
+                }
+            } else if (row == OP_MENU_DRUM_ROW && col == OP_MENU_DRUM_COL) {
+                tiles_op_mode_t mode = s_menu_pending ? s_menu_pending_mode : s_active_mode;
+                if (mode == OP_MODE_DRUM) {
+                    r = g = b = pulse;
+                } else {
+                    r = TILES_DRUM_SEQ_COLOR_R * OP_SCALE_AVAILABLE_LEVEL;
+                    g = TILES_DRUM_SEQ_COLOR_G * OP_SCALE_AVAILABLE_LEVEL;
+                    b = TILES_DRUM_SEQ_COLOR_B * OP_SCALE_AVAILABLE_LEVEL;
                 }
             }
             tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), r, g, b);
@@ -1958,9 +1973,16 @@ static void set_active_mode(tiles_op_mode_t mode) {
     if (s_active_mode == OP_MODE_SCENE_LAUNCH && mode != OP_MODE_SCENE_LAUNCH) {
         scene_launch_leave();
     }
+    if (s_active_mode == OP_MODE_DRUM && mode != OP_MODE_DRUM) {
+        /* Ends drums held on the pads; the beat keeps playing. */
+        tiles_drum_seq_leave();
+    }
     s_active_mode = mode;
     if (mode == OP_MODE_SEQUENCER) {
         seq_start();
+    }
+    if (mode == OP_MODE_DRUM) {
+        tiles_drum_seq_enter();
     }
     /* Modes that draw the whole grid claim standby (mode_owns_standby_grid()). */
     if (mode_owns_standby_grid(mode)) {
@@ -1991,7 +2013,7 @@ static void set_active_mode(tiles_op_mode_t mode) {
     /* Triangle is lit only while the mode menu is open. */
     tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
     s_scene_pending_melodic = false;
-    if (mode == OP_MODE_SCENE_LAUNCH || mode == OP_MODE_SEQUENCER || mode == OP_MODE_SONG) {
+    if (mode == OP_MODE_SCENE_LAUNCH || mode == OP_MODE_SEQUENCER || mode == OP_MODE_SONG || mode == OP_MODE_DRUM) {
         s_ableton_capture_active = false;
     }
     if (mode == OP_MODE_SCENE_LAUNCH) {
@@ -2327,6 +2349,11 @@ static void handle_menu_taps(void) {
                 s_menu_pending_mode = mode;
                 s_menu_pending = true;
             }
+            if (!s_menu_pending && row == OP_MENU_DRUM_ROW && col == OP_MENU_DRUM_COL && touched &&
+                (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD) {
+                s_menu_pending_mode = OP_MODE_DRUM;
+                s_menu_pending = true;
+            }
             s_menu_prev_pad_touched[pad - 1u] = touched;
         }
     }
@@ -2376,6 +2403,8 @@ static void handle_triangle_click(void) {
                         /* Cancel an open per-step edit (its escape hatch) instead of opening the
                          * picker over it. */
                         edit_exit();
+                    } else if (s_active_mode == OP_MODE_DRUM && tiles_drum_seq_edit_is_open()) {
+                        tiles_drum_seq_edit_cancel();
                     } else if (s_song_capture_active) {
                         /* End a running Song capture instead of opening the picker over it (the
                          * picker would take the grid and freeze the capture). */
@@ -2623,8 +2652,8 @@ static void handle_diamond_transport(uint32_t now_ms) {
     s_diamond_was_held = held;
 }
 
-/* Tap tempo on circle. A press counts only if: sequencer mode with no
- * edit open (or a Song capture is running), no external clock, and no
+/* Tap tempo on circle. A press counts only if: sequencer or drum mode with
+ * no edit open (or a Song capture is running), no external clock, and no
  * other game-combo button (triangle, diamond, square) held.
  * Committed on RELEASE, with the PRESS time as the tap time: circle is
  * also the first half of circle + "-"/"+" (length), circle + step
@@ -2649,8 +2678,8 @@ static void handle_circle_tap(uint32_t now_ms) {
         s_circle_press_ms = now_ms;
         /* Tap tempo is sequencer-only, plus while a Song capture runs (which can
          * start without a tempo and needs a way to set one). */
-        bool mode_ok =
-            (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode == OP_SEQ_EDIT_NONE) || s_song_capture_active;
+        bool mode_ok = (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode == OP_SEQ_EDIT_NONE) ||
+                       (s_active_mode == OP_MODE_DRUM && !tiles_drum_seq_edit_is_open()) || s_song_capture_active;
         bool combo_conflict = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
@@ -2674,13 +2703,15 @@ static void handle_circle_tap(uint32_t now_ms) {
     s_circle_was_held = held;
 }
 
+/* Any sequencer lane, or the drum sequencer: what keeps the shared clock
+ * running and the triangle's background pulse on. */
 static bool any_lane_running(void) {
     for (uint8_t lane = 0u; lane < OP_SEQ_NUM_LANES; lane++) {
         if (s_seq_lane_running[lane]) {
             return true;
         }
     }
-    return false;
+    return tiles_drum_seq_is_running();
 }
 
 /* Declared early for tiles_op_mode_is_sequencer_active(). Up to
@@ -2713,6 +2744,17 @@ static void handle_transport_and_length(uint32_t now_ms) {
         (s_active_mode == OP_MODE_SEQUENCER) && s_seq_edit_mode == OP_SEQ_EDIT_NONE && !s_seq_capture_mode_active;
     bool guitar_active = (s_active_mode == OP_MODE_GUITAR);
     bool scene_launch_active = (s_active_mode == OP_MODE_SCENE_LAUNCH);
+    bool drum_active = (s_active_mode == OP_MODE_DRUM) && !tiles_drum_seq_edit_is_open();
+
+    /* Drums: circle held first, then "-"/"+" = the previous / next 8 drums. */
+    if (drum_active && minus_held && !s_minus_was_held && circle_held) {
+        tiles_drum_seq_bank_step(-1);
+        s_minus_used_as_combo = true;
+    }
+    if (drum_active && plus_held && !s_plus_was_held && circle_held) {
+        tiles_drum_seq_bank_step(+1);
+        s_plus_used_as_combo = true;
+    }
 
     if (active && minus_held && !s_minus_was_held && circle_held) {
         op_seq_pattern_t *pat = active_pattern();
@@ -2749,6 +2791,16 @@ static void handle_transport_and_length(uint32_t now_ms) {
                 s_seq_note_sounding[lane] = false;
                 s_seq_pending_start[lane] = false;
             }
+        } else if (drum_active && !s_minus_used_as_combo) {
+            /* Drums: "-" pauses in place; "-" again rewinds (as the sequencer). */
+            if (tiles_drum_seq_is_running()) {
+                tiles_drum_seq_pause();
+                if (!any_lane_running()) {
+                    tiles_midi_clock_set_running(false);
+                }
+            } else {
+                tiles_drum_seq_rewind();
+            }
         } else if (guitar_active) {
             /* Bass guitar: one fret per press. */
             uint8_t offset = tiles_note_map_get_guitar_fret_offset();
@@ -2779,6 +2831,15 @@ static void handle_transport_and_length(uint32_t now_ms) {
                 tiles_midi_clock_set_running(true);
                 s_seq_pending_start[lane] = true;
                 s_seq_pending_restart[lane] = false;
+            }
+        } else if (drum_active && !s_plus_used_as_combo) {
+            /* Drums: "+" while playing restarts from step 1 at the next beat;
+             * while stopped (with a tempo) resumes at the nearest beat. */
+            if (tiles_drum_seq_is_running()) {
+                tiles_drum_seq_start(true);
+            } else if (tiles_midi_clock_tap_tempo_established() || tiles_midi_clock_external_active(now_ms)) {
+                tiles_drum_seq_start(false);
+                tiles_midi_clock_set_running(true);
             }
         } else if (guitar_active) {
             /* set_guitar_fret_offset() clamps. */
@@ -2960,6 +3021,9 @@ void tiles_op_mode_init(bool crash_recovered) {
      * the sequencer's lanes). */
     song_store_load_all();
 
+    /* Drum sequencer: empty pattern, stopped (not kept across a crash). */
+    tiles_drum_seq_init();
+
     /* Register Ableton mode's SysEx callback (harmless if never used). */
     scene_launch_init();
     /* Register the melodic echo's note callback. */
@@ -3007,10 +3071,11 @@ void tiles_op_mode_scan(void) {
                 seq_end_current_note(lane);
             }
         }
-        /* Same for chord notes. */
+        /* Same for chord notes and drums. */
         if (s_active_mode == OP_MODE_CHORD) {
             chord_end_all_notes();
         }
+        tiles_drum_seq_end_all_notes();
         return;
     }
 
@@ -3035,6 +3100,12 @@ void tiles_op_mode_scan(void) {
         s_seq_pending_start[s_seq_edit_lane] = true;
         s_seq_pending_restart[s_seq_edit_lane] = false;
     }
+    /* Same for the drum sequencer in drum mode. */
+    if (s_active_mode == OP_MODE_DRUM && clock.start_edge && clock.source_is_tap_tempo &&
+        !tiles_drum_seq_is_running()) {
+        tiles_drum_seq_start(false);
+        tiles_midi_clock_set_running(true);
+    }
 
     /* Every lane advances every scan, whatever menu or sub-view is open (they
      * used to freeze while a menu was up). Except the lane a capture is
@@ -3054,6 +3125,8 @@ void tiles_op_mode_scan(void) {
         }
         song_advance_clock(slot, clock);
     }
+    /* The drum sequencer too, shown or not. */
+    tiles_drum_seq_advance(clock, s_active_mode == OP_MODE_DRUM && !s_menu_visible && !s_scale_menu_visible);
 
     if (s_menu_visible) {
         handle_menu_taps();
@@ -3112,6 +3185,11 @@ void tiles_op_mode_scan(void) {
             handle_song_overview_taps(now_ms);
             render_song_overview(now_ms);
         }
+    } else if (s_active_mode == OP_MODE_DRUM) {
+        /* Drum mode draws through standby, so it writes diamond's transport
+         * LED itself. */
+        tiles_drum_seq_handle_input(now_ms);
+        tiles_drum_seq_render(now_ms, beat_flash_level, transport_led_level(now_ms), clock.running);
     } else if (s_active_mode == OP_MODE_SCENE_LAUNCH) {
         /* True if it just switched modes (Ableton opened melodic mode for a new
          * recording; see s_scene_pending_melodic): skip this frame's render. */
@@ -3171,14 +3249,14 @@ bool tiles_op_mode_is_sequencer_active(void) {
      * longer timeouts. (Lane flags, not the shared clock: an external clock
      * can tick with every lane stopped.) */
     return s_active_mode == OP_MODE_SEQUENCER || any_lane_running() || s_active_mode == OP_MODE_SONG ||
-           any_song_slot_running();
+           any_song_slot_running() || s_active_mode == OP_MODE_DRUM;
 }
 
 bool tiles_op_mode_has_menu_open(void) {
     /* Sub-views that can sit untouched (menus, pattern bank, step edit,
      * capture waiting for a tempo): standby must not cover them. */
     return s_menu_visible || s_scale_menu_visible || s_pattern_bank_visible || s_seq_edit_mode != OP_SEQ_EDIT_NONE ||
-           s_seq_capture_mode_active;
+           s_seq_capture_mode_active || tiles_drum_seq_edit_is_open();
 }
 
 /* ---- Song mode (BETA) --------------------------------------------------------

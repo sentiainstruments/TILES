@@ -17,19 +17,18 @@ static void reset(void) { tiles_midi_channels_init(); }
 int main(void) {
     uint8_t ch;
 
-    /* 1. fixed channels are exactly the six documented values, all distinct, none
-     * of them 10 (percussion) or inside the shared pool (2-9). */
+    /* 1. fixed channels are exactly the seven documented values, all distinct, none
+     * inside the shared pool (2-9); drums are on 10 (GM percussion). */
     uint8_t fixed[] = {TILES_MIDI_CH_SEQ_LANE_0, TILES_MIDI_CH_SEQ_LANE_1, TILES_MIDI_CH_SEQ_LANE_2,
-                       TILES_MIDI_CH_SEQ_LANE_3, TILES_MIDI_CH_CHORD, TILES_MIDI_CH_GAME};
+                       TILES_MIDI_CH_SEQ_LANE_3, TILES_MIDI_CH_CHORD, TILES_MIDI_CH_GAME, TILES_MIDI_CH_DRUMS};
     assert(TILES_MIDI_CH_SEQ_LANE_0 == 15 && TILES_MIDI_CH_SEQ_LANE_1 == 14 && TILES_MIDI_CH_SEQ_LANE_2 == 13 &&
            TILES_MIDI_CH_SEQ_LANE_3 == 12 && TILES_MIDI_CH_CHORD == 11 && TILES_MIDI_CH_GAME == 10);
-    assert(TILES_MIDI_CH_PERCUSSION_EXCLUDED == 9); /* nibble 9 = MIDI channel 10 */
-    for (int i = 0; i < 6; i++) {
-        assert(fixed[i] != TILES_MIDI_CH_PERCUSSION_EXCLUDED);
+    assert(TILES_MIDI_CH_DRUMS == 9); /* nibble 9 = MIDI channel 10 */
+    for (int i = 0; i < 7; i++) {
         assert(fixed[i] < TILES_MIDI_SHARED_POOL_FIRST || fixed[i] >= TILES_MIDI_SHARED_POOL_FIRST + TILES_MIDI_SHARED_POOL_SIZE);
-        for (int j = 0; j < 6; j++) assert(i == j || fixed[i] != fixed[j]);
+        for (int j = 0; j < 7; j++) assert(i == j || fixed[i] != fixed[j]);
     }
-    /* the shared pool (2-9, i.e. nibbles 1-8) plus the 6 fixed channels plus channel 10
+    /* the shared pool (2-9, i.e. nibbles 1-8) plus the 7 fixed channels (channel 10 among them)
      * plus the master (nibble 0) account for exactly all 16 channels, no gaps, no overlap. */
     assert(TILES_MIDI_SHARED_POOL_FIRST == 1 && TILES_MIDI_SHARED_POOL_SIZE == 8);
 

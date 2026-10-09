@@ -28,6 +28,12 @@ number (`firmware/src/board/unit_id.h`); unit 2's are:
   messages go out on it; clip colors and the TILES DISPLAY notes come
   back on it. Never on DIN, never meant for a track.
 
+Drum mode plays on **MIDI channel 10** of the MIDI port, in Drum Rack
+order (first bank C1-G1 = Live's first 8 pads, `firmware/src/services/
+drum_seq.h`). Give the Drum Rack its own track with input "SENTIA TILES N
+(MIDI)", channel 10, and monitor In; the melodic track's input then
+wants channels 1-9 (or all, if it should hear the drums too).
+
 A Live set made with one unit doesn't find another by itself: pick the
 other unit's ports in the set and in Preferences. (Firmware before 0.2.1
 named every unit plain "SENTIA TILES".)

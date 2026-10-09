@@ -29,7 +29,7 @@ before re-tuning a constant or reviving an approach that was dropped.
 | `expression` | Touch + Hall fusion: strike detection, velocity, pressure, per-note pitch bend from tilt, vibrato, release velocity, melodic harmonics, MPE channel allocation. |
 | `note_map` | Pad → note: scales (picker order), key, octave, bass guitar frets, chord strip + melody grid. |
 | `mpe_alloc` | Pure MPE channel choice / steal order (MMA RP-053 3.2). Tested. |
-| `midi_channels` | The 16-channel map: fixed parts (game 11, chord 12, sequencer 13-16), channel 10 unused, pool 2-9 shared by Song and the live MPE zone. Tested. |
+| `midi_channels` | The 16-channel map: fixed parts (drums 10, game 11, chord 12, sequencer 13-16), pool 2-9 shared by Song and the live MPE zone. Tested. |
 | `midi_clock` | External MIDI clock or tap tempo → one pulse counter. |
 | `cv_gate` | Monophonic MIDI-to-CV (1 V/oct, pressure, gate). Off unless external power and explicitly enabled. |
 | `haptics` | Per-pad motor envelopes: kick, gap, sustain; touch pulse; voice ceiling. |
@@ -38,7 +38,8 @@ before re-tuning a constant or reviving an approach that was dropped.
 
 | Module | Role |
 |---|---|
-| `op_mode` | Mode menu and the modes: melodic, sequencer, bass guitar, chord, Song (beta), Ableton. Scale picker, pattern bank, captures, Live transport. The button map is in `op_mode.h`. |
+| `op_mode` | Mode menu and the modes: melodic, sequencer, bass guitar, chord, Song (beta), Ableton, drums. Scale picker, pattern bank, captures, Live transport. The button map is in `op_mode.h`. |
+| `drum_seq` | Drum mode: 16 steps on columns 1-4, 8 drums on columns 5-6 (tap selects, push plays), banks of 8 in Drum Rack order, MIDI channel 10. The step engine and layout are `drum_pattern` (no hardware; tested). |
 | `octave_control` | "-"/"+" octave shift and transpose mode. |
 | `expression_control` | Square: pitch bend toggle, expression menu; circle + square: MPE on/off. |
 | `lighting` | Pad LEDs and underglow; power-derived brightness ceiling; idle colors by note role; indicator priority on the underglow. |

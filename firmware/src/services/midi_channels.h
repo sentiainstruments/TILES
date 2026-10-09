@@ -15,15 +15,16 @@
  *   Channel  1      MPE Zone Master: RPNs and pedals, never an MPE note
  *                   (with MPE off, every live note goes here).
  *   Channels 2-9    SHARED POOL, 8 channels (below).
- *   Channel  10     NEVER USED: General MIDI percussion. A GM receiver
- *                   plays anything there as drums.
+ *   Channel  10     The drum sequencer (TILES_MIDI_CH_DRUMS): General MIDI's
+ *                   percussion channel, so a GM kit or a Drum Rack plays it
+ *                   as drums. Nothing else ever sends there.
  *   Channel  11     Game mode (TILES_MIDI_CH_GAME).
  *   Channel  12     Chord mode (TILES_MIDI_CH_CHORD).
  *   Channels 13-16  The 4 sequencer lanes (lane 0 = channel 16).
  *
- * Channels 11-16 are PERMANENT, whether or not the part is sounding, so an
+ * Channels 10-16 are PERMANENT, whether or not the part is sounding, so an
  * external synth patched to "sequencer lane 2" can rely on it. That gives
- * 6 independently addressable parts.
+ * 7 independently addressable parts.
  *
  * ==== Shared pool (channels 2-9) ====
  *
@@ -64,8 +65,8 @@
 #define TILES_MIDI_CH_CHORD 11u      /* channel 12 */
 #define TILES_MIDI_CH_GAME 10u       /* channel 11 */
 
-/* Never assigned: General MIDI percussion. */
-#define TILES_MIDI_CH_PERCUSSION_EXCLUDED 9u /* channel 10 */
+/* General MIDI percussion: the drum sequencer, and nothing else. */
+#define TILES_MIDI_CH_DRUMS 9u /* channel 10 */
 
 /* The shared pool: channels 2-9, split between Song mode and the live
  * MPE zone. */

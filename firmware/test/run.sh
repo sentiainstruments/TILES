@@ -26,6 +26,10 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_midi_channels.c sr
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_mpe_alloc.c src/services/mpe_alloc.c -o /tmp/sentia_tiles_test_mpe_alloc
 /tmp/sentia_tiles_test_mpe_alloc
 
+# Drum sequencer core: layout, Drum Rack notes, steps, repeats, chance, quantized start.
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_drum_pattern.c src/services/drum_pattern.c -o /tmp/sentia_tiles_test_drum_pattern
+/tmp/sentia_tiles_test_drum_pattern
+
 # Flash store (power-cut simulation) and the settings table on top of it.
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/storage test/test_kv_store.c src/storage/kv_store.c -o /tmp/sentia_tiles_test_kv_store
 /tmp/sentia_tiles_test_kv_store

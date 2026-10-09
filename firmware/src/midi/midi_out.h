@@ -17,7 +17,7 @@
  *     note goes here.
  *   - Ch 2-9: Member Channels, one per held note. How many are really in
  *     the zone depends on Song mode (services/midi_channels.h, which owns
- *     the full channel map). Ch 10-16 are fixed parts or unused.
+ *     the full channel map). Ch 10-16 are fixed parts (10 = drums).
  *
  * This file is the wire layer only: it sends on whatever channel it is
  * given. Channel allocation (claim on strike, release on Note-Off, steal

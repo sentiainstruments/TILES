@@ -14,10 +14,12 @@
  *                             looper, 128 steps per pattern.
  *   6 Ableton      (teal)     Scene Launch: clip grid for Live's Session
  *                             View (daw-integration/).
+ *   pad 7 Drums    (lime)     16-step drum sequencer on MIDI channel 10,
+ *                             Drum Rack note order (services/drum_seq.h).
  * The current mode pulses white in the menu. A pick (press past half)
  * takes effect once the finger lifts, so it can't play a note in the new
  * mode. Melodic, bass guitar and chord pass notes through expression.c;
- * sequencer, Song and Ableton draw the whole grid themselves.
+ * sequencer, Song, Ableton and drums draw the whole grid themselves.
  *
  * ---- Buttons ---------------------------------------------------------------
  *   triangle            mode menu (toggle)
@@ -32,10 +34,11 @@
  *                       opened melodic mode.
  *   "-" / "+"           sequencer: stop/start the viewed lane ("-" twice
  *                       rewinds, "+" while playing restarts), circle
- *                       first = length. Bass guitar: frets. Ableton: pan
- *                       the 5-track window.
- *   circle              tap tempo (sequencer, or during Song capture) when
- *                       no external clock; flashes the beat.
+ *                       first = length. Drums: stop/start the same way,
+ *                       circle first = previous/next 8 drums. Bass guitar:
+ *                       frets. Ableton: pan the 5-track window.
+ *   circle              tap tempo (sequencer, drums, or during Song
+ *                       capture) when no external clock; flashes the beat.
  *
  * ---- Sequencer ---------------------------------------------------------------
  * 4 lanes play at once, each on its own fixed channel
