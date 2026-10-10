@@ -2399,8 +2399,14 @@ static void handle_triangle_click(void) {
                         /* Cancel an open per-step edit (its escape hatch) instead of opening the
                          * picker over it. */
                         edit_exit();
-                    } else if (s_active_mode == OP_MODE_DRUM && tiles_drum_seq_edit_is_open()) {
-                        tiles_drum_seq_edit_cancel();
+                    } else if (s_active_mode == OP_MODE_DRUM) {
+                        /* Drums follow no scale: circle + triangle shows the other page of
+                         * steps instead (or closes an open roll dial). */
+                        if (tiles_drum_seq_edit_is_open()) {
+                            tiles_drum_seq_edit_cancel();
+                        } else {
+                            tiles_drum_seq_flip_page();
+                        }
                     } else if (s_song_capture_active) {
                         /* End a running Song capture instead of opening the picker over it (the
                          * picker would take the grid and freeze the capture). */
@@ -2427,8 +2433,7 @@ static void handle_triangle_click(void) {
     s_triangle_was_held = held;
 }
 
-/* Diamond: DAW transport outside the sequencer and drum mode (drums:
- * diamond flips the step page, see services/drum_seq.h).
+/* Diamond: DAW transport outside the sequencer.
  *   - Click: play/stop toggle. Sends the Play or Stop CC on the DAW port
  *     (plus System Realtime Start/Stop unless TILES is following an
  *     external clock).
@@ -2507,8 +2512,6 @@ static void handle_diamond_transport(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
     bool sequencer_active = (s_active_mode == OP_MODE_SEQUENCER);
-    /* Drums, like the sequencer, take diamond for themselves: no transport. */
-    bool drum_active = (s_active_mode == OP_MODE_DRUM);
 
     if (held && !s_diamond_was_held) {
         s_diamond_press_had_conflict = false;
@@ -2528,20 +2531,14 @@ static void handle_diamond_transport(uint32_t now_ms) {
         }
     }
     /* Record arm only outside the sequencer. */
-    if (held && !sequencer_active && !drum_active && !s_diamond_press_had_conflict && !s_diamond_press_was_shift &&
+    if (held && !sequencer_active && !s_diamond_press_had_conflict && !s_diamond_press_was_shift &&
         !s_diamond_record_armed && (now_ms - s_diamond_press_start_ms) >= OP_TRANSPORT_RECORD_ARM_HOLD_MS) {
         s_diamond_record_armed = true;
     }
 
     if (!held && s_diamond_was_held) {
         if (!s_diamond_press_had_conflict) {
-            if (drum_active) {
-                /* Drums: diamond = the other page of steps; circle + diamond does
-                 * nothing (no transport in the sequencers). */
-                if (!s_diamond_press_was_shift && !tiles_drum_seq_edit_is_open()) {
-                    tiles_drum_seq_flip_page();
-                }
-            } else if (sequencer_active) {
+            if (sequencer_active) {
                 /* Sequencer: circle + diamond = capture (the same gesture as capture
                  * everywhere else), diamond alone = pattern bank. */
                 if (s_diamond_press_was_shift) {
@@ -2822,7 +2819,15 @@ static void handle_transport_and_length(uint32_t now_ms) {
         s_minus_used_as_combo = false;
     }
     if (!plus_held && s_plus_was_held) {
-        if (active && !s_plus_used_as_combo) {
+        if (active && !s_plus_used_as_combo && !tiles_midi_clock_external_active(now_ms)) {
+            /* No clock coming in: play starts NOW as beat 1, not quantized. The
+             * internal clock restarts (a Start), so every running lane and the
+             * drums start over with it, in step. */
+            uint8_t lane = s_seq_edit_lane;
+            s_seq_lane_running[lane] = true;
+            s_seq_pending_start[lane] = false;
+            (void)tiles_midi_clock_restart();
+        } else if (active && !s_plus_used_as_combo) {
             uint8_t lane = s_seq_edit_lane;
             if (s_seq_lane_running[lane]) {
                 /* "+" while playing: restart from step 0 at the next beat. */
@@ -2837,9 +2842,14 @@ static void handle_transport_and_length(uint32_t now_ms) {
                 s_seq_pending_start[lane] = true;
                 s_seq_pending_restart[lane] = false;
             }
+        } else if (drum_active && !s_plus_used_as_combo && !tiles_midi_clock_external_active(now_ms)) {
+            /* Drums, no clock coming in: step 1 now, the clock restarted with it
+             * (as in the sequencer). */
+            tiles_drum_seq_start(true);
+            (void)tiles_midi_clock_restart();
         } else if (drum_active && !s_plus_used_as_combo) {
-            /* Drums: "+" while playing restarts from step 1 at the next beat;
-             * while stopped (with a tempo) resumes at the nearest beat. */
+            /* Drums following an external clock: "+" while playing restarts from
+             * step 1 at the next beat; while stopped resumes at the nearest beat. */
             if (tiles_drum_seq_is_running()) {
                 tiles_drum_seq_start(true);
             } else if (tiles_midi_clock_tap_tempo_established() || tiles_midi_clock_external_active(now_ms)) {
@@ -3194,10 +3204,10 @@ void tiles_op_mode_scan(void) {
             render_song_overview(now_ms);
         }
     } else if (s_active_mode == OP_MODE_DRUM) {
-        /* Drum mode draws through standby, button LEDs included (diamond
-         * shows its page). */
+        /* Drum mode draws through standby, so it writes diamond's transport
+         * LED itself. */
         tiles_drum_seq_handle_input(now_ms);
-        tiles_drum_seq_render(now_ms, beat_flash_level, clock.running);
+        tiles_drum_seq_render(now_ms, beat_flash_level, transport_led_level(now_ms), clock.running);
     } else if (s_active_mode == OP_MODE_SCENE_LAUNCH) {
         /* True if it just switched modes (Ableton opened melodic mode for a new
          * recording; see s_scene_pending_melodic): skip this frame's render. */

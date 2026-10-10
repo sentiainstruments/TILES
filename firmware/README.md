@@ -53,7 +53,7 @@ print-only steps and the boot animation.
 
 ## Status (2026-10-04)
 
-Four pre-production units (Rev A0), firmware 0.2.9 (`src/midi/product_identity.h`),
+Four pre-production units (Rev A0), firmware 0.3.0 (`src/midi/product_identity.h`),
 built with Arm GNU Toolchain 15.3 (native arm64). Each unit names itself "SENTIA TILES N" over
 USB (`src/board/unit_id.h`), so several can play in one DAW session.
 
@@ -73,8 +73,8 @@ Set for now (compile-time switches, see `daw-integration/README.md`):
   melodic harmonics, haptics, lighting, standby and deep sleep, games,
   settings saved to flash.
 - **Song mode is beta**: built, not yet played on hardware.
-- **Drum mode** (menu pad 3; bass guitar moved to pad 7 in 0.2.9): played on
-  units 2 and 4 (0.2.8); 0.2.9 adds pages, rolls and lag fixes. Colour schemes and custom scales (0.2.7) not
+- **Drum mode** (menu pad 3; bass guitar on pad 7 since 0.2.9): played on
+  units 2 and 4 (0.2.8); 0.2.9-0.3.0 add pages, rolls and lag fixes. Colour schemes and custom scales (0.2.7) not
   yet played.
 - Main loop: ~2.2-2.5 ms per pass (INFO `loop.*`, 2026-10-10, unit 2).
 - DIN MIDI (TRS jacks) works on hardware (confirmed 2026-10-04).

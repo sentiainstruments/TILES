@@ -7,8 +7,8 @@
  *   1 Melodic      (magenta)  default. Notes via services/expression.c.
  *   2 Sequencer    (red)      4 lanes x 24 steps (below).
  *   3 Drums        (lime)     16/32-step drum sequencer on MIDI channel
- *                             10, Drum Rack note order; diamond flips its
- *                             step page (services/drum_seq.h).
+ *                             10, Drum Rack note order; circle + triangle
+ *                             flips its step page (services/drum_seq.h).
  *   4 Chord        (blue)     columns 1-2 play chords (op_mode.c), columns
  *                             3-6 are a melody grid (expression.c).
  *   5 Song         (yellow)   BETA, untested on hardware: a 24-slot
@@ -25,18 +25,19 @@
  *
  * ---- Buttons ---------------------------------------------------------------
  *   triangle            mode menu (toggle)
- *   circle + triangle   scale picker (one global scale), or cancel an open
+ *   circle + triangle   scale picker (one global scale; drums: the other
+ *                       step page), or cancel an open
  *                       step edit / capture
  *   diamond             Live transport: click = play/stop, hold 2 s =
  *                       record (CCs on the DAW port). Sequencer: pattern
- *                       bank. Drums: step page. Song step editor: back.
+ *                       bank. Song step editor: back.
  *   circle + diamond    capture: sequencer capture in the sequencer; Song
  *                       capture from melodic/chord/bass/Song; stop all
  *                       clips in Ableton mode; end a Live recording that
  *                       opened melodic mode.
  *   "-" / "+"           sequencer: stop/start the viewed lane ("-" twice
- *                       rewinds, "+" while playing restarts), circle
- *                       first = length. Drums: stop/start the same way,
+ *                       rewinds); with no clock coming in "+" restarts the
+ *                       clock, step 1 now; circle first = length. Drums: stop/start the same way,
  *                       circle first = previous/next 8 drums. Bass guitar:
  *                       frets. Ableton: pan the 5-track window.
  *   circle              tap tempo (sequencer, drums, or during Song

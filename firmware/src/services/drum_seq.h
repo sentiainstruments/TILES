@@ -7,25 +7,26 @@
  * owns the mode switch, the buttons' shared gestures and the clock.
  *
  *   columns 1-4   the selected drum's steps, one page of 16. Tap: on / off.
- *                 Hold: chance (push in for more). Circle + step: repeats
- *                 within the step (push in for more). A dial arms the step
- *                 if it was off.
+ *                 Hold: roll the step (push in for more hits, up to 4); it
+ *                 arms the step if it was off.
  *   columns 5-6   8 drums (C1-G1 in Live's names on the first bank). Tap:
  *                 select (its steps show on the left). Push: play it, with
  *                 the strike's velocity. Circle + push: a roll, its rate
  *                 (1/8 to 1/32 triplets) and loudness following pressure,
  *                 in time with the clock. Circle + hold 1 s without pushing:
  *                 clear its steps; on to 3 s: clear the whole pattern.
- *   diamond       the other page (steps 17-32). Anything on page 2 makes
- *                 the pattern 32 steps; an empty page 2, 16. No DAW
- *                 transport here, as in the sequencer.
- *   "-" / "+"     stop / start, like the sequencer ("-" twice rewinds).
+ *   circle + triangle  the other page (steps 17-32). Anything on page 2
+ *                 makes the pattern 32 steps; an empty page 2, 16. (Drums
+ *                 follow no scale, so this isn't the scale picker here.)
+ *   "-" / "+"     stop / start ("-" twice rewinds). With no clock coming
+ *                 in, "+" restarts the clock: step 1 now, not quantized.
  *   circle + "-"/"+"  the previous / next 8 drums.
  *   circle        tap tempo (no external clock).
+ *   diamond       DAW transport, as in the other play modes.
  *
  * Colors: lime is the mode's (underglow, steps); each bank of drums has its
  * own green on the drum pads; the selected drum is blue, and so is the
- * playhead on a step that sounds; a drum flashes white as it plays; diamond
+ * playhead on a step that sounds; a drum flashes white as it plays; triangle
  * lights on page 2. The beat keeps playing in the background in every other
  * mode, like the sequencer's lanes. The pattern saves itself after every
  * change (its own flash region, through storage/log_store.h, which never
@@ -70,10 +71,10 @@ void tiles_drum_seq_advance(tiles_midi_clock_state_t clock, bool shown);
 void tiles_drum_seq_handle_input(uint32_t now_ms);
 
 /* Draws the grid, button LEDs and underglow through the standby setters.
- * `beat_flash` lights circle. */
-void tiles_drum_seq_render(uint32_t now_ms, float beat_flash, bool clock_running);
+ * `beat_flash` lights circle, `diamond_led` is the transport LED level. */
+void tiles_drum_seq_render(uint32_t now_ms, float beat_flash, float diamond_led, bool clock_running);
 
-/* Diamond: shows the other page of 16 steps. */
+/* Circle + triangle: shows the other page of 16 steps. */
 void tiles_drum_seq_flip_page(void);
 
 /* Transport, driven by op_mode's "-"/"+" handling (which also runs the
@@ -86,7 +87,7 @@ void tiles_drum_seq_rewind(void);
 /* Circle + "-"/"+": -1 / +1 bank of 8 drums. */
 void tiles_drum_seq_bank_step(int direction);
 
-/* A step's chance / repeat dial is open (it owns the grid). */
+/* A step's roll dial is open (it owns the grid). */
 bool tiles_drum_seq_edit_is_open(void);
 void tiles_drum_seq_edit_cancel(void);
 

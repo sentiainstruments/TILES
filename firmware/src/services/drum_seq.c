@@ -20,7 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* A step held this long opens its chance dial (the sequencer's pitch-pick
+/* A step held this long opens its roll dial (the sequencer's pitch-pick
  * hold, services/op_mode.c OP_SEQ_PITCH_ASSIGN_HOLD_MS). */
 #define DRUM_STEP_HOLD_MS 350u
 /* Circle + a drum held without pushing: this long clears its part; on to
@@ -66,7 +66,6 @@
 #define DRUM_BLUE_G 0.3f
 #define DRUM_BLUE_B 1.0f
 
-typedef enum { DRUM_EDIT_NONE = 0, DRUM_EDIT_CHANCE, DRUM_EDIT_REPEAT } drum_edit_t;
 
 static tiles_drum_pattern_t s_pattern;
 static tiles_drum_player_t s_player;
@@ -80,7 +79,7 @@ static bool s_clock_running;
 static bool s_prev_touched[TILES_NUM_PADS];
 static uint32_t s_step_touch_ms[TILES_DRUM_PAGE_STEPS]; /* 0 = not timing a tap/hold */
 
-static drum_edit_t s_edit;
+static bool s_edit;          /* a step's roll dial is open */
 static uint8_t s_edit_step; /* 0-31 */
 
 /* Drum pads played live: strike detection as in chord mode, rolls, and the
@@ -130,7 +129,7 @@ static void out_note_on(uint8_t note, uint8_t velocity, void *ctx) {
     }
     /* The selected drum's hits pulse their step pad, so a finger resting on
      * the grid feels the beat. */
-    if (s_shown && note == tiles_drum_note(s_bank, s_voice) && s_edit == DRUM_EDIT_NONE &&
+    if (s_shown && note == tiles_drum_note(s_bank, s_voice) && !s_edit &&
         s_player.step / TILES_DRUM_PAGE_STEPS == s_page) {
         tiles_haptics_trigger_touch_pulse(tiles_drum_pad_for_step(s_player.step));
     }
@@ -211,7 +210,7 @@ void tiles_drum_seq_init(const tiles_kv_ops_t *ops) {
     s_voice = 0u;
     s_page = 0u;
     s_shown = false;
-    s_edit = DRUM_EDIT_NONE;
+    s_edit = false;
     for (uint8_t v = 0; v < TILES_DRUM_VOICES; v++) {
         s_drum_sounding[v] = false;
         s_roll_active[v] = false;
@@ -223,12 +222,12 @@ void tiles_drum_seq_init(const tiles_kv_ops_t *ops) {
 }
 
 void tiles_drum_seq_enter(void) {
-    s_edit = DRUM_EDIT_NONE;
+    s_edit = false;
     resync_touches();
 }
 
 void tiles_drum_seq_leave(void) {
-    s_edit = DRUM_EDIT_NONE;
+    s_edit = false;
     end_live_notes();
 }
 
@@ -338,7 +337,7 @@ tiles_drum_seq_store_info_t tiles_drum_seq_get_store_info(void) {
     return info;
 }
 
-/* ---- edits: chance and repeats ---- */
+/* ---- the roll dial: hold a step ---- */
 
 static float dial_fraction(uint16_t depth) {
     float f = (float)depth / DRUM_DIAL_FULL_DEPTH;
@@ -346,23 +345,23 @@ static float dial_fraction(uint16_t depth) {
 }
 
 bool tiles_drum_seq_edit_is_open(void) {
-    return s_edit != DRUM_EDIT_NONE;
+    return s_edit;
 }
 
 void tiles_drum_seq_edit_cancel(void) {
-    s_edit = DRUM_EDIT_NONE;
+    s_edit = false;
     resync_touches();
 }
 
-/* Opens a dial on `step`, arming it first: a chance or repeat setting on a
- * silent step would do nothing. */
-static void edit_open(drum_edit_t kind, uint8_t step) {
+/* Opens the roll dial on `step`, arming it first: a roll on a silent step
+ * would do nothing. */
+static void edit_open(uint8_t step) {
     uint8_t note = tiles_drum_note(s_bank, s_voice);
     if (!tiles_drum_pattern_is_armed(&s_pattern, note, step)) {
         tiles_drum_pattern_toggle(&s_pattern, note, step);
         mark_changed();
     }
-    s_edit = kind;
+    s_edit = true;
     s_edit_step = step;
 }
 
@@ -376,20 +375,12 @@ static void handle_edit(void) {
     if (depth < DRUM_DIAL_RELEASE_GUARD_DEPTH) {
         return;
     }
+    /* Push harder for more hits within the step (1-4). */
     uint8_t note = tiles_drum_note(s_bank, s_voice);
-    float f = dial_fraction(depth);
-    if (s_edit == DRUM_EDIT_CHANCE) {
-        uint8_t percent = (uint8_t)(f * 100.0f + 0.5f);
-        if (s_pattern.probability[note][s_edit_step] != percent) {
-            tiles_drum_pattern_set_probability(&s_pattern, note, s_edit_step, percent);
-            mark_changed();
-        }
-    } else {
-        uint8_t hits = (uint8_t)(1u + (uint32_t)(f * (float)(TILES_DRUM_MAX_RATCHET - 1u) + 0.5f));
-        if (s_pattern.ratchet[note][s_edit_step] != hits) {
-            tiles_drum_pattern_set_ratchet(&s_pattern, note, s_edit_step, hits);
-            mark_changed();
-        }
+    uint8_t hits = (uint8_t)(1u + (uint32_t)(dial_fraction(depth) * (float)(TILES_DRUM_MAX_RATCHET - 1u) + 0.5f));
+    if (s_pattern.ratchet[note][s_edit_step] != hits) {
+        tiles_drum_pattern_set_ratchet(&s_pattern, note, s_edit_step, hits);
+        mark_changed();
     }
 }
 
@@ -525,7 +516,7 @@ void tiles_drum_seq_flip_page(void) {
 }
 
 void tiles_drum_seq_handle_input(uint32_t now) {
-    if (s_edit != DRUM_EDIT_NONE) {
+    if (s_edit) {
         handle_edit();
         return;
     }
@@ -545,15 +536,11 @@ void tiles_drum_seq_handle_input(uint32_t now) {
         }
         uint8_t step = (uint8_t)(s_page * TILES_DRUM_PAGE_STEPS + local);
         if (touched && !was) {
-            if (circle) {
-                edit_open(DRUM_EDIT_REPEAT, step); /* circle + step: repeats */
-                return;
-            }
             s_step_touch_ms[local] = now == 0u ? 1u : now;
         } else if (touched) {
             if (s_step_touch_ms[local] != 0u && now - s_step_touch_ms[local] >= DRUM_STEP_HOLD_MS) {
                 s_step_touch_ms[local] = 0u;
-                edit_open(DRUM_EDIT_CHANCE, step); /* hold: chance */
+                edit_open(step); /* hold: roll */
                 return;
             }
         } else if (was) {
@@ -590,7 +577,7 @@ static float slow_pulse(uint32_t now, float period_ms, float lo, float hi) {
     return lo + (hi - lo) * raw;
 }
 
-static void render_buttons(uint32_t now, float beat_flash, bool clock_running) {
+static void render_buttons(uint32_t now, float beat_flash, float diamond_led, bool clock_running) {
     bool playhead_elsewhere = tiles_drum_pattern_length(&s_pattern) > TILES_DRUM_PAGE_STEPS && s_player.running &&
                               s_player.step / TILES_DRUM_PAGE_STEPS != s_page;
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
@@ -598,8 +585,10 @@ static void render_buttons(uint32_t now, float beat_flash, bool clock_running) {
         if (col == TILES_CIRCLE_BUTTON_COL) {
             level = beat_flash;
         } else if (col == TILES_DIAMOND_BUTTON_COL) {
-            /* Diamond: lit on page 2; faint while the playhead is on the page
-             * not shown. */
+            level = diamond_led;
+        } else if (col == TILES_TRIANGLE_BUTTON_COL) {
+            /* Triangle (with circle, the page): lit on page 2; faint while the
+             * playhead is on the page not shown. */
             level = s_page == 1u ? DRUM_PAGE2_LED_LEVEL : (playhead_elsewhere ? DRUM_OTHER_PAGE_LED_LEVEL : 0.0f);
         } else if (col == TILES_MINUS_BUTTON_COL && !s_player.running) {
             /* "-": solid when rewound, slow pulse when paused mid-bar (a second
@@ -622,29 +611,21 @@ static void render_underglow(void) {
     }
 }
 
-/* Chance amber, repeats blue: a meter across all 24 pads, as in the
- * sequencer's dials. */
+/* The roll dial: a blue meter across all 24 pads, as in the sequencer's
+ * ratchet dial. */
 static void render_edit(void) {
     uint8_t note = tiles_drum_note(s_bank, s_voice);
-    uint8_t lit;
-    float r, g, b;
-    if (s_edit == DRUM_EDIT_CHANCE) {
-        lit = (uint8_t)((uint32_t)s_pattern.probability[note][s_edit_step] * TILES_NUM_PADS / 100u);
-        r = 1.0f; g = 0.8f; b = 0.0f;
-    } else {
-        lit = (uint8_t)((uint32_t)s_pattern.ratchet[note][s_edit_step] * TILES_NUM_PADS / TILES_DRUM_MAX_RATCHET);
-        r = 0.0f; g = 0.4f; b = 1.0f;
-    }
+    uint8_t lit = (uint8_t)((uint32_t)s_pattern.ratchet[note][s_edit_step] * TILES_NUM_PADS / TILES_DRUM_MAX_RATCHET);
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         float on = pad <= lit ? 1.0f : 0.0f;
-        tiles_lighting_set_standby_pad_rgb(pad, r * on, g * on, b * on);
+        tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.4f * on, 1.0f * on);
     }
 }
 
-void tiles_drum_seq_render(uint32_t now, float beat_flash, bool clock_running) {
-    render_buttons(now, beat_flash, clock_running);
+void tiles_drum_seq_render(uint32_t now, float beat_flash, float diamond_led, bool clock_running) {
+    render_buttons(now, beat_flash, diamond_led, clock_running);
     render_underglow();
-    if (s_edit != DRUM_EDIT_NONE) {
+    if (s_edit) {
         render_edit();
         return;
     }

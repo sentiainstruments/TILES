@@ -75,6 +75,12 @@ bool tiles_midi_clock_tap_tempo_established(void);
  * does NOT set start_edge (resume, Continue-style). */
 void tiles_midi_clock_set_running(bool running);
 
+/* The sequencers' play button with no external clock: restarts the
+ * internal clock now, as beat 1 (a Start: start_edge set, running, the
+ * generator's phase reset). With no tapped tempo yet it runs at 120 BPM.
+ * False (nothing done) while external clock is active: it rules then. */
+bool tiles_midi_clock_restart(void);
+
 /* Running state from either source. Doesn't consume start_edge, so it's
  * safe to call anytime. op_mode uses it to tell stop-while-stopped
  * (rewind) from stop-while-playing, and play-while-playing (restart) from

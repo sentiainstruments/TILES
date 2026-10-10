@@ -9496,3 +9496,23 @@ change. Search it by file or feature name.
     sends DAW transport in drum mode, as in the sequencer. Save format v2
     (u32 step masks); v1 still loads.
   - Mode menu: drums on pad 3, bass guitar on pad 7.
+- **Drum gestures settled; play starts now (0.3.0, 2026-10-10).** Real
+  feedback: "in drum mode shift plus triangle does the second page of
+  sequences, not diamond. restore transport controls in regular diamond ...
+  since drums dont get affected by scales then we dont need that combo to be
+  scales. the play button in sequencers should always restart midi clock
+  immediately as the first beat with play, not quantize, this when there is
+  no clock in. also remove the shift plus step features and make hold step
+  to roll that step on all drum sounds. keep shift plus sound to roll that
+  part".
+  - Drums: circle + triangle flips the step page (the scale picker means
+    nothing to drums); triangle's LED shows page 2. Diamond is the DAW
+    transport again, as in the other play modes.
+  - Hold a step: its roll dial (1-4 hits by pressure), arming the step;
+    circle + step and the chance dial are gone (stored chance values still
+    play). Circle + push a drum still rolls it live.
+  - "+" in the sequencer and drums with no external clock: the internal
+    clock restarts now as beat 1 (`tiles_midi_clock_restart()`, a Start:
+    every running lane and the drums start over together), at 120 BPM if
+    no tempo was tapped. With external clock, the quantized start stays.
+  - 0.3.0, not 0.2.10: the USB bcdDevice holds one decimal digit per field.
