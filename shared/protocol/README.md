@@ -56,6 +56,7 @@ CONTENT LIST\n            every record in the content store, one line each, then
 CONTENT CLEAR\n           wipe the content store (every custom scale): OK
 TEST LEDS <0-100>\n       bench only: every LED white at that % (current measurement)
 TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
+TEST MODE <name>\n        bench only: switch mode (melodic chord sequencer bass song ableton drums)
 TEST OFF\n                bench only: back to normal
 ```
 
@@ -283,7 +284,10 @@ settings store's `store.*` (loaded, restored, slot, seq, saved_bytes, writes,
 last_result, pending, failures); the content store's
 `content.storage=ok|none|newer-format`, `content.scales=<n>/9`,
 `content.records`, `content.bytes=<used>/<capacity>`, `content.writes`,
-`content.last_result`. New keys may be added; ignore ones you don't know.
+`content.last_result`; main-loop timing `loop.avg_us`, `loop.max_us` (last
+second) and `loop.max_ever_us`; drum mode's store `drums.storage`,
+`drums.saved_bytes`, `drums.saves`, `drums.pending`. New keys may be added;
+ignore ones you don't know.
 
 ## Persistence
 

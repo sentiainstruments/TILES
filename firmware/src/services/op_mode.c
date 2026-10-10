@@ -52,18 +52,17 @@ typedef enum {
 } tiles_op_mode_t;
 
 /* Mode menu: one pad per mode on row 1 (nearest the buttons), each its own
- * color, like the game menu. Column order: melodic, sequencer, bass
- * guitar, chord, Song, Ableton. */
+ * color, like the game menu. Column order: melodic, sequencer, drums,
+ * chord, Song, Ableton; bass guitar is the first pad of row 2 (pad 7). */
 #define OP_MENU_ROW 1u
 #define OP_MENU_COL_MELODIC 1u
 #define OP_MENU_COL_SEQUENCER 2u
-#define OP_MENU_COL_GUITAR 3u
+#define OP_MENU_COL_DRUM 3u
 #define OP_MENU_COL_CHORD 4u
 #define OP_MENU_COL_SONG 5u
 #define OP_MENU_COL_SCENE_LAUNCH 6u
-/* Row 1 is full: drums are the first pad of row 2 (pad 7). */
-#define OP_MENU_DRUM_ROW 2u
-#define OP_MENU_DRUM_COL 1u
+#define OP_MENU_GUITAR_ROW 2u
+#define OP_MENU_GUITAR_COL 1u
 
 /* Mode colors: melodic = Sentia magenta, sequencer = red, bass guitar =
  * amber (matches its fretboard), chord = blue (matches its chord strip). */
@@ -1221,7 +1220,7 @@ static bool col_is_available(uint8_t col) {
     switch (col) {
     case OP_MENU_COL_MELODIC:
     case OP_MENU_COL_SEQUENCER:
-    case OP_MENU_COL_GUITAR:
+    case OP_MENU_COL_DRUM:
     case OP_MENU_COL_CHORD:
     case OP_MENU_COL_SONG:
     case OP_MENU_COL_SCENE_LAUNCH:
@@ -1258,10 +1257,10 @@ static void render_menu_col_color(uint8_t col, float *r, float *g, float *b) {
         *g = OP_MENU_SCENE_LAUNCH_G;
         *b = OP_MENU_SCENE_LAUNCH_B;
         break;
-    default: /* only OP_MENU_COL_GUITAR is left (only called for available columns) */
-        *r = OP_MENU_GUITAR_R;
-        *g = OP_MENU_GUITAR_G;
-        *b = OP_MENU_GUITAR_B;
+    default: /* only OP_MENU_COL_DRUM is left (only called for available columns) */
+        *r = TILES_DRUM_SEQ_COLOR_R;
+        *g = TILES_DRUM_SEQ_COLOR_G;
+        *b = TILES_DRUM_SEQ_COLOR_B;
         break;
     }
 }
@@ -1277,8 +1276,8 @@ static bool col_is_current_mode(uint8_t col) {
         return mode == OP_MODE_MELODIC;
     case OP_MENU_COL_SEQUENCER:
         return mode == OP_MODE_SEQUENCER;
-    case OP_MENU_COL_GUITAR:
-        return mode == OP_MODE_GUITAR;
+    case OP_MENU_COL_DRUM:
+        return mode == OP_MODE_DRUM;
     case OP_MENU_COL_CHORD:
         return mode == OP_MODE_CHORD;
     case OP_MENU_COL_SONG:
@@ -1306,14 +1305,14 @@ static void render_menu(uint32_t now_ms) {
                     g *= OP_SCALE_AVAILABLE_LEVEL;
                     b *= OP_SCALE_AVAILABLE_LEVEL;
                 }
-            } else if (row == OP_MENU_DRUM_ROW && col == OP_MENU_DRUM_COL) {
+            } else if (row == OP_MENU_GUITAR_ROW && col == OP_MENU_GUITAR_COL) {
                 tiles_op_mode_t mode = s_menu_pending ? s_menu_pending_mode : s_active_mode;
-                if (mode == OP_MODE_DRUM) {
+                if (mode == OP_MODE_GUITAR) {
                     r = g = b = pulse;
                 } else {
-                    r = TILES_DRUM_SEQ_COLOR_R * OP_SCALE_AVAILABLE_LEVEL;
-                    g = TILES_DRUM_SEQ_COLOR_G * OP_SCALE_AVAILABLE_LEVEL;
-                    b = TILES_DRUM_SEQ_COLOR_B * OP_SCALE_AVAILABLE_LEVEL;
+                    r = OP_MENU_GUITAR_R * OP_SCALE_AVAILABLE_LEVEL;
+                    g = OP_MENU_GUITAR_G * OP_SCALE_AVAILABLE_LEVEL;
+                    b = OP_MENU_GUITAR_B * OP_SCALE_AVAILABLE_LEVEL;
                 }
             }
             tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), r, g, b);
@@ -2336,8 +2335,8 @@ static void handle_menu_taps(void) {
                     mode = OP_MODE_CHORD;
                 } else if (col == OP_MENU_COL_SEQUENCER) {
                     mode = OP_MODE_SEQUENCER;
-                } else if (col == OP_MENU_COL_GUITAR) {
-                    mode = OP_MODE_GUITAR;
+                } else if (col == OP_MENU_COL_DRUM) {
+                    mode = OP_MODE_DRUM;
                 } else if (col == OP_MENU_COL_SONG) {
                     mode = OP_MODE_SONG;
                 } else if (col == OP_MENU_COL_SCENE_LAUNCH) {
@@ -2346,9 +2345,9 @@ static void handle_menu_taps(void) {
                 s_menu_pending_mode = mode;
                 s_menu_pending = true;
             }
-            if (!s_menu_pending && row == OP_MENU_DRUM_ROW && col == OP_MENU_DRUM_COL && touched &&
+            if (!s_menu_pending && row == OP_MENU_GUITAR_ROW && col == OP_MENU_GUITAR_COL && touched &&
                 (float)tiles_hall_get_depth(pad) > OP_MENU_SELECT_DEPTH_THRESHOLD) {
-                s_menu_pending_mode = OP_MODE_DRUM;
+                s_menu_pending_mode = OP_MODE_GUITAR;
                 s_menu_pending = true;
             }
             s_menu_prev_pad_touched[pad - 1u] = touched;
@@ -2428,7 +2427,8 @@ static void handle_triangle_click(void) {
     s_triangle_was_held = held;
 }
 
-/* Diamond: DAW transport outside the sequencer.
+/* Diamond: DAW transport outside the sequencer and drum mode (drums:
+ * diamond flips the step page, see services/drum_seq.h).
  *   - Click: play/stop toggle. Sends the Play or Stop CC on the DAW port
  *     (plus System Realtime Start/Stop unless TILES is following an
  *     external clock).
@@ -2507,6 +2507,8 @@ static void handle_diamond_transport(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
     bool sequencer_active = (s_active_mode == OP_MODE_SEQUENCER);
+    /* Drums, like the sequencer, take diamond for themselves: no transport. */
+    bool drum_active = (s_active_mode == OP_MODE_DRUM);
 
     if (held && !s_diamond_was_held) {
         s_diamond_press_had_conflict = false;
@@ -2526,14 +2528,20 @@ static void handle_diamond_transport(uint32_t now_ms) {
         }
     }
     /* Record arm only outside the sequencer. */
-    if (held && !sequencer_active && !s_diamond_press_had_conflict && !s_diamond_press_was_shift &&
+    if (held && !sequencer_active && !drum_active && !s_diamond_press_had_conflict && !s_diamond_press_was_shift &&
         !s_diamond_record_armed && (now_ms - s_diamond_press_start_ms) >= OP_TRANSPORT_RECORD_ARM_HOLD_MS) {
         s_diamond_record_armed = true;
     }
 
     if (!held && s_diamond_was_held) {
         if (!s_diamond_press_had_conflict) {
-            if (sequencer_active) {
+            if (drum_active) {
+                /* Drums: diamond = the other page of steps; circle + diamond does
+                 * nothing (no transport in the sequencers). */
+                if (!s_diamond_press_was_shift && !tiles_drum_seq_edit_is_open()) {
+                    tiles_drum_seq_flip_page();
+                }
+            } else if (sequencer_active) {
                 /* Sequencer: circle + diamond = capture (the same gesture as capture
                  * everywhere else), diamond alone = pattern bank. */
                 if (s_diamond_press_was_shift) {
@@ -3186,10 +3194,10 @@ void tiles_op_mode_scan(void) {
             render_song_overview(now_ms);
         }
     } else if (s_active_mode == OP_MODE_DRUM) {
-        /* Drum mode draws through standby, so it writes diamond's transport
-         * LED itself. */
+        /* Drum mode draws through standby, button LEDs included (diamond
+         * shows its page). */
         tiles_drum_seq_handle_input(now_ms);
-        tiles_drum_seq_render(now_ms, beat_flash_level, transport_led_level(now_ms), clock.running);
+        tiles_drum_seq_render(now_ms, beat_flash_level, clock.running);
     } else if (s_active_mode == OP_MODE_SCENE_LAUNCH) {
         /* True if it just switched modes (Ableton opened melodic mode for a new
          * recording; see s_scene_pending_melodic): skip this frame's render. */
@@ -3250,6 +3258,26 @@ bool tiles_op_mode_is_sequencer_active(void) {
      * can tick with every lane stopped.) */
     return s_active_mode == OP_MODE_SEQUENCER || any_lane_running() || s_active_mode == OP_MODE_SONG ||
            any_song_slot_running() || s_active_mode == OP_MODE_DRUM;
+}
+
+bool tiles_op_mode_test_set_mode(const char *name) {
+    static const struct {
+        const char *name;
+        tiles_op_mode_t mode;
+    } MODES[] = {{"melodic", OP_MODE_MELODIC}, {"chord", OP_MODE_CHORD},   {"sequencer", OP_MODE_SEQUENCER},
+                 {"bass", OP_MODE_GUITAR},     {"song", OP_MODE_SONG},     {"ableton", OP_MODE_SCENE_LAUNCH},
+                 {"drums", OP_MODE_DRUM}};
+    for (size_t i = 0; i < sizeof(MODES) / sizeof(MODES[0]); i++) {
+        if (strcmp(name, MODES[i].name) == 0) {
+            if (s_menu_visible) {
+                menu_exit();
+            }
+            s_scale_menu_visible = false;
+            set_active_mode(MODES[i].mode);
+            return true;
+        }
+    }
+    return false;
 }
 
 bool tiles_op_mode_has_menu_open(void) {

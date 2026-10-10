@@ -3,19 +3,21 @@
 /* Operation modes and their menus: what the pad grid and the triangle,
  * diamond, "-"/"+" and circle buttons do in each mode.
  *
- * ---- Modes (triangle opens the mode menu, row 1: one pad per mode) -------
+ * ---- Modes (triangle opens the mode menu: one pad per mode) --------------
  *   1 Melodic      (magenta)  default. Notes via services/expression.c.
  *   2 Sequencer    (red)      4 lanes x 24 steps (below).
- *   3 Bass guitar  (amber)    rows = strings, columns = frets; "-"/"+"
- *                             shift the fret window (note_map.h).
+ *   3 Drums        (lime)     16/32-step drum sequencer on MIDI channel
+ *                             10, Drum Rack note order; diamond flips its
+ *                             step page (services/drum_seq.h).
  *   4 Chord        (blue)     columns 1-2 play chords (op_mode.c), columns
  *                             3-6 are a melody grid (expression.c).
  *   5 Song         (yellow)   BETA, untested on hardware: a 24-slot
  *                             looper, 128 steps per pattern.
  *   6 Ableton      (teal)     Scene Launch: clip grid for Live's Session
  *                             View (daw-integration/).
- *   pad 7 Drums    (lime)     16-step drum sequencer on MIDI channel 10,
- *                             Drum Rack note order (services/drum_seq.h).
+ *   7 Bass guitar  (amber)    rows = strings, columns = frets; "-"/"+"
+ *                             shift the fret window (note_map.h). First
+ *                             pad of row 2: row 1 is full.
  * The current mode pulses white in the menu. A pick (press past half)
  * takes effect once the finger lifts, so it can't play a note in the new
  * mode. Melodic, bass guitar and chord pass notes through expression.c;
@@ -27,7 +29,7 @@
  *                       step edit / capture
  *   diamond             Live transport: click = play/stop, hold 2 s =
  *                       record (CCs on the DAW port). Sequencer: pattern
- *                       bank. Song step editor: back.
+ *                       bank. Drums: step page. Song step editor: back.
  *   circle + diamond    capture: sequencer capture in the sequencer; Song
  *                       capture from melodic/chord/bass/Song; stop all
  *                       clips in Ableton mode; end a Live recording that
@@ -135,3 +137,8 @@ uint32_t tiles_op_mode_incoming_note_age_ms(uint8_t layer, uint8_t note);
  * underglow color to use now. services/lighting.c ranks it above debug
  * mode's pulse. */
 bool tiles_op_mode_pattern_flash_underglow_color(float *out_r, float *out_g, float *out_b);
+
+/* Bench/diagnostics (the settings shell's TEST MODE): switches straight to
+ * a mode by name (melodic, chord, sequencer, bass, song, ableton, drums),
+ * closing any menu. False for an unknown name. */
+bool tiles_op_mode_test_set_mode(const char *name);

@@ -2,10 +2,12 @@
 
 #include "board/unit_id.h"
 #include "content.h"
+#include "diagnostics/loop_stats.h"
 #include "drum_seq.h"
 #include "haptics.h"
 #include "lighting.h"
 #include "note_map.h"
+#include "op_mode.h"
 #include "power.h"
 #include "product_identity.h"
 #include "settings.h"
@@ -443,6 +445,13 @@ static void handle_line(char *line) {
         reply(text);
         snprintf(text, sizeof(text), "content.last_result=%s", kv_result_name(content.kv.last_result));
         reply(text);
+        tiles_loop_stats_t loop = tiles_loop_stats_get();
+        snprintf(text, sizeof(text), "loop.avg_us=%lu", (unsigned long)loop.avg_us);
+        reply(text);
+        snprintf(text, sizeof(text), "loop.max_us=%lu", (unsigned long)loop.max_us);
+        reply(text);
+        snprintf(text, sizeof(text), "loop.max_ever_us=%lu", (unsigned long)loop.max_ever_us);
+        reply(text);
         tiles_drum_seq_store_info_t drums = tiles_drum_seq_get_store_info();
         snprintf(text, sizeof(text), "drums.storage=%s", drums.storage ? "ok" : "none");
         reply(text);
@@ -494,7 +503,16 @@ static void handle_line(char *line) {
             reply_ok();
             return;
         }
-        reply_err("usage-TEST-LEDS-n|MOTORS-n-[duty]|OFF");
+        if (what != NULL && strcmp(what, "MODE") == 0 && arg != NULL) {
+            /* Switch mode without the pads (loop-timing checks per mode). */
+            if (tiles_op_mode_test_set_mode(arg)) {
+                reply_ok();
+            } else {
+                reply_err("mode-melodic|chord|sequencer|bass|song|ableton|drums");
+            }
+            return;
+        }
+        reply_err("usage-TEST-LEDS-n|MOTORS-n-[duty]|MODE-name|OFF");
         return;
     }
 

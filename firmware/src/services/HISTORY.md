@@ -9460,3 +9460,39 @@ change. Search it by file or feature name.
     that note says, on the beat's grid, like drum mode.
   - Flashed to units 2 and 4.
 
+- **Drum mode polish, lag (0.2.9, 2026-10-10).** Real feedback: "drum
+  sequencer has been lagging a bit sometimes. polish it also shift hold
+  doesnt trigger that feature it should trigger a note roll depending on
+  pressure also shift hold to delete should be shorter, also the selected
+  drum is blue, and triggered step with sound is blue. also page scroll of
+  drum sounds should change hue of green ... also it would be great to have
+  a two page 16 step mode", then "use diamond, no transport controls on
+  sequencers" and "swap bass and drum mode in menu positioning".
+  - **Lag, measured.** New INFO `loop.*` (diagnostics/loop_stats.c) and a
+    `TEST MODE <name>` bench command. On unit 2 the main loop took ~3.96 ms
+    per pass in every mode; `buttons.c` wrote all six button LEDs over I2C
+    (4 register writes each) on every pass whatever their value. With an
+    unchanged level skipped (and levels in 256 steps, so a slow pulse
+    writes far less often): 2.19 ms melodic, 2.53 ms drums and sequencer.
+    Every mode's step timing and pad response gain from it.
+  - **Saving without stalls.** 0.2.8 saved through kv_store, whose
+    per-save sector erase (tens of ms, interrupts off) ran while the beat
+    played. Drum mode now saves through `storage/log_store.c`: appends
+    page-aligned records into erased flash (page programs only) and erases
+    the spare sector only while the clock is stopped. A 0.2.8 pattern (kv
+    format, same sectors) is read once and re-saved in the log.
+  - Circle + push a drum: a roll, rate from pressure (1/8, 1/16, 1/32,
+    1/32 triplet at raw depths 300/550/800, first guesses), loudness from
+    pressure, on the clock's grid when it runs. Circle + hold without
+    pushing: clear the drum at 1 s, the whole pattern at 3 s (was 3/6).
+  - A chance or repeats dial arms its step if it was off (circle + an empty
+    step "did nothing" before: the repeats were set on a silent step).
+  - Selected drum blue; the playhead on a step that sounds blue (the
+    sequencer's armed-playhead blue). Each bank of drums gets its own green
+    on the drum pads (lime, dark green, cool green, olive, repeating).
+  - Two pages: patterns hold 32 steps; anything on page 2 makes the pattern
+    32 steps long, else 16. Diamond flips the page shown (lit on page 2,
+    faint while the playhead is on the other page). Diamond no longer
+    sends DAW transport in drum mode, as in the sequencer. Save format v2
+    (u32 step masks); v1 still loads.
+  - Mode menu: drums on pad 3, bass guitar on pad 7.

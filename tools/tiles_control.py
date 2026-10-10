@@ -32,6 +32,7 @@ Usage:
     TILES_SERIAL=F1A60E66E44C9D4B python3 tools/tiles_control.py info   # one of several boards (serial = chip ID)
     python3 tools/tiles_control.py test leds 50          # bench: every LED white at 50% (current tests)
     python3 tools/tiles_control.py test motors 4 100     # bench: pads 1-4's motors at 100% for 8 s
+    python3 tools/tiles_control.py test mode drums       # bench: switch mode (loop.* timing per mode)
     python3 tools/tiles_control.py test off              # bench: back to normal
     python3 tools/tiles_control.py scales                # custom scales on the device (picker pads 16-24)
     python3 tools/tiles_control.py scale get 1

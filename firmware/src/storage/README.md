@@ -19,6 +19,12 @@ data.
   with partially-applied operations (`firmware/test/test_kv_store.c`).
   Header (20 bytes, little-endian): magic, layout version, the caller's
   payload version, sequence number, length, CRC-32.
+- **`log_store.{h,c}`** -- an append-only record log over two sectors, for
+  data that changes while music plays (drum mode's pattern). Each save is a
+  new page-aligned record after the last (page programs only, well under a
+  millisecond); erasing the spare sector is a separate call the owner makes
+  when a stall doesn't matter. Same power-cut guarantee as kv_store, tested
+  the same way (`firmware/test/test_log_store.c`).
 - **`storage_flash.{h,c}`** -- the real flash ops (XIP reads; erase/program
   with interrupts off and the watchdog petted before/after, the same
   single-core pattern the pattern bank uses) and a boot-time check that the
@@ -31,6 +37,7 @@ data.
   - 4 sectors below: Song mode store (`services/op_mode.c`)
   - 2 sectors below that: settings (`profiles/settings_persist.c`)
   - 2 sectors below that: content store, custom scales (`profiles/content.c`)
+  - 2 sectors below that: drum mode's pattern (`services/drum_seq.c`, log_store)
 
 ## What uses it
 

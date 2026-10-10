@@ -8,7 +8,7 @@
 /* ---- layout ---- */
 
 uint8_t tiles_drum_pad_for_step(uint8_t step) {
-    step = (uint8_t)(step % TILES_DRUM_STEPS);
+    step = (uint8_t)(step % TILES_DRUM_PAGE_STEPS);
     return (uint8_t)((step / STEP_COLS) * GRID_COLS + step % STEP_COLS + 1u);
 }
 
@@ -74,13 +74,22 @@ void tiles_drum_pattern_clear(tiles_drum_pattern_t *p) {
 }
 
 bool tiles_drum_pattern_is_armed(const tiles_drum_pattern_t *p, uint8_t note, uint8_t step) {
-    return note < TILES_DRUM_NOTES && step < TILES_DRUM_STEPS && (p->armed[note] & (1u << step)) != 0u;
+    return note < TILES_DRUM_NOTES && step < TILES_DRUM_STEPS && (p->armed[note] & (1ul << step)) != 0u;
 }
 
 void tiles_drum_pattern_toggle(tiles_drum_pattern_t *p, uint8_t note, uint8_t step) {
     if (note < TILES_DRUM_NOTES && step < TILES_DRUM_STEPS) {
-        p->armed[note] ^= (uint16_t)(1u << step);
+        p->armed[note] ^= (uint32_t)(1ul << step);
     }
+}
+
+uint8_t tiles_drum_pattern_length(const tiles_drum_pattern_t *p) {
+    for (uint16_t n = 0; n < TILES_DRUM_NOTES; n++) {
+        if ((p->armed[n] >> TILES_DRUM_PAGE_STEPS) != 0u) {
+            return (uint8_t)TILES_DRUM_STEPS;
+        }
+    }
+    return (uint8_t)TILES_DRUM_PAGE_STEPS;
 }
 
 bool tiles_drum_pattern_note_has_steps(const tiles_drum_pattern_t *p, uint8_t note) {
@@ -101,37 +110,56 @@ void tiles_drum_pattern_set_ratchet(tiles_drum_pattern_t *p, uint8_t note, uint8
 
 /* ---- saving ---- */
 
-static uint16_t edited_mask(const tiles_drum_pattern_t *p, uint8_t note) {
-    uint16_t mask = 0u;
+static uint32_t edited_mask(const tiles_drum_pattern_t *p, uint8_t note) {
+    uint32_t mask = 0u;
     for (uint8_t s = 0; s < TILES_DRUM_STEPS; s++) {
         if (p->probability[note][s] != 100u || p->ratchet[note][s] != 1u) {
-            mask |= (uint16_t)(1u << s);
+            mask |= (uint32_t)(1ul << s);
         }
     }
     return mask;
+}
+
+static uint8_t bits(uint32_t v) {
+    uint8_t n = 0u;
+    for (; v != 0u; v &= v - 1u) {
+        n++;
+    }
+    return n;
+}
+
+static void put_u32(uint8_t *o, uint32_t v) {
+    o[0] = (uint8_t)(v & 0xFFu);
+    o[1] = (uint8_t)((v >> 8) & 0xFFu);
+    o[2] = (uint8_t)((v >> 16) & 0xFFu);
+    o[3] = (uint8_t)(v >> 24);
+}
+
+static uint32_t get_mask(const uint8_t *i, uint8_t size) {
+    uint32_t v = (uint32_t)i[0] | ((uint32_t)i[1] << 8);
+    if (size == 4u) {
+        v |= ((uint32_t)i[2] << 16) | ((uint32_t)i[3] << 24);
+    }
+    return v;
 }
 
 uint16_t tiles_drum_pattern_encode(const tiles_drum_pattern_t *p, uint8_t *out, uint16_t cap, bool *truncated) {
     uint16_t len = 0u;
     *truncated = false;
     for (uint16_t n = 0; n < TILES_DRUM_NOTES; n++) {
-        uint16_t edited = edited_mask(p, (uint8_t)n);
+        uint32_t edited = edited_mask(p, (uint8_t)n);
         if (p->armed[n] == 0u && edited == 0u) {
             continue;
         }
-        uint16_t need = 5u;
-        for (uint8_t s = 0; s < TILES_DRUM_STEPS; s++) {
-            need = (uint16_t)(need + ((edited >> s) & 1u) * 2u);
-        }
+        uint16_t need = (uint16_t)(9u + 2u * bits(edited));
         if ((uint32_t)len + need > cap) {
             *truncated = true;
             break;
         }
-        out[len++] = (uint8_t)n;
-        out[len++] = (uint8_t)(p->armed[n] & 0xFFu);
-        out[len++] = (uint8_t)(p->armed[n] >> 8);
-        out[len++] = (uint8_t)(edited & 0xFFu);
-        out[len++] = (uint8_t)(edited >> 8);
+        out[len] = (uint8_t)n;
+        put_u32(&out[len + 1u], p->armed[n]);
+        put_u32(&out[len + 5u], edited);
+        len = (uint16_t)(len + 9u);
         for (uint8_t s = 0; s < TILES_DRUM_STEPS; s++) {
             if ((edited >> s) & 1u) {
                 out[len++] = p->probability[n][s];
@@ -142,22 +170,28 @@ uint16_t tiles_drum_pattern_encode(const tiles_drum_pattern_t *p, uint8_t *out, 
     return len;
 }
 
-void tiles_drum_pattern_decode(tiles_drum_pattern_t *p, const uint8_t *in, uint16_t len) {
+bool tiles_drum_pattern_decode(tiles_drum_pattern_t *p, const uint8_t *in, uint16_t len, uint16_t version) {
     tiles_drum_pattern_clear(p);
+    uint8_t mask_size;
+    if (version == 1u) {
+        mask_size = 2u; /* 0.2.8: 16 steps */
+    } else if (version == TILES_DRUM_BLOB_VERSION) {
+        mask_size = 4u;
+    } else {
+        return false;
+    }
+    uint8_t head = (uint8_t)(1u + 2u * mask_size);
     uint16_t pos = 0u;
-    while ((uint32_t)pos + 5u <= len) {
+    while ((uint32_t)pos + head <= len) {
         uint8_t note = in[pos];
-        uint16_t armed = (uint16_t)(in[pos + 1u] | (in[pos + 2u] << 8));
-        uint16_t edited = (uint16_t)(in[pos + 3u] | (in[pos + 4u] << 8));
-        uint16_t need = 5u;
-        for (uint8_t s = 0; s < TILES_DRUM_STEPS; s++) {
-            need = (uint16_t)(need + ((edited >> s) & 1u) * 2u);
-        }
+        uint32_t armed = get_mask(&in[pos + 1u], mask_size);
+        uint32_t edited = get_mask(&in[pos + 1u + mask_size], mask_size);
+        uint16_t need = (uint16_t)(head + 2u * bits(edited));
         if (note >= TILES_DRUM_NOTES || (uint32_t)pos + need > len) {
-            return; /* damaged: keep what came before */
+            return true; /* damaged: keep what came before */
         }
         p->armed[note] = armed;
-        uint16_t at = (uint16_t)(pos + 5u);
+        uint16_t at = (uint16_t)(pos + head);
         for (uint8_t s = 0; s < TILES_DRUM_STEPS; s++) {
             if ((edited >> s) & 1u) {
                 tiles_drum_pattern_set_probability(p, note, s, in[at]);
@@ -167,6 +201,7 @@ void tiles_drum_pattern_decode(tiles_drum_pattern_t *p, const uint8_t *in, uint1
         }
         pos = (uint16_t)(pos + need);
     }
+    return true;
 }
 
 /* ---- player ---- */
@@ -271,7 +306,7 @@ void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern
         uint8_t first = pl->pending_restart ? 0u : pl->step;
         uint32_t steps_in = phase / TILES_DRUM_CLOCKS_PER_STEP;
         pl->step_started_pulse = pulse_count - phase + steps_in * TILES_DRUM_CLOCKS_PER_STEP;
-        enter_step(pl, pat, out, (uint8_t)((first + steps_in) % TILES_DRUM_STEPS));
+        enter_step(pl, pat, out, (uint8_t)((first + steps_in) % tiles_drum_pattern_length(pat)));
         return;
     }
 
@@ -298,5 +333,5 @@ void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern
     /* Several steps' worth of pulses between scans: jump, don't replay. */
     uint32_t steps = elapsed / TILES_DRUM_CLOCKS_PER_STEP;
     pl->step_started_pulse += steps * TILES_DRUM_CLOCKS_PER_STEP;
-    enter_step(pl, pat, out, (uint8_t)((pl->step + steps) % TILES_DRUM_STEPS));
+    enter_step(pl, pat, out, (uint8_t)((pl->step + steps) % tiles_drum_pattern_length(pat)));
 }

@@ -34,6 +34,10 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_drum_pattern.c src
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/storage test/test_kv_store.c src/storage/kv_store.c -o /tmp/sentia_tiles_test_kv_store
 /tmp/sentia_tiles_test_kv_store
 
+# The append-only log under drum mode's pattern (saves without erasing while playing).
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/storage test/test_log_store.c src/storage/log_store.c src/storage/kv_store.c -o /tmp/sentia_tiles_test_log_store
+/tmp/sentia_tiles_test_log_store
+
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/profiles -Isrc/storage test/test_settings.c src/profiles/settings.c src/profiles/settings_persist.c src/storage/kv_store.c -lm -o /tmp/sentia_tiles_test_settings
 /tmp/sentia_tiles_test_settings
 

@@ -6,8 +6,10 @@
  * wires it to touch, light, haptics, MIDI and the clock.
  *
  * Layout (pads numbered 1-24, top-left first, 6 per row):
- *   columns 1-4  the 16 steps, read like a page: pads 1-4 are steps 1-4,
- *                pads 7-10 steps 5-8, and so on.
+ *   columns 1-4  16 steps, read like a page: pads 1-4 are steps 1-4,
+ *                pads 7-10 steps 5-8, and so on. A pattern has two pages
+ *                (steps 1-16, 17-32): it plays 32 steps when anything is
+ *                armed on page 2, else 16.
  *   columns 5-6  8 drums, two per row, top to bottom: pads 5, 6, 11, 12,
  *                17, 18, 23, 24 are drums 1-8.
  *
@@ -16,13 +18,14 @@
  * names MIDI 36 "C1"; it's also General MIDI's kick). Banks go down to
  * notes 4-11 and up to 116-123.
  *
- * The pattern holds a 16-step row for every MIDI note, so a beat built in
+ * The pattern holds a 32-step row for every MIDI note, so a beat built in
  * one bank keeps playing while another bank is shown. */
 
 #include <stdbool.h>
 #include <stdint.h>
 
-#define TILES_DRUM_STEPS 16u
+#define TILES_DRUM_STEPS 32u      /* two pages */
+#define TILES_DRUM_PAGE_STEPS 16u
 #define TILES_DRUM_VOICES 8u
 #define TILES_DRUM_NOTES 128u
 #define TILES_DRUM_FIRST_NOTE 36u
@@ -36,8 +39,8 @@
 #define TILES_DRUM_STEP_VELOCITY 100u
 
 /* ---- layout ---- */
-uint8_t tiles_drum_pad_for_step(uint8_t step);               /* 0-15 -> pad */
-bool tiles_drum_step_for_pad(uint8_t pad, uint8_t *out_step); /* false for a drum pad */
+uint8_t tiles_drum_pad_for_step(uint8_t step);               /* step 0-31 -> its pad on its page */
+bool tiles_drum_step_for_pad(uint8_t pad, uint8_t *out_step); /* 0-15 on the page; false for a drum pad */
 uint8_t tiles_drum_pad_for_voice(uint8_t voice);              /* 0-7 -> pad */
 bool tiles_drum_voice_for_pad(uint8_t pad, uint8_t *out_voice);
 /* The note drum `voice` plays in `bank` (bank clamped to the range). */
@@ -46,7 +49,7 @@ int8_t tiles_drum_clamp_bank(int bank);
 
 /* ---- pattern ---- */
 typedef struct {
-    uint16_t armed[TILES_DRUM_NOTES];                         /* bit s = step s */
+    uint32_t armed[TILES_DRUM_NOTES];                         /* bit s = step s */
     uint8_t probability[TILES_DRUM_NOTES][TILES_DRUM_STEPS]; /* 0-100 */
     uint8_t ratchet[TILES_DRUM_NOTES][TILES_DRUM_STEPS];     /* 1-4 hits */
 } tiles_drum_pattern_t;
@@ -57,21 +60,24 @@ void tiles_drum_pattern_clear_note(tiles_drum_pattern_t *p, uint8_t note);
 bool tiles_drum_pattern_is_armed(const tiles_drum_pattern_t *p, uint8_t note, uint8_t step);
 void tiles_drum_pattern_toggle(tiles_drum_pattern_t *p, uint8_t note, uint8_t step);
 bool tiles_drum_pattern_note_has_steps(const tiles_drum_pattern_t *p, uint8_t note);
+/* 32 if any note has a step armed on page 2, else 16. */
+uint8_t tiles_drum_pattern_length(const tiles_drum_pattern_t *p);
 /* Clamped to 0-100 and 1-TILES_DRUM_MAX_RATCHET. */
 void tiles_drum_pattern_set_probability(tiles_drum_pattern_t *p, uint8_t note, uint8_t step, uint8_t percent);
 void tiles_drum_pattern_set_ratchet(tiles_drum_pattern_t *p, uint8_t note, uint8_t step, uint8_t hits);
 
 /* Saving (services/drum_seq.c keeps it in its own flash region). Sparse:
  * only notes with steps or edited chance/repeats, each as
- *   u8 note, u16 armed, u16 edited (steps whose chance or repeats aren't
+ *   u8 note, u32 armed, u32 edited (steps whose chance or repeats aren't
  *   the default), then per edited step: u8 chance, u8 repeats
- * (little-endian). A plain beat is 5 bytes per drum. Encoding stops before
- * a note that wouldn't fit and says so (`truncated`; needs ~110 drums with
- * every step edited). Decoding clears first, clamps values and stops at a
- * damaged record. */
-#define TILES_DRUM_BLOB_VERSION 1u
+ * (little-endian, version 2). A plain beat is 9 bytes per drum. Version 1
+ * (firmware 0.2.8, 16 steps) had u16 masks; it still decodes. Encoding
+ * stops before a note that wouldn't fit and says so (`truncated`).
+ * Decoding clears first, clamps values and stops at a damaged record. */
+#define TILES_DRUM_BLOB_VERSION 2u
 uint16_t tiles_drum_pattern_encode(const tiles_drum_pattern_t *p, uint8_t *out, uint16_t cap, bool *truncated);
-void tiles_drum_pattern_decode(tiles_drum_pattern_t *p, const uint8_t *in, uint16_t len);
+/* False for an unknown version (nothing decoded). */
+bool tiles_drum_pattern_decode(tiles_drum_pattern_t *p, const uint8_t *in, uint16_t len, uint16_t version);
 
 /* ---- player ----
  * Follows MIDI clock pulses like a sequencer lane (services/op_mode.c):
@@ -91,7 +97,7 @@ typedef struct {
     bool running;
     bool pending_start;   /* waiting for the nearest beat */
     bool pending_restart; /* at that beat: step 1 (true) or resume (false) */
-    uint8_t step;         /* 0-15: the step playing or parked on */
+    uint8_t step;         /* 0-31: the step playing or parked on */
     uint32_t step_started_pulse;
     bool sounding[TILES_DRUM_NOTES];
     uint8_t hits_total[TILES_DRUM_NOTES]; /* this step's hits for the note, 0 = not firing */

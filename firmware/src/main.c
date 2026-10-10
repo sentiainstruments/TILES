@@ -19,6 +19,7 @@
 #include "board/unit_id.h"
 #include "diagnostics/calibration.h"
 #include "diagnostics/i2c_scan.h"
+#include "diagnostics/loop_stats.h"
 #include "midi/din_midi.h"
 #include "midi/identity.h"
 #include "midi/midi_in.h"
@@ -225,6 +226,7 @@ int main(void) {
     tiles_expression_announce_mpe_zone();
 
     while (true) {
+        tiles_loop_stats_mark(time_us_32());
         /* Must run every pass: it IS the USB stack (control transfers, CDC and
          * MIDI data). pico_stdio_usb's background servicing is compiled out when
          * tinyusb_device is linked directly, so without this call nothing is
