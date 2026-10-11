@@ -9535,3 +9535,11 @@ change. Search it by file or feature name.
   pressure (1/32, 1/32T, 1/64, 1/96), first hit at the step velocity, then
   louder with pressure; `muted` now holds the playhead on that step, and on
   release the pattern carries on from the step after.
+- **Step roll starts as a repeat; circle + drum clears again (0.3.3,
+  2026-10-10).** Real feedback: "we lost the clear step with shift. and for
+  step roll it should start with step repeat, then roll 2 hits 3 4." Step
+  roll tiers by pressure: 1 hit per step (a step repeat), 2, 3, 4. The
+  0.2.9 drum-pad roll (circle + push) took over circle + holding a drum
+  down, so the clear never fired once the pad was pressed; asked, the user
+  chose the clear: circle + hold a drum clears it at 1 s, everything at
+  3 s, and the drum-pad roll is gone (rolling lives on the steps).

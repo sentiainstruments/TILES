@@ -53,7 +53,7 @@ print-only steps and the boot animation.
 
 ## Status (2026-10-04)
 
-Four pre-production units (Rev A0), firmware 0.3.2 (`src/midi/product_identity.h`),
+Four pre-production units (Rev A0), firmware 0.3.3 (`src/midi/product_identity.h`),
 built with Arm GNU Toolchain 15.3 (native arm64). Each unit names itself "SENTIA TILES N" over
 USB (`src/board/unit_id.h`), so several can play in one DAW session.
 

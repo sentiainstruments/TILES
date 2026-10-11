@@ -20,8 +20,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* Circle + a drum held without pushing: this long clears its part; on to
- * DRUM_CLEAR_ALL_HOLD_MS, the whole pattern. (A push makes it a roll.) */
+/* Circle + a drum held: this long clears its part; on to
+ * DRUM_CLEAR_ALL_HOLD_MS, the whole pattern. A circle touch never plays. */
 #define DRUM_CLEAR_HOLD_MS 1000u
 #define DRUM_CLEAR_ALL_HOLD_MS 3000u
 #define DRUM_CLEAR_FLASH_MS 400u
@@ -29,12 +29,10 @@
 #define DRUM_FIRE_FLASH_MS 90u
 /* ~900 is full-scale depth on this hardware. */
 #define DRUM_DIAL_FULL_DEPTH 900.0f
-/* Drum rolls (circle + push a drum): the rate follows pressure, in MIDI
- * clock pulses per hit: 1/8, 1/16, 1/32, 1/32 triplet as the depth passes
- * these raw Hall depths (first guesses). Step rolls (circle + a step) use
- * the same depths for 2, 3, 4 or 6 hits per step (1/32, 1/32 triplet,
- * 1/64, 1/96). Velocity follows pressure, from DRUM_ROLL_VELOCITY_MIN up;
- * a step roll's first hit is the step velocity. */
+/* Step rolls (circle + a step): 1 hit per step (a step repeat), then 2, 3,
+ * 4 as the depth passes these raw Hall depths (first guesses). Velocity
+ * follows pressure, from DRUM_ROLL_VELOCITY_MIN up; the first hit is the
+ * step velocity. */
 #define DRUM_ROLL_DEPTH_16TH 300u
 #define DRUM_ROLL_DEPTH_32ND 550u
 #define DRUM_ROLL_DEPTH_32ND_T 800u
@@ -82,18 +80,13 @@ static uint8_t s_rep_step; /* 0-31 */
 static uint8_t s_rep_pad;
 static uint32_t s_rep_next_ms;
 
-/* Drum pads played live: strike detection as in chord mode, rolls, and the
+/* Drum pads played live (strike detection as in chord mode), and the
  * circle-hold clear. */
 static bool s_drum_awaiting[TILES_DRUM_VOICES];
 static uint32_t s_drum_touch_ms[TILES_DRUM_VOICES];
 static float s_drum_peak[TILES_DRUM_VOICES];
-static bool s_drum_circle_touch[TILES_DRUM_VOICES]; /* circle was held at touch-down */
 static bool s_drum_sounding[TILES_DRUM_VOICES];
 static uint8_t s_drum_sounding_note[TILES_DRUM_VOICES];
-static bool s_roll_active[TILES_DRUM_VOICES];
-static uint8_t s_roll_pulses[TILES_DRUM_VOICES];
-static uint32_t s_roll_last_grid[TILES_DRUM_VOICES];
-static uint32_t s_roll_next_ms[TILES_DRUM_VOICES];
 static uint32_t s_drum_clear_ms[TILES_DRUM_VOICES]; /* clear-hold started, 0 = none */
 static uint8_t s_drum_clear_stage[TILES_DRUM_VOICES]; /* 0, 1 = part cleared, 2 = all cleared */
 static uint32_t s_drum_cleared_ms[TILES_DRUM_VOICES];
@@ -177,7 +170,6 @@ static void end_live_notes(void) {
             s_drum_sounding[v] = false;
         }
         s_drum_awaiting[v] = false;
-        s_roll_active[v] = false;
     }
 }
 
@@ -219,7 +211,6 @@ void tiles_drum_seq_init(const tiles_kv_ops_t *ops) {
     s_rep_active = false;
     for (uint8_t v = 0; v < TILES_DRUM_VOICES; v++) {
         s_drum_sounding[v] = false;
-        s_roll_active[v] = false;
         s_drum_cleared_ms[v] = 0u;
         s_drum_fired_any[v] = false;
     }
@@ -348,29 +339,17 @@ static float dial_fraction(uint16_t depth) {
 
 /* ---- drum pads: hits, rolls, clears ---- */
 
-static void drum_hit(uint8_t voice, uint8_t pad, uint8_t velocity, bool first) {
+static void drum_hit(uint8_t voice, uint8_t pad, uint8_t velocity) {
     if (s_drum_sounding[voice]) {
         tiles_midi_note_off(TILES_MIDI_CH_DRUMS, s_drum_sounding_note[voice], 0u);
     }
     uint8_t note = tiles_drum_note(s_bank, voice);
     tiles_midi_note_on(TILES_MIDI_CH_DRUMS, note, velocity);
-    if (first) {
-        tiles_haptics_trigger_kick(pad, velocity);
-    } else {
-        tiles_haptics_trigger_touch_pulse(pad); /* each roll hit, felt */
-    }
+    tiles_haptics_trigger_kick(pad, velocity);
     s_drum_sounding[voice] = true;
     s_drum_sounding_note[voice] = note;
     s_drum_fired_ms[voice] = now_ms();
     s_drum_fired_any[voice] = true;
-}
-
-static uint8_t roll_pulses_for(uint16_t depth) {
-    return depth >= DRUM_ROLL_DEPTH_32ND_T ? 2u : depth >= DRUM_ROLL_DEPTH_32ND ? 3u : depth >= DRUM_ROLL_DEPTH_16TH ? 6u : 12u;
-}
-
-static uint32_t roll_interval_ms(uint8_t pulses) {
-    return (uint32_t)(tiles_midi_clock_get_ms_per_beat() * (float)pulses / (float)TILES_DRUM_CLOCKS_PER_BEAT);
 }
 
 static uint8_t pressure_velocity(uint16_t depth) {
@@ -378,70 +357,31 @@ static uint8_t pressure_velocity(uint16_t depth) {
     return (uint8_t)(v > 127.0f ? 127.0f : v);
 }
 
-static void roll_set_rate(uint8_t voice, uint8_t pulses, uint32_t now) {
-    s_roll_pulses[voice] = pulses;
-    s_roll_last_grid[voice] = s_pulse / pulses;
-    s_roll_next_ms[voice] = now + roll_interval_ms(pulses);
-}
-
-/* Repeats on the clock's grid while it runs (in time with the beat), else
- * at the tempo's interval from the first hit. */
-static void roll_service(uint8_t voice, uint8_t pad, uint16_t depth, uint32_t now) {
-    uint8_t pulses = roll_pulses_for(depth);
-    if (pulses != s_roll_pulses[voice]) {
-        roll_set_rate(voice, pulses, now);
-    }
-    uint8_t velocity = pressure_velocity(depth);
-    if (s_clock_running) {
-        uint32_t grid = s_pulse / pulses;
-        if (grid != s_roll_last_grid[voice]) {
-            s_roll_last_grid[voice] = grid;
-            drum_hit(voice, pad, velocity, false);
-        }
-    } else if ((int32_t)(now - s_roll_next_ms[voice]) >= 0) {
-        drum_hit(voice, pad, velocity, false);
-        uint32_t interval = roll_interval_ms(pulses);
-        s_roll_next_ms[voice] += interval;
-        if ((int32_t)(now - s_roll_next_ms[voice]) >= 0) {
-            s_roll_next_ms[voice] = now + interval; /* fell behind: don't burst */
-        }
-    }
-}
-
 static void handle_drum_pad(uint8_t voice, uint8_t pad, bool touched, bool was, bool circle, uint32_t now) {
     if (touched && !was) {
         s_voice = voice; /* a tap selects */
         tiles_haptics_trigger_touch_pulse(pad);
-        s_drum_circle_touch[voice] = circle;
-        s_drum_awaiting[voice] = true;
+        /* Circle first: a clear-hold, never a hit. */
+        s_drum_awaiting[voice] = !circle;
         s_drum_touch_ms[voice] = now;
         s_drum_peak[voice] = (float)tiles_hall_get_depth(pad);
         s_drum_clear_ms[voice] = circle ? (now == 0u ? 1u : now) : 0u;
         s_drum_clear_stage[voice] = 0u;
-        s_roll_active[voice] = false;
     } else if (touched) {
-        uint16_t depth = tiles_hall_get_depth(pad);
         if (s_drum_awaiting[voice]) {
             /* A push: past the strike depth (as melodic and chord mode), not a
              * light touch. */
-            if ((float)depth > s_drum_peak[voice]) {
-                s_drum_peak[voice] = (float)depth;
+            float depth = (float)tiles_hall_get_depth(pad);
+            if (depth > s_drum_peak[voice]) {
+                s_drum_peak[voice] = depth;
             }
             if (s_drum_peak[voice] >= TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA) {
-                uint8_t velocity = tiles_expression_velocity_from_strike(now - s_drum_touch_ms[voice], s_drum_peak[voice]);
-                drum_hit(voice, pad, velocity, true);
+                drum_hit(voice, pad,
+                         tiles_expression_velocity_from_strike(now - s_drum_touch_ms[voice], s_drum_peak[voice]));
                 s_drum_awaiting[voice] = false;
-                if (s_drum_circle_touch[voice]) {
-                    /* Circle + push: a roll (and no clear). */
-                    s_roll_active[voice] = true;
-                    s_drum_clear_ms[voice] = 0u;
-                    roll_set_rate(voice, roll_pulses_for(depth), now);
-                }
             }
         }
-        if (s_roll_active[voice]) {
-            roll_service(voice, pad, depth, now);
-        } else if (s_drum_clear_ms[voice] != 0u) {
+        if (s_drum_clear_ms[voice] != 0u) {
             uint32_t held = now - s_drum_clear_ms[voice];
             if (s_drum_clear_stage[voice] == 0u && held >= DRUM_CLEAR_HOLD_MS) {
                 /* This drum's part. */
@@ -467,7 +407,6 @@ static void handle_drum_pad(uint8_t voice, uint8_t pad, bool touched, bool was, 
             s_drum_sounding[voice] = false;
         }
         s_drum_awaiting[voice] = false;
-        s_roll_active[voice] = false;
         s_drum_clear_ms[voice] = 0u;
     }
 }
@@ -475,7 +414,7 @@ static void handle_drum_pad(uint8_t voice, uint8_t pad, bool touched, bool was, 
 /* ---- step roll: circle + a step ---- */
 
 static uint8_t step_roll_hits_for(uint16_t depth) {
-    return depth >= DRUM_ROLL_DEPTH_32ND_T ? 6u : depth >= DRUM_ROLL_DEPTH_32ND ? 4u : depth >= DRUM_ROLL_DEPTH_16TH ? 3u : 2u;
+    return depth >= DRUM_ROLL_DEPTH_32ND_T ? 4u : depth >= DRUM_ROLL_DEPTH_32ND ? 3u : depth >= DRUM_ROLL_DEPTH_16TH ? 2u : 1u;
 }
 
 static uint32_t step_roll_interval_ms(uint16_t depth) {
@@ -656,7 +595,7 @@ void tiles_drum_seq_render(uint32_t now, float beat_flash, float diamond_led, bo
         if (now - s_drum_cleared_ms[v] < DRUM_CLEAR_FLASH_MS && s_drum_cleared_ms[v] != 0u) {
             r = 1.0f; g = 0.0f; b = 0.0f; /* cleared */
         } else if (s_drum_sounding[v]) {
-            r = g = b = 1.0f; /* held after a push, or rolling */
+            r = g = b = 1.0f; /* held after a push */
         } else if (s_drum_fired_any[v] && now - s_drum_fired_ms[v] < DRUM_FIRE_FLASH_MS) {
             r = g = b = DRUM_FIRE_FLASH_LEVEL;
         } else if (v == s_voice) {

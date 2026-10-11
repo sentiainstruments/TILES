@@ -9,15 +9,13 @@
  *   columns 1-4   the selected drum's steps, one page of 16. Touch: on /
  *                 off, at once (no hold gesture). Circle + a step: the
  *                 playhead jumps there now and every drum on that step
- *                 rolls while held, 2, 3, 4 or 6 hits per step by
- *                 pressure, louder with it; on release the pattern
+ *                 rolls while held: a step repeat at first, then 2, 3, 4
+ *                 hits per step the harder you push, louder with it; on release the pattern
  *                 carries on from that step. Nothing is recorded.
  *   columns 5-6   8 drums (C1-G1 in Live's names on the first bank). Tap:
  *                 select (its steps show on the left). Push: play it, with
- *                 the strike's velocity. Circle + push: a roll, its rate
- *                 (1/8 to 1/32 triplets) and loudness following pressure,
- *                 in time with the clock. Circle + hold 1 s without pushing:
- *                 clear its steps; on to 3 s: clear the whole pattern.
+ *                 the strike's velocity. Circle + hold 1 s: clear its
+ *                 steps; on to 3 s: clear the whole pattern.
  *   circle + triangle  the other page (steps 17-32). Anything on page 2
  *                 makes the pattern 32 steps; an empty page 2, 16. (Drums
  *                 follow no scale, so this isn't the scale picker here.)
