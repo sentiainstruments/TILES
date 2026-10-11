@@ -9516,3 +9516,12 @@ change. Search it by file or feature name.
     every running lane and the drums start over together), at 120 BPM if
     no tempo was tapped. With external clock, the quantized start stays.
   - 0.3.0, not 0.2.10: the USB bcdDevice holds one decimal digit per field.
+- **Hold a step = live step repeat (0.3.1, 2026-10-10).** Real feedback:
+  "the sequencer roll I meant step repeat and retrigger". Holding a step
+  (350 ms) no longer opens a per-drum ratchet dial: it retriggers every drum
+  armed on that step, live, while held, rate and velocity from pressure
+  (the roll tiers), on the clock's grid when it runs, at the tempo's
+  interval when stopped. The running pattern keeps its place silently
+  (`tiles_drum_player_t.muted`, which also stops the player ending the
+  repeat's notes) and picks up on release. Nothing is written to the
+  pattern. Stored ratchets from 0.3.0 still play.

@@ -7,8 +7,10 @@
  * owns the mode switch, the buttons' shared gestures and the clock.
  *
  *   columns 1-4   the selected drum's steps, one page of 16. Tap: on / off.
- *                 Hold: roll the step (push in for more hits, up to 4); it
- *                 arms the step if it was off.
+ *                 Hold: step repeat, live: every drum on that step
+ *                 retriggers while held, faster and louder the harder you
+ *                 push, in time with the clock; the pattern carries on
+ *                 silently and picks up on release. Nothing is recorded.
  *   columns 5-6   8 drums (C1-G1 in Live's names on the first bank). Tap:
  *                 select (its steps show on the left). Push: play it, with
  *                 the strike's velocity. Circle + push: a roll, its rate
@@ -86,10 +88,6 @@ void tiles_drum_seq_rewind(void);
 
 /* Circle + "-"/"+": -1 / +1 bank of 8 drums. */
 void tiles_drum_seq_bank_step(int direction);
-
-/* A step's roll dial is open (it owns the grid). */
-bool tiles_drum_seq_edit_is_open(void);
-void tiles_drum_seq_edit_cancel(void);
 
 /* Ends every sounding note, sequenced or played (another feature took the
  * board). */

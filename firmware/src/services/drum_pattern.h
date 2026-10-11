@@ -98,6 +98,7 @@ typedef struct {
     bool pending_start;   /* waiting for the nearest beat */
     bool pending_restart; /* at that beat: step 1 (true) or resume (false) */
     uint8_t step;         /* 0-31: the step playing or parked on */
+    bool muted;           /* a step repeat owns the notes: steps advance silently, nothing is ended */
     uint32_t step_started_pulse;
     bool sounding[TILES_DRUM_NOTES];
     uint8_t hits_total[TILES_DRUM_NOTES]; /* this step's hits for the note, 0 = not firing */
@@ -116,6 +117,12 @@ void tiles_drum_player_rewind(tiles_drum_player_t *pl);
 void tiles_drum_player_end_all(tiles_drum_player_t *pl, const tiles_drum_output_t *out);
 /* True while a repeat is still due within the current step. */
 bool tiles_drum_player_repeats_pending(const tiles_drum_player_t *pl);
+/* Step repeat (hold a step): sounds every note armed on `step`, all banks,
+ * at `velocity`, ending whatever the player had sounding; chance is
+ * ignored (it's played live). Set `muted` meanwhile so the running pattern
+ * keeps its place without sounding. */
+void tiles_drum_player_fire_step(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat,
+                                 const tiles_drum_output_t *out, uint8_t step, uint8_t velocity);
 /* Call every scan with the clock snapshot (pulse count, running,
  * start_edge). */
 void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat, const tiles_drum_output_t *out,

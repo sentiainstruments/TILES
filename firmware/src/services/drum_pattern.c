@@ -245,21 +245,38 @@ bool tiles_drum_player_repeats_pending(const tiles_drum_player_t *pl) {
     return false;
 }
 
-static void hit(tiles_drum_player_t *pl, const tiles_drum_output_t *out, uint8_t note) {
+static void hit_at(tiles_drum_player_t *pl, const tiles_drum_output_t *out, uint8_t note, uint8_t velocity) {
     if (pl->sounding[note]) {
         out->note_off(note, out->ctx);
     }
-    out->note_on(note, TILES_DRUM_STEP_VELOCITY, out->ctx);
+    out->note_on(note, velocity, out->ctx);
     pl->sounding[note] = true;
+}
+
+static void hit(tiles_drum_player_t *pl, const tiles_drum_output_t *out, uint8_t note) {
+    hit_at(pl, out, note, TILES_DRUM_STEP_VELOCITY);
     pl->hits_done[note]++;
+}
+
+void tiles_drum_player_fire_step(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat,
+                                 const tiles_drum_output_t *out, uint8_t step, uint8_t velocity) {
+    tiles_drum_player_end_all(pl, out);
+    for (uint16_t n = 0; n < TILES_DRUM_NOTES; n++) {
+        if (tiles_drum_pattern_is_armed(pat, (uint8_t)n, step)) {
+            hit_at(pl, out, (uint8_t)n, velocity);
+        }
+    }
 }
 
 /* Ends the last step's hits, then fires every armed note on `step` that
  * wins its probability roll. */
 static void enter_step(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat, const tiles_drum_output_t *out,
                        uint8_t step) {
-    tiles_drum_player_end_all(pl, out);
     pl->step = step;
+    if (pl->muted) {
+        return; /* a step repeat owns the notes; the pattern only keeps its place */
+    }
+    tiles_drum_player_end_all(pl, out);
     for (uint16_t n = 0; n < TILES_DRUM_NOTES; n++) {
         pl->hits_done[n] = 0u;
         if (!tiles_drum_pattern_is_armed(pat, (uint8_t)n, step)) {
@@ -277,7 +294,9 @@ static void enter_step(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat,
 void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat, const tiles_drum_output_t *out,
                                uint32_t pulse_count, bool clock_running, bool start_edge) {
     if (!pl->running) {
-        tiles_drum_player_end_all(pl, out);
+        if (!pl->muted) {
+            tiles_drum_player_end_all(pl, out);
+        }
         return;
     }
     if (start_edge) {
@@ -290,7 +309,9 @@ void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern
     if (!clock_running) {
         /* The shared tempo stopped: silent, but still "running", so it
          * resumes with the clock. */
-        tiles_drum_player_end_all(pl, out);
+        if (!pl->muted) {
+            tiles_drum_player_end_all(pl, out);
+        }
         return;
     }
     if (pl->pending_start) {

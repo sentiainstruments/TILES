@@ -2401,12 +2401,8 @@ static void handle_triangle_click(void) {
                         edit_exit();
                     } else if (s_active_mode == OP_MODE_DRUM) {
                         /* Drums follow no scale: circle + triangle shows the other page of
-                         * steps instead (or closes an open roll dial). */
-                        if (tiles_drum_seq_edit_is_open()) {
-                            tiles_drum_seq_edit_cancel();
-                        } else {
-                            tiles_drum_seq_flip_page();
-                        }
+                         * steps instead. */
+                        tiles_drum_seq_flip_page();
                     } else if (s_song_capture_active) {
                         /* End a running Song capture instead of opening the picker over it (the
                          * picker would take the grid and freeze the capture). */
@@ -2681,7 +2677,7 @@ static void handle_circle_tap(uint32_t now_ms) {
         /* Tap tempo is sequencer-only, plus while a Song capture runs (which can
          * start without a tempo and needs a way to set one). */
         bool mode_ok = (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode == OP_SEQ_EDIT_NONE) ||
-                       (s_active_mode == OP_MODE_DRUM && !tiles_drum_seq_edit_is_open()) || s_song_capture_active;
+                       s_active_mode == OP_MODE_DRUM || s_song_capture_active;
         bool combo_conflict = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
@@ -2746,7 +2742,7 @@ static void handle_transport_and_length(uint32_t now_ms) {
         (s_active_mode == OP_MODE_SEQUENCER) && s_seq_edit_mode == OP_SEQ_EDIT_NONE && !s_seq_capture_mode_active;
     bool guitar_active = (s_active_mode == OP_MODE_GUITAR);
     bool scene_launch_active = (s_active_mode == OP_MODE_SCENE_LAUNCH);
-    bool drum_active = (s_active_mode == OP_MODE_DRUM) && !tiles_drum_seq_edit_is_open();
+    bool drum_active = (s_active_mode == OP_MODE_DRUM);
 
     /* Drums: circle held first, then "-"/"+" = the previous / next 8 drums. */
     if (drum_active && minus_held && !s_minus_was_held && circle_held) {
@@ -3294,7 +3290,7 @@ bool tiles_op_mode_has_menu_open(void) {
     /* Sub-views that can sit untouched (menus, pattern bank, step edit,
      * capture waiting for a tempo): standby must not cover them. */
     return s_menu_visible || s_scale_menu_visible || s_pattern_bank_visible || s_seq_edit_mode != OP_SEQ_EDIT_NONE ||
-           s_seq_capture_mode_active || tiles_drum_seq_edit_is_open();
+           s_seq_capture_mode_active;
 }
 
 /* ---- Song mode (BETA) --------------------------------------------------------
