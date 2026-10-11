@@ -9543,3 +9543,6 @@ change. Search it by file or feature name.
   down, so the clear never fired once the pad was pressed; asked, the user
   chose the clear: circle + hold a drum clears it at 1 s, everything at
   3 s, and the drum-pad roll is gone (rolling lives on the steps).
+- **Step roll at constant velocity (0.3.4, 2026-10-10).** Real feedback:
+  "velocity should be constant on the roll." Every roll hit plays at the
+  step velocity; pressure sets the rate only.

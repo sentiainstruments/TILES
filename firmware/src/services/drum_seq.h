@@ -10,7 +10,8 @@
  *                 off, at once (no hold gesture). Circle + a step: the
  *                 playhead jumps there now and every drum on that step
  *                 rolls while held: a step repeat at first, then 2, 3, 4
- *                 hits per step the harder you push, louder with it; on release the pattern
+ *                 hits per step the harder you push, every hit at the
+ *                 same velocity; on release the pattern
  *                 carries on from that step. Nothing is recorded.
  *   columns 5-6   8 drums (C1-G1 in Live's names on the first bank). Tap:
  *                 select (its steps show on the left). Push: play it, with

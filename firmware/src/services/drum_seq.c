@@ -27,16 +27,12 @@
 #define DRUM_CLEAR_FLASH_MS 400u
 /* How long a drum pad flashes white when its drum plays. First guess. */
 #define DRUM_FIRE_FLASH_MS 90u
-/* ~900 is full-scale depth on this hardware. */
-#define DRUM_DIAL_FULL_DEPTH 900.0f
 /* Step rolls (circle + a step): 1 hit per step (a step repeat), then 2, 3,
- * 4 as the depth passes these raw Hall depths (first guesses). Velocity
- * follows pressure, from DRUM_ROLL_VELOCITY_MIN up; the first hit is the
- * step velocity. */
+ * 4 as the depth passes these raw Hall depths (first guesses). Every hit
+ * is at the step velocity (pressure sets the rate only). */
 #define DRUM_ROLL_DEPTH_16TH 300u
 #define DRUM_ROLL_DEPTH_32ND 550u
 #define DRUM_ROLL_DEPTH_32ND_T 800u
-#define DRUM_ROLL_VELOCITY_MIN 30.0f
 /* Saving: DRUM_SAVE_QUIET_MS after the last change, no pad touched. While
  * the clock runs only into already-erased flash (log_store.h: page
  * programs, well under a millisecond); an erase waits for the clock to
@@ -332,11 +328,6 @@ tiles_drum_seq_store_info_t tiles_drum_seq_get_store_info(void) {
     return info;
 }
 
-static float dial_fraction(uint16_t depth) {
-    float f = (float)depth / DRUM_DIAL_FULL_DEPTH;
-    return f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
-}
-
 /* ---- drum pads: hits, rolls, clears ---- */
 
 static void drum_hit(uint8_t voice, uint8_t pad, uint8_t velocity) {
@@ -350,11 +341,6 @@ static void drum_hit(uint8_t voice, uint8_t pad, uint8_t velocity) {
     s_drum_sounding_note[voice] = note;
     s_drum_fired_ms[voice] = now_ms();
     s_drum_fired_any[voice] = true;
-}
-
-static uint8_t pressure_velocity(uint16_t depth) {
-    float v = DRUM_ROLL_VELOCITY_MIN + (127.0f - DRUM_ROLL_VELOCITY_MIN) * dial_fraction(depth);
-    return (uint8_t)(v > 127.0f ? 127.0f : v);
 }
 
 static void handle_drum_pad(uint8_t voice, uint8_t pad, bool touched, bool was, bool circle, uint32_t now) {
@@ -423,8 +409,8 @@ static uint32_t step_roll_interval_ms(uint16_t depth) {
     return ms < 1u ? 1u : ms;
 }
 
-static void step_roll_hit(uint8_t velocity) {
-    tiles_drum_player_fire_step(&s_player, &s_pattern, &s_out, s_rep_step, velocity);
+static void step_roll_hit(void) {
+    tiles_drum_player_fire_step(&s_player, &s_pattern, &s_out, s_rep_step, TILES_DRUM_STEP_VELOCITY);
     tiles_haptics_trigger_touch_pulse(s_rep_pad);
 }
 
@@ -437,7 +423,7 @@ static void step_roll_begin(uint8_t step, uint8_t pad, uint32_t now) {
     s_rep_pad = pad;
     tiles_drum_player_jump(&s_player, step, s_pulse);
     s_player.muted = true;
-    step_roll_hit(TILES_DRUM_STEP_VELOCITY);
+    step_roll_hit();
     s_rep_next_ms = now + step_roll_interval_ms(tiles_hall_get_depth(pad));
 }
 
@@ -447,9 +433,8 @@ static void step_roll_service(uint32_t now) {
         return;
     }
     if ((int32_t)(now - s_rep_next_ms) >= 0) {
-        uint16_t depth = tiles_hall_get_depth(s_rep_pad);
-        step_roll_hit(pressure_velocity(depth));
-        uint32_t interval = step_roll_interval_ms(depth);
+        step_roll_hit();
+        uint32_t interval = step_roll_interval_ms(tiles_hall_get_depth(s_rep_pad));
         s_rep_next_ms += interval;
         if ((int32_t)(now - s_rep_next_ms) >= 0) {
             s_rep_next_ms = now + interval; /* fell behind: don't burst */
