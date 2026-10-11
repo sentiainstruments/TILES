@@ -69,8 +69,8 @@ static bool s_clock_running;
 
 static bool s_prev_touched[TILES_NUM_PADS];
 
-/* Step roll (circle + a step): the playhead jumps to the step and holds
- * there (s_player.muted) while every drum armed on it retriggers. */
+/* Step roll (circle + a step), slip style: every drum armed on the step
+ * retriggers while the pattern runs on silently (s_player.muted). */
 static bool s_rep_active;
 static uint8_t s_rep_step; /* 0-31 */
 static uint8_t s_rep_pad;
@@ -414,14 +414,13 @@ static void step_roll_hit(void) {
     tiles_haptics_trigger_touch_pulse(s_rep_pad);
 }
 
-/* Jumps the playhead to `step` now and hits it at once; it keeps hitting
- * while held (step_roll_service()), and the pattern carries on from that
- * step on release. */
+/* Hits `step` at once and keeps hitting while held (step_roll_service());
+ * the pattern runs on silently underneath and plays on from wherever it has
+ * got to on release. */
 static void step_roll_begin(uint8_t step, uint8_t pad, uint32_t now) {
     s_rep_active = true;
     s_rep_step = step;
     s_rep_pad = pad;
-    tiles_drum_player_jump(&s_player, step, s_pulse);
     s_player.muted = true;
     step_roll_hit();
     s_rep_next_ms = now + step_roll_interval_ms(tiles_hall_get_depth(pad));
@@ -470,7 +469,7 @@ void tiles_drum_seq_handle_input(uint32_t now) {
         if (touched && !was) {
             if (circle) {
                 if (!s_rep_active) {
-                    step_roll_begin(step, pad, now); /* circle + step: jump there and roll */
+                    step_roll_begin(step, pad, now); /* circle + step: roll it */
                 }
             } else {
                 /* A touch toggles at once (no hold gesture on steps). */

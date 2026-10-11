@@ -98,7 +98,7 @@ typedef struct {
     bool pending_start;   /* waiting for the nearest beat */
     bool pending_restart; /* at that beat: step 1 (true) or resume (false) */
     uint8_t step;         /* 0-31: the step playing or parked on */
-    bool muted;           /* a step roll owns the notes: the playhead stays on its step, silent */
+    bool muted;           /* a step roll owns the notes: the pattern runs on silently (slip) */
     uint32_t step_started_pulse;
     bool sounding[TILES_DRUM_NOTES];
     uint8_t hits_total[TILES_DRUM_NOTES]; /* this step's hits for the note, 0 = not firing */
@@ -117,13 +117,11 @@ void tiles_drum_player_rewind(tiles_drum_player_t *pl);
 void tiles_drum_player_end_all(tiles_drum_player_t *pl, const tiles_drum_output_t *out);
 /* True while a repeat is still due within the current step. */
 bool tiles_drum_player_repeats_pending(const tiles_drum_player_t *pl);
-/* Step roll (circle + a step): jump moves the playhead to `step` now, on
- * the step grid (step boundaries stay on the clock's sixteenths), so the
- * pattern carries on from there; fire_step sounds every note armed on
- * `step`, all banks, at `velocity` (chance ignored: it's played live),
- * ending whatever was sounding. While `muted` the playhead stays on its
- * step and the player leaves notes alone; clear it to carry on. */
-void tiles_drum_player_jump(tiles_drum_player_t *pl, uint8_t step, uint32_t pulse_count);
+/* Step roll (circle + a step), slip style: fire_step sounds every note
+ * armed on `step`, all banks, at `velocity` (chance ignored: it's played
+ * live), ending whatever was sounding. While `muted` the pattern keeps
+ * running silently and leaves the roll's notes alone; clear it and the
+ * pattern plays on from wherever it has got to. */
 void tiles_drum_player_fire_step(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat,
                                  const tiles_drum_output_t *out, uint8_t step, uint8_t velocity);
 /* Call every scan with the clock snapshot (pulse count, running,

@@ -9546,3 +9546,9 @@ change. Search it by file or feature name.
 - **Step roll at constant velocity (0.3.4, 2026-10-10).** Real feedback:
   "velocity should be constant on the roll." Every roll hit plays at the
   step velocity; pressure sets the rate only.
+- **Step roll in slip mode (0.3.5, 2026-10-10).** Real feedback: "make the
+  roll like a slip mode, the sequencer continues running in background
+  instead of restarting from the roll step". No jump: circle + a step rolls
+  it at once while the pattern runs on silently (`muted` = slip), and on
+  release it plays on from wherever it has got to. The playhead keeps
+  moving on the grid during the roll; the rolled step shows white.

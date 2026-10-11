@@ -7,12 +7,12 @@
  * owns the mode switch, the buttons' shared gestures and the clock.
  *
  *   columns 1-4   the selected drum's steps, one page of 16. Touch: on /
- *                 off, at once (no hold gesture). Circle + a step: the
- *                 playhead jumps there now and every drum on that step
- *                 rolls while held: a step repeat at first, then 2, 3, 4
- *                 hits per step the harder you push, every hit at the
- *                 same velocity; on release the pattern
- *                 carries on from that step. Nothing is recorded.
+ *                 off, at once (no hold gesture). Circle + a step: every
+ *                 drum on that step rolls while held, at once: a step
+ *                 repeat at first, then 2, 3, 4 hits per step the harder
+ *                 you push, every hit at the same velocity. Slip style:
+ *                 the pattern runs on silently underneath and plays on
+ *                 from where it got to on release. Nothing is recorded.
  *   columns 5-6   8 drums (C1-G1 in Live's names on the first bank). Tap:
  *                 select (its steps show on the left). Push: play it, with
  *                 the strike's velocity. Circle + hold 1 s: clear its
