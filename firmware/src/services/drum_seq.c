@@ -20,10 +20,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* A step held this long starts its step repeat (the sequencer's pitch-pick
- * hold, services/op_mode.c OP_SEQ_PITCH_ASSIGN_HOLD_MS); a shorter touch
- * is a tap. */
-#define DRUM_STEP_HOLD_MS 350u
 /* Circle + a drum held without pushing: this long clears its part; on to
  * DRUM_CLEAR_ALL_HOLD_MS, the whole pattern. (A push makes it a roll.) */
 #define DRUM_CLEAR_HOLD_MS 1000u
@@ -33,10 +29,12 @@
 #define DRUM_FIRE_FLASH_MS 90u
 /* ~900 is full-scale depth on this hardware. */
 #define DRUM_DIAL_FULL_DEPTH 900.0f
-/* Rolls (circle + push a drum) and step repeats (hold a step): the rate
- * follows pressure, in MIDI clock pulses per hit: 1/8, 1/16, 1/32, 1/32
- * triplet as the depth passes these raw Hall depths (first guesses).
- * Velocity follows pressure too, from DRUM_ROLL_VELOCITY_MIN up. */
+/* Drum rolls (circle + push a drum): the rate follows pressure, in MIDI
+ * clock pulses per hit: 1/8, 1/16, 1/32, 1/32 triplet as the depth passes
+ * these raw Hall depths (first guesses). Step rolls (circle + a step) use
+ * the same depths for 2, 3, 4 or 6 hits per step (1/32, 1/32 triplet,
+ * 1/64, 1/96). Velocity follows pressure, from DRUM_ROLL_VELOCITY_MIN up;
+ * a step roll's first hit is the step velocity. */
 #define DRUM_ROLL_DEPTH_16TH 300u
 #define DRUM_ROLL_DEPTH_32ND 550u
 #define DRUM_ROLL_DEPTH_32ND_T 800u
@@ -76,15 +74,12 @@ static uint32_t s_pulse; /* the clock as of this scan's advance */
 static bool s_clock_running;
 
 static bool s_prev_touched[TILES_NUM_PADS];
-static uint32_t s_step_touch_ms[TILES_DRUM_PAGE_STEPS]; /* 0 = not timing a tap/hold */
 
-/* Step repeat: a held step retriggers every drum armed on it, live, while
- * the pattern keeps its place silently (s_player.muted). */
+/* Step roll (circle + a step): the playhead jumps to the step and holds
+ * there (s_player.muted) while every drum armed on it retriggers. */
 static bool s_rep_active;
 static uint8_t s_rep_step; /* 0-31 */
 static uint8_t s_rep_pad;
-static uint8_t s_rep_pulses;
-static uint32_t s_rep_last_grid;
 static uint32_t s_rep_next_ms;
 
 /* Drum pads played live: strike detection as in chord mode, rolls, and the
@@ -159,16 +154,13 @@ static void resync_touches(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         s_prev_touched[pad - 1u] = tiles_touch_is_touched(pad);
     }
-    for (uint8_t s = 0; s < TILES_DRUM_PAGE_STEPS; s++) {
-        s_step_touch_ms[s] = 0u;
-    }
     for (uint8_t v = 0; v < TILES_DRUM_VOICES; v++) {
         s_drum_awaiting[v] = false;
         s_drum_clear_ms[v] = 0u;
     }
 }
 
-static void step_repeat_end(void) {
+static void step_roll_end(void) {
     if (s_rep_active) {
         s_rep_active = false;
         s_player.muted = false;
@@ -177,7 +169,7 @@ static void step_repeat_end(void) {
 }
 
 static void end_live_notes(void) {
-    step_repeat_end();
+    step_roll_end();
     for (uint8_t v = 0; v < TILES_DRUM_VOICES; v++) {
         if (s_drum_sounding[v]) {
             tiles_midi_note_off(TILES_MIDI_CH_DRUMS, s_drum_sounding_note[v], 0u);
@@ -480,53 +472,48 @@ static void handle_drum_pad(uint8_t voice, uint8_t pad, bool touched, bool was, 
     }
 }
 
-/* ---- step repeat: hold a step ---- */
+/* ---- step roll: circle + a step ---- */
 
-static void step_repeat_hit(uint16_t depth) {
-    tiles_drum_player_fire_step(&s_player, &s_pattern, &s_out, s_rep_step, pressure_velocity(depth));
+static uint8_t step_roll_hits_for(uint16_t depth) {
+    return depth >= DRUM_ROLL_DEPTH_32ND_T ? 6u : depth >= DRUM_ROLL_DEPTH_32ND ? 4u : depth >= DRUM_ROLL_DEPTH_16TH ? 3u : 2u;
+}
+
+static uint32_t step_roll_interval_ms(uint16_t depth) {
+    float step_ms = tiles_midi_clock_get_ms_per_beat() / 4.0f;
+    uint32_t ms = (uint32_t)(step_ms / (float)step_roll_hits_for(depth) + 0.5f);
+    return ms < 1u ? 1u : ms;
+}
+
+static void step_roll_hit(uint8_t velocity) {
+    tiles_drum_player_fire_step(&s_player, &s_pattern, &s_out, s_rep_step, velocity);
     tiles_haptics_trigger_touch_pulse(s_rep_pad);
 }
 
-static void step_repeat_set_rate(uint8_t pulses, uint32_t now) {
-    s_rep_pulses = pulses;
-    s_rep_last_grid = s_pulse / pulses;
-    s_rep_next_ms = now + roll_interval_ms(pulses);
-}
-
-/* Starts at once with a hit, then retriggers on the clock's grid while it
- * runs (in time with the beat), else at the tempo's interval. */
-static void step_repeat_begin(uint8_t step, uint8_t pad, uint32_t now) {
-    uint16_t depth = tiles_hall_get_depth(pad);
+/* Jumps the playhead to `step` now and hits it at once; it keeps hitting
+ * while held (step_roll_service()), and the pattern carries on from that
+ * step on release. */
+static void step_roll_begin(uint8_t step, uint8_t pad, uint32_t now) {
     s_rep_active = true;
     s_rep_step = step;
     s_rep_pad = pad;
+    tiles_drum_player_jump(&s_player, step, s_pulse);
     s_player.muted = true;
-    step_repeat_set_rate(roll_pulses_for(depth), now);
-    step_repeat_hit(depth);
+    step_roll_hit(TILES_DRUM_STEP_VELOCITY);
+    s_rep_next_ms = now + step_roll_interval_ms(tiles_hall_get_depth(pad));
 }
 
-static void step_repeat_service(uint32_t now) {
+static void step_roll_service(uint32_t now) {
     if (!tiles_touch_is_touched(s_rep_pad)) {
-        step_repeat_end(); /* the pattern carries on from where it is */
+        step_roll_end();
         return;
     }
-    uint16_t depth = tiles_hall_get_depth(s_rep_pad);
-    uint8_t pulses = roll_pulses_for(depth);
-    if (pulses != s_rep_pulses) {
-        step_repeat_set_rate(pulses, now);
-    }
-    if (s_clock_running) {
-        uint32_t grid = s_pulse / pulses;
-        if (grid != s_rep_last_grid) {
-            s_rep_last_grid = grid;
-            step_repeat_hit(depth);
-        }
-    } else if ((int32_t)(now - s_rep_next_ms) >= 0) {
-        step_repeat_hit(depth);
-        uint32_t interval = roll_interval_ms(pulses);
+    if ((int32_t)(now - s_rep_next_ms) >= 0) {
+        uint16_t depth = tiles_hall_get_depth(s_rep_pad);
+        step_roll_hit(pressure_velocity(depth));
+        uint32_t interval = step_roll_interval_ms(depth);
         s_rep_next_ms += interval;
         if ((int32_t)(now - s_rep_next_ms) >= 0) {
-            s_rep_next_ms = now + interval;
+            s_rep_next_ms = now + interval; /* fell behind: don't burst */
         }
     }
 }
@@ -535,14 +522,11 @@ static void step_repeat_service(uint32_t now) {
 
 void tiles_drum_seq_flip_page(void) {
     s_page ^= 1u;
-    for (uint8_t s = 0; s < TILES_DRUM_PAGE_STEPS; s++) {
-        s_step_touch_ms[s] = 0u; /* a finger resting on a step isn't a tap on the new page */
-    }
 }
 
 void tiles_drum_seq_handle_input(uint32_t now) {
     if (s_rep_active) {
-        step_repeat_service(now);
+        step_roll_service(now);
     }
     bool circle = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
     uint8_t note = tiles_drum_note(s_bank, s_voice);
@@ -560,21 +544,15 @@ void tiles_drum_seq_handle_input(uint32_t now) {
         }
         uint8_t step = (uint8_t)(s_page * TILES_DRUM_PAGE_STEPS + local);
         if (touched && !was) {
-            s_step_touch_ms[local] = now == 0u ? 1u : now;
-        } else if (touched) {
-            if (s_step_touch_ms[local] != 0u && now - s_step_touch_ms[local] >= DRUM_STEP_HOLD_MS) {
-                s_step_touch_ms[local] = 0u;
+            if (circle) {
                 if (!s_rep_active) {
-                    step_repeat_begin(step, pad, now); /* hold: repeat the step */
+                    step_roll_begin(step, pad, now); /* circle + step: jump there and roll */
                 }
-            }
-        } else if (was) {
-            /* A tap toggles on release, so a hold never flips the step first. */
-            if (s_step_touch_ms[local] != 0u) {
+            } else {
+                /* A touch toggles at once (no hold gesture on steps). */
                 tiles_drum_pattern_toggle(&s_pattern, note, step);
                 mark_changed();
             }
-            s_step_touch_ms[local] = 0u;
         }
     }
 }
@@ -650,7 +628,7 @@ void tiles_drum_seq_render(uint32_t now, float beat_flash, float diamond_led, bo
         uint8_t step = (uint8_t)(s_page * TILES_DRUM_PAGE_STEPS + local);
         uint8_t pad = tiles_drum_pad_for_step(local);
         bool armed = tiles_drum_pattern_is_armed(&s_pattern, note, step);
-        /* A repeating step is white; the playhead shows playing or parked, as
+        /* A rolling step is white; the playhead shows playing or parked, as
          * in the sequencer: blue on a step that sounds, dim white on an empty
          * one. */
         if (s_rep_active && step == s_rep_step) {

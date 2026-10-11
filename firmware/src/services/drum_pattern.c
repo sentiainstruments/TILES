@@ -258,6 +258,12 @@ static void hit(tiles_drum_player_t *pl, const tiles_drum_output_t *out, uint8_t
     pl->hits_done[note]++;
 }
 
+void tiles_drum_player_jump(tiles_drum_player_t *pl, uint8_t step, uint32_t pulse_count) {
+    pl->step = (uint8_t)(step % TILES_DRUM_STEPS);
+    pl->step_started_pulse = pulse_count - pulse_count % TILES_DRUM_CLOCKS_PER_STEP;
+    pl->pending_start = false;
+}
+
 void tiles_drum_player_fire_step(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat,
                                  const tiles_drum_output_t *out, uint8_t step, uint8_t velocity) {
     tiles_drum_player_end_all(pl, out);
@@ -273,9 +279,6 @@ void tiles_drum_player_fire_step(tiles_drum_player_t *pl, const tiles_drum_patte
 static void enter_step(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat, const tiles_drum_output_t *out,
                        uint8_t step) {
     pl->step = step;
-    if (pl->muted) {
-        return; /* a step repeat owns the notes; the pattern only keeps its place */
-    }
     tiles_drum_player_end_all(pl, out);
     for (uint16_t n = 0; n < TILES_DRUM_NOTES; n++) {
         pl->hits_done[n] = 0u;
@@ -299,6 +302,18 @@ void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern
         }
         return;
     }
+    if (pl->muted) {
+        /* A step roll holds the playhead: keep the step grid moving under it,
+         * the step and the notes untouched. */
+        if (start_edge) {
+            pl->step_started_pulse = pulse_count;
+        } else if (clock_running && pulse_count - pl->step_started_pulse >= TILES_DRUM_CLOCKS_PER_STEP) {
+            pl->step_started_pulse +=
+                (pulse_count - pl->step_started_pulse) / TILES_DRUM_CLOCKS_PER_STEP * TILES_DRUM_CLOCKS_PER_STEP;
+        }
+        pl->pending_start = false;
+        return;
+    }
     if (start_edge) {
         /* A clock Start (or the first tap-tempo start): step 1 now. */
         pl->pending_start = false;
@@ -309,9 +324,7 @@ void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern
     if (!clock_running) {
         /* The shared tempo stopped: silent, but still "running", so it
          * resumes with the clock. */
-        if (!pl->muted) {
-            tiles_drum_player_end_all(pl, out);
-        }
+        tiles_drum_player_end_all(pl, out);
         return;
     }
     if (pl->pending_start) {

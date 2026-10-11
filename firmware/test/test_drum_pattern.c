@@ -252,34 +252,38 @@ int main(void) {
     len = tiles_drum_pattern_encode(&pat, blob, sizeof(blob), &truncated);
     assert(tiles_drum_pattern_decode(&back, blob, len, TILES_DRUM_BLOB_VERSION) && back.armed[40] == 0x80000000u);
 
-    /* 15. step repeat: fire_step sounds every drum on the step (chance
-     * ignored), muted playback keeps its place silently and leaves the
-     * repeat's notes alone */
+    /* 15. step roll: jump puts the playhead on the step, on the step grid;
+     * fire_step sounds every drum on it (chance ignored); while muted the
+     * playhead stays and the player leaves the notes alone; then the
+     * pattern carries on from the step after */
     fresh();
-    tiles_drum_pattern_toggle(&pat, 36, 4);
-    tiles_drum_pattern_toggle(&pat, 42, 4);
-    tiles_drum_pattern_set_probability(&pat, 42, 4, 0);
-    tiles_drum_pattern_toggle(&pat, 38, 6);
+    tiles_drum_pattern_toggle(&pat, 36, 9);
+    tiles_drum_pattern_toggle(&pat, 42, 9);
+    tiles_drum_pattern_set_probability(&pat, 42, 9, 0);
+    tiles_drum_pattern_toggle(&pat, 38, 10);
     tiles_drum_player_start(&pl, true);
     tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
+    run(1, 20);                                      /* on step 4 */
+    tiles_drum_player_jump(&pl, 9, 21);
+    assert(pl.step == 9 && pl.step_started_pulse == 18);
     pl.muted = true;
-    tiles_drum_player_fire_step(&pl, &pat, &out, 4, 77);
+    tiles_drum_player_fire_step(&pl, &pat, &out, 9, 77);
     assert(rec.on[36] == 1 && rec.on[42] == 1 && rec.last_velocity == 77);
-    run(1, 6 * 7);                                   /* steps 2-8 pass, silently */
-    assert(pl.step == 7 && rec.on[38] == 0 && rec.off[36] == 0 && rec.off[42] == 0);
-    tiles_drum_player_fire_step(&pl, &pat, &out, 4, 90);
+    run(22, 60);                                     /* held across several step lengths */
+    assert(pl.step == 9 && rec.on[38] == 0 && rec.off[36] == 0 && pl.step_started_pulse == 60);
+    tiles_drum_player_fire_step(&pl, &pat, &out, 9, 90);
     assert(rec.on[36] == 2 && rec.off[36] == 1);    /* a retrigger ends the last hit */
     pl.muted = false;
-    tiles_drum_player_end_all(&pl, &out);
-    run(6 * 7 + 1, 6 * 16 + 6 * 6);                  /* back to normal: step 7 plays next time round */
-    assert(rec.on[38] == 1);
-    /* stopped, a repeat's notes aren't cut by the idle player */
+    run(61, 66);                                     /* released: the next step is 11 */
+    assert(pl.step == 10 && rec.on[38] == 1);
+    /* stopped: jump parks the playhead, the idle player doesn't cut the roll */
     fresh();
-    tiles_drum_pattern_toggle(&pat, 36, 0);
+    tiles_drum_pattern_toggle(&pat, 36, 3);
+    tiles_drum_player_jump(&pl, 3, 100);
     pl.muted = true;
-    tiles_drum_player_fire_step(&pl, &pat, &out, 0, 100);
-    tiles_drum_player_advance(&pl, &pat, &out, 5, false, false);
-    assert(rec.on[36] == 1 && rec.off[36] == 0);
+    tiles_drum_player_fire_step(&pl, &pat, &out, 3, 100);
+    tiles_drum_player_advance(&pl, &pat, &out, 105, false, false);
+    assert(pl.step == 3 && rec.on[36] == 1 && rec.off[36] == 0);
 
     printf("drum_pattern: all tests pass\n");
     return 0;

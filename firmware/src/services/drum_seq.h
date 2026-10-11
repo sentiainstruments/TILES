@@ -6,11 +6,12 @@
  * services/drum_pattern.h; this file is the hardware side. services/op_mode.c
  * owns the mode switch, the buttons' shared gestures and the clock.
  *
- *   columns 1-4   the selected drum's steps, one page of 16. Tap: on / off.
- *                 Hold: step repeat, live: every drum on that step
- *                 retriggers while held, faster and louder the harder you
- *                 push, in time with the clock; the pattern carries on
- *                 silently and picks up on release. Nothing is recorded.
+ *   columns 1-4   the selected drum's steps, one page of 16. Touch: on /
+ *                 off, at once (no hold gesture). Circle + a step: the
+ *                 playhead jumps there now and every drum on that step
+ *                 rolls while held, 2, 3, 4 or 6 hits per step by
+ *                 pressure, louder with it; on release the pattern
+ *                 carries on from that step. Nothing is recorded.
  *   columns 5-6   8 drums (C1-G1 in Live's names on the first bank). Tap:
  *                 select (its steps show on the left). Push: play it, with
  *                 the strike's velocity. Circle + push: a roll, its rate

@@ -9525,3 +9525,13 @@ change. Search it by file or feature name.
   (`tiles_drum_player_t.muted`, which also stops the player ending the
   repeat's notes) and picks up on release. Nothing is written to the
   pattern. Stored ratchets from 0.3.0 still play.
+- **Circle + step = jump and roll; no hold on steps (0.3.2, 2026-10-10).**
+  Real feedback: "not the hold, dont hold retrigger no hold action at all
+  rn. shift press does immediate jump to step and roll depending on
+  pressure in 4 steps of subdivisions shorter than a step". A step touch
+  toggles at once (no hold timing at all). Circle + a step: the playhead
+  jumps there now (`tiles_drum_player_jump()`, kept on the sixteenth grid)
+  and every drum on the step rolls while held, 2/3/4/6 hits per step by
+  pressure (1/32, 1/32T, 1/64, 1/96), first hit at the step velocity, then
+  louder with pressure; `muted` now holds the playhead on that step, and on
+  release the pattern carries on from the step after.
