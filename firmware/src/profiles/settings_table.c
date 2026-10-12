@@ -95,14 +95,37 @@ CV_PRESSURE_FIELD(cv_press_gain, gain_trim, F, f)
     static tiles_setting_value_t get_look_##name(void) { return U(tiles_lighting_get_look(param)); } \
     static void set_look_##name(tiles_setting_value_t v) { tiles_lighting_set_look(param, (uint16_t)v.u); }
 LOOK_ENTRY(idle, TILES_LOOK_IDLE_BASELINE_PERCENT)
-LOOK_ENTRY(natural, TILES_LOOK_NATURAL_PERCENT)
-LOOK_ENTRY(root, TILES_LOOK_ROOT_PERCENT)
-LOOK_ENTRY(fifth, TILES_LOOK_FIFTH_PERCENT)
-LOOK_ENTRY(fifth_red, TILES_LOOK_FIFTH_RED_TINT_PERCENT)
 LOOK_ENTRY(echo_tint, TILES_LOOK_ECHO_SUSTAIN_TINT_PERCENT)
 LOOK_ENTRY(echo_g, TILES_LOOK_ECHO_SECONDARY_G_PERCENT)
 LOOK_ENTRY(echo_b, TILES_LOOK_ECHO_SECONDARY_B_PERCENT)
 LOOK_ENTRY(echo_flash, TILES_LOOK_ECHO_FLASH_MS)
+
+/* ---- colour scheme and custom pad colours (lighting.h) ---- */
+_Static_assert(TILES_LIGHTING_COLOR_NONE == TILES_COLOR_NONE, "lighting and settings must agree on 'none'");
+#define SCHEME_ENTRY(name, role)                                                                    \
+    static tiles_setting_value_t get_color_##name(void) { return U(tiles_lighting_get_scheme_color(role)); } \
+    static void set_color_##name(tiles_setting_value_t v) { tiles_lighting_set_scheme_color(role, v.u); }
+SCHEME_ENTRY(root, TILES_SCHEME_ROOT)
+SCHEME_ENTRY(third, TILES_SCHEME_THIRD)
+SCHEME_ENTRY(fifth, TILES_SCHEME_FIFTH)
+SCHEME_ENTRY(note, TILES_SCHEME_NOTE)
+SCHEME_ENTRY(accidental, TILES_SCHEME_ACCIDENTAL)
+static tiles_setting_value_t get_custom_pads(void) { return U(tiles_lighting_get_custom_pads_enabled() ? 1u : 0u); }
+static void set_custom_pads(tiles_setting_value_t v) { tiles_lighting_set_custom_pads_enabled(v.u != 0u); }
+/* One getter/setter pair and one row per pad; n is the logical pad, text
+ * its two-digit key suffix ("color.pad.01".."color.pad.24"). */
+#define PAD_COLOR_ENTRY(n, text)                                                                    \
+    static tiles_setting_value_t get_pad_##n(void) { return U(tiles_lighting_get_pad_color(n##u)); } \
+    static void set_pad_##n(tiles_setting_value_t v) { tiles_lighting_set_pad_color(n##u, v.u); }
+#define PAD_COLOR_ROW(n, text)                                                                      \
+    TILES_SETTING(0x0710 + (n) - 1, "color.pad." text, TILES_SETTING_COLOR, {.u = 0}, {.u = 0}, NULL, get_pad_##n, \
+                  set_pad_##n)
+#define PAD_COLOR_LIST(X)                                                                           \
+    X(1, "01") X(2, "02") X(3, "03") X(4, "04") X(5, "05") X(6, "06") X(7, "07") X(8, "08")          \
+    X(9, "09") X(10, "10") X(11, "11") X(12, "12") X(13, "13") X(14, "14") X(15, "15") X(16, "16")   \
+    X(17, "17") X(18, "18") X(19, "19") X(20, "20") X(21, "21") X(22, "22") X(23, "23") X(24, "24")
+PAD_COLOR_LIST(PAD_COLOR_ENTRY)
+#define PAD_COLOR_ROW_COMMA(n, text) PAD_COLOR_ROW(n, text),
 
 /* ---- MIDI ---- */
 static tiles_setting_value_t get_din_type(void) { return U((uint32_t)tiles_din_midi_get_trs_type()); }
@@ -117,7 +140,8 @@ static const char *const DIN_TYPE_NAMES[] = {"a", "b"};
 /* THE TABLE. One row per setting. Rules:
  *  - `id` is permanent (it is what is written to flash and what a binary protocol will use): never
  *    reuse or renumber one -- retire it by leaving a gap. Ids are grouped by hundreds:
- *    0x01xx pedal, 0x02xx expression, 0x03xx CV/gate, 0x04xx LED look, 0x05xx MIDI, 0x06xx features.
+ *    0x01xx pedal, 0x02xx expression, 0x03xx CV/gate, 0x04xx LED look, 0x05xx MIDI, 0x06xx features,
+ *    0x07xx colours.
  *  - `key` is the human/script name.
  *  - The range is what the setting will accept -- wide enough for any value that is actually useful,
  *    narrow enough to refuse something nonsensical (or unsafe for the CV output).
@@ -159,14 +183,8 @@ static const tiles_setting_def_t TABLE[] = {
     /* LED look: whole percent of the (fixed) brightness ceiling; see lighting.h */
     TILES_SETTING(0x0400, "look.idle_baseline_percent", TILES_SETTING_UINT, {.u = 0}, {.u = 100}, NULL, get_look_idle,
                   set_look_idle),
-    TILES_SETTING(0x0401, "look.natural_pad_percent", TILES_SETTING_UINT, {.u = 0}, {.u = 100}, NULL,
-                  get_look_natural, set_look_natural),
-    TILES_SETTING(0x0402, "look.root_pad_percent", TILES_SETTING_UINT, {.u = 0}, {.u = 100}, NULL, get_look_root,
-                  set_look_root),
-    TILES_SETTING(0x0403, "look.fifth_pad_percent", TILES_SETTING_UINT, {.u = 0}, {.u = 100}, NULL, get_look_fifth,
-                  set_look_fifth),
-    TILES_SETTING(0x0404, "look.fifth_red_tint_percent", TILES_SETTING_UINT, {.u = 0}, {.u = 100}, NULL,
-                  get_look_fifth_red, set_look_fifth_red),
+    /* 0x0401-0x0404 retired (natural/root/fifth levels and the fifth's red
+     * tint): replaced by the colour scheme, color.* below. */
     TILES_SETTING(0x0405, "look.echo_sustain_tint_percent", TILES_SETTING_UINT, {.u = 0}, {.u = 100}, NULL,
                   get_look_echo_tint, set_look_echo_tint),
     TILES_SETTING(0x0406, "look.echo_secondary_g_percent", TILES_SETTING_UINT, {.u = 0}, {.u = 100}, NULL,
@@ -190,6 +208,19 @@ static const tiles_setting_def_t TABLE[] = {
                   get_harm_confirm, set_harm_confirm),
     TILES_SETTING(0x0603, "features.harmonics.press_depth", TILES_SETTING_UINT, {.u = 1}, {.u = 1000}, NULL,
                   get_harm_press, set_harm_press),
+    /* colour scheme (0xRRGGBB before the power ceiling, or "none"; lighting.h) */
+    TILES_SETTING(0x0700, "color.root", TILES_SETTING_COLOR, {.u = 0}, {.u = 0}, NULL, get_color_root, set_color_root),
+    TILES_SETTING(0x0701, "color.third", TILES_SETTING_COLOR, {.u = 0}, {.u = 0}, NULL, get_color_third,
+                  set_color_third),
+    TILES_SETTING(0x0702, "color.fifth", TILES_SETTING_COLOR, {.u = 0}, {.u = 0}, NULL, get_color_fifth,
+                  set_color_fifth),
+    TILES_SETTING(0x0703, "color.note", TILES_SETTING_COLOR, {.u = 0}, {.u = 0}, NULL, get_color_note, set_color_note),
+    TILES_SETTING(0x0704, "color.accidental", TILES_SETTING_COLOR, {.u = 0}, {.u = 0}, NULL, get_color_accidental,
+                  set_color_accidental),
+    /* custom pad colours (advanced; melodic mode only) */
+    TILES_SETTING(0x0705, "color.custom_pads", TILES_SETTING_BOOL, {.u = 0}, {.u = 1}, NULL, get_custom_pads,
+                  set_custom_pads),
+    PAD_COLOR_LIST(PAD_COLOR_ROW_COMMA)
 };
 #define TABLE_COUNT (sizeof(TABLE) / sizeof(TABLE[0]))
 

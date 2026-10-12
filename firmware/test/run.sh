@@ -26,12 +26,24 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_midi_channels.c sr
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_mpe_alloc.c src/services/mpe_alloc.c -o /tmp/sentia_tiles_test_mpe_alloc
 /tmp/sentia_tiles_test_mpe_alloc
 
+# Drum sequencer core: layout, Drum Rack notes, steps, repeats, chance, quantized start.
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_drum_pattern.c src/services/drum_pattern.c -o /tmp/sentia_tiles_test_drum_pattern
+/tmp/sentia_tiles_test_drum_pattern
+
 # Flash store (power-cut simulation) and the settings table on top of it.
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/storage test/test_kv_store.c src/storage/kv_store.c -o /tmp/sentia_tiles_test_kv_store
 /tmp/sentia_tiles_test_kv_store
 
+# The append-only log under drum mode's pattern (saves without erasing while playing).
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/storage test/test_log_store.c src/storage/log_store.c src/storage/kv_store.c -o /tmp/sentia_tiles_test_log_store
+/tmp/sentia_tiles_test_log_store
+
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/profiles -Isrc/storage test/test_settings.c src/profiles/settings.c src/profiles/settings_persist.c src/storage/kv_store.c -lm -o /tmp/sentia_tiles_test_settings
 /tmp/sentia_tiles_test_settings
+
+# Content store (custom scales) on its own simulated flash region, into the real note map.
+cc -std=c11 -Wall -Wextra -Wpedantic -Itest/stubs -Isrc/storage -Isrc/services -Isrc/board -Isrc/profiles test/test_content.c src/profiles/content.c src/storage/kv_store.c src/services/note_map.c src/board/pad_config.c -o /tmp/sentia_tiles_test_content
+/tmp/sentia_tiles_test_content
 
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/midi test/test_identity.c -o /tmp/sentia_tiles_test_identity
 /tmp/sentia_tiles_test_identity

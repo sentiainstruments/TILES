@@ -19,11 +19,13 @@
 #include "board/unit_id.h"
 #include "diagnostics/calibration.h"
 #include "diagnostics/i2c_scan.h"
+#include "diagnostics/loop_stats.h"
 #include "midi/din_midi.h"
 #include "midi/identity.h"
 #include "midi/midi_in.h"
 #include "midi/midi_out.h"
 #include "midi/usb_device.h"
+#include "profiles/content.h"
 #include "profiles/settings_table.h"
 #include "services/boot_sequence.h"
 #include "services/buttons.h"
@@ -45,6 +47,7 @@
 #include "services/power.h"
 #include "services/standby.h"
 #include "services/touch.h"
+#include "storage/storage_flash.h"
 #include "usb_vendor/usb_vendor.h"
 
 /* Power-change callback (registered below): a power-source switch can
@@ -214,11 +217,16 @@ int main(void) {
      * saved to flash. Must follow every module init. */
     tiles_settings_boot();
 
+    /* Content store: custom scales the companion app pushed, into the note
+     * map's CUSTOM_1..9 (after tiles_note_map_init()). */
+    tiles_content_init(tiles_storage_content_region_safe() ? tiles_storage_content_ops() : NULL);
+
     /* MPE zone declaration for DIN (USB repeats it on mount), after settings,
      * so a saved "MPE off" announces a withdrawn zone. */
     tiles_expression_announce_mpe_zone();
 
     while (true) {
+        tiles_loop_stats_mark(time_us_32());
         /* Must run every pass: it IS the USB stack (control transfers, CDC and
          * MIDI data). pico_stdio_usb's background servicing is compiled out when
          * tinyusb_device is linked directly, so without this call nothing is

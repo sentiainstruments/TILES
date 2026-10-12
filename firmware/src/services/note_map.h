@@ -36,10 +36,11 @@ void tiles_note_map_init(bool crash_recovered);
  * overwhelming menu: kept the approachable and "fun" exotic scales). Their
  * enum values stay so nothing else churns.
  *
- * CUSTOM_* are valid enum values with no table yet
- * (tiles_note_map_scale_is_defined() is false): the picker treats them as
- * unavailable, and get_note() would fall back to chromatic if one were
- * ever selected. */
+ * CUSTOM_1..9 take their tables from tiles_note_map_set_custom_scale()
+ * (the content store, profiles/content.c, pushes them from the companion
+ * app). An empty one (tiles_note_map_scale_is_defined() is false) is
+ * unavailable on the picker, and get_note() falls back to chromatic if it
+ * is selected anyway (e.g. its scale was deleted while in use). */
 typedef enum {
     TILES_SCALE_CHROMATIC = 0,
     TILES_SCALE_IONIAN,
@@ -79,9 +80,20 @@ typedef enum {
  * out-of-range slot. */
 tiles_scale_mode_t tiles_note_map_scale_for_grid_slot(uint8_t slot_1_to_24);
 
-/* True if `scale` has an interval table; false for the CUSTOM_*
- * placeholders. */
+/* True if `scale` has an interval table; false for an empty CUSTOM_* slot. */
 bool tiles_note_map_scale_is_defined(tiles_scale_mode_t scale);
+
+/* Custom scales, slot 1-9 = TILES_SCALE_CUSTOM_1..9. `intervals` are
+ * semitones above the root: 1-12 of them, starting at 0, strictly
+ * increasing, all below 12 (tiles_note_map_custom_scale_valid()). count 0
+ * empties the slot. Returns false (slot unchanged) for a bad slot or table. */
+#define TILES_NOTE_MAP_NUM_CUSTOM_SCALES 9u
+#define TILES_NOTE_MAP_MAX_SCALE_NOTES 12u
+bool tiles_note_map_custom_scale_valid(const int8_t *intervals, uint8_t count);
+bool tiles_note_map_set_custom_scale(uint8_t slot_1_to_9, const int8_t *intervals, uint8_t count);
+/* Copies a custom slot's table into `out` (capacity
+ * TILES_NOTE_MAP_MAX_SCALE_NOTES); returns its count, 0 if empty. */
+uint8_t tiles_note_map_get_custom_scale(uint8_t slot_1_to_9, int8_t *out);
 
 /* MIDI note of the lowest pad (19) in chromatic: C3 (MIDI 60 = C4). The
  * one place to change the base octave. */
@@ -127,6 +139,10 @@ bool tiles_note_map_is_root_pad(uint8_t logical_pad);
  * scale without a perfect fifth gets no fifth pads). Chord-mode aware.
  * For idle lighting. False out of range. */
 bool tiles_note_map_is_fifth_pad(uint8_t logical_pad);
+
+/* The scale's third: the major third (4 semitones) if the scale has one,
+ * else its minor third (3), else none. Same degree math as the fifth. */
+bool tiles_note_map_is_third_pad(uint8_t logical_pad);
 
 /* True if the pad's current note is a natural (white key). Depends on the
  * key, unlike the root check. For idle lighting. True out of range. */

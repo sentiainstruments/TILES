@@ -12,7 +12,7 @@
 static uint32_t m_mode, m_enabled, m_aftertouch;
 static float m_bend, m_gain;
 static int32_t m_ref_note;
-static uint32_t m_din, m_look_natural, m_volatile;
+static uint32_t m_din, m_look_natural, m_volatile, m_color;
 static int set_calls;
 
 static tiles_setting_value_t U(uint32_t v) { tiles_setting_value_t x; x.u = v; return x; }
@@ -28,6 +28,7 @@ static tiles_setting_value_t g_ref(void) { return I(m_ref_note); }         stati
 static tiles_setting_value_t g_din(void) { return U(m_din); }              static void s_din(tiles_setting_value_t v) { m_din = v.u; set_calls++; }
 static tiles_setting_value_t g_vol(void) { return U(m_volatile); }        static void s_vol(tiles_setting_value_t v) { m_volatile = v.u; set_calls++; }
 static tiles_setting_value_t g_nat(void) { return U(m_look_natural); }     static void s_nat(tiles_setting_value_t v) { m_look_natural = v.u; set_calls++; }
+static tiles_setting_value_t g_col(void) { return U(m_color); }           static void s_col(tiles_setting_value_t v) { m_color = v.u; set_calls++; }
 
 static const char *const MODE_NAMES[] = {"sustain", "expression"};
 static const char *const DIN_NAMES[] = {"a", "b"};
@@ -41,11 +42,12 @@ static const tiles_setting_def_t TABLE[] = {
     TILES_SETTING(1280, "midi.din_trs_type",     TILES_SETTING_ENUM,  {.u = 0},   {.u = 1},     DIN_NAMES, g_din, s_din),
     TILES_SETTING(1025, "look.natural_pad_percent", TILES_SETTING_UINT, {.u = 0}, {.u = 100},   NULL, g_nat, s_nat),
     TILES_SETTING_V(768, "cv.enabled",           TILES_SETTING_BOOL,  {.u = 0},   {.u = 1},     NULL, g_vol, s_vol),
+    TILES_SETTING(1792, "color.root",            TILES_SETTING_COLOR, {.u = 0},   {.u = 0},     NULL, g_col, s_col),
 };
 #define N (sizeof(TABLE) / sizeof(TABLE[0]))
 
 static void reset_modules(void) {
-    m_mode = 0; m_enabled = 1; m_aftertouch = 1450; m_bend = 0.065f; m_gain = 1.0f; m_ref_note = 0; m_din = 0; m_look_natural = 21; m_volatile = 0;
+    m_mode = 0; m_enabled = 1; m_aftertouch = 1450; m_bend = 0.065f; m_gain = 1.0f; m_ref_note = 0; m_din = 0; m_look_natural = 21; m_volatile = 0; m_color = 0x660066u;
     set_calls = 0;
 }
 static void boot_registry(void) { reset_modules(); tiles_settings_init(TABLE, N); tiles_settings_capture_defaults(); }
@@ -59,6 +61,7 @@ static bool sim_erase(uint8_t s) { if (g_fail_erase) return false; g_erases++; m
 static bool sim_program(uint8_t s, uint32_t o, const uint8_t *b, uint32_t l) {
     for (uint32_t i = 0; i < l; i++) { assert((g_mem[s][o + i] & b[i]) == b[i]); g_mem[s][o + i] &= b[i]; } return true; }
 static const tiles_kv_ops_t OPS = {sim_read, sim_erase, sim_program};
+static tiles_kv_t g_kv;
 
 static bool g_idle = true;
 static bool idle_fn(void) { return g_idle; }
@@ -211,15 +214,38 @@ int main(void) {
 
     /* a snapshot with an unknown id is cleaned up on the next save; a blob from an unknown version is ignored */
     memset(g_mem, 0xFF, sizeof(g_mem)); boot_registry();
-    tiles_kv_init(&OPS);
+    tiles_kv_init(&g_kv, &OPS);
     uint8_t junk[14] = {0xEF, 0xBE, 0, 9, 0, 0, 0,   0x01, 0x04, TILES_SETTING_UINT, 40, 0, 0, 0};
-    assert(tiles_kv_write(junk, sizeof(junk), TILES_SETTINGS_BLOB_VERSION) == TILES_KV_OK);
+    assert(tiles_kv_write(&g_kv, junk, sizeof(junk), TILES_SETTINGS_BLOB_VERSION) == TILES_KV_OK);
     boot_registry(); tiles_settings_persist_init(&OPS, idle_fn); assert(m_look_natural == 40 && tiles_settings_persist_get_info().saved_bytes == 14);
     e = g_erases; for (int i = 0; i < 20; i++) tiles_settings_persist_service(t += 500);
     assert(g_erases == e + 1 && tiles_settings_persist_get_info().saved_bytes == 7);       /* unknown entry dropped, known kept */
-    memset(g_mem, 0xFF, sizeof(g_mem)); tiles_kv_init(&OPS);
-    assert(tiles_kv_write(junk, sizeof(junk), 99) == TILES_KV_OK);
+    memset(g_mem, 0xFF, sizeof(g_mem)); tiles_kv_init(&g_kv, &OPS);
+    assert(tiles_kv_write(&g_kv, junk, sizeof(junk), 99) == TILES_KV_OK);
     boot_registry(); tiles_settings_persist_init(&OPS, idle_fn); assert(m_look_natural == 21 && !tiles_settings_persist_get_info().loaded);
+
+    /* ---------- color: hex RRGGBB or "none", round-trips through the blob ---------- */
+    boot_registry();
+    text_of("color.root", buf); assert(!strcmp(buf, "660066"));
+    assert(tiles_settings_set_text("color.root", "ff8800") == TILES_SETTINGS_OK && m_color == 0xFF8800u);
+    text_of("color.root", buf); assert(!strcmp(buf, "FF8800"));                         /* always upper case out */
+    assert(tiles_settings_set_text("color.root", "#00FF00") == TILES_SETTINGS_OK && m_color == 0x00FF00u);
+    assert(tiles_settings_set_text("color.root", "none") == TILES_SETTINGS_OK && m_color == TILES_COLOR_NONE);
+    text_of("color.root", buf); assert(!strcmp(buf, "none"));
+    assert(tiles_settings_set_text("color.root", "12345") == TILES_SETTINGS_BAD_VALUE);
+    assert(tiles_settings_set_text("color.root", "1234567") == TILES_SETTINGS_BAD_VALUE);
+    assert(tiles_settings_set_text("color.root", "GG0000") == TILES_SETTINGS_BAD_VALUE);
+    assert(tiles_settings_set_text("color.root", "") == TILES_SETTINGS_BAD_VALUE && m_color == TILES_COLOR_NONE);
+    tiles_settings_describe(&TABLE[9], buf, sizeof(buf)); assert(!strcmp(buf, "id=1792 key=color.root type=color default=660066"));
+    assert(tiles_settings_set_text("color.root", "ABCDEF") == TILES_SETTINGS_OK);
+    {
+        uint8_t blob[64]; bool of;
+        size_t bl = tiles_settings_serialize(blob, sizeof(blob), &of); assert(!of && bl == 7);
+        boot_registry(); assert(m_color == 0x660066u);
+        assert(tiles_settings_apply_blob(blob, bl) == 1 && m_color == 0xABCDEFu);
+        blob[3] = 0; blob[4] = 0; blob[5] = 0; blob[6] = 0x02;                               /* 0x02000000: not a colour */
+        boot_registry(); assert(tiles_settings_apply_blob(blob, bl) == 0 && m_color == 0x660066u);
+    }
 
     printf("settings: all tests pass\n");
     return 0;

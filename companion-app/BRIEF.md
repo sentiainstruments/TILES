@@ -74,18 +74,21 @@ of them; only the ✅ ones can be wired to the real board in phase 1.
 |---|---|---|
 | 1 | **Tune the feel**: pitch-bend and pressure sensitivity, MPE on/off | ✅ settings |
 | 2 | **Set up the pedal**: sustain vs expression, pedal polarity, sustain style | ✅ settings |
-| 3 | **Change the look**: LED brightness levels for idle/root/fifth pads, echo colours | ✅ settings |
+| 3 | **Change the look**: colour schemes (root / fifth / third / note / accidental colours), echo colours | ✅ settings (`color.*`, firmware 0.2.7) |
+| 3b | **Paint pads** (advanced): any colour on any pad in melodic mode | ✅ settings (`color.custom_pads`, `color.pad.01`-`24`, 0.2.7) |
 | 4 | **Tune harmonics** (light touches pluck overtones of a held note) | ✅ settings |
 | 5 | **Set up CV/gate** for modular gear: volts per semitone, trims | ✅ settings |
 | 6 | **DIN MIDI jack type** (TRS A/B) | ✅ settings |
 | 7 | **Update firmware** | ⚠️ reboot-to-bootloader works (`REBOOT BOOTSEL`); the app must then copy the `.uf2` -- flow not designed |
 | 8 | **Set up Ableton**: install the TILES script, explain the two ports | ⚠️ app-side only (copy a folder); see `../daw-integration/README.md` |
-| 9 | **Pick scale / key / layout** | ⚠️ 18 scales + 9 custom slots exist on the device, chosen with buttons; not exposed to the app yet |
+| 9 | **Push / pull custom scales** into the picker's 9 custom slots | ✅ `SCALES`, `SCALE GET/PUT/DELETE` (0.2.7) |
+| 9b | **Pick scale / key** from the app | ⚠️ chosen on the device with buttons; not exposed to the app yet |
 | 10 | **Save / load / share a setup** (layout file) | ❌ layout object not built on the device |
 | 11 | **Calibrate pads** / see live pad sensors | ❌ no streaming yet |
 | 12 | **Remap pads** (notes/CCs per pad) | ❌ not built |
 | 13 | **Diagnose** ("is pad 7 broken?") | ⚠️ `INFO` exists; per-pad test not exposed |
 | 14 | See a change made on the device (button press) reflected in the app | ❌ no change notification yet -- the app must re-read |
+| 15 | **Packs** (sold): scale packs now; layouts, modes, games later | ⚠️ scales carry `pack=`/`item=`/`version=`; layouts and unlocking paid modes/games are planned -- `../docs/architecture/content-packs.md` |
 
 Whatever the top-priority tasks need that's ❌ goes onto the firmware
 list; tell us early.
@@ -108,9 +111,15 @@ GET <key>         -> the value, or ERR ...
 SET <key> <value> -> OK, or ERR unknown-key / bad-value / out-of-range
 RESET <key>|ALL   -> back to default
 SAVE              -> write to flash now (it also auto-saves ~2 s after the last change)
-INFO              -> unit=2/4, firmware=0.2.0, flash-store status...
+INFO              -> unit=2/4, firmware=0.2.7, power, flash-store and content-store status...
 REBOOT BOOTSEL    -> reboots into the bootloader for a firmware update (no reply)
 REBOOT APP        -> plain restart
+SCALES            -> every custom scale: "1 Hirajoshi 0,2,3,7,8 pack=japan item=hirajoshi version=1"; then OK
+SCALE GET <slot>  -> one scale's line, then OK (or ERR empty)
+SCALE PUT <slot> <name> <intervals> [pack=..] [item=..] [version=..]  -> OK once saved
+SCALE DELETE <slot>
+CONTENT LIST      -> every record in the content store; then OK
+CONTENT CLEAR     -> wipe every custom scale
 ```
 
 Things the app must respect:
@@ -130,7 +139,19 @@ Things the app must respect:
 - **`persist=0` settings** (currently only `cv_gate.enabled`) reset every
   boot by design -- show that in the UI.
 - **LED `look.*` values are % of a fixed safe ceiling**, not raw
-  brightness; no setting can exceed it.
+  brightness; no setting can exceed it. Same for `color.*`: the colour is
+  what the pad shows before that ceiling, so `363636` is a dim white.
+- **Colour schemes live in the app.** A scheme is five colours (root,
+  fifth, third, note, accidental; each `RRGGBB` or `none` = no highlight);
+  the device only holds the active one. Applying a scheme is five `SET`s.
+  Name, save, share and ship preset schemes app-side; the default scheme is
+  the device defaults (`RESET` each `color.*` key, or read them from
+  `SCHEMA`). Per-pad colours are the same idea per pad, behind an
+  "advanced" switch (`color.custom_pads`).
+- **Scales are pushed whole** and saved before the device answers `OK`
+  (a flash write, tens of ms): don't push while someone is playing. A
+  `SCALES` line is exactly a `SCALE PUT`'s arguments, so pull → edit → push
+  round-trips.
 - **CV/gate only runs on external power**, even when enabled -- the UI
   should say so rather than imply it's broken.
 
@@ -198,10 +219,6 @@ suggestion for the UI.
 | `cv_gate.pressure.zero_trim_volts` | float | -2.5 – 2.5 | 0 | Advanced |
 | `cv_gate.pressure.gain_trim` | float | 0.5 – 2.0 | 1.0 | Advanced |
 | `look.idle_baseline_percent` | uint | 0 – 100 | 50 | Basic |
-| `look.natural_pad_percent` | uint | 0 – 100 | 21 | Basic |
-| `look.root_pad_percent` | uint | 0 – 100 | 40 | Basic |
-| `look.fifth_pad_percent` | uint | 0 – 100 | 40 | Basic |
-| `look.fifth_red_tint_percent` | uint | 0 – 100 | 35 | Advanced |
 | `look.echo_sustain_tint_percent` | uint | 0 – 100 | 35 | Advanced |
 | `look.echo_secondary_g_percent` | uint | 0 – 100 | 18 | Advanced |
 | `look.echo_secondary_b_percent` | uint | 0 – 100 | 12 | Advanced |
@@ -211,6 +228,17 @@ suggestion for the UI.
 | `features.harmonics.arm_ms` | uint | 0 – 1000 | 150 | Advanced |
 | `features.harmonics.confirm_ms` | uint | 0 – 500 | 40 | Advanced |
 | `features.harmonics.press_depth` | uint | 1 – 1000 | 128 | Advanced |
+| `color.root` | color | RRGGBB / none | 660066 (Sentia pink) | Basic (scheme) |
+| `color.fifth` | color | RRGGBB / none | 240066 (violet) | Basic (scheme) |
+| `color.third` | color | RRGGBB / none | none | Basic (scheme) |
+| `color.note` | color | RRGGBB / none | 363636 (dim white) | Basic (scheme) |
+| `color.accidental` | color | RRGGBB / none | 000000 (dark) | Advanced (scheme) |
+| `color.custom_pads` | bool | | off | Advanced (pad painter) |
+| `color.pad.01` … `color.pad.24` | color | RRGGBB / none | none | Advanced (pad painter) |
+
+(`look.natural_pad_percent`, `look.root_pad_percent`, `look.fifth_pad_percent`
+and `look.fifth_red_tint_percent` are gone as of 0.2.7: the colour scheme
+replaced them.)
 
 What each one does, in detail: `../shared/protocol/README.md` ("Key
 catalog"). Some raw units (pitch-bend sensitivity as a "cosine
@@ -236,8 +264,11 @@ expression menu maps them onto 6 steps; matching that is a good default.
 2. Firmware update: will the app ship firmware files inside itself, or
    download them (which pulls in a server)?
 3. Should the app also be the Ableton-setup helper (task 8)?
-4. Scales/layouts on the device: what should the app be able to change?
-   (Needs firmware work either way.)
+4. Scales: custom scales are pushable now (0.2.7). Layouts: what should a
+   layout hold first (pad → note map? a mode's settings?) -- see
+   `../docs/architecture/content-packs.md`.
+5. Packs: how does the app know what a user owns (account on a server,
+   or a licence file)? Shapes the entitlement design in the same doc.
 
 ## 10. Where to look
 
@@ -247,6 +278,8 @@ expression menu maps them onto 6 steps; matching that is a good default.
 | Protocol + every setting explained | `../shared/protocol/README.md` |
 | Reference client (Python) | `../tools/tiles_control.py`, `../tools/README.md` |
 | Real settings data for the fake device | `fixtures/tiles-settings.json` |
+| Colour schemes, pad colours, custom scales, content store | `../shared/protocol/README.md` |
+| Packs: how scales, layouts, modes and games get sold | `../docs/architecture/content-packs.md` |
 | USB IDs, firmware version | `../firmware/src/midi/product_identity.h` |
 | Ableton setup / two MIDI ports | `../daw-integration/README.md` |
 | Pad wiring, buttons | `../docs/hardware/`, `../firmware/src/board/board_layout.h` |

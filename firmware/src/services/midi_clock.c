@@ -179,6 +179,25 @@ bool tiles_midi_clock_tap_tempo_established(void) {
     return s_tap_tempo_established;
 }
 
+bool tiles_midi_clock_restart(void) {
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    if (tiles_midi_clock_external_active(now_ms)) {
+        return false;
+    }
+    if (!s_tap_tempo_established) {
+        s_tap_interval_ms = 500.0f; /* 120 BPM until a tempo is tapped */
+        s_tap_tempo_established = true;
+    }
+    /* Beat 1 now: the pulse count jumps to the next beat boundary (every lane
+     * re-anchors on start_edge, so the jump never plays steps), and the next
+     * pulse is one pulse interval from now. */
+    s_pulse_count += (24u - s_pulse_count % 24u) % 24u;
+    s_next_virtual_pulse_due_ms = now_ms + (uint32_t)(s_tap_interval_ms / 24.0f + 0.5f);
+    s_running = true;
+    s_start_edge = true;
+    return true;
+}
+
 void tiles_midi_clock_set_running(bool running) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
     if (tiles_midi_clock_external_active(now_ms)) {

@@ -39,10 +39,6 @@ void tiles_lighting_set_pad_press(uint8_t logical_pad, float press_0_to_1);
  * <= 2000 ms. Defaults are the constants at the top of lighting.c. */
 typedef enum {
     TILES_LOOK_IDLE_BASELINE_PERCENT = 0, /* "visible but not active": pressed floor, bass frets, chord strip */
-    TILES_LOOK_NATURAL_PERCENT,           /* melodic: plain white pad (not root, fifth or playing) */
-    TILES_LOOK_ROOT_PERCENT,              /* melodic: root pad (Sentia magenta) */
-    TILES_LOOK_FIFTH_PERCENT,             /* melodic: perfect-fifth pad (blue + red tint) */
-    TILES_LOOK_FIFTH_RED_TINT_PERCENT,    /* red mixed into the fifth's blue */
     TILES_LOOK_ECHO_SUSTAIN_TINT_PERCENT, /* echo (primary, green): white kept in the sustain */
     TILES_LOOK_ECHO_SECONDARY_G_PERCENT,  /* second TILES DISPLAY (soft red): settled green */
     TILES_LOOK_ECHO_SECONDARY_B_PERCENT,  /* second TILES DISPLAY (soft red): settled blue */
@@ -52,6 +48,35 @@ typedef enum {
 
 uint16_t tiles_lighting_get_look(tiles_look_param_t param);
 void tiles_lighting_set_look(tiles_look_param_t param, uint16_t value);
+
+/* Colour scheme: the idle colour of each note role in melodic mode and
+ * chord mode's melody grid, as 0xRRGGBB -- what the pad shows before the
+ * power ceiling, so brightness is in the value (0x363636 is a dim white).
+ * TILES_LIGHTING_COLOR_NONE means "no highlight for this role": the pad
+ * falls through to the next one. Priority: root > fifth > third >
+ * accidental (a sharp/flat pitch class) > note. Each is a saved setting
+ * (color.* in profiles/settings_table.c); the companion app edits schemes
+ * through those. Defaults are the device's original look. */
+#define TILES_LIGHTING_COLOR_NONE 0x01000000u
+typedef enum {
+    TILES_SCHEME_ROOT = 0,
+    TILES_SCHEME_THIRD,
+    TILES_SCHEME_FIFTH,
+    TILES_SCHEME_NOTE,
+    TILES_SCHEME_ACCIDENTAL,
+    TILES_SCHEME_COUNT
+} tiles_scheme_role_t;
+void tiles_lighting_set_scheme_color(tiles_scheme_role_t role, uint32_t rgb_or_none);
+uint32_t tiles_lighting_get_scheme_color(tiles_scheme_role_t role);
+
+/* Custom pad colours (advanced): with custom pads on, a pad that has its
+ * own colour shows it in melodic mode instead of its role colour; pads set
+ * to TILES_LIGHTING_COLOR_NONE keep the scheme. Pressed pads, the echo and
+ * Song capture still draw over it. logical_pad 1-24. */
+void tiles_lighting_set_custom_pads_enabled(bool enabled);
+bool tiles_lighting_get_custom_pads_enabled(void);
+void tiles_lighting_set_pad_color(uint8_t logical_pad, uint32_t rgb_or_none);
+uint32_t tiles_lighting_get_pad_color(uint8_t logical_pad);
 
 /* Rewrites pads round-robin via the required mux sequence (disable all ->
  * select -> enable one bank -> send one pixel -> latch -> disable), plus

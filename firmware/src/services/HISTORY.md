@@ -9375,3 +9375,186 @@ change. Search it by file or feature name.
   motors spinning up; held 3 s it read 0.35 A, the parts' sum. Data:
   `docs/hardware/current-measurements.md`.
 
+- **Colour schemes, per-pad colours, custom scales, content store (0.2.7,
+  2026-10-08).** Real feedback: "lets make color porfiles that he can access
+  and map like root note color, fifth color, third color, scale note color
+  ... not individaul pads but schemes, also we shoudl be able to modify
+  individual pad colors ... like an advanced feature. sam should also access
+  other parameters like pushing new scales or pulling scales off the device
+  ... we will sell these layouts in packs so keep that in mind." Built for
+  Sam's companion app:
+  - **Colour scheme** (`lighting.c`): melodic idle pads are coloured by
+    role, root > fifth > third > accidental > note, each a `color` setting
+    (`RRGGBB` before the power ceiling, or `none` = fall through).
+    Defaults are the old look, as colours: root `660066` (magenta at 40%),
+    fifth `240066` (violet at 40%), note `363636` (white at 21%),
+    accidental dark, third `none` (a third landmark was tried and dropped
+    before; the app can turn it on). The third is the scale's major third
+    if it has one, else its minor (`tiles_note_map_is_third_pad`). The four
+    look rows it replaces (`0x0401`-`0x0404`) are retired.
+  - **Per-pad colours** (advanced): `color.custom_pads` + `color.pad.01`-`24`,
+    melodic mode only (chord mode's grid keeps the scheme). Sequencer edit
+    views keep their own menu colours.
+  - **New settings type `color`** (`profiles/settings.c`), `SETTINGS_MAX`
+    128, sparse blob cap 1 KB.
+  - **Content store** (`profiles/content.c`): a second kv region below the
+    settings (`kv_store` became a per-instance `tiles_kv_t`), a blob of
+    typed records. Custom scales fill the picker's CUSTOM_1..9 (which had
+    no tables), each with pack / item / version. Saved before `OK`; unknown
+    record types kept; a newer blob format is read-only until `CONTENT
+    CLEAR`. USB: `SCALES`, `SCALE GET/PUT/DELETE`, `CONTENT LIST/CLEAR`,
+    `INFO` content fields.
+  - LIST and SCHEMA now stream: with the colour rows SCHEMA is ~5 KB, over
+    the 4 KB reply buffer, which would have cut it off silently.
+  - Packs plan (data pushed, code unlocked per unit by signed
+    entitlements): `docs/architecture/content-packs.md`.
+- **Drum mode (0.2.8, 2026-10-09).** Real feedback: "lets create a new app
+  called drum sequencer for now. the left 4 columns are the 16 step
+  sequencer, the right 2 columns are the drum sounds. tap selects the drum
+  sound, push triggers sound, when drum selected we view the sequence for
+  that drum sound, how we assign midi to this is like the drum rack in
+  ableton ... c1 is pad 5 c#1 is pad 6, pad 11 is d1, d#1 is pad 12 ...
+  shift + moves to the next 8 sounds and back with - give this mode a
+  different color with underglow that we havent used yet. the sequencer
+  operates similar to regular sequencer including tap tempo. diamond does
+  daw transport controls". Built as:
+  - `drum_pattern.{h,c}`: layout, notes, pattern and step player, no
+    hardware, tested natively (`test/test_drum_pattern.c`). Notes are Live's
+    names: C1 = MIDI 36 (Drum Rack's first pad, GM kick); banks of 8 go from
+    notes 4-11 up to 116-123. Every note has its own 16-step row, so a beat
+    in one bank keeps playing while another bank is shown.
+  - `drum_seq.{h,c}`: the hardware side. Tap a drum: select; push (past the
+    strike depth, as melodic): play with the strike's velocity; circle +
+    hold 3 s: clear its steps. Steps: tap on/off (on release), hold = chance
+    dial, circle + step = repeats dial (the sequencer's gestures, minus
+    pitch). "-"/"+" stop/start as the sequencer; circle + "-"/"+" banks.
+    Diamond: the performance transport, unchanged.
+  - MIDI channel 10, which had been kept free for exactly this (GM
+    percussion); `TILES_MIDI_CH_PERCUSSION_EXCLUDED` became
+    `TILES_MIDI_CH_DRUMS`.
+  - Lime (0.5, 1, 0): no mode or indicator used it. Mode menu pad 7 (row 1
+    is full).
+  - The quantized start snaps to the nearest beat's grid (first half of a
+    beat: start now on that beat's grid; second half: wait). The
+    sequencer's own pending start waits in the first half and starts
+    unaligned in the second; not changed there.
+  - The pattern lives in RAM (lost at power-off); saving it is a next step.
+- **Drum patterns save themselves; whole-pattern clear; sequencer start
+  fix (0.2.8, 2026-10-09).** Real feedback: "make it so patterns save on
+  drum sequencer always, to clear pattern or part shift plus hold desired
+  pad down. fix the bug you found".
+  - Drum pattern in its own two-slot flash region (`TILES_FLASH_DRUM_*`),
+    written 2 s after the last change with no pad touched. While the beat
+    plays, only just after a step starts with no repeat due and steps of at
+    least 80 ms (below 188 BPM), so the tens-of-ms flash stall falls in a
+    gap; faster tempos save at the next stop. Sparse format in
+    `drum_pattern.c` (5 bytes per plain drum). INFO reports `drums.*`.
+  - Circle + hold a drum: 3 s clears its part (that pad flashes red), keep
+    holding to 6 s clears the whole pattern, every bank (the grid flashes
+    red).
+  - The sequencer's quantized start (lanes and capture) was inverted from
+    its own design note above ("past the halfway point ... waits for the
+    next one; within the first half, snaps to the one that just passed"): it
+    waited through the first half of a beat and started unaligned in the
+    second, so a "+" start could land half a beat off. Now it does what
+    that note says, on the beat's grid, like drum mode.
+  - Flashed to units 2 and 4.
+
+- **Drum mode polish, lag (0.2.9, 2026-10-10).** Real feedback: "drum
+  sequencer has been lagging a bit sometimes. polish it also shift hold
+  doesnt trigger that feature it should trigger a note roll depending on
+  pressure also shift hold to delete should be shorter, also the selected
+  drum is blue, and triggered step with sound is blue. also page scroll of
+  drum sounds should change hue of green ... also it would be great to have
+  a two page 16 step mode", then "use diamond, no transport controls on
+  sequencers" and "swap bass and drum mode in menu positioning".
+  - **Lag, measured.** New INFO `loop.*` (diagnostics/loop_stats.c) and a
+    `TEST MODE <name>` bench command. On unit 2 the main loop took ~3.96 ms
+    per pass in every mode; `buttons.c` wrote all six button LEDs over I2C
+    (4 register writes each) on every pass whatever their value. With an
+    unchanged level skipped (and levels in 256 steps, so a slow pulse
+    writes far less often): 2.19 ms melodic, 2.53 ms drums and sequencer.
+    Every mode's step timing and pad response gain from it.
+  - **Saving without stalls.** 0.2.8 saved through kv_store, whose
+    per-save sector erase (tens of ms, interrupts off) ran while the beat
+    played. Drum mode now saves through `storage/log_store.c`: appends
+    page-aligned records into erased flash (page programs only) and erases
+    the spare sector only while the clock is stopped. A 0.2.8 pattern (kv
+    format, same sectors) is read once and re-saved in the log.
+  - Circle + push a drum: a roll, rate from pressure (1/8, 1/16, 1/32,
+    1/32 triplet at raw depths 300/550/800, first guesses), loudness from
+    pressure, on the clock's grid when it runs. Circle + hold without
+    pushing: clear the drum at 1 s, the whole pattern at 3 s (was 3/6).
+  - A chance or repeats dial arms its step if it was off (circle + an empty
+    step "did nothing" before: the repeats were set on a silent step).
+  - Selected drum blue; the playhead on a step that sounds blue (the
+    sequencer's armed-playhead blue). Each bank of drums gets its own green
+    on the drum pads (lime, dark green, cool green, olive, repeating).
+  - Two pages: patterns hold 32 steps; anything on page 2 makes the pattern
+    32 steps long, else 16. Diamond flips the page shown (lit on page 2,
+    faint while the playhead is on the other page). Diamond no longer
+    sends DAW transport in drum mode, as in the sequencer. Save format v2
+    (u32 step masks); v1 still loads.
+  - Mode menu: drums on pad 3, bass guitar on pad 7.
+- **Drum gestures settled; play starts now (0.3.0, 2026-10-10).** Real
+  feedback: "in drum mode shift plus triangle does the second page of
+  sequences, not diamond. restore transport controls in regular diamond ...
+  since drums dont get affected by scales then we dont need that combo to be
+  scales. the play button in sequencers should always restart midi clock
+  immediately as the first beat with play, not quantize, this when there is
+  no clock in. also remove the shift plus step features and make hold step
+  to roll that step on all drum sounds. keep shift plus sound to roll that
+  part".
+  - Drums: circle + triangle flips the step page (the scale picker means
+    nothing to drums); triangle's LED shows page 2. Diamond is the DAW
+    transport again, as in the other play modes.
+  - Hold a step: its roll dial (1-4 hits by pressure), arming the step;
+    circle + step and the chance dial are gone (stored chance values still
+    play). Circle + push a drum still rolls it live.
+  - "+" in the sequencer and drums with no external clock: the internal
+    clock restarts now as beat 1 (`tiles_midi_clock_restart()`, a Start:
+    every running lane and the drums start over together), at 120 BPM if
+    no tempo was tapped. With external clock, the quantized start stays.
+  - 0.3.0, not 0.2.10: the USB bcdDevice holds one decimal digit per field.
+- **Hold a step = live step repeat (0.3.1, 2026-10-10).** Real feedback:
+  "the sequencer roll I meant step repeat and retrigger". Holding a step
+  (350 ms) no longer opens a per-drum ratchet dial: it retriggers every drum
+  armed on that step, live, while held, rate and velocity from pressure
+  (the roll tiers), on the clock's grid when it runs, at the tempo's
+  interval when stopped. The running pattern keeps its place silently
+  (`tiles_drum_player_t.muted`, which also stops the player ending the
+  repeat's notes) and picks up on release. Nothing is written to the
+  pattern. Stored ratchets from 0.3.0 still play.
+- **Circle + step = jump and roll; no hold on steps (0.3.2, 2026-10-10).**
+  Real feedback: "not the hold, dont hold retrigger no hold action at all
+  rn. shift press does immediate jump to step and roll depending on
+  pressure in 4 steps of subdivisions shorter than a step". A step touch
+  toggles at once (no hold timing at all). Circle + a step: the playhead
+  jumps there now (`tiles_drum_player_jump()`, kept on the sixteenth grid)
+  and every drum on the step rolls while held, 2/3/4/6 hits per step by
+  pressure (1/32, 1/32T, 1/64, 1/96), first hit at the step velocity, then
+  louder with pressure; `muted` now holds the playhead on that step, and on
+  release the pattern carries on from the step after.
+- **Step roll starts as a repeat; circle + drum clears again (0.3.3,
+  2026-10-10).** Real feedback: "we lost the clear step with shift. and for
+  step roll it should start with step repeat, then roll 2 hits 3 4." Step
+  roll tiers by pressure: 1 hit per step (a step repeat), 2, 3, 4. The
+  0.2.9 drum-pad roll (circle + push) took over circle + holding a drum
+  down, so the clear never fired once the pad was pressed; asked, the user
+  chose the clear: circle + hold a drum clears it at 1 s, everything at
+  3 s, and the drum-pad roll is gone (rolling lives on the steps).
+- **Step roll at constant velocity (0.3.4, 2026-10-10).** Real feedback:
+  "velocity should be constant on the roll." Every roll hit plays at the
+  step velocity; pressure sets the rate only.
+- **Step roll in slip mode (0.3.5, 2026-10-10).** Real feedback: "make the
+  roll like a slip mode, the sequencer continues running in background
+  instead of restarting from the roll step". No jump: circle + a step rolls
+  it at once while the pattern runs on silently (`muted` = slip), and on
+  release it plays on from wherever it has got to. The playhead keeps
+  moving on the grid during the roll; the rolled step shows white.
+- **Feel a drum's steps (0.3.6, 2026-10-11).** Real feedback: "when touch
+  a drum pad without pressing or triggering the sound, make it so theres a
+  strong haptic kick to indicate the active steps, so every active step
+  give a kick." A drum pad that's touched but not pushed gets a 127-velocity
+  kick each time its drum plays (sequenced steps and step rolls), stopped
+  at 50 ms (kick 45 ms + gap, before the sustain would start).

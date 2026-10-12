@@ -34,7 +34,13 @@ typedef enum {
     TILES_SETTING_INT,      /* .i, inclusive [min.i, max.i] */
     TILES_SETTING_FLOAT,    /* .f, inclusive [min.f, max.f], never NaN */
     TILES_SETTING_ENUM,     /* .u indexes enum_names[0..max.u] */
+    TILES_SETTING_COLOR,    /* .u = 0xRRGGBB, or TILES_COLOR_NONE; text "RRGGBB" (hex) or "none" */
 } tiles_setting_type_t;
+
+/* A COLOR setting's "no colour": the role or pad falls back to whatever it
+ * would show otherwise (e.g. no third highlight, a pad without a custom
+ * colour). Outside 0x000000-0xFFFFFF so it can't collide with a real one. */
+#define TILES_COLOR_NONE 0x01000000u
 
 typedef union {
     uint32_t u;
