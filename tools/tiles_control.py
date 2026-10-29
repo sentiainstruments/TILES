@@ -201,8 +201,9 @@ def main():
     elif command == "reboot" and argc == 3 and sys.argv[2].lower() in ("bootsel", "app"):
         request, multi = f"REBOOT {sys.argv[2].upper()}", False
     elif command == "test" and argc >= 3:
-        # Bench tests for current measurement: test leds 37 | test motors 4 [duty%] | test off
-        request, multi = "TEST " + " ".join(a.upper() for a in sys.argv[2:]), sys.argv[2].lower() == "motors"
+        # Bench tests: test leds 37 | test motors 4 [duty%] | test mode drums | test off. The mode
+        # name stays lowercase (the device matches it as written).
+        request, multi = " ".join(["TEST", sys.argv[2].upper()] + sys.argv[3:]), sys.argv[2].lower() == "motors"
     elif command == "scales" and argc == 2:
         request, multi = "SCALES", True
     elif command == "scale" and argc >= 4 and sys.argv[2].lower() in ("get", "put", "delete"):

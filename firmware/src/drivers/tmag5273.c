@@ -10,6 +10,7 @@
 #define REG_MANUFACTURER_ID_LSB 0x0Eu
 #define REG_MANUFACTURER_ID_MSB 0x0Fu
 #define REG_X_MSB_RESULT 0x12u
+#define REG_Z_MSB_RESULT 0x16u
 
 /* Tables 8-17/8-18 reset values: "TI" (MSB 0x54 'T', LSB 0x49 'I'). */
 #define EXPECTED_MANUFACTURER_ID_LSB 0x49u
@@ -84,4 +85,18 @@ bool tiles_tmag5273_read_xyz(const tiles_tmag5273_t *dev, tiles_tmag5273_sample_
     out->y = (int16_t)(((uint16_t)buf[2] << 8) | buf[3]);
     out->z = (int16_t)(((uint16_t)buf[4] << 8) | buf[5]);
     return true;
+}
+
+bool tiles_tmag5273_read_z(const tiles_tmag5273_t *dev, int16_t *z) {
+    uint8_t buf[2];
+    if (!read_regs(dev->bus, dev->addr, REG_Z_MSB_RESULT, buf, sizeof(buf))) {
+        return false;
+    }
+    *z = (int16_t)(((uint16_t)buf[0] << 8) | buf[1]);
+    return true;
+}
+
+bool tiles_tmag5273_config_ok(const tiles_tmag5273_t *dev) {
+    uint8_t value;
+    return read_regs(dev->bus, dev->addr, REG_DEVICE_CONFIG_2, &value, 1) && value == DEVICE_CONFIG_2_VALUE;
 }

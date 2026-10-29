@@ -1,0 +1,163 @@
+
+.tiles-visualizer {
+  --device-background: #252836;
+  --device-border: #55596d;
+  --pad-background: #161925;
+  --button-background: #373b4e;
+  --button-border: #858ba6;
+  --button-text: #e9eaf3;
+  --active-pad-color: #f0f1ff;
+  --pad-gap: 10px;
+  --device-radius: 24px;
+
+  width: 100%;
+  box-sizing: border-box;
+  padding: 24px;
+}
+
+.tiles-visualizer-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.tiles-visualizer-heading h2 {
+  margin: 0;
+}
+
+.tiles-visualizer-heading span,
+.tiles-preview-note {
+  color: #9498a9;
+  font-size: 13px;
+}
+
+.tiles-device {
+  max-width: 650px;
+  margin: 0 auto;
+  padding: clamp(12px, 4%, 30px);
+  background: var(--device-background);
+  border: 2px solid var(--device-border);
+  border-radius: var(--device-radius);
+  box-shadow: 0 14px 35px #0004;
+}
+
+.tiles-device-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 25px;
+}
+
+.tiles-brand {
+  color: #c5c7d2;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+}
+
+.tiles-buttons {
+  display: flex;
+  gap: 7px;
+}
+
+.tiles-function-button {
+  width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  color: var(--button-text);
+  background: var(--button-background);
+  border: 1px solid var(--button-border);
+  border-radius: 6px;
+  font-size: 15px;
+}
+
+.tiles-pad-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--pad-gap);
+}
+
+.tiles-pad {
+  min-width: 0;
+  aspect-ratio: 1;
+  padding: 0;
+  background: var(--pad-background);
+  border: 2px solid var(--pad-color);
+  border-radius: 10px;
+  color: #a6a9b9;
+  cursor: pointer;
+  transition: background 0.12s, box-shadow 0.12s;
+  box-shadow:
+    inset 0 0 10px var(--pad-color),
+    0 0 9px color-mix(
+      in srgb,
+      var(--pad-color) 50%,
+      transparent
+    );
+}
+
+.tiles-pad span {
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.tiles-pad.is-active {
+  background: color-mix(
+    in srgb,
+    var(--pad-color) 15%,
+    var(--pad-background)
+  );
+
+  border-color: var(--pad-color);
+
+  box-shadow:
+    0 0 20px var(--pad-color),
+    inset 0 0 15px var(--pad-color);
+
+  color: #ffffff;
+}
+
+.tiles-pad:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 3px;
+}
+
+.tiles-preview-note {
+  text-align: center;
+  margin-top: 12px;
+}
+
+@media (max-width: 550px) {
+  .tiles-device-header {
+    flex-direction: column;
+  }
+
+  .tiles-visualizer {
+    padding: 12px;
+    --pad-gap: 5px;
+  }
+
+  .tiles-pad {
+    border-radius: 6px;
+  }
+}
+
+.tiles-preview-controls {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 0 auto 18px;
+}
+.tiles-preview-controls label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+.tiles-preview-controls select {
+  max-width: 220px;
+}

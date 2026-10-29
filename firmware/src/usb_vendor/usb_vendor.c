@@ -4,14 +4,17 @@
 #include "content.h"
 #include "diagnostics/loop_stats.h"
 #include "drum_seq.h"
+#include "hall.h"
 #include "haptics.h"
 #include "lighting.h"
 #include "note_map.h"
 #include "op_mode.h"
+#include "play_state.h"
 #include "power.h"
 #include "product_identity.h"
 #include "settings.h"
 #include "settings_persist.h"
+#include "touch.h"
 
 #include "tusb.h"
 
@@ -19,6 +22,7 @@
 #include "pico/bootrom.h"
 #include "pico/time.h"
 
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,6 +40,23 @@
 
 static char s_rx_line[USB_VENDOR_LINE_MAX];
 static size_t s_rx_len;
+
+/* A partial line (no newline yet) is dropped once nothing has arrived for
+ * this long while the device waits for input. A host that gave up
+ * mid-write (a batch that timed out, an app quitting) would otherwise glue
+ * its tail onto the next session's first command. A real command arrives
+ * in one write, far quicker. */
+#define USB_VENDOR_PARTIAL_LINE_MS 1000u
+static uint32_t s_rx_idle_since_ms;
+
+/* Request tags: a command line may start with "@<tag> " (1-16 of
+ * A-Z a-z 0-9 _ -), and then every line of its reply starts with the same
+ * "@<tag> ". A host can then keep several commands in flight and match
+ * each line to its request, and skip lines left over from an earlier
+ * session (a reply still streaming when the last app quit). Untagged
+ * commands are answered untagged, as always. */
+#define USB_VENDOR_TAG_MAX 16u
+static char s_tag[USB_VENDOR_TAG_MAX + 3u]; /* "@" tag " " NUL; empty = untagged */
 
 static char s_out[USB_VENDOR_OUT_MAX];
 static size_t s_out_len;  /* bytes queued */
@@ -58,6 +79,7 @@ static void out_append(const char *text) {
 }
 
 static void reply(const char *text) {
+    out_append(s_tag);
     out_append(text);
     out_append("\n");
 }
@@ -67,7 +89,7 @@ static void reply_ok(void) {
 }
 
 static void reply_err(const char *reason) {
-    char buf[64];
+    char buf[USB_VENDOR_LINE_MAX];
     snprintf(buf, sizeof(buf), "ERR %s", reason);
     reply(buf);
 }
@@ -214,7 +236,7 @@ static bool listing_row(char *text, size_t cap) {
  * when the listing runs out. */
 static void fill_listing(void) {
     char text[USB_VENDOR_LINE_MAX];
-    while (s_listing != LISTING_NONE && sizeof(s_out) - s_out_len > USB_VENDOR_LINE_MAX + 4u) {
+    while (s_listing != LISTING_NONE && sizeof(s_out) - s_out_len > USB_VENDOR_LINE_MAX + sizeof(s_tag) + 4u) {
         if (listing_row(text, sizeof(text))) {
             reply(text);
         } else {
@@ -347,9 +369,40 @@ static void handle_scale(void) {
     reply_content_result(tiles_content_put_scale(&s));
 }
 
+/* Takes a leading "@<tag> " off `line` into s_tag (cleared when there's
+ * none). False for a malformed tag. */
+static bool take_tag(char **line) {
+    s_tag[0] = '\0';
+    if ((*line)[0] != '@') {
+        return true;
+    }
+    size_t n = strcspn(*line + 1, " ");
+    if (n == 0u || n > USB_VENDOR_TAG_MAX) {
+        return false;
+    }
+    for (size_t i = 1u; i <= n; i++) {
+        char c = (*line)[i];
+        if (!isalnum((unsigned char)c) && c != '_' && c != '-') {
+            return false;
+        }
+    }
+    memcpy(s_tag, *line, n + 1u);
+    s_tag[n + 1u] = ' ';
+    s_tag[n + 2u] = '\0';
+    *line += n + 1u;
+    return true;
+}
+
 static void handle_line(char *line) {
+    if (!take_tag(&line)) {
+        reply_err("bad-tag");
+        return;
+    }
     char *cmd = strtok(line, " ");
     if (cmd == NULL) {
+        if (s_tag[0] != '\0') {
+            reply_err("missing-command"); /* a tagged request always gets an answer */
+        }
         return; /* blank line: no reply, like a terminal */
     }
     char text[USB_VENDOR_LINE_MAX];
@@ -396,8 +449,12 @@ static void handle_line(char *line) {
         tiles_settings_persist_info_t info = tiles_settings_persist_get_info();
         snprintf(text, sizeof(text), "unit=%u/%u", (unsigned)TILES_UNIT_NUMBER, (unsigned)TILES_UNIT_COUNT);
         reply(text);
-        snprintf(text, sizeof(text), "firmware=%u.%u.%u", (unsigned)TILES_FW_VERSION_MAJOR,
-                 (unsigned)TILES_FW_VERSION_MINOR, (unsigned)TILES_FW_VERSION_PATCH);
+        if (TILES_FW_POINT == 0u) {
+            snprintf(text, sizeof(text), "firmware=%s.%u", TILES_FW_STAGE_NAME, (unsigned)TILES_FW_BUILD);
+        } else {
+            snprintf(text, sizeof(text), "firmware=%s.%u.%u", TILES_FW_STAGE_NAME, (unsigned)TILES_FW_BUILD,
+                     (unsigned)TILES_FW_POINT);
+        }
         reply(text);
         snprintf(text, sizeof(text), "settings=%u", (unsigned)tiles_settings_count());
         reply(text);
@@ -452,6 +509,33 @@ static void handle_line(char *line) {
         reply(text);
         snprintf(text, sizeof(text), "loop.max_ever_us=%lu", (unsigned long)loop.max_ever_us);
         reply(text);
+        tiles_hall_rest_info_t rest = tiles_hall_get_rest_info();
+        snprintf(text, sizeof(text), "hall.rezeros=%lu", (unsigned long)rest.rezeros);
+        reply(text);
+        snprintf(text, sizeof(text), "hall.unconfirmed=%u", (unsigned)rest.unconfirmed);
+        reply(text);
+        snprintf(text, sizeof(text), "hall.reinits=%lu", (unsigned long)rest.reinits);
+        reply(text);
+        snprintf(text, sizeof(text), "hall.dead=%u", (unsigned)rest.dead);
+        reply(text);
+        tiles_touch_info_t touch = tiles_touch_get_info();
+        snprintf(text, sizeof(text), "touch.recoveries=%lu", (unsigned long)touch.recoveries);
+        reply(text);
+        snprintf(text, sizeof(text), "boot.ms=%lu", (unsigned long)loop.boot_ms);
+        reply(text);
+        snprintf(text, sizeof(text), "boot.sensors_ms=%lu", (unsigned long)rest.boot_ms);
+        reply(text);
+        tiles_op_mode_seq_store_info_t seq = tiles_op_mode_get_seq_store_info();
+        snprintf(text, sizeof(text), "seq.storage=%s", seq.storage ? "ok" : "none");
+        reply(text);
+        snprintf(text, sizeof(text), "seq.saved_bytes=%u", (unsigned)seq.saved_bytes);
+        reply(text);
+        snprintf(text, sizeof(text), "seq.saves=%lu", (unsigned long)seq.saves);
+        reply(text);
+        snprintf(text, sizeof(text), "seq.pending=%d", seq.pending ? 1 : 0);
+        reply(text);
+        snprintf(text, sizeof(text), "seq.truncated=%d", seq.truncated ? 1 : 0);
+        reply(text);
         tiles_drum_seq_store_info_t drums = tiles_drum_seq_get_store_info();
         snprintf(text, sizeof(text), "drums.storage=%s", drums.storage ? "ok" : "none");
         reply(text);
@@ -460,6 +544,18 @@ static void handle_line(char *line) {
         snprintf(text, sizeof(text), "drums.saves=%lu", (unsigned long)drums.saves);
         reply(text);
         snprintf(text, sizeof(text), "drums.pending=%d", drums.pending ? 1 : 0);
+        reply(text);
+        tiles_play_state_info_t play = tiles_play_state_get_info();
+        snprintf(text, sizeof(text), "state.storage=%s", play.storage ? "ok" : "none");
+        reply(text);
+        if (play.have_saved) {
+            snprintf(text, sizeof(text), "state.saved=mode:%u scale:%u octave:%d key:%d", (unsigned)play.mode,
+                     (unsigned)play.scale, (int)play.octave, (int)play.key);
+            reply(text);
+        }
+        snprintf(text, sizeof(text), "state.saves=%lu", (unsigned long)play.saves);
+        reply(text);
+        snprintf(text, sizeof(text), "state.pending=%d", play.pending ? 1 : 0);
         reply(text);
         reply_ok();
         return;
@@ -508,7 +604,7 @@ static void handle_line(char *line) {
             if (tiles_op_mode_test_set_mode(arg)) {
                 reply_ok();
             } else {
-                reply_err("mode-melodic|chord|sequencer|bass|song|ableton|drums");
+                reply_err("mode-melodic|duet|sequencer|bass|song|ableton|drums|volca|prism|bounce|ripples|sand|orbits|cradle");
             }
             return;
         }
@@ -532,27 +628,35 @@ static void handle_line(char *line) {
     /* REBOOT BOOTSEL | APP: the scriptable path. (picotool's -f uses the
      * standard USB reset interface instead; see tusb_config.h.)
      *
-     * BOOTSEL enters the ROM USB bootloader. reset_usb_boot() never returns,
-     * so the "OK" is flushed by hand first, with a bounded wait (pump_out()
-     * alone only reaches the peripheral FIFO, not the host). No activity LED
-     * is wired, hence the 0 arguments.
+     * Both flush the "OK" by hand first, with a bounded wait (pump_out()
+     * alone only reaches the peripheral FIFO, not the host).
      *
-     * APP is a warm restart into this firmware (to test a fresh boot, or to
-     * unstick a non-USB subsystem). watchdog_reboot() returns right away, so
-     * the reply goes out during the delay like any other. */
+     * BOOTSEL enters the ROM USB bootloader (reset_usb_boot() never
+     * returns). No activity LED is wired, hence the 0 arguments.
+     *
+     * APP is a warm restart into this firmware, booting as from power-on
+     * (not a crash recovery: watchdog_reboot() clears the marker that
+     * watchdog_enable_caused_reboot() reads), to test a fresh boot or
+     * unstick a non-USB subsystem. It must not return to the main loop:
+     * that feeds the watchdog every pass, which kept a delayed reboot from
+     * ever firing. */
     if (strcmp(cmd, "REBOOT") == 0) {
         char *what = strtok(NULL, " ");
-        if (what != NULL && strcmp(what, "BOOTSEL") == 0) {
+        bool bootsel = what != NULL && strcmp(what, "BOOTSEL") == 0;
+        if (bootsel || (what != NULL && strcmp(what, "APP") == 0)) {
             reply_ok();
             uint32_t deadline_ms = to_ms_since_boot(get_absolute_time()) + 50u;
             while (to_ms_since_boot(get_absolute_time()) < deadline_ms) {
                 tud_task();
                 pump_out();
             }
-            reset_usb_boot(0, 0);
-        } else if (what != NULL && strcmp(what, "APP") == 0) {
-            watchdog_reboot(0, 0, 100u);
-            reply_ok();
+            if (bootsel) {
+                reset_usb_boot(0, 0);
+            }
+            watchdog_reboot(0, 0, 1u);
+            while (true) {
+                tight_loop_contents(); /* not fed: resets within 1 ms */
+            }
         } else {
             reply_err(what == NULL ? "missing-key" : "unknown-key");
         }
@@ -610,6 +714,7 @@ static void handle_line(char *line) {
 
 void tiles_usb_vendor_init(void) {
     s_listing = LISTING_NONE;
+    s_tag[0] = '\0';
     s_rx_len = 0u;
     s_out_len = 0u;
     s_out_sent = 0u;
@@ -620,6 +725,7 @@ void tiles_usb_vendor_scan(void) {
         s_out_len = 0u; /* host gone: drop the reply rather than hand it to the next host */
         s_out_sent = 0u;
         s_listing = LISTING_NONE;
+        s_rx_len = 0u;
         return;
     }
     pump_out();
@@ -627,7 +733,9 @@ void tiles_usb_vendor_scan(void) {
         fill_listing(); /* buffer drained: the listing's next rows */
         pump_out();
     }
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
     if (s_out_len > 0u || s_listing != LISTING_NONE) {
+        s_rx_idle_since_ms = now_ms; /* not reading: no partial-line timeout */
         return; /* still sending the previous reply: wait before the next command */
     }
     while (tud_vendor_available()) {
@@ -635,6 +743,7 @@ void tiles_usb_vendor_scan(void) {
         if (tud_vendor_read(&byte, 1) == 0) {
             break;
         }
+        s_rx_idle_since_ms = now_ms;
         if (byte == '\n' || byte == '\r') {
             if (s_rx_len > 0u) {
                 s_rx_line[s_rx_len] = '\0';
@@ -650,5 +759,8 @@ void tiles_usb_vendor_scan(void) {
         }
         /* Line longer than USB_VENDOR_LINE_MAX: drop bytes until the next
          * newline. No real command comes close, so it is malformed anyway. */
+    }
+    if (s_rx_len > 0u && now_ms - s_rx_idle_since_ms > USB_VENDOR_PARTIAL_LINE_MS) {
+        s_rx_len = 0u;
     }
 }

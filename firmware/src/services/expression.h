@@ -66,6 +66,11 @@ float tiles_expression_get_pitch_bend_sensitivity(void);
 void tiles_expression_set_aftertouch_sensitivity(uint16_t depth_full_scale);
 uint16_t tiles_expression_get_aftertouch_sensitivity(void);
 
+/* How far pad 1-24's sounding note is bent: 0 (centred, no note, or bend
+ * off) to 1 (the pad's full bend, before the wire-range scaling), vibrato
+ * included. For the LEDs' bend dimming (lighting.c). */
+float tiles_expression_get_pad_bend_amount(uint8_t logical_pad);
+
 /* Melodic harmonics (hold one note, lightly touch other pads to pluck its
  * harmonics; expression.c "Melodic harmonics"). Setting
  * `features.melodic_harmonics`, default on; turning it off ends any
@@ -102,3 +107,9 @@ uint8_t tiles_expression_velocity_from_strike(uint32_t strike_time_ms, float pea
  * single source of truth: expression.c's MIN_STRIKE_DEPTH_DELTA is defined
  * from it. */
 #define TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA 150.0f
+/* Overshoot past it (by the end of the follow-through) at which the depth
+ * signal maxes out; a strike this deep has nothing left to measure
+ * (strike_settle.h). Unmeasured. */
+#define TILES_EXPRESSION_STRIKE_OVERSHOOT_FULL_SCALE 550.0f
+#define TILES_EXPRESSION_FULL_STRIKE_DEPTH \
+    (TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA + TILES_EXPRESSION_STRIKE_OVERSHOOT_FULL_SCALE)

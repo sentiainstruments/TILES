@@ -2,6 +2,7 @@
 
 #include "board_pins.h"
 #include "pad_config.h"
+#include "rest_guard.h"
 
 #include "tca9548a.h"
 #include "tmag5273.h"
@@ -10,26 +11,36 @@
 
 #include "pico/time.h"
 
+#include <stdio.h>
+
 static tiles_tca9548a_t s_hall_muxes[TILES_NUM_HALL_MUXES]; /* index 0/1/2 = mux 1/2/3 */
 static bool s_pad_init_ok[TILES_NUM_PADS];
 static tiles_hall_sample_t s_pad_sample[TILES_NUM_PADS];
-static int16_t s_pad_baseline_z[TILES_NUM_PADS];
+/* Each pad's rest Z and the rules that keep it true (rest_guard.h). */
+static tiles_rest_guard_t s_rest[TILES_NUM_PADS];
 static uint8_t s_scan_cursor;
-
-/* Slow drift tracker (docs/architecture/defaults-and-safeguards.md "Pad
- * baseline calibration and drift compensation"). A pad's baseline creeps
- * toward its reading only while it is untouched (which also means no note)
- * and each read stays within DRIFT_NOISE_THRESHOLD of the PREVIOUS one for
- * DRIFT_DWELL_MS. The reference slides with every read, so slow drift
- * accumulates without any single step looking unstable. Only background
- * (untouched) reads get here. */
-#define DRIFT_NOISE_THRESHOLD 8    /* raw Z counts a step may move and still be "stable" */
-#define DRIFT_DWELL_MS 400u        /* how long a stable streak must last before nudging */
-#define DRIFT_SLEW_DENOMINATOR 128 /* nudge ~1/128 of the gap per qualifying read, never snap */
-
-static int16_t s_pad_drift_last_z[TILES_NUM_PADS];
-static uint32_t s_pad_drift_stable_since_ms[TILES_NUM_PADS];
-static bool s_pad_drift_ref_valid[TILES_NUM_PADS];
+/* The one Hall channel left open (mux index 0-2, -1 = none or unknown):
+ * a read switches channels instead of closing all three muxes before and
+ * after (six writes a read). Every sensor sits at 0x35 behind a mux, and
+ * no other device on I2C0 uses that address, so one open channel is safe
+ * between reads. */
+static int8_t s_open_mux = -1;
+static uint8_t s_open_channel;
+/* Sensor upkeep (tiles_hall_scan()): consecutive failed reads per pad, the
+ * next config check, the next retry of a dead sensor, and counts for INFO. */
+static uint8_t s_pad_fail_streak[TILES_NUM_PADS];
+static uint8_t s_check_cursor;
+static uint32_t s_next_check_ms;
+static uint32_t s_next_retry_ms;
+static uint32_t s_reinits;
+static uint32_t s_boot_us; /* init and the boot recapture */
+#define HALL_FAIL_LIMIT 10u   /* failed reads in a row: the sensor is retried */
+#define HALL_CHECK_MS 250u    /* one pad's config checked: each every ~6 s */
+#define HALL_RETRY_MS 2000u   /* one dead sensor retried */
+/* Release follow-up (hall.h): touched last call, and when a released pad
+ * stops being read every call (0 = not following). */
+static bool s_pad_was_touched[TILES_NUM_PADS];
+static uint32_t s_pad_follow_until_ms[TILES_NUM_PADS];
 
 static int mux_index_for_addr(uint8_t mux_i2c_addr) {
     if (mux_i2c_addr == TILES_I2C0_ADDR_HALL_MUX1) {
@@ -48,99 +59,96 @@ static void disable_all_hall_muxes(void) {
     for (uint8_t i = 0; i < TILES_NUM_HALL_MUXES; i++) {
         tiles_tca9548a_disable_all(&s_hall_muxes[i]);
     }
+    s_open_mux = -1;
 }
 
-/* Disables every Hall channel, then opens only this pad's channel, so at
- * most one channel across the three muxes is open. */
+/* Opens this pad's channel, closing the one open on another mux first, so
+ * at most one channel across the three muxes is ever open. A failed write
+ * closes everything (the state is unknown). */
 static bool select_pad(const tiles_pad_config_t *cfg) {
-    disable_all_hall_muxes();
-
     int idx = mux_index_for_addr(cfg->hall.mux_i2c_addr);
     if (idx < 0) {
         return false;
     }
-    return tiles_tca9548a_select_channel(&s_hall_muxes[idx], cfg->hall.mux_channel);
+    if (s_open_mux == idx && s_open_channel == cfg->hall.mux_channel) {
+        return true;
+    }
+    if (s_open_mux >= 0 && s_open_mux != idx && !tiles_tca9548a_disable_all(&s_hall_muxes[s_open_mux])) {
+        disable_all_hall_muxes();
+        return false;
+    }
+    s_open_mux = -1;
+    if (!tiles_tca9548a_select_channel(&s_hall_muxes[idx], cfg->hall.mux_channel)) {
+        disable_all_hall_muxes();
+        return false;
+    }
+    s_open_mux = (int8_t)idx;
+    s_open_channel = cfg->hall.mux_channel;
+    return true;
 }
 
-/* Select, read, deselect one pad; stores the timestamped sample. Used by
- * both the touched-pad pass and the round-robin. */
-static void read_pad(uint8_t pad_index /* 0-23 */) {
+/* Selects and reads one pad (its channel stays open); stores the
+ * timestamped sample. X/Y too for a touched key (tilt); Z only at rest. */
+static void read_pad(uint8_t pad_index /* 0-23 */, bool with_tilt) {
     const tiles_pad_config_t *cfg = board_pad_config((uint8_t)(pad_index + 1u));
     if (cfg == NULL || !select_pad(cfg)) {
         s_pad_sample[pad_index].valid = false;
-        disable_all_hall_muxes();
         return;
     }
 
     tiles_tmag5273_t dev = {.bus = i2c0, .addr = cfg->hall.sensor_i2c_addr};
-    tiles_tmag5273_sample_t raw;
-    bool ok = tiles_tmag5273_read_xyz(&dev, &raw);
-
-    disable_all_hall_muxes();
-
+    bool ok;
+    if (with_tilt) {
+        tiles_tmag5273_sample_t raw;
+        ok = tiles_tmag5273_read_xyz(&dev, &raw);
+        if (ok) {
+            s_pad_sample[pad_index].x = raw.x;
+            s_pad_sample[pad_index].y = raw.y;
+            s_pad_sample[pad_index].z = raw.z;
+        }
+    } else {
+        ok = tiles_tmag5273_read_z(&dev, &s_pad_sample[pad_index].z);
+    }
     if (ok) {
-        s_pad_sample[pad_index].x = raw.x;
-        s_pad_sample[pad_index].y = raw.y;
-        s_pad_sample[pad_index].z = raw.z;
         s_pad_sample[pad_index].sample_time_ms = to_ms_since_boot(get_absolute_time());
+        s_pad_fail_streak[pad_index] = 0u;
+    } else {
+        disable_all_hall_muxes();
+        if (s_pad_fail_streak[pad_index] < 255u) {
+            s_pad_fail_streak[pad_index]++;
+        }
     }
     s_pad_sample[pad_index].valid = ok;
 }
 
-static void reset_drift_tracker(uint8_t pad_index) {
-    s_pad_drift_ref_valid[pad_index] = false;
-    s_pad_drift_last_z[pad_index] = 0;
-    s_pad_drift_stable_since_ms[pad_index] = 0;
+/* Identifies and configures one pad's sensor; true if it answered. */
+static bool setup_sensor(uint8_t pad_index) {
+    const tiles_pad_config_t *cfg = board_pad_config((uint8_t)(pad_index + 1u));
+    if (cfg == NULL || !select_pad(cfg)) {
+        return false;
+    }
+    tiles_tmag5273_t dev;
+    return tiles_tmag5273_identify(i2c0, cfg->hall.sensor_i2c_addr) &&
+           tiles_tmag5273_init(&dev, i2c0, cfg->hall.sensor_i2c_addr);
 }
 
-/* For a pad just read by the background pass: nudges the baseline once
- * the reading has held steady long enough, else updates the streak state. */
-static void update_drift_tracker(uint8_t pad_index) {
+/* For a pad just read by the background pass (untouched): its rest guard
+ * drifts, re-zeroes or confirms (rest_guard.h). */
+static void update_rest_guard(uint8_t pad_index) {
     if (!s_pad_init_ok[pad_index] || !s_pad_sample[pad_index].valid) {
         return;
     }
+    tiles_rest_guard_t *g = &s_rest[pad_index];
     if (tiles_touch_is_touched((uint8_t)(pad_index + 1u))) {
-        /* Can't normally happen (background reads are untouched pads); if it
-         * does, reset so a stale streak doesn't resume after release. */
-        reset_drift_tracker(pad_index);
+        tiles_rest_guard_touched(g); /* can't normally happen here */
         return;
     }
-
-    int16_t z = s_pad_sample[pad_index].z;
-    uint32_t now_ms = s_pad_sample[pad_index].sample_time_ms;
-
-    if (!s_pad_drift_ref_valid[pad_index]) {
-        s_pad_drift_last_z[pad_index] = z;
-        s_pad_drift_stable_since_ms[pad_index] = now_ms;
-        s_pad_drift_ref_valid[pad_index] = true;
-        return;
+    bool was_confirmed = g->confirmed;
+    int16_t old = g->baseline;
+    if (tiles_rest_guard_untouched(g, s_pad_sample[pad_index].z, s_pad_sample[pad_index].sample_time_ms)) {
+        printf("[hall] pad %u %s (rest moved %d)\n", (unsigned)(pad_index + 1u),
+               was_confirmed ? "re-zeroed" : "confirmed at rest", (int)(g->baseline - old));
     }
-
-    int16_t step = (int16_t)(z - s_pad_drift_last_z[pad_index]);
-    if (step < 0) {
-        step = (int16_t)(-step);
-    }
-    /* The reference slides to this reading whether or not it was stable (see
-     * above). */
-    s_pad_drift_last_z[pad_index] = z;
-
-    if (step > DRIFT_NOISE_THRESHOLD) {
-        s_pad_drift_stable_since_ms[pad_index] = now_ms;
-        return;
-    }
-
-    if (now_ms - s_pad_drift_stable_since_ms[pad_index] < DRIFT_DWELL_MS) {
-        return;
-    }
-
-    /* Stable long enough: nudge, don't snap, but by at least 1 count so a
-     * small remaining gap doesn't stall at zero from integer division. */
-    int32_t gap = (int32_t)z - (int32_t)s_pad_baseline_z[pad_index];
-    int32_t nudge = gap / (int32_t)DRIFT_SLEW_DENOMINATOR;
-    if (nudge == 0 && gap != 0) {
-        nudge = (gap > 0) ? 1 : -1;
-    }
-    s_pad_baseline_z[pad_index] = (int16_t)(s_pad_baseline_z[pad_index] + nudge);
 }
 
 bool tiles_hall_init(void) {
@@ -152,39 +160,26 @@ bool tiles_hall_init(void) {
     bool all_ok = true;
     s_scan_cursor = 0;
 
+    uint32_t start_us = time_us_32();
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_pad_sample[i] = (tiles_hall_sample_t){0};
-        s_pad_init_ok[i] = false;
-        s_pad_baseline_z[i] = 0;
-        reset_drift_tracker(i);
-
-        const tiles_pad_config_t *cfg = board_pad_config((uint8_t)(i + 1u));
-        if (cfg == NULL || !select_pad(cfg)) {
-            all_ok = false;
-            disable_all_hall_muxes();
-            continue;
-        }
-
-        bool ok = tiles_tmag5273_identify(i2c0, cfg->hall.sensor_i2c_addr);
+        s_pad_fail_streak[i] = 0u;
+        tiles_rest_guard_set(&s_rest[i], 0, true);
+        bool ok = setup_sensor(i);
+        /* Baseline: this pad is assumed at rest now (see the header); the
+         * rest guard repairs it if it wasn't. */
         if (ok) {
-            tiles_tmag5273_t dev;
-            ok = tiles_tmag5273_init(&dev, i2c0, cfg->hall.sensor_i2c_addr);
-
-            /* Baseline: this pad is assumed at rest now (see the header). */
-            if (ok) {
-                tiles_tmag5273_sample_t raw;
-                if (tiles_tmag5273_read_xyz(&dev, &raw)) {
-                    s_pad_baseline_z[i] = raw.z;
-                }
+            read_pad(i, true);
+            if (s_pad_sample[i].valid) {
+                tiles_rest_guard_set(&s_rest[i], s_pad_sample[i].z, true);
             }
         }
-
         s_pad_init_ok[i] = ok;
         all_ok = all_ok && ok;
-
-        disable_all_hall_muxes();
     }
-
+    disable_all_hall_muxes();
+    s_boot_us += time_us_32() - start_us;
+    s_next_retry_ms = to_ms_since_boot(get_absolute_time()) + HALL_RETRY_MS;
     return all_ok;
 }
 
@@ -195,11 +190,90 @@ bool tiles_hall_last_init_ok(uint8_t logical_pad) {
     return s_pad_init_ok[logical_pad - 1u];
 }
 
-void tiles_hall_scan(void) {
-    /* Priority pass: every touched, initialized pad is read this call. */
+/* Sensor upkeep, only with no pad touched (a retry or re-setup can take
+ * about a millisecond): a pad whose reads keep failing is set aside and,
+ * like one that never set up, retried every HALL_RETRY_MS; and every
+ * HALL_CHECK_MS one pad's config is checked, since a sensor that lost
+ * power still answers but stops measuring. */
+static void sensor_upkeep(uint32_t now_ms) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        if (s_pad_init_ok[i] && tiles_touch_is_touched((uint8_t)(i + 1u))) {
-            read_pad(i);
+        if (tiles_touch_is_touched((uint8_t)(i + 1u))) {
+            return;
+        }
+    }
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        if (s_pad_init_ok[i] && s_pad_fail_streak[i] >= HALL_FAIL_LIMIT) {
+            s_pad_init_ok[i] = false;
+            printf("[hall] pad %u stopped answering; retrying\n", (unsigned)(i + 1u));
+        }
+    }
+    if ((int32_t)(now_ms - s_next_retry_ms) >= 0) {
+        s_next_retry_ms = now_ms + HALL_RETRY_MS;
+        for (uint8_t n = 0; n < TILES_NUM_PADS; n++) {
+            uint8_t i = (uint8_t)((s_check_cursor + n) % TILES_NUM_PADS);
+            if (s_pad_init_ok[i]) {
+                continue;
+            }
+            if (setup_sensor(i)) {
+                read_pad(i, false);
+                if (s_pad_sample[i].valid) {
+                    s_pad_init_ok[i] = true;
+                    tiles_rest_guard_set(&s_rest[i], s_pad_sample[i].z, true); /* untouched: at rest */
+                    s_reinits++;
+                    printf("[hall] pad %u sensor back\n", (unsigned)(i + 1u));
+                }
+            } else {
+                disable_all_hall_muxes();
+            }
+            break; /* one a time */
+        }
+    }
+    if ((int32_t)(now_ms - s_next_check_ms) >= 0) {
+        s_next_check_ms = now_ms + HALL_CHECK_MS;
+        uint8_t i = s_check_cursor;
+        s_check_cursor = (uint8_t)((s_check_cursor + 1u) % TILES_NUM_PADS);
+        const tiles_pad_config_t *cfg = board_pad_config((uint8_t)(i + 1u));
+        if (!s_pad_init_ok[i] || cfg == NULL || !select_pad(cfg)) {
+            return;
+        }
+        tiles_tmag5273_t dev = {.bus = i2c0, .addr = cfg->hall.sensor_i2c_addr};
+        if (!tiles_tmag5273_config_ok(&dev)) {
+            if (tiles_tmag5273_init(&dev, i2c0, cfg->hall.sensor_i2c_addr)) {
+                s_reinits++;
+                printf("[hall] pad %u sensor had reset; set up again\n", (unsigned)(i + 1u));
+            } else {
+                disable_all_hall_muxes();
+                s_pad_init_ok[i] = false;
+            }
+        }
+    }
+}
+
+void tiles_hall_scan(void) {
+    /* Priority pass: every touched, initialized pad is read this call, and
+     * every pad just released until its key reads up (see hall.h). */
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        uint8_t pad = (uint8_t)(i + 1u);
+        bool touched = tiles_touch_is_touched(pad);
+        if (s_pad_was_touched[i] && !touched) {
+            s_pad_follow_until_ms[i] = now_ms + TILES_HALL_RELEASE_FOLLOW_MS;
+            if (s_pad_follow_until_ms[i] == 0u) {
+                s_pad_follow_until_ms[i] = 1u;
+            }
+        }
+        s_pad_was_touched[i] = touched;
+        bool following = !touched && s_pad_follow_until_ms[i] != 0u;
+        if (following && (int32_t)(now_ms - s_pad_follow_until_ms[i]) >= 0) {
+            s_pad_follow_until_ms[i] = 0u;
+            following = false;
+        }
+        if (!s_pad_init_ok[i] || (!touched && !following)) {
+            continue;
+        }
+        read_pad(i, true);
+        if (following && tiles_hall_get_depth(pad) < TILES_HALL_KEY_UP_DEPTH) {
+            s_pad_follow_until_ms[i] = 0u; /* key is up: back to the round-robin */
         }
     }
 
@@ -212,11 +286,11 @@ void tiles_hall_scan(void) {
             continue; /* covered by the priority pass, or not initialized */
         }
 
-        read_pad(pad_index);
-        update_drift_tracker(pad_index);
-        return;
+        read_pad(pad_index, false);
+        update_rest_guard(pad_index);
+        break;
     }
-    /* Everything touched or nothing initialized: no background read this call. */
+    sensor_upkeep(now_ms);
 }
 
 tiles_hall_sample_t tiles_hall_get_sample(uint8_t logical_pad) {
@@ -227,21 +301,24 @@ tiles_hall_sample_t tiles_hall_get_sample(uint8_t logical_pad) {
 }
 
 bool tiles_hall_recapture_baseline(void) {
+    uint32_t start_us = time_us_32();
     bool all_ok = true;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         if (!s_pad_init_ok[i]) {
             continue;
         }
-        read_pad(i);
-        if (s_pad_sample[i].valid) {
-            s_pad_baseline_z[i] = s_pad_sample[i].z;
-            /* Fresh baseline: restart the drift tracker so stale streak state can't
-             * nudge it away immediately. */
-            reset_drift_tracker(i);
-        } else {
+        read_pad(i, true);
+        if (!s_pad_sample[i].valid) {
             all_ok = false;
+        } else if (tiles_touch_is_touched((uint8_t)(i + 1u))) {
+            /* A finger on it: this reading may be pressed. Keep the old
+             * baseline, untrusted, until the pad is seen at rest. */
+            tiles_rest_guard_set(&s_rest[i], s_rest[i].baseline, false);
+        } else {
+            tiles_rest_guard_set(&s_rest[i], s_pad_sample[i].z, true);
         }
     }
+    s_boot_us += time_us_32() - start_us;
     return all_ok;
 }
 
@@ -253,6 +330,19 @@ uint16_t tiles_hall_get_depth(uint8_t logical_pad) {
     if (!s_pad_init_ok[i] || !s_pad_sample[i].valid) {
         return 0u;
     }
-    int32_t delta = (int32_t)s_pad_sample[i].z - (int32_t)s_pad_baseline_z[i];
-    return (uint16_t)(delta < 0 ? -delta : delta);
+    return tiles_rest_guard_depth(&s_rest[i], s_pad_sample[i].z);
+}
+
+tiles_hall_rest_info_t tiles_hall_get_rest_info(void) {
+    tiles_hall_rest_info_t info = {0u, 0u, s_reinits, 0u, s_boot_us / 1000u};
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        info.rezeros += s_rest[i].rezeros;
+        if (s_pad_init_ok[i] && !s_rest[i].confirmed) {
+            info.unconfirmed++;
+        }
+        if (!s_pad_init_ok[i]) {
+            info.dead++;
+        }
+    }
+    return info;
 }

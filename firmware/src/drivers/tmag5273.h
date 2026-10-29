@@ -39,3 +39,12 @@ bool tiles_tmag5273_init(tiles_tmag5273_t *dev, i2c_inst_t *bus, uint8_t addr);
  * conversion). Doesn't check CONV_STATUS, so reading faster than the
  * conversion rate returns the previous sample instead of blocking. */
 bool tiles_tmag5273_read_xyz(const tiles_tmag5273_t *dev, tiles_tmag5273_sample_t *out);
+
+/* Z only (2 bytes from Z_MSB_RESULT): a third of the read, for a key at
+ * rest, which needs no tilt. */
+bool tiles_tmag5273_read_z(const tiles_tmag5273_t *dev, int16_t *z);
+
+/* True if the sensor still has the config init wrote (one register read:
+ * DEVICE_CONFIG_2). A sensor that lost power resets to standby and stops
+ * measuring while still answering; false then, or on a failed read. */
+bool tiles_tmag5273_config_ok(const tiles_tmag5273_t *dev);

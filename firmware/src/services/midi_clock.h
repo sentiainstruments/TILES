@@ -30,6 +30,13 @@
 #include <stdint.h>
 
 typedef struct {
+    /* Pulses since the song's position 0: from a Start's downbeat, or the
+     * position a Song Position Pointer gave before a Continue (a DAW playing
+     * from mid-song), or wherever an internal start or a clock picked up
+     * mid-stream began. On start_edge, a sequencer's step is
+     * song_pulse / clocks-per-step (mod its length), so it lands where it
+     * would have from the top. */
+    uint32_t song_pulse;
     /* Total pulses seen, regardless of `running`; diff against your last read.
      * Advanced by real 0xF8 bytes or, with no external clock, the tap-tempo
      * generator. */
@@ -53,8 +60,9 @@ void tiles_midi_clock_init(void);
  * after tiles_midi_in_scan() and before anything reads the clock state. */
 void tiles_midi_clock_scan(void);
 
-/* Clock/transport snapshot. Clears start_edge, so each consumer should
- * call it once per scan (op_mode is the only consumer). */
+/* Clock/transport snapshot. Clears start_edge, so a start reaches one
+ * reader: op_mode is the only one (its scan and its playback ticks share
+ * the edge between them). */
 tiles_midi_clock_state_t tiles_midi_clock_get_state(void);
 
 /* True if a real Real-Time byte arrived within EXTERNAL_CLOCK_TIMEOUT_MS:
@@ -86,6 +94,15 @@ bool tiles_midi_clock_restart(void);
  * (rewind) from stop-while-playing, and play-while-playing (restart) from
  * play-while-stopped. */
 bool tiles_midi_clock_is_running(void);
+
+/* Clock lead, in ms (setting midi.clock_lead_ms): following an external
+ * clock, pulses come through this long before they're due, so notes land
+ * on the DAW's grid (midi_clock.c has the details). 15 = the offset
+ * measured recording Bouncing notes into Live 12 (64-sample buffer,
+ * 48 kHz); 0 = off. */
+#define TILES_MIDI_CLOCK_LEAD_MS_DEFAULT 15u
+void tiles_midi_clock_set_lead_ms(uint16_t lead_ms);
+uint16_t tiles_midi_clock_get_lead_ms(void);
 
 /* Current tempo in ms per quarter note, from whichever source is driving
  * (external: measured beat to beat; tap: the averaged interval). 500

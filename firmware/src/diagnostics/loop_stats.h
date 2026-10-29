@@ -12,6 +12,7 @@ typedef struct {
     uint32_t max_us;      /* last 1 s window */
     uint32_t passes;      /* in that window */
     uint32_t max_ever_us; /* since boot (the first second excluded) */
+    uint32_t boot_ms;     /* power-on to the first pass (the boot animation included) */
 } tiles_loop_stats_t;
 
 /* Call once at the top of every pass with time_us_32(). */

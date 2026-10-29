@@ -239,10 +239,15 @@ void tiles_octave_control_scan(void) {
     }
     s_combo_was_held = both_held;
 
+    /* Chord mode: circle + "-"/"+" moves the chord strip's octave, plain
+     * "-"/"+" the melody's (two instruments, two octaves). */
+    bool chords = tiles_note_map_is_chord_mode_active() && tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
     if (!minus_pressed && s_prev_minus_pressed && !s_minus_became_combo) {
         if (s_transpose_mode) {
             tiles_note_map_set_key_offset((int8_t)(tiles_note_map_get_key_offset() - 1));
             s_transpose_flash_anchor_ms = now_ms;
+        } else if (chords) {
+            tiles_note_map_set_chord_octave_shift((int8_t)(tiles_note_map_get_chord_octave_shift() - 1));
         } else {
             tiles_note_map_set_octave_shift((int8_t)(tiles_note_map_get_octave_shift() - 1));
         }
@@ -251,6 +256,8 @@ void tiles_octave_control_scan(void) {
         if (s_transpose_mode) {
             tiles_note_map_set_key_offset((int8_t)(tiles_note_map_get_key_offset() + 1));
             s_transpose_flash_anchor_ms = now_ms;
+        } else if (chords) {
+            tiles_note_map_set_chord_octave_shift((int8_t)(tiles_note_map_get_chord_octave_shift() + 1));
         } else {
             tiles_note_map_set_octave_shift((int8_t)(tiles_note_map_get_octave_shift() + 1));
         }
@@ -258,28 +265,34 @@ void tiles_octave_control_scan(void) {
     s_prev_minus_pressed = minus_pressed;
     s_prev_plus_pressed = plus_pressed;
 
+    float minus_level, plus_level;
+    tiles_octave_control_led_levels(now_ms, &minus_level, &plus_level);
+    tiles_buttons_set_override_led(BUTTON_ID_MINUS, minus_level);
+    tiles_buttons_set_override_led(BUTTON_ID_PLUS, plus_level);
+    if (s_transpose_mode) {
+        render_transpose_frame(now_ms);
+    }
+}
+
+void tiles_octave_control_led_levels(uint32_t now_ms, float *minus_level, float *plus_level) {
+    *minus_level = 0.0f;
+    *plus_level = 0.0f;
     if (s_transpose_mode) {
         /* Same now_ms, so both LEDs pulse in phase. */
-        float pulse = magnitude1_level(now_ms);
-        tiles_buttons_set_override_led(BUTTON_ID_MINUS, pulse);
-        tiles_buttons_set_override_led(BUTTON_ID_PLUS, pulse);
-        render_transpose_frame(now_ms);
+        *minus_level = *plus_level = magnitude1_level(now_ms);
         return;
     }
-
-    int8_t shift = tiles_note_map_get_octave_shift();
-    float minus_level = 0.0f;
-    float plus_level = 0.0f;
+    /* The melody's octave, or the chords' while circle is held in chord
+     * mode. */
+    bool chords = tiles_note_map_is_chord_mode_active() && tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
+    int8_t shift = chords ? tiles_note_map_get_chord_octave_shift() : tiles_note_map_get_octave_shift();
     if (shift != 0) {
         uint8_t magnitude = (uint8_t)(shift < 0 ? -shift : shift);
         float level = level_for_magnitude(magnitude, now_ms);
         if (shift < 0) {
-            minus_level = level;
+            *minus_level = level;
         } else {
-            plus_level = level;
+            *plus_level = level;
         }
     }
-
-    tiles_buttons_set_override_led(BUTTON_ID_MINUS, minus_level);
-    tiles_buttons_set_override_led(BUTTON_ID_PLUS, plus_level);
 }

@@ -14,7 +14,9 @@
 #include "game_mode.h"
 #include "octave_control.h"
 #include "op_mode.h"
+#include "light_effects.h"
 #include "pedal.h"
+#include "strike_settle.h"
 
 #include "pico/time.h"
 
@@ -43,6 +45,37 @@ static bool s_harmonics_enabled = true;
  * (the MPR121 release threshold was tuned for that). Unmeasured. */
 #define TOUCH_DROPOUT_GRACE_MS 12u
 
+/* A resting finger's touch can drop out for longer than that. Two rules
+ * keep it from replaying the note (the key is still down, so the re-touch
+ * read as a new hard strike: a note-off, a fresh note-on and a kick under
+ * a finger that never moved):
+ *   - A sounding note whose key the Hall still reads as pressed (depth >=
+ *     MIN_STRIKE_DEPTH_DELTA) outlives a dropout for up to
+ *     PRESSED_DROPOUT_GRACE_MS. A key that comes up ends it at once, so real
+ *     releases stay snappy; the limit stops a key held down without a
+ *     finger from hanging the note.
+ *   - A touch that begins with the key already pressed is an instant
+ *     strike (a hard hit can bottom out before touch registers) only if
+ *     the key was up (< TILES_HALL_KEY_UP_DEPTH) within
+ *     STRIKE_FROM_REST_MS. Otherwise the finger never left: the pad waits,
+ *     silent and without a touch tick, for the key to come up, then
+ *     detects a strike as usual.
+ * Both need a fresh depth after the finger leaves: hall.c keeps reading a
+ * released pad until its key reads up. Without that the depth froze at
+ * the last pressed reading (an untouched pad is re-read only every
+ * ~50 ms), a real lift looked like a dropout over a held key, and quick
+ * repeated presses on one pad were swallowed. "Up" is above bare contact
+ * (a resting finger reads up to ~96), so a finger left lightly on the pad
+ * can still re-arm it. First guesses: the dropouts aren't measured; a
+ * hard hit's touch lag is a few tens of ms at most. */
+#define PRESSED_DROPOUT_GRACE_MS 300u
+#define STRIKE_FROM_REST_MS 150u
+
+/* A touch that comes back within this gap gets no new touch tick (the
+ * haptic pulse on touch-down): it's the same finger flickering. First
+ * guess, under the lift of a fast repeated tap. */
+#define TOUCH_PULSE_MIN_GAP_MS 60u
+
 /* Depth travel since touch-down that makes it a press (and the point where
  * velocity measurement starts). A touch that never gets here plays
  * nothing, like a key that's touched but not pressed. 150 sits in the gap
@@ -70,8 +103,10 @@ static bool s_harmonics_enabled = true;
  *   - strike_time_ms: time from touch-down to crossing
  *     MIN_STRIKE_DEPTH_DELTA (like a keybed's two-contact timing; ~0 for a
  *     very fast hit).
- *   - peak_depth: how far the strike keeps going during
- *     VELOCITY_FOLLOWTHROUGH_MS after the crossing.
+ *   - peak_depth: how far the strike keeps going during the
+ *     follow-through after the crossing (strike_settle.h: up to
+ *     TILES_STRIKE_FOLLOWTHROUGH_MS, cut short once the key stops going
+ *     down or the depth score is full, so the note isn't held back).
  * Time alone can't tell a quick light tap from a quick hard hit (both
  * cross the threshold at once), and depth read at the instant of crossing
  * can be faked by a fast graze. Over the short follow-through, a light
@@ -91,14 +126,8 @@ static bool s_harmonics_enabled = true;
 #define STRIKE_TIME_MIN_VELOCITY_MS 300u
 #define VELOCITY_CURVE_EXPONENT 1.0f
 
-/* Follow-through window after crossing the threshold before committing:
- * long enough for a light touch to plateau, short enough to stay under
- * perceptible onset latency (~10-20 ms). First guess. */
-#define VELOCITY_FOLLOWTHROUGH_MS 20u
-
-/* Overshoot past MIN_STRIKE_DEPTH_DELTA (by the end of the follow-through)
- * at which the depth signal maxes out. Unmeasured. */
-#define STRIKE_DEPTH_OVERSHOOT_FULL_SCALE 550.0f
+/* Overshoot at which the depth signal maxes out (expression.h). */
+#define STRIKE_DEPTH_OVERSHOOT_FULL_SCALE TILES_EXPRESSION_STRIKE_OVERSHOOT_FULL_SCALE
 
 /* Depth's share of the velocity blend (see "Velocity"). */
 #define STRIKE_DEPTH_WEIGHT 0.85f
@@ -294,6 +323,8 @@ typedef struct {
      * threshold_crossed makes it a one-time capture. */
     uint32_t strike_time_ms;
     bool threshold_crossed;
+    /* The follow-through after the crossing (strike_settle.h). */
+    tiles_strike_settle_t settle;
 
     uint32_t last_seen_sample_time_ms;
 
@@ -322,6 +353,13 @@ typedef struct {
      * first touch. */
     uint32_t last_touched_ms;
     bool last_touched_valid;
+
+    /* Last scan the key read up (< TILES_HALL_KEY_UP_DEPTH), for
+     * STRIKE_FROM_REST_MS. */
+    uint32_t last_key_up_ms;
+    /* AWAITING_STRIKE that began with the key already pressed and no recent
+     * rest: waiting for the key to come up before detecting a strike. */
+    bool awaiting_rest;
 
     /* This note's channel: a Member Channel with MPE on, the Master Channel
      * (ch 1) with MPE off. Valid in PAD_STATE_NOTE_ON. */
@@ -372,6 +410,9 @@ typedef struct {
     bool pitch_bend_baseline_settled;
     uint32_t pitch_bend_claim_ms;
     uint16_t pitch_bend_last_sent;
+    /* The bend's centre for this note: 8192, or above it for a quarter tone
+     * (bend_center_for()). */
+    uint16_t bend_center;
     /* Run tracking for PITCH_BEND_ARM_MS: run_active = the delta is outside
      * the deadzone; run_positive = which side (a sign flip starts a new run);
      * run_start_ms = when this run began. */
@@ -903,6 +944,7 @@ void tiles_expression_init(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_pads[i] = (pad_expr_t){0};
         s_pads[i].state = PAD_STATE_IDLE;
+        s_pads[i].bend_center = PITCH_BEND_CENTER;
     }
     for (uint8_t i = 0; i < TILES_MIDI_SHARED_POOL_SIZE; i++) {
         if (s_mpe_channels[i].in_use) {
@@ -1019,8 +1061,7 @@ static uint16_t pitch_bend_14bit_from_cosine_delta(pad_expr_t *s, float delta, u
     if (normalized < -1.0f) {
         normalized = -1.0f;
     }
-    int32_t bend = (int32_t)PITCH_BEND_CENTER +
-                   (int32_t)(normalized * 8191.0f * PITCH_BEND_WIRE_RANGE_COMPENSATION);
+    int32_t bend = (int32_t)s->bend_center + (int32_t)(normalized * 8191.0f * PITCH_BEND_WIRE_RANGE_COMPENSATION);
     if (bend < 0) {
         bend = 0;
     }
@@ -1118,8 +1159,8 @@ static void center_and_deactivate_all_bending_pads(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         pad_expr_t *s = &s_pads[i];
         if (s->state == PAD_STATE_NOTE_ON && s->pitch_bend_active) {
-            tiles_midi_send_pitch_bend(s->midi_channel, PITCH_BEND_CENTER);
-            s->pitch_bend_last_sent = PITCH_BEND_CENTER;
+            tiles_midi_send_pitch_bend(s->midi_channel, s->bend_center);
+            s->pitch_bend_last_sent = s->bend_center;
             s->pitch_bend_active = false;
         }
     }
@@ -1137,6 +1178,19 @@ void tiles_expression_toggle_pitch_bend(void) {
 
 bool tiles_expression_is_pitch_bend_enabled(void) {
     return s_pitch_bend_enabled;
+}
+
+float tiles_expression_get_pad_bend_amount(uint8_t logical_pad) {
+    if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
+        return 0.0f;
+    }
+    const pad_expr_t *s = &s_pads[logical_pad - 1u];
+    if (s->state != PAD_STATE_NOTE_ON || !s->pitch_bend_active) {
+        return 0.0f;
+    }
+    float amount = fabsf(((float)s->pitch_bend_last_sent - (float)s->bend_center) /
+                         (8191.0f * PITCH_BEND_WIRE_RANGE_COMPENSATION));
+    return amount > 1.0f ? 1.0f : amount;
 }
 
 void tiles_expression_set_pitch_bend_sensitivity(float max_cosine_deviation) {
@@ -1192,11 +1246,16 @@ static void begin_awaiting_strike(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
     s->last_seen_sample_time_ms = 0;
 
     /* Check the first reading immediately: a hard hit can be fully pressed
-     * before touch registers, and that's an instant, maximum-speed strike. */
+     * before touch registers, and that's an instant, maximum-speed strike --
+     * unless the key hasn't been at rest lately (STRIKE_FROM_REST_MS). */
     float initial_depth = (float)tiles_hall_get_depth(pad);
     s->peak_depth = initial_depth;
-    s->threshold_crossed = (initial_depth >= MIN_STRIKE_DEPTH_DELTA);
+    s->awaiting_rest = initial_depth >= MIN_STRIKE_DEPTH_DELTA && (now_ms - s->last_key_up_ms) > STRIKE_FROM_REST_MS;
+    s->threshold_crossed = !s->awaiting_rest && initial_depth >= MIN_STRIKE_DEPTH_DELTA;
     s->strike_time_ms = 0;
+    if (s->threshold_crossed) {
+        tiles_strike_settle_begin(&s->settle, initial_depth, now_ms);
+    }
 }
 
 /* Time score 0..1 (fast = 1), shaped by VELOCITY_CURVE_EXPONENT (1.0 =
@@ -1256,6 +1315,18 @@ static uint8_t aftertouch_from_depth(uint16_t depth) {
 
 /* Starts pitch bend tracking for `pad`'s new note, latching whether bend
  * is enabled now. The baseline is captured later (PITCH_BEND_SETTLE_MS). */
+/* Quarter tones (note_map.h): the pad's note sits `cents` up, so its bend
+ * is centred there, in the wire's 48-semitone scale. MPE only: with MPE
+ * off the bend is channel 1's, every note's. */
+static uint16_t bend_center_for(uint8_t pad) {
+    uint8_t cents = tiles_note_map_get_pad_cents(pad);
+    if (cents == 0u || !s_mpe_enabled) {
+        return PITCH_BEND_CENTER;
+    }
+    float wire = 8192.0f * ((float)cents / 100.0f) / PITCH_BEND_MPE_SPEC_DEFAULT_RANGE_SEMITONES;
+    return (uint16_t)((int32_t)PITCH_BEND_CENTER + (int32_t)(wire + 0.5f));
+}
+
 static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
     s->pitch_bend_active = s_pitch_bend_enabled;
     if (!s->pitch_bend_active) {
@@ -1281,7 +1352,7 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
     s->pitch_bend_smoothed_delta = 0.0f;
     s->pitch_bend_baseline_settled = false;
     s->pitch_bend_claim_ms = now_ms;
-    s->pitch_bend_last_sent = PITCH_BEND_CENTER;
+    s->pitch_bend_last_sent = s->bend_center;
     s->pitch_bend_run_active = false;
     /* Reset, so the previous note's energy can't bias the vibrato detector. */
     s->pitch_bend_wiggle_energy = 0.0f;
@@ -1338,6 +1409,7 @@ static uint8_t find_most_recent_held_pad(uint8_t exclude_pad) {
 static void end_held_note(pad_expr_t *s, uint8_t pad, bool player_release, bool may_hold) {
     tiles_cv_gate_note_off(s->active_note);
     tiles_haptics_stop(pad);
+    tiles_fx_release(pad, to_ms_since_boot(get_absolute_time()));
     s->pitch_bend_active = false;
     if (s->midi_channel != TILES_MIDI_MPE_MASTER_CHANNEL && s->last_sent_aftertouch != 0u) {
         /* MPE: pressure 0 right before Note-Off, even if the Note-Off waits for
@@ -1492,12 +1564,18 @@ void tiles_expression_scan(void) {
         pad_expr_t *s = &s_pads[i];
 
         bool raw_touched = tiles_touch_is_touched(pad);
+        /* Untouched this long before this scan (UINT32_MAX: never touched). */
+        uint32_t touch_gap_ms = s->last_touched_valid ? now_ms - s->last_touched_ms : UINT32_MAX;
         if (raw_touched) {
             s->last_touched_ms = now_ms;
             s->last_touched_valid = true;
         }
         /* Dropout-bridged touch (a raw touch always reads true here). */
         bool touched = pad_touch_bridged(s, now_ms);
+        float depth_now = (float)tiles_hall_get_depth(pad);
+        if (depth_now < (float)TILES_HALL_KEY_UP_DEPTH) {
+            s->last_key_up_ms = now_ms;
+        }
 
         if (s->state == PAD_STATE_STOLEN) {
             /* Stolen pad: silent until a real release, then IDLE. */
@@ -1513,10 +1591,24 @@ void tiles_expression_scan(void) {
              * left to finish. op_mode is asked per pad (tiles_op_mode_owns_pad()):
              * chord mode only claims its strip, the melody pads still play here. */
             if (touched && !tiles_expression_control_owns_pad_grid() && !tiles_octave_control_is_transpose_active() &&
-                !tiles_op_mode_owns_pad(pad) && !tiles_game_mode_is_active()) {
+                !tiles_op_mode_owns_pad(pad) && !tiles_game_mode_is_active() && tiles_note_map_pad_has_note(pad)) {
                 begin_awaiting_strike(s, pad, now_ms);
-                /* Touch-only haptic tick, whether or not it becomes a press. */
-                tiles_haptics_trigger_touch_pulse(pad);
+                /* Touch-only haptic tick, whether or not it becomes a press; not for
+                 * a finger that never left (see PRESSED_DROPOUT_GRACE_MS). */
+                if (!s->awaiting_rest && touch_gap_ms >= TOUCH_PULSE_MIN_GAP_MS) {
+                    tiles_haptics_trigger_touch_pulse(pad);
+                }
+            }
+            continue;
+        }
+
+        if (s->state == PAD_STATE_AWAITING_STRIKE && s->awaiting_rest) {
+            /* The key was already down when this touch began: silent until it
+             * comes up, then a strike is detected from there. */
+            if (!touched) {
+                s->state = PAD_STATE_IDLE;
+            } else if (depth_now < (float)TILES_HALL_KEY_UP_DEPTH) {
+                begin_awaiting_strike(s, pad, now_ms);
             }
             continue;
         }
@@ -1536,6 +1628,9 @@ void tiles_expression_scan(void) {
                         /* First sample past the threshold: record strike_time_ms. */
                         s->threshold_crossed = true;
                         s->strike_time_ms = hs.sample_time_ms - s->touch_start_sample_ms;
+                        tiles_strike_settle_begin(&s->settle, s->peak_depth, hs.sample_time_ms);
+                    } else if (s->threshold_crossed) {
+                        tiles_strike_settle_sample(&s->settle, depth, hs.sample_time_ms);
                     }
                 }
             }
@@ -1544,12 +1639,12 @@ void tiles_expression_scan(void) {
              * the current reading would show it. */
             bool pressed = s->threshold_crossed;
 
-            /* ready = pressed and the follow-through window has passed while touched.
-             * commit_on_release = touch ended before that: commit now with the depth
-             * reached, rather than dropping a real hit or waiting for nothing. */
-            uint32_t crossed_at_ms = s->touch_start_sample_ms + s->strike_time_ms;
-            bool followthrough_elapsed = pressed && (now_ms - crossed_at_ms) >= VELOCITY_FOLLOWTHROUGH_MS;
-            bool ready = touched && followthrough_elapsed;
+            /* ready = pressed and the follow-through is done (strike_settle.h) while
+             * touched. commit_on_release = touch ended before that: commit now with
+             * the depth reached, rather than dropping a real hit or waiting for
+             * nothing. */
+            bool ready = touched && pressed &&
+                         tiles_strike_settle_ready(&s->settle, s->peak_depth, TILES_EXPRESSION_FULL_STRIKE_DEPTH, now_ms);
             bool commit_on_release = !touched && pressed;
 
             if (ready || commit_on_release) {
@@ -1562,10 +1657,14 @@ void tiles_expression_scan(void) {
                 /* HOLD style: close this pad's held note and any held note of the same
                  * pitch before the new Note-On (re-striking a held key), keeping one
                  * Note-Off per Note-On. No-op in SYNTH style. */
+                /* One USB transfer for the Note-Offs, the setup and the Note-On
+                 * (midi_out.h's batch): one by one, the Note-On left a pass behind. */
+                tiles_midi_out_batch_begin();
                 release_held_note(s);
                 release_held_notes_of_pitch(s->active_note);
                 s->midi_channel =
                     s_mpe_enabled ? claim_mpe_channel(pad, s->active_note) : TILES_MIDI_MPE_MASTER_CHANNEL;
+                s->bend_center = bend_center_for(pad);
                 init_pitch_bend_for_pad(s, pad, now_ms);
                 s->touch_claim_seq = s_next_mpe_claim_seq++;
                 if (!s_mpe_enabled) {
@@ -1574,8 +1673,14 @@ void tiles_expression_scan(void) {
                     s_non_mpe_owner_pad = pad;
                 }
                 tiles_midi_send_note_setup(s->midi_channel);
+                if (s->bend_center != PITCH_BEND_CENTER) {
+                    tiles_midi_send_pitch_bend(s->midi_channel, s->bend_center); /* a quarter tone up */
+                    s->pitch_bend_last_sent = s->bend_center;
+                }
                 tiles_midi_note_on(s->midi_channel, s->active_note, velocity);
+                tiles_midi_out_batch_end();
                 tiles_cv_gate_note_on(s->active_note, velocity);
+                tiles_fx_hit(pad, velocity, now_ms); /* light effects */
                 /* Same velocity for the haptic kick and the MIDI note. */
                 tiles_haptics_trigger_kick(pad, velocity);
                 s->last_sent_aftertouch = 0u; /* the setup just set it */
@@ -1599,14 +1704,16 @@ void tiles_expression_scan(void) {
         }
 
         /* PAD_STATE_NOTE_ON */
-        if (!touched) {
+        float raw_depth = depth_now;
+        /* A dropout while the key is still pressed keeps the note (see
+         * PRESSED_DROPOUT_GRACE_MS). */
+        bool key_still_down = raw_depth >= MIN_STRIKE_DEPTH_DELTA && touch_gap_ms < PRESSED_DROPOUT_GRACE_MS;
+        if (!touched && !key_still_down) {
             /* Touch ended: the finger let go (the one player_release=true call). */
             end_held_note(s, pad, true, true);
             s->state = PAD_STATE_IDLE;
             continue;
         }
-
-        float raw_depth = (float)tiles_hall_get_depth(pad);
 
         /* Retrigger without lifting: depth back near rest (after the grace time)
          * ends the note and starts strike detection again; the next real press

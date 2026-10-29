@@ -3,6 +3,12 @@ import { contextBridge, ipcRenderer,} from 'electron'
 contextBridge.exposeInMainWorld(
   'tiles',
   {
+    project: {
+      open: () => ipcRenderer.invoke('project:open'),
+      save: (project: unknown, saveAs = false) =>
+        ipcRenderer.invoke('project:save', project, saveAs),
+      reset: () => ipcRenderer.invoke('project:new'),
+    },
     usb: {
       list: () =>
         ipcRenderer.invoke('usb:list'),

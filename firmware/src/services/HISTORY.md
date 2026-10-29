@@ -9558,3 +9558,869 @@ change. Search it by file or feature name.
   give a kick." A drum pad that's touched but not pushed gets a 127-velocity
   kick each time its drum plays (sequenced steps and step rolls), stopped
   at 50 ms (kick 45 ms + gap, before the sustain would start).
+- **Device bug fixes: resting finger, power-cycle memory, settings
+  protocol (0.3.7, 2026-10-12).** Asked "what could we fix in bugs on the
+  device?", the user picked three:
+  1. *A pad replaying under a resting finger* (pinned since earlier
+     traces). A resting finger's capacitive touch flickers for longer than
+     `TOUCH_DROPOUT_GRACE_MS` (12 ms; the same flicker behind the harmonics
+     ghost plucks above). The note ended, and on re-touch
+     `begin_awaiting_strike()` read the still-pressed key as an instant hard
+     strike: note-off, a fresh max-velocity note-on and a haptic kick, with
+     no movement at all. Now a note whose key the Hall still reads as
+     pressed outlives a dropout for up to `PRESSED_DROPOUT_GRACE_MS`
+     (300 ms), and a touch that starts with the key pressed is an instant
+     strike only if the key was at rest within `STRIKE_FROM_REST_MS`
+     (150 ms); otherwise the pad waits silently (`awaiting_rest`) for the
+     key to come up, then detects a strike as usual. A re-touch within
+     `TOUCH_PULSE_MIN_GAP_MS` (60 ms) gets no second touch tick. All first
+     guesses; not yet measured on hardware.
+  2. *Scale, key, octave and mode forgotten at power-off.* They lived only
+     in `__uninitialized_ram`. New `play_state`: saved ~2 s after a change
+     with the pads idle, through `storage/log_store` in its own two
+     sectors (one page per save; an erase waits for the clock to stop),
+     restored at power-up (a crash reboot still keeps RAM's values). INFO
+     `state.*`. Running sequencer lanes are deliberately not restored.
+  3. *The companion app's concurrent GETs.* `useTilesSettings` fires every
+     GET at once and each call read the USB endpoint itself, so replies
+     went to whichever call read first (a GET could show another key's
+     value). The device side was already strict (one command at a time,
+     the rest waiting in TinyUSB's FIFO); the protocol gained optional
+     request tags (`@<tag> CMD`, every reply line echoes the tag) so a
+     host can match lines to requests and skip leftovers from an earlier
+     session, and `companion-app/src/main/usb.ts` now queues commands and
+     tags each one, falling back to plain commands on older firmware.
+- **Found while flashing 0.3.7 (0.3.8, 2026-10-14).** Hardware checks on
+  units 2 and 4 turned up three more:
+  1. *A half-sent command poisoned the next one.* A test that wrote eight
+     tagged commands before reading stalled (the device stops reading
+     while a reply waits) and pyusb gave up 3 bytes short; the device kept
+     "@6 I" and glued it onto the next command, from any later session,
+     which a tagging host would wait on forever. usb_vendor.c now drops a
+     partial line after 1 s with nothing arriving while it waits for input.
+  2. *play_state didn't save during standby.* Its service sat after
+     op_mode's early return for standby, games and transpose, so a change
+     made just before standby waited for standby to end, or was lost at
+     power-off. It now runs first in `tiles_op_mode_scan()`.
+  3. *`REBOOT APP` never rebooted.* `watchdog_reboot(0, 0, 100)` returned to
+     the main loop, which feeds the watchdog every pass, so the 100 ms reset
+     never came (it replied OK and carried on). It now flushes the OK,
+     reboots with a 1 ms delay and spins unfed. Also `tiles_control.py test
+     mode <name>` upper-cased the mode name, which the device rejects.
+  Checked on both units: pipelined tagged commands (with a reader) answer in
+  order, each with its tag; the line after a stalled batch is answered;
+  drums saved within 3 s and restored after both a reflash and a REBOOT APP.
+- **Pressure hue and bend flutter on the pads (0.3.9, 2026-10-14).** Asked:
+  "led hue shift slightly on pressure, make it standardized so the hue
+  shifts universally correctly also make it not too crazy but actually
+  still visible. and for pitchbend led intensity flutter tied to the
+  amount of bend." One last step in lighting.c's write_pad(), on every
+  touched pad in every mode (not games, the sleep animation or the bench
+  test): pressure (Hall depth past the strike threshold, scaled like
+  aftertouch) turns the colour by up to 40 degrees in HSV with saturation
+  and value kept, so every colour moves by the same angle and nothing gets
+  brighter; white has no hue, so it tints toward Sentia magenta (300
+  degrees, up to 45% saturation) instead, blended in below 15% saturation.
+  A bending note's pad dips in brightness by up to 50% at full bend
+  (expression.c's new tiles_expression_get_pad_bend_amount(), 0..1 of the
+  pad's own range), 6-12 Hz rising with the bend. Pads showing either are
+  rewritten every 12 ms, at most one extra pad write per pass. Settings
+  look.pressure_hue_degrees (0x0409) and look.bend_flutter_percent
+  (0x040A), 0 = off. All first guesses; not yet seen on hardware.
+- **Faster bend flutter; no pressure hue with MPE off (0.4.0, 2026-10-14).**
+  Real feedback after trying 0.3.9 on unit 2: "faster flutter on pitch
+  bend and also if mpe is off there is no hue shift". Flutter 12-24 Hz
+  (was 6-12), and bending pads are rewritten every 5 ms (others 12) so the
+  faster wave keeps several samples per cycle. With MPE off, pressure is
+  one channel-wide value, so the pads don't show it (the flutter stays).
+  0.3.9 + 1 would be 0.3.10, which the one-digit USB bcdDevice can't hold.
+  Measured on unit 2 while playing: loop ~3.0-3.3 ms (max ~4.3) against
+  ~2.1-2.3 ms idle, because the live rewrites came on top of the
+  round-robin's pad write each pass, and one pad write is ~0.7 ms (four
+  TCA9554 writes on I2C plus the SK6805's 300 us latch). Now a due live pad
+  takes the pass's single pad write and the round-robin waits.
+- **The resting-finger fix swallowed quick repeated presses (0.4.1,
+  2026-10-14).** Real feedback: "the retrigger thing you implemented is
+  rejecting some of the presses". Both 0.3.7 rules read the pad's Hall
+  depth after the finger leaves, but hall.c only re-reads an untouched pad
+  in its background round-robin (~50 ms), so the depth froze at the last
+  pressed reading: a real lift looked like a dropout over a held key (the
+  note was kept, and a quick re-press landed on it), and the key coming
+  up was never seen (the re-press waited for it). hall.c now keeps reading
+  a released pad every call until its depth is below
+  TILES_HALL_KEY_UP_DEPTH (100) or 300 ms pass, usually one to three
+  extra reads per release. "Up" is that level, not <= 40: bare contact
+  reads up to ~96, so a finger left lightly on a pad couldn't re-arm it.
+- **Bend swells the pad darker instead of flickering (0.4.2, 2026-10-14).**
+  Real feedback: "lets do swells instead of flicker so less bright led when
+  bend". The flutter is gone: brightness falls smoothly with the bend
+  amount, to 50% at full bend, eased over 60 ms each way. The setting kept
+  its id (0x040A, settings are saved by id) and is now
+  look.bend_dim_percent.
+- **Pressure tints toward Sentia blue; Feel menu row 4 = LED intensity
+  (0.4.3, 2026-10-14).** Real feedback: "make the hue shift to sentia blue
+  not sentia pink. but not fully. make the feel settings change, so row 4 is
+  now led intensity with the default being full available, and lowest off,
+  move pressure to row 3." Pressure now moves a pad's hue toward Sentia
+  blue (the brand periwinkle #94ABF9, ~226 degrees) by up to 40 degrees, the
+  short way and never past it; white tints partway toward it (up to 45%
+  saturation). Feel menu: the reserved Y-axis row 3 is gone; row 3 is
+  pressure (aftertouch) sensitivity, row 4 LED intensity, columns 0, 4, 16,
+  36, 64, 100% of the ceiling (even-looking steps), column 6 the default,
+  column 1 off (blinks like haptics off). It's a saved setting
+  (look.led_intensity_percent, 0x040B), so the row shows the column nearest
+  the restored value. Pads and the normal underglow only (button LEDs and
+  the underglow indicators are untouched), and the Feel menu itself always
+  shows at full brightness, so "off" can be undone.
+- **LED intensity covers the button LEDs (0.4.4, 2026-10-14).** Real
+  feedback: "this affects function buttons as well". buttons.c now
+  remembers the level each LED was last asked for and writes it scaled by
+  the intensity (tiles_buttons_set_led_intensity(), fed by lighting.c each
+  pass, full while the Feel menu is open); a change redraws all six from
+  that memory, since some owners only draw their LED on change. A PCA9685
+  resync also restores every LED from it instead of waiting for owners.
+- **Volca mode (0.5.0, 2026-10-14).** Asked: "add a new mode that works like
+  drum mode but runs on each channel sending a C note so I can use it with
+  my Volca Sample with beta7 custom firmware, call it volca mode ... its
+  color is purple ... this mode only overrides MIDI functionality,
+  assigning each pad from the drum selector a different MIDI channel." Built
+  as drum mode with a routing flag, not a separate mode: same pattern,
+  gestures and saving. Drum k from C1 (bank 1's eight, then bank 2's) plays
+  C4 (MIDI 60) on channel k (1-16); past 16, nothing. Purple where drum
+  mode is lime (menu pad, underglow, armed steps, bank shades). Menu: row 2
+  pad 2, next to bass. Switching routing ends sounding notes on the old one
+  first. play_state saves it as mode 7; it survives a crash with the mode.
+  The pattern is shared with drum mode. Not in the guide yet (asked).
+- **Harmony mode (0.6.0, 2026-10-15).** Asked for a second chord mode, a
+  harmonic machine for experimenting and getting out of the box without
+  theory. Researched first: chord machines built from 4 chord types + 4
+  extensions with a key mode, Omnichord and Stradella (roots by fifths), pop
+  chord statistics (triads dominate), Tymoczko (minimal voice leading),
+  low interval limits, Lehman's Hollywood Harmony (chromatic moves read as
+  "wonder"). The fifths/diatonic layout was rejected by the user as needing
+  knowledge; built the user's chromatic layout instead: roots C..B three per
+  row from bottom-left (neighbours a semitone across, a minor third up: the
+  film-score moves), 12 colours named by mood (bright / dark / ambiguous
+  columns, stranger going up), tap to pick, live recolour keeping shared
+  notes, glide voicing (least movement, C3-C6, root bass C2-B2), "-"/"+"
+  octave, channel pressure, channel 12. Key lock = any scale but chromatic
+  in the scale picker: outside notes dark and silent, chord tones fitted to
+  the scale keeping their role (D bright -> Dm, B bright -> Bdim). Teal,
+  mode menu row 2 pad 3; play_state saves it as 8. Flashed to unit 4 only.
+  Not yet: tilt morph, press bloom, dice, "native colour" glow.
+- **Harmony layout B, for an A/B test (0.6.1, 2026-10-15).** Asked to load
+  the type-plus-extension layout as a second one, to A/B test. The layout B
+  proposed earlier: the same chromatic roots; column 4 voicing (root, 1st,
+  2nd, open; tap to pick, no glide), column 5 quality while held (major,
+  minor, sus4, dim; last pressed wins, none = major), column 6 extensions
+  while held, combining (6, 7, maj7, 9: Maj+7 = 7, Dim+6 = dim7, Dim+7 =
+  m7b5). Changing them under a sounding chord changes it (shared notes
+  held). Same key lock and octave. Its own menu pad (row 2 pad 4, light
+  blue), saved by play_state as 9; its own TEST MODE name. Unit 4 only.
+- **Harmony is layout B only; haptics on the roots (0.6.2,
+  2026-10-15).** After the A/B: "haptics on the left side. remove other
+  layout lets replace it with this one". The mood-colour layout A, its glide
+  voicing and its menu pad are gone (git history has them); Harmony is the
+  former layout B on row 2 pad 3, teal. A board saved in either (8, or 0.6.1's
+  9) opens Harmony. The root pads now feel like melodic pads: a tick on
+  touch, a kick on the strike, a buzz following pressure while held.
+- **Harmony: latching, pressed modifiers, velocity, pedal strum; key lock
+  keeps colour notes (0.6.3, 2026-10-17).** Real feedback: "the note
+  quantize of scale locking should allow for the complex voicing notes ... it
+  should just disable the melodic notes outside the scale"; "make the voicing
+  options or tensions or quality latched for that specific note and only
+  release when a new note is pressed; keep voicings latching forever"; "make
+  the things hold reactive not capacitive and chords velocity sensitive";
+  "add strumming of that chord when pedal is held".
+  - Key lock only silences roots outside the scale; chord tones are never
+    fitted (harmony_core's fitting is gone).
+  - Quality and extensions pressed while a chord sounds latch onto it until
+    a new root is pressed; pressed while nothing sounds, they wait for the
+    next root; the same pad again takes it off; held while striking, they
+    carry (hold-then-press). Voicing stays latched.
+  - Columns 4-6 act on a press past the strike depth (Hall), re-armed when
+    the key comes up below TILES_HALL_KEY_UP_DEPTH, not on capacitive touch.
+  - Chords wait a 20 ms follow-through past the strike depth before reading
+    velocity (as expression.c); firing at the threshold read every chord
+    soft.
+  - Pedal down: a light touch on a root pad (staying light 40 ms) plucks one
+    note of the last chord, the 12 pads climbing its notes from the bass
+    (tiles_harmony_strum_note()); 400 ms each, 80% of the chord's velocity.
+    HOLD style: TILES holds a released chord until the pedal comes up.
+  Harmony's colour is light blue (0.3, 0.6, 1.0), not teal: Ableton's menu
+  pad was already teal (0, 0.5, 0.5).
+- **Mode menu by family; the app can add or remove modes (0.7.0,
+  2026-10-17).** Asked: "align modes based on functionality": column 1
+  melodic (default) with chord + melody below it, column 2 sequencer modes,
+  column 3 harmonic modes, then bass modes, then hardware / gear modes
+  starting with Ableton (Volca, CV/gate gear to come), then experimental; and
+  "Sam should be able to make the control software delete or add layouts".
+  The menu is now a table (MENU_SLOTS): melodic, chord | sequencer, drums,
+  Song | Harmony | bass | Ableton, Volca | (experimental, empty). Song sits
+  with the sequencers (it sequences; still beta). New settings modes.chord ..
+  modes.volca (0x0800-0x0807, default on): off = dark, unpickable, and the
+  mode in use falls back to melodic; melodic can't be removed. Mode names in
+  the guide are pending marketable names (not changed until approved).
+- **Colour families, Duet / Prism, Bouncing notes (0.8.0, 2026-10-17).**
+  Asked: "redo the hues for modes so it's grouped by colors well but not
+  confusing, so color families per mode, and the underglow matches the mode
+  always; call it duet mode, prism mode, volca stays volca"; and a new mode,
+  bouncing notes.
+  - Colours by family (column): magenta (melodic, Duet pink), greens
+    (sequencer green, drums lime, Song yellow), blue (Prism), amber (bass),
+    teal/cyan (Ableton teal, Volca cyan), violet (Bouncing notes). The
+    sequencer left red (the crash indicator's colour); Duet left blue; Volca
+    left purple. Every mode's underglow is its menu colour: lighting.c's
+    normal underglow follows the mode (it was white in melodic, chord and
+    bass); the sequencer's views show it (they were dark); menus stay dark.
+  - Names: chord mode is Duet, Harmony is Prism (code names unchanged:
+    OP_MODE_CHORD, harmony.c); settings modes.duet / modes.prism keep ids
+    0x0800 / 0x0804; TEST MODE takes duet / prism (old names still work).
+  - Bouncing notes (bounce.c, bounce_core.c): each column a lane; tap a
+    pad to drop that lane's ball from its height (the same height again:
+    off); it lands every 1/2/4/6 sixteenths for heights 1-4, louder from
+    higher, playing the lane's scale note (key note up, octave from
+    elsewhere) on channel 11. 12 lanes, circle + "-"/"+" scroll one column,
+    all pads flash pink at either end. "-"/"+" stop/start like the
+    sequencer ("+" with no clock in: every ball lands now, clock restarted);
+    circle taps tempo; square is only the Feel menu here (no bend toggle,
+    tiles_op_mode_square_toggles_bend()). Keeps bouncing in other modes.
+    Column 6, violet; modes.bounce (0x0808); play_state 10.
+- **Sequencers in reds, Bass green, Bouncing notes shading (0.8.1,
+  2026-10-17).** Asked: "sequencer modes should be in reds, also the default
+  pads should be in those hues of red and orange, not just the underglow and
+  selector, for sequencer based instruments; also make bouncing notes shift
+  shades of purple from left to right columns so we get a sense of
+  positioning on scrolling".
+  - Column 2 is now the warm family: Sequencer scarlet (1, 0.06, 0), drums
+    orange (1, 0.32, 0), Song amber (1, 0.62, 0). Inside the modes too:
+    the sequencer's empty steps inside the loop glow a faint orange (they
+    were dark; past the loop stays dark, so the length shows), armed steps
+    stay red; pattern-bank lanes red-orange / orange / amber / rose (were
+    amber / green / blue / purple); drum banks orange / red / amber / rose
+    (were lime / greens / olive); Song's track hues 10-50 degrees
+    (red-orange to amber, were 30-90). Blue playheads and selections, white
+    and red flashes unchanged. The crash indicator's red still pulses; the
+    Sequencer's is steady.
+  - Bass guitar moved from amber (now Song's) to green, frets included
+    (lighting.c). The DAW echo's pale green flashes in from white, the
+    frets' deeper green doesn't.
+  - Bouncing notes: lane 1 blue-violet shading to lane 12 magenta-violet
+    (bounce.c lane_rgb), so the visible colours tell the scroll position.
+    The key-note lanes' pink is gone (it broke the shading).
+- **Bouncing notes: wider colour sweep, half time (0.8.2, 2026-10-17).**
+  Asked: "more dramatic hue shift for bouncing notes; also half the time,
+  it's too subdivided".
+  - Lanes now sweep hue 235 -> 335 degrees (deep blue, violet, magenta, hot
+    pink; about 9 degrees a lane, 45 across the six shown) instead of
+    blue-violet -> magenta-violet.
+  - A step is an eighth, not a sixteenth (BOUNCE_PULSES_PER_STEP 12): heights
+    1-4 land every 1, 2, 4, 6 eighths, and the balls move half as fast.
+- **Bouncing notes: hold a pad to pick the lane's pitch (0.8.3,
+  2026-10-17).** Asked: "holding notes makes bouncing notes be pitch
+  selectable" (the "regular mechanics" from the original request: the
+  sequencer's held step).
+  - Hold a pad 350 ms (BOUNCE_PICK_HOLD_MS, the sequencer's
+    OP_SEQ_PITCH_ASSIGN_HOLD_MS): the pads turn into the melodic surface,
+    the lane's note pulsing white; the first new touch anywhere is the
+    lane's note and closes it; circle + triangle backs out. Balls keep
+    bouncing meanwhile; standby stays off while it's open.
+  - Taps now act on the lift (they set or stop the height), so a hold never
+    changes the height first.
+  - A picked note is absolute (key and octave changes don't move it) and
+    fitted to the scale at playback, like a sequencer step; unpicked lanes
+    still follow the scale. RAM-only, like the heights; no preview sound
+    when picking (the sequencer has none either).
+- **Notes no longer wait out the whole velocity window (0.8.4,
+  2026-10-17).** Reported: "when recording, the MIDI notes are triggered
+  late; there's an offset in the recorded sequence, so there's latency
+  somewhere".
+  - Where it was: every melodic (and Prism chord) strike waited
+    VELOCITY_FOLLOWTHROUGH_MS = 20 ms after crossing the strike depth before
+    its Note-On, on top of the MPR121's ~4 ms (ESI 1 ms, 4-sample second
+    filter) and a pass (~2.5 ms): about 27 ms even for the hardest hit, the
+    same on every note, so it showed as a steady late offset when
+    recording. The clock-to-note path (sequencers, drums, Bouncing notes)
+    was already one pass: an external 0xF8 steps them the same pass and
+    TinyUSB starts the transfer on write. Sequencer capture records on the
+    touch edge, so it wasn't affected; Duet's chord pads never waited.
+  - Fix (strike_settle.c, tested): the note goes as soon as its velocity is
+    known: at once when the peak is already at full depth (strike depth +
+    550: the depth score can't grow), or when the key stops going down
+    (2 fresh Hall samples over >= 4 ms without rising 8 depth units);
+    otherwise at the 20 ms cap (a slow press still going). Velocities
+    come out the same as with the full window, except a press that stalls
+    and then pushes on within 20 ms (now read at the stall). Hard hits now
+    go about 15-20 ms sooner. Expression.h now owns the full-scale overshoot
+    (TILES_EXPRESSION_STRIKE_OVERSHOOT_FULL_SCALE) for both callers.
+- **Following a DAW's clock: Start on the downbeat, beats aligned, Bouncing
+  notes quantized (0.8.5, 2026-10-18).** Reported after 0.8.4: "there's
+  still a ~12 ms delay between notes and clock, or notes and recorded MIDI
+  in Ableton".
+  - Measured/known budget on the board: an incoming Clock steps the
+    sequencers in the same pass and TinyUSB starts the transfer on write
+    (about 1-3 ms with a ~2.1 ms pass); a struck pad is ~4 ms of MPR121
+    filtering plus the strike settle (strike_settle.h) plus a pass. The
+    Live set at the time: 64-sample buffer at 48 kHz (5.67 ms overall
+    latency; it had been 256 / 13.7 ms just before), MIDI Clock Sync Delay
+    0 on both TILES ports, Sync on for both TILES outputs (MIDI and DAW;
+    midi_in takes one). So the constant part left is mostly host-side
+    (Live's clock output vs. its recording); Live's per-port MIDI Clock
+    Sync Delay (negative) and Track Delay are the tools for it.
+  - Found and fixed on the way (whole-pulse offsets, ~21 ms at 120 BPM):
+    - An external Start started playback at the 0xFA itself, so when the
+      Start arrived a pass before its first Clock every later step came one
+      Clock early. MIDI's rule now: the first Clock after a Start is the
+      downbeat (midi_clock.c s_start_pending).
+    - The pulse counter was never realigned on an external Start, so after
+      a second Start pulse_count % 24 no longer matched the DAW's beats:
+      quantized "+" starts and the beat flash were off by up to 23 pulses.
+      A Start now sets the counter so its downbeat Clock lands on a
+      multiple of 24 (stopped meanwhile, so nothing steps across the jump).
+    - Bouncing notes' "+" under an external clock dropped the balls at the
+      press, so their grid sat wherever the press fell. They now drop on
+      the clock's next beat (tiles_bounce_mode_start_on_beat()).
+  - test/test_midi_clock.c (new) covers Start alone / with its Clock in the
+    same pass, the alignment, Continue, Stop cancelling a waiting Start, and
+    a Start with no Clock.
+  - Not handled yet: Song Position Pointer (Live sends SPP + Continue when
+    playing from mid-song; the board then resumes on its own count).
+- **Clock lead, exact internal tempo, Bouncing notes' haptics after its
+  notes (0.8.6, 2026-10-19).** Reported: "we have a misalignment of 15 ms
+  in bouncing notes; it could be a clock thing or MIDI or trigger".
+  - Clock: the board never sends clock, so recorded into Live it follows
+    Live's (Sync on both TILES outputs, Sync Delay 0). A constant offset
+    like this is the round trip: Live's clock out, USB both ways, the
+    pass, Live stamping what comes back; the board's own share is one
+    pass (~1-3 ms). It can't hear a Clock sooner, so it now runs ahead:
+    midi_clock.c predicts each pulse from the last Clocks' spacing (a
+    24-interval ring of arrival times) and lets it through
+    midi.clock_lead_ms (0x0501, default 15: the offset measured here)
+    before it's due; capped at 0.75 of a pulse (never a whole pulse
+    early), only after 3 Clocks have set the pace, and the count given out
+    never goes back. The downbeat right after a Start can't be foreseen and
+    still comes as it arrives.
+  - The tap / "+" generator counted whole milliseconds per pulse
+    (20.833 -> 21 at 120 BPM: really 119 BPM, ~16 ms behind per bar against
+    a DAW at 120); it now runs in microseconds (test: 480 pulses in 10 s).
+  - Bouncing notes: a landing's haptic pulse is an I2C write; it ran
+    between one lane's note and the next, so with several lanes landing
+    together the later notes went out late. Notes first, then haptics.
+  - test_midi_clock.c: the lead (through 6 ms before a 21 ms Clock, at most
+    one ahead, no double count, never back, 0 = off) and the generator's
+    tempo.
+- **Timing pass: one USB transfer per moment, playback between scans and
+  under menus, Song Position Pointer; menu, sequencer and Bouncing notes
+  looks (0.8.7, 2026-10-19).** Asked: "catch timing implementation for MIDI
+  clock, Live and anything else, make things as tight as possible"; then
+  "the steps on the step sequencer should be red matching the underglow and
+  mode colour; bouncing notes haptics are still felt if we switch modes;
+  the visuals for bouncing notes should feel more smooth"; then "make
+  active modes flash twice and pause when the mode is playing; the selected
+  mode keeps the pulse".
+  - USB: TinyUSB starts a transfer on the first packet written; packets
+    written right after wait for it to finish and for the next tud_task()
+    (about a pass, ~2 ms). So a chord, a step's drums, Bouncing notes'
+    landings and even every MPE note (pitch-bend centre, pressure, then the
+    Note-On) went out spread over two transfers. midi_out.h's batch
+    (begin/end) holds channel messages and hands them to TinyUSB's stream
+    write in one go (one flush); used for playback steps, the pad note-on
+    (with its setup), Prism and Duet chords, capture notes and the CC
+    broadcast. Non-channel messages flush the batch first (order kept); a
+    host stall mid-message marks the stream path unsafe until remount.
+  - Playback ticks: every clock-driven part (lanes, Song tracks, drums,
+    Bouncing notes) steps in advance_playback(), from the scan and from
+    tiles_op_mode_playback_tick(), which main.c runs (with tud_task, MIDI
+    in and the clock) after touch, lighting, Hall and haptics: a Clock that
+    lands mid-pass is played within a fraction of a pass. The scan shares
+    the start edge a tick consumed (s_tick_start_edge). Drum saves keep
+    "right after a step starts" via a sticky s_step_entered.
+  - Playback no longer freezes under the Feel menu, transpose or the
+    standby animation (op_mode's scan returned before the clock, so
+    background lanes stopped and then jumped ahead when they closed). Games
+    and deep sleep still pause it. Sequencer and Bouncing notes haptics are
+    felt only while their grid is on the pads.
+  - Song Position Pointer (0xF2, midi_in.c, from the clock's port only): a
+    Continue after one (Live playing from mid-song) starts on the next
+    Clock at that position, the counter's beat phase matching, and
+    clock.song_pulse tells every part where it is: the sequencer's lanes,
+    the drum player (tiles_drum_player_start_at()), Song tracks (which now
+    also re-anchor on a Start at all) and Bouncing notes' eighth grid land
+    where they'd be had it played from the top. A plain Continue still
+    resumes. Tests: test_midi_in (SPP from USB/DIN, not from another
+    port), test_midi_clock (positioned Continue, Start ignoring a
+    position), test_drum_pattern (start_at).
+  - Mode menu: a mode playing in the background blinks twice and pauses in
+    its colour (the diamond's record-armed rhythm, double_blink_on());
+    the current mode keeps its white pulse.
+  - Sequencer steps in the mode's scarlet: armed at 0.3 (tints kept), empty
+    in-loop steps at 0.1 (they were faint orange).
+  - Bouncing notes: balls glide on a parabola between steps (timed by the
+    clock between pulses), crossfaded across two pads; the landing flash
+    fades over 140 ms. A pad write is ~0.7 ms, so the frame goes out at most
+    two pads per scan, biggest change first (a full repaint at once held
+    the loop ~17 ms).
+  - Cost, measured on unit 2 the same day (loop.avg_us, nothing playing):
+    0.8.6 2.48 ms (Bouncing notes) / 2.40 (melodic); 0.8.7 without the
+    ticks 2.55 / 2.47; with four ticks that step playback every time
+    2.78; with ticks that skip when no new pulse or edge came in (what
+    shipped) 2.63 / 2.56. (The ~2.1 ms seen earlier in the week was with
+    less MIDI coming in from Live.)
+- **Bouncing notes: Real gravity on the square (0.9.0, 2026-10-19).** Asked:
+  "make the expression button turn on a more expressive version of bouncing
+  notes; give me ideas and ask me to pick". Offered real gravity, wandering
+  balls, singing balls (MPE), chain reactions; picked real gravity.
+  - bounce_core.c gravity: a ball thrown to an apex keeps 70% of its height
+    each landing (TILES_GRAVITY_RESTITUTION) and rests below 0.06 pad; a
+    bounce takes 6/sqrt(3) * sqrt(apex) eighths (an apex of 3 = 6 eighths,
+    the plain mode's height 4), so the gaps shrink like a dropped ball's.
+    Free time, scaled by the tempo, not on the clock's grid. Tested
+    (lands half a bounce after the throw, every gap and impact smaller,
+    rests within ~a dozen bounces).
+  - bounce.c: a square click (alone, under 600 ms) toggles it, square LED
+    lit. A touch throws the column's ball as soon as the strike is measured
+    (strike_settle.h, expression's velocity curve): row = base apex (0..3
+    pads), strike adds up to 2 (off the grid and back); a light tap that
+    never presses throws from the row on the lift; hold still picks the
+    pitch. Landing velocity from the fall height (sqrt, full at 5 pads), a
+    note lasts until the next landing or an eighth. "-" catches every ball,
+    "+" throws each lane again as it last was; is_running() = a ball in the
+    air (so the menu's playing blink shows it). The plain balls wait, state
+    kept. Drawn with the same smooth renderer; the marker shows the next
+    apex sinking.
+  - Found on the way: the square never opened the Feel menu in grid-owning
+    modes (sequencer, drums, Bouncing notes): expression_control returns
+    early when op_mode owns the grid, so bounce.h's "the Feel menu only"
+    was wrong; the click was free.
+- **Square held = the Feel menu in every mode; Real gravity throws on the
+  lift (0.9.1, 2026-10-19).** Asked: "yes, make square hold open the Feel
+  menu in those modes"; then "bouncing notes is being triggered even before
+  pitch is assigned, that's wrong unless we just tap the pad, not hold it".
+  - expression_control.c skips only while an op_mode menu or sub-view is up
+    (tiles_op_mode_has_menu_open()), not whenever a mode draws the whole
+    grid, so square held opens the Feel menu in the sequencer, drums, Song,
+    Prism, Ableton and Bouncing notes too. Closing it hands the pads back to
+    the mode's standby drawing (set_submenu_visible() keeps standby on when
+    tiles_op_mode_owns_pad_grid()). A square click there goes to
+    tiles_op_mode_handle_square_click(): Bouncing notes toggles Real gravity,
+    the other grid modes do nothing (no pitch bend toggle); elsewhere it
+    toggles bend as before. bounce.c's own square watcher is gone: with the
+    menu opening on press, op_mode never saw the press, so the click was
+    lost.
+  - Feel menu over Prism ends the held chord (tiles_harmony_leave()); back
+    from any other feature, op_mode resyncs the sequencer's steps, Song's
+    slots, Ableton's grid, Prism and Bouncing notes so a finger that went
+    down or up meanwhile isn't a tap (resync_after_other_feature()).
+  - Real gravity threw on the strike, so holding a pad to pick its pitch
+    threw the ball (and could land a note) first. Now a tap throws on the
+    lift, strength from the press it made; a hold only picks the pitch. The
+    ball falls before it lands anyway, so the lift costs nothing audible.
+- **Gravity switches keep the balls; empty sequencer steps dark again
+  (0.9.2, 2026-10-19).** Asked: "make it so changing from gravity vs no
+  gravity doesn't stop current notes, it just enables or disables the
+  gravity from their current position; also remove the light on steps that
+  aren't on in sequencer mode".
+  - set_gravity() no longer ends notes or catches balls. To gravity
+    (gravity_from_plain()): a plain ball of height h becomes apex h-1 (a
+    height-1 dribble: the smallest throw) at the same point of its bounce;
+    plain notes still sounding get an eighth (their next step won't come).
+    Back (plain_from_gravity()): each ball takes the plain height nearest
+    its apex (resting ones off) at the step of its bounce it was on, the
+    plain transport on, the next step realigned to the eighth grid
+    (s_step_realign). Note-offs with an end time now run in both modes.
+  - Sequencer: empty in-loop steps dark (the faint scarlet from 0.8.1/0.8.7
+    is gone); armed steps stay scarlet.
+- **Chords survive the Feel menu; Duet's chord velocity follows through
+  (0.9.4, 2026-10-22).** Reported: "the expression button is releasing all
+  notes even in chord + melodic mode; this limits performance, make it not
+  kill notes on chords; also the velocity mapping for chords is weird in
+  that mode".
+  - op_mode's other-feature branch ended Duet's chord pads every scan
+    (chord_end_all_notes()), and the Feel menu opening ended Prism's held
+    chord (tiles_harmony_leave()). Now under the Feel menu or transpose the
+    chords keep sounding and end when their pad lifts
+    (chord_pads_track_releases(), tiles_harmony_track_releases(): no new
+    strikes, a strike in progress dropped, Prism's pedal hold and plucks
+    still end). A game or deep sleep still ends them. Melodic pads already
+    kept sounding (expression.c only blocks new strikes).
+  - Duet's chord pads committed the moment the peak crossed the strike
+    depth, so the depth score (85% of the velocity) read ~0: nearly every
+    chord came out at 8-26 unless the first reading was already deep. They
+    now use the melodic strike's follow-through (strike_settle.h), and a tap
+    released before it ends plays with the depth it reached.
+- **Duet's chord pads get aftertouch (0.9.5, 2026-10-22).** Asked: "give
+  chord modes aftertouch capabilities as well". Prism already sent channel
+  pressure from its held root. Duet's strip now does the same on the chord
+  channel (12): the deepest held chord pad, scaled by the aftertouch
+  sensitivity (the Feel menu's pressure row; 0 = off); each held pad's buzz
+  follows its own press; a chord struck with no other held starts at 0.
+- **Light effects, Layouts and Duet's two octaves (0.9.6, 2026-10-22).**
+  Asked: "keep all except drip; make shift + -/+ in chord + melodic mode
+  affect the octave of the chords only (two octave selectors); we need
+  infrastructure for some deep menu diving: [circle + square in the Feel
+  menu] opens the visual effects, and while in the Feel menu shift +
+  triangle changes melodic layouts. By default mode 1 is chromatic and
+  scales as usual, 2 is in 3 columns (name it later): notes chromatically
+  into 3 columns rising from pad 19 as C, 20 C#, 13 D, 14 D#, ...; with a
+  scale, tonal notes rise from C to C and the C at the next column's foot
+  mirrors the one above in the column before, three octaves; other scales
+  map accordingly, octave notes repeated when starting new columns".
+  - Effects (light_effects.c, tested): the preview's eleven (the TILES
+    Light Effects artifact, all approved but Drip). expression.c and Duet's
+    chord pads report hits and releases; lighting.c blends the effect over
+    the look (screen) where it draws the look itself (not under standby:
+    menus, Prism, the sequencers, Bouncing notes), a held pad stays white
+    (Touch colour tints it), and while it animates it spends up to two pad
+    writes a pass on the pads whose effect changed most (service_play_fx(),
+    after the live pressure pads, before the round-robin).
+  - Deeper menus (expression_control.c): a short circle press begun in the
+    Feel menu (or with square held) joined by square opens Light effects,
+    by triangle Layouts; a pad picks and closes, any button closes. Pad 1
+    off, 2-6 white, 7-12 colour, 13-24 empty (Drip's removal made it 12 +
+    12). A locked Feel menu no longer closes on triangle while circle is
+    held.
+  - Layouts (note_map.c columns_degree()): three 2-pad columns rising two
+    notes a row; scales of up to 7 notes start each column on the root an
+    octave above the last (a 7-note scale: the top root repeats at the next
+    column's foot, three octaves), 8 or more run on. Melodic mode only.
+    Roots, fifths and thirds follow (same degree). Tested.
+  - Duet: circle + "-"/"+" moves the chord strip's own octave
+    (tiles_note_map_set_chord_octave_shift(), RAM only), plain "-"/"+" only
+    the melody; the LEDs show the chords' octave while circle is held.
+  - Named (2026-10-22): the user picked plain names over marketing ones:
+    the layouts are Rows (default) and Columns.
+- **Five more layouts; the deeper menus get their own colours (0.9.7,
+  2026-10-22).** From the layouts preview (TILES Layouts artifact) the user
+  kept Fourths, Keys, Fifths, Tonnetz and Quarter tones and skipped Thirds,
+  Snake, Mirror and Octave stacks; and asked for the new sub-menus to have
+  different colours "so we don't confuse them".
+  - note_map.c: Fourths and Fifths are degree layouts (rows apart by that
+    interval in scale steps, round(n * semitones / 12); Fifths an octave
+    down). Keys, Tonnetz and Quarter tones place pitches
+    (absolute_semitones(), -1 = no note, so Tonnetz folds into C3..F#5, not
+    below: a negative value read as a gap): a scale only lights them, roles
+    from the pitch against the key. Keys' gaps have no note
+    (tiles_note_map_pad_has_note(): expression.c strikes nothing there,
+    lighting.c keeps them dark). Quarter tones' odd pads report 50 cents
+    (tiles_note_map_get_pad_cents()): expression.c centres that note's bend
+    50 cents up (bend_center_for(), MPE only; tilt bends around it), and
+    lighting.c shows them a dim Sentia blue. Layouts apply in melodic mode
+    only (tiles_note_map_set_layout_enabled() from op_mode.c), so the
+    sequencer's default step notes and the other modes keep Rows. Tested.
+  - Menu colours: the Feel menu stays magenta; Light effects is amber (its
+    underglow and the Off pad); Layouts cyan (its pads and underglow).
+- **Touch demos a light effect, a press picks it (0.9.8, 2026-10-22).**
+  Asked: "make it so that capacitive touch demos the light effects". In the
+  Light effects menu, touching an effect's pad (no press) plays a looping
+  scripted phrase (eight hits over 1.8 s) through that effect across the
+  grid while the finger rests; lifting goes back to the menu with the
+  effect in use restored; pressing past the strike depth picks it (a
+  kick) and closes. Layouts still pick on touch. The deeper menus now draw
+  through tiles_lighting_set_standby_frame(): a whole frame, three pads a
+  scan, biggest change first (the demo animates every pad; sent whole,
+  each frame would hold the loop ~17 ms).
+- **Layouts preview on touch too; both previews wait 0.3 s (0.9.9,
+  2026-10-22).** Asked: "touch demos the playing melodic layout as well; it
+  puts it up if you touch but no press; give this and the preview for
+  lights a slight delay so we avoid accidental touches or distracting too
+  much". Both deeper menus now work alike: a finger resting on a pad
+  previews it after DEEP_PREVIEW_DELAY_MS (300, a first guess); Layouts
+  shows the layout's resting colours (switched in only while the frame is
+  read, tiles_lighting_melodic_rest_rgb()); a press picks and closes, a
+  lift goes back with nothing changed. Layouts no longer pick on a touch.
+- **Faster pad writes, paced standby, no flash saves while playing (Alpha 1,
+  2026-10-23).** Asked for optimization ideas, then "do 1, 2, 3".
+  - LED latch 300 -> 120 us (drivers/sk6805.h): 300 was the WS2812B-V5's
+    rule; the SK6805-EC15 needs 80 (board map led_systems, updated). One
+    mux write selects the channel and enables it
+    (tiles_tca9554_select_and_enable(), was disable, select, enable), so a
+    pad write is ~0.3 ms instead of ~0.7 (unmeasured).
+  - Standby and the deeper menus: tiles_lighting_set_standby_frame() and
+    the standby animation only store colours; service_standby_frame()
+    sends 3 pads a pass, largest change first (as the menus already did),
+    so a full repaint no longer holds one scan.
+  - Flash: settings saves also wait for the clock to stop (pads_idle() in
+    settings_table.c); pattern bank and Song saves are marked pending and
+    written once the clock is stopped and no pad is touched (op_mode.c).
+    play_state and drums already skipped erases while the clock ran.
+- **Effect previews play the touched pad; colour effects follow velocity
+  (Alpha 2, 2026-10-23).** Asked: "make the lighting effect previews act
+  like the touched key is the pressed key. for color changing effects make
+  it biased by velocity not position so velocity alters hues; if that
+  dulls some of the effects then don't, but for most do it".
+  - Preview (expression_control.c): the scripted phrase across the grid is
+    gone; the touched pad itself is struck eight times a loop (1.8 s),
+    velocity 35 up to 127 and back, and shows the pressed look while each
+    note is down (white, or Touch colour's tint). The Off pad shows just
+    the pressed white.
+  - Hues (light_effects.c velocity_hue(): 205 deg soft, a cool blue, to
+    335 hard, a hot pink): Prism ripple starts there and still shifts as
+    it travels (30 deg a pad, was 48 from the note's pitch class); Rise's
+    bar (was by column); Ink (was the pitch class); Fireworks' sparks
+    scatter 90 deg around it (was a fixed five-colour set, random).
+    Heatmap keeps its heat colours, since a velocity hue would lose the
+    build-up, but a hit adds 0.1 + 0.45 x velocity of heat (was 0.22 +
+    0.2 x), so one hard hit reaches violet-magenta and a soft one stays
+    blue. Touch colour was already by velocity. tiles_fx_hit() lost its
+    pitch-class argument.
+- **Resting pads dim under a light effect (Alpha 3, 2026-10-23).** Asked:
+  "these effects should dim unactive pads so theres more dynamic range in
+  the lights". With any effect picked, the pads' resting look (scheme
+  colours, bass frets, the chord strip; pad_idle_rgb(), split out of
+  pad_look_rgb()) drops to TILES_LIGHTING_FX_REST_LEVEL (0.3, a first
+  guess; PWM is linear, so it reads brighter than 30%). Held pads, DAW
+  echo notes and Song capture flashes stay full; Off keeps the full look.
+  The Light effects preview now draws over the melodic look dimmed the
+  same way (full while resting on Off), so it shows what play will.
+- **Light effects on the drum pads and over the step grids (Alpha 4,
+  2026-10-23).** Asked: "the effects should affect the drum player pads
+  that play when pressed once and they should all carry accompanying
+  version of the effects for sequencer modes, versions that can be
+  represented within a sequencer without distracting too much".
+  - Drums/Volca: a drum pad pushed live is a hit (drum_seq.c drum_hit(),
+    released on lift); held, it shows Touch colour's tint instead of white.
+    The selected drum's steps, as the playhead sounds them, are playback
+    hits on their step pads (with the step's haptic pulse).
+  - Sequencer: the viewed lane's steps, as they sound (seq_fire_note()).
+  - Sequencer versions (light_effects.c, tiles_fx_set_sequencer()): every
+    effect at FX_SEQ_LEVEL (0.6); a playback hit at FX_PLAYBACK_LEVEL
+    (0.45) of a live one and released at once, so Afterglow and Touch
+    colour leave a trail behind the playhead; Ripple and Prism ripple stop
+    1.5 pads out, Cross 2 pads, Fireworks throws 2 sparks next to the hit
+    (4, up to 2 pads away, in play), Rise climbs 2 rows (4). First guesses.
+  - Drawing (lighting.c): op_mode.c says every scan whether the standby
+    frame is a step grid (tiles_lighting_set_grid_effects(): the
+    sequencer's step view, drum/Volca mode; not their menus, edit pages,
+    pattern bank or captures, nor under the Feel menu); then the effect is
+    screened over the frame (standby_pad_rgb()), 3 pads a pass as usual.
+    A mode change clears the effect's light. Song and Bouncing notes are
+    not included.
+- **Boot animation drawn again; rest guard for the pads (Alpha 4.1,
+  2026-10-23).** Reported: "something is causing pad 6 to give haptic
+  feedback after release not when pressed", fixed by a reboot; then "the
+  boot sequence animation got damaged at some point and that also created
+  this issue".
+  - Cause: Alpha 1 made tiles_lighting_set_standby_pad_rgb() only store
+    the colour, for tiles_lighting_service() to send a few pads a pass.
+    The boot animation runs before the main loop, so its pads were never
+    sent: the pads stayed dark through it. That animation is the cue to
+    keep hands off while each pad's rest position is taken at its end; a
+    finger on pad 6 then gave it a pressed rest, so pressing read as no
+    movement and the release read as a strike (note and kick on lift).
+  - Fix: tiles_lighting_flush_standby() sends every changed pad at once,
+    for a caller with its own loop; the boot animation calls it each
+    frame (as the immediate writes did before).
+  - Fail-safe, asked "make a fail safe but better than that" (than a plain
+    re-zero): services/rest_guard.c (pure, tested), replacing hall.c's
+    drift tracker: drift as before; a re-zero when an untouched key reads
+    a strike's depth (150) steady for 600 ms; a pad touched as the boot
+    capture runs keeps its old baseline but reports no depth until seen
+    at rest. INFO hall.rezeros / hall.unconfirmed; a re-zero prints a line
+    on the console.
+- **Button LEDs follow the pads' brightness ceiling (Alpha 4.2,
+  2026-10-23).** Asked: "the function buttons always feel a bit too
+  bright compared to regular pads, offset that". The pads top out at the
+  power mode's ceiling (50% USB, 90% 12 V); the button LEDs went to full
+  PWM. buttons.c write_led_level() now scales every level by that ceiling
+  times BUTTON_LED_MATCH (0.8, first guess), boot animation included.
+- **Button LED steps even to the eye (Alpha 4.3, 2026-10-23).** Asked,
+  after 4.2 dimmed them: "i fear lights might be choppy". The 256 levels
+  were even in PWM duty, and 4.2's scale left a full pulse ~100 of them,
+  the dim end coarsest (one step there is a large share of the light).
+  Now quantized in square-root space: 256 steps even in brightness
+  (~160 across the dimmed range), the 12-bit PWM resolving the fine dim
+  ones. The PCA9685s still run their power-on ~200 Hz PWM (no prescale
+  is set; the haptic motors share the chips), which every lit button now
+  uses: raising it would change the motors' drive, untried.
+- **One shared clock, a sequencer phase lock, sensor upkeep (Alpha 5,
+  2026-10-23).** Asked: "do 2 and 3, 4 if it's actually important, do 5
+  but without interfering with playing, also make the reading time in boot
+  up faster, do 6 with enough of a buffer, do 7 ... also let's find a way
+  that makes sequencers sync up between each other ... a lock option
+  editable from software but not on hardware", then: "the clock is
+  resetting when playing drum mode and sequencer modes ... latch first to
+  midi if available, if not then internal clock, and make that internal
+  clock a single one dictated by the first playing sequence ... make it so
+  there's no retriggering".
+  - Clock (op_mode.c): "+" restarted the internal clock (a Start) in the
+    sequencer, drums and Bouncing notes even with other patterns playing,
+    so they all jumped back to step 1; "-" stopped it when no lane, drums
+    or Bouncing notes ran, ignoring Song tracks. Now the first pattern to
+    start starts it; the rest join on its beat (others_playing()); it stops
+    with the last (stop_clock_if_idle(), Song included). External clock
+    still rules when present.
+  - Phase lock, setting seq.lock off|bar (0x0A00, no hardware gesture,
+    set to bar on unit 2): a lane or the drums started while the clock runs
+    joins on the next step at the step it would be on had it played from
+    the song's top (song_pulse), and its steps keep following the song
+    position (a length or pattern change can't shift it). 16-step
+    patterns share the bar line; other lengths keep their place from the
+    top. drum_pattern.c player.phase_lock (tested), op_mode.c lanes.
+  - Hall (hall.c): one mux channel left open between reads, switching
+    closes the old one (was: all three closed before and after every
+    read, six writes); untouched pads read Z only (2 bytes, not 6); upkeep
+    while no pad is touched: retry dead sensors every 2 s, check one pad's
+    config every 250 ms (a sensor that lost power stops measuring but
+    answers). Boot: INFO boot.ms and boot.sensors_ms.
+  - Touch (touch.c, mpr121.c): each controller's ECR checked once a
+    second, set up again after a reset (judged worth it: a touch surface
+    is where static gets in, and a reset leaves 12 pads dead with no
+    error); a pad touched 3 minutes without a press re-zeroes its
+    controller when its other pads are free.
+  - main.c: all notes off after a crash restart, at start and on USB
+    mount.
+- **Boot animation ~10% shorter (Alpha 5.1, 2026-10-23).** Asked: "shorten
+  the boot animation a bit very slightly" (Alpha 5 measured boot.ms 4819, of
+  which the sensors 26 ms). Every phase scaled by 0.9, so its shape is
+  unchanged: rain 1600 -> 1450 ms, fade 700 -> 630, pulse rise/hold/fall
+  700/500/1200 -> 630/450/1080; ~4.7 s -> ~4.2 s.
+- **Sequencer autosave; stuck-touch reset removed (Alpha 5.2, 2026-10-23).**
+  - Asked: "the sequences don't auto save as they should when unplugged,
+    including the pitch and step count". Only pattern bank slots saved
+    with circle + tap persisted, and only as they were at that moment;
+    every edit since, unsaved slots, step pitches and lengths were lost at
+    power-off (and at a crash: the patterns aren't __uninitialized_ram).
+    Now everything saves itself, like drum mode: services/seq_pattern.c
+    (op_seq_pattern_t moved there; a sparse blob of every non-empty
+    pattern, the playing ones first, plus each lane's playing pattern
+    and the viewed lane; host-tested) appended to a log_store in a new
+    two-sector region (flash_map.h TILES_FLASH_SEQ_OFFSET). Changes are
+    found by a fingerprint of the patterns every 250 ms, whatever made
+    them; the save waits 2 s after the last with no pad touched, goes
+    right after a step starts while lanes play, and only erases with the
+    clock stopped. At boot the bank store loads first, then the newest
+    autosave over it; the first boot after the update saves what the bank
+    loaded. INFO seq.*.
+  - Reported: "the touch rejection or whatever the recent change to
+    capacitive plus pressure is messing up playing, revert that". INFO on
+    unit 2 showed touch.reseeds=28 (the stuck-touch reset: a pad touched 3
+    minutes with no key travel re-took its controller's 12 baselines),
+    while hall.rezeros, touch.recoveries and hall.reinits were 0. Removed.
+    The controller recovery stays, now needing two failed checks in a row
+    (a single bad read would otherwise soft-reset a working controller
+    under the fingers).
+- **Holding a step no longer turns into a chance dial (Alpha 5.3,
+  2026-10-23).** Asked: "remove whatever is happening with long hold note
+  in sequencer past the select pitch". Held past OP_SEQ_PROBABILITY_HOLD_MS
+  (1.2 s), the pitch edit escalated to a probability dial on the step's
+  depth (amber meter). Removed with its edit mode and depth helper: a hold
+  opens the pitch edit and stays there. Chances already saved in a
+  pattern still play (seq_enter_step()); ratchet (circle + step) is
+  unchanged.
+- **Physics modes and a new menu layout (Alpha 6.0, 2026-10-24).**
+  - Asked for more physics-based modes like Bouncing notes; eight were
+    simulated in an on-screen lab first (Ripples, Sand, Orbits, Newton's
+    cradle, strings, pendulums, billiards, membrane). Kept the first four.
+    Feedback on the lab shaped them: one set of moves for every mode (a
+    run/stop/clear on "-"/"+" was rejected: "-"/"+" stay octave in
+    Ripples, Sand and the cradle, stop/play only in Orbits); a square that
+    freezes the water was rejected as not physics (Ripples' square is
+    Splash); Orbits' free gravity felt unpredictable (planets flung off or
+    swallowed, orbits drifting off the beat), so planets now ride circles
+    with Kepler periods rounded to whole and half beats; the cradle was
+    kept as it was.
+  - services/physics_core.c (no hardware; host-tested): the four
+    simulations in beats (double), emitting notes (a cell's note,
+    velocity, length) and taps, and rendering a frame. Ripples: a ring a
+    pad a sixteenth, reach 1.1-5 pads by strike, crossings on the
+    sixteenths, a held finger bobbing once a beat, Splash drops landing on
+    eighths. Sand: drips on 1/4-1/32 by pressure, grains falling in real
+    time, 3 a cell, avalanches, a grain off every pile each 2 beats, Flip.
+    Orbits: the first strike a sun, then planets; notes by the clock at
+    each return home, stop/play resuming a whole number of beats later so
+    the grid holds; Pull lets planets pull each other (bounded by a spring
+    to their orbit and damping, 0.8 / 4 / 1.2 after the lab showed full
+    gravity throwing 3 of 5 planets out in 16 beats), off again they glide
+    back and their next pass lands on a sixteenth. Cradle: the first knock
+    on the next eighth at least 0.2 beat on, then every beat (Shuffle 4/3
+    and 2/3), 10% lower each knock.
+  - services/physics.c: the shared moves (circle + tap removes, circle +
+    hold 1 s clears, the circle view dims the scene and pulses what a tap
+    removes red), strikes measured like expression.c's (velocity at the
+    strike depth, pressure from depth over the aftertouch range), notes on
+    channel 11 through one voice per note number, kicks stopped before
+    their sustain, the beat count pulled onto a running clock's phase over
+    ~100 ms and never backwards. Modes keep moving in the background;
+    leaving one lets go of its held fingers.
+  - Menu (op_mode.c): bass guitar into column 1 under Duet, in lilac
+    (lighting.h TILES_LIGHTING_BASS_*: fretboard, menu, underglow), with
+    melodic's magenta and Duet's pink; Ableton and Volca one column left
+    (4); columns 5-6 the physics and experimental modes, each in the colour
+    of what it models: Bouncing notes lime (was violet), Newton's cradle
+    steel, Sand sand; Ripples water, Orbits night-sky violet. play_state
+    11-14, settings modes.cradle/sand/ripples/orbits (0x0809-0x080C).
+  - op_mode.c: back from transpose or the screensaver, a mode that draws
+    through standby claims it again (both release it on the way out).
+    octave_control.c: tiles_octave_control_led_levels() for modes that
+    draw every LED but keep "-"/"+" as octave.
+  - Loop on unit 2 (loop.avg_us, nothing playing): drums 1479, Bouncing
+    notes 1478, Orbits 1468, Ripples/Sand/cradle ~1562, melodic 1849.
+- **Physics modes, second pass (Alpha 6.1, 2026-10-26).** Feedback after
+  playing 6.0: the modes felt like gimmicks; not knowing what to do, and the
+  lights, were the main problems. Newton's cradle was liked but should run
+  for ever, like a sequencer, unless the square is on; Sand's colour should
+  be more like sand, and its gravity flip, though liked, wasn't musical;
+  Ripples fun but shallow; Orbits cool, but how to turn a planet off wasn't
+  obvious.
+  - Everything placed now loops and stays lit, and a strike on it takes it
+    away, the sequencer's habit: a Ripples stone drops again every bar at
+    its sixteenth (pressing while it's held makes it bigger); a planet's
+    cell stays lit in its colour and a strike there removes it; touching a
+    swinging ball catches its swing.
+  - Newton's cradle swings for ever; square = Real (10% lower each knock,
+    to rest), replacing Shuffle.
+  - Sand is a melody: the playhead crosses the six columns on triplet
+    eighths (two beats, column 1 on the beat) and plays each pile at its
+    height, one scale degree a grain from the key note (out.note_degree;
+    physics.c degree_note(), counted like Bouncing notes' lanes). Pouring
+    raises a step (each landing sounds its new note softly), avalanches
+    smooth steep jumps, the hourglass takes a grain every 8 beats. Flip
+    turns the melody upside down (pitch is still the surface's height); a
+    flip's grains land without avalanches so the notes survive it. Colour
+    1.0/0.85/0.5 (was 1.0/0.7/0.35, too orange).
+  - Orbits: the sun sits at cell 14 from the start; holding a cell moves
+    it, every planet taking its new distance and period (next pass on the
+    next sixteenth; a planet under the sun is swallowed). The second sun is
+    gone.
+  - Lights: each mode shows something at rest (the pond's faint surface,
+    the floor and a playhead column, the sun with a faint corona, the six
+    balls); moving things are a crisp dot shared between the nearest pads
+    instead of a wide glow.
+- **Underglow lit by the pads in Bouncing notes and the physics modes
+  (Alpha 6.2, 2026-10-26).** Reported: the underglow "is weird" in these
+  modes and doesn't interact with playing. It was a fixed wash of the
+  mode's colour at near full level (230/255) under mostly dark pads, and
+  in Bouncing notes a lime wash under blue-to-pink lanes. Now
+  lighting.c's tiles_lighting_set_standby_underglow_from_pads(): each LED
+  takes the brightest pad light near its anchor (weight exp(-d^2/2)) over
+  a 15% floor of the mode's colour, rising at once and fading over
+  ~120 ms; one chain write for all four, at most every 16 ms, changes
+  under 1/64 skipped (each write is ~0.25 ms). Loop on unit 2 unchanged
+  (1.94-2.12 ms across these modes, melodic 2.12 the same pass).
+- **Newton's cradle: square is the Pendulum wave (Alpha 6.3, 2026-10-26).**
+  Feedback: the square's Real (each knock lower, to rest) was too like
+  Bouncing notes' real gravity; offered Pendulum wave, Stack, Rattle, Moon
+  gravity; picked Pendulum wave. Every ball hangs on its own string:
+  column c passes the bottom 8 + c times in two bars (playing its note
+  each time), so they drift into rolling patterns and all meet on the
+  first beat of every second bar (tested: 8..13 passes, all six together
+  once per 8 beats). A strike stops a swinging ball or restarts a still
+  one in step; holding a cell above lifts it that high (louder), silent
+  until let go. Square off returns to the cradle at rest; the cradle
+  itself always swings for ever (Real removed).
+- **Pendulum wave starts from what's swinging (Alpha 6.4, 2026-10-26).**
+  Reported: Newton's cradle "is glitching out, it's always running once
+  you click the square". Turning the wave on set all six balls going at
+  once (8-13 passes each per two bars, ~8 notes a beat) with a rectified
+  sine bounce that snapped back to the floor on every pass: a strobe that
+  took six touches to quiet. Now only the balls swinging at that moment
+  carry on as pendulums (at their swing height); the rest hang still until
+  a strike starts them in step or a lift lets them go. Each ball rises and
+  settles smoothly ((1 - cos) / 2 over a pass), and a pass flashes at half
+  its level. Square off still stops every ball.
+- **Sand darker (Alpha 6.5, 2026-10-28).** Reported: Sand "should be darker
+  and more sand coloured, it's getting confused with the sequencer bar"
+  (the pale 1.0/0.85/0.5 piles read near white, like the playhead's white
+  column). Colour 0.8/0.55/0.25 (a dark ochre); piles 0.35 -> 0.25, the
+  surface grain 0.75 -> 0.55, the floor 0.06 -> 0.05; falling grains in the
+  same ochre, brighter. The playhead stays white at 0.12.

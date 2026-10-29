@@ -1,6 +1,6 @@
 {
-  "_comment": "Captured from a real SENTIA TILES (board 2, firmware 0.2.0) with tools/tiles_control.py schema + list on 2026-09-29; the color.* rows, the retired look.* rows and the scales/content sections were updated by hand for firmware 0.2.7 (from firmware/src/profiles/settings_table.c, not yet re-captured from a board). For the companion app's fake device -- see ../BRIEF.md. 'value' is that board's current value; the real app must read it from the device.",
-  "firmware": "0.2.7",
+  "_comment": "Mock catalog: base v0.3.6 plus 21 alpha.6.5 settings from sentiainstruments/TILES firmware/board-bringup at a52f515fffa0c025c4d7900096920cbb309bc8ea. Not measured against hardware. In-memory simulator; old versions remain selectable.",
+  "firmware": "alpha.6.5",
   "settings": [
     {
       "id": 256,
@@ -51,9 +51,9 @@
       "key": "expression.pitch_bend_sensitivity",
       "type": "float",
       "min": 0.001,
-      "max": 1.0,
+      "max": 1,
       "default": 0.065,
-      "value": 0.1,
+      "value": 0.065,
       "persist": true
     },
     {
@@ -63,7 +63,7 @@
       "min": 1,
       "max": 65535,
       "default": 900,
-      "value": 1300,
+      "value": 900,
       "persist": true
     },
     {
@@ -79,7 +79,7 @@
       "key": "cv_gate.pitch.volts_per_semitone",
       "type": "float",
       "min": 0.001,
-      "max": 1.0,
+      "max": 1,
       "default": 0.083333,
       "value": 0.083333,
       "persist": true
@@ -100,8 +100,8 @@
       "type": "float",
       "min": -2.5,
       "max": 2.5,
-      "default": 0.0,
-      "value": 0.0,
+      "default": 0,
+      "value": 0,
       "persist": true
     },
     {
@@ -109,9 +109,9 @@
       "key": "cv_gate.pitch.gain_trim",
       "type": "float",
       "min": 0.5,
-      "max": 2.0,
-      "default": 1.0,
-      "value": 1.0,
+      "max": 2,
+      "default": 1,
+      "value": 1,
       "persist": true
     },
     {
@@ -119,9 +119,9 @@
       "key": "cv_gate.pressure.full_scale_volts",
       "type": "float",
       "min": 0.1,
-      "max": 10.0,
-      "default": 10.0,
-      "value": 10.0,
+      "max": 10,
+      "default": 10,
+      "value": 10,
       "persist": true
     },
     {
@@ -130,8 +130,8 @@
       "type": "float",
       "min": -2.5,
       "max": 2.5,
-      "default": 0.0,
-      "value": 0.0,
+      "default": 0,
+      "value": 0,
       "persist": true
     },
     {
@@ -139,9 +139,9 @@
       "key": "cv_gate.pressure.gain_trim",
       "type": "float",
       "min": 0.5,
-      "max": 2.0,
-      "default": 1.0,
-      "value": 1.0,
+      "max": 2,
+      "default": 1,
+      "value": 1,
       "persist": true
     },
     {
@@ -483,6 +483,258 @@
       "default": "none",
       "value": "none",
       "persist": true
+    }
+  ],
+  "legacyFirmware": "0.2.0",
+  "legacySettings": [
+    {
+      "id": 1025,
+      "key": "look.natural_pad_percent",
+      "type": "uint",
+      "min": 0,
+      "max": 100,
+      "default": 21,
+      "value": 21,
+      "persist": true
+    },
+    {
+      "id": 1026,
+      "key": "look.root_pad_percent",
+      "type": "uint",
+      "min": 0,
+      "max": 100,
+      "default": 40,
+      "value": 40,
+      "persist": true
+    },
+    {
+      "id": 1027,
+      "key": "look.fifth_pad_percent",
+      "type": "uint",
+      "min": 0,
+      "max": 100,
+      "default": 40,
+      "value": 40,
+      "persist": true
+    },
+    {
+      "id": 1028,
+      "key": "look.fifth_red_tint_percent",
+      "type": "uint",
+      "min": 0,
+      "max": 100,
+      "default": 35,
+      "value": 35,
+      "persist": true
+    }
+  ],
+  "alphaSettings": [
+    {
+      "id": 1033,
+      "key": "look.pressure_hue_degrees",
+      "type": "uint",
+      "default": 40,
+      "value": 40,
+      "persist": true,
+      "min": 0,
+      "max": 90
+    },
+    {
+      "id": 1034,
+      "key": "look.bend_dim_percent",
+      "type": "uint",
+      "default": 50,
+      "value": 50,
+      "persist": true,
+      "min": 0,
+      "max": 90
+    },
+    {
+      "id": 1035,
+      "key": "look.led_intensity_percent",
+      "type": "uint",
+      "default": 100,
+      "value": 100,
+      "persist": true,
+      "min": 0,
+      "max": 100
+    },
+    {
+      "id": 1036,
+      "key": "look.play_effect",
+      "type": "enum",
+      "default": "off",
+      "value": "off",
+      "persist": true,
+      "values": [
+        "off",
+        "afterglow",
+        "ripple",
+        "cross",
+        "halo",
+        "warmth",
+        "prism_ripple",
+        "touch_colour",
+        "heatmap",
+        "fireworks",
+        "rise",
+        "ink"
+      ]
+    },
+    {
+      "id": 1281,
+      "key": "midi.clock_lead_ms",
+      "type": "uint",
+      "default": 15,
+      "value": 15,
+      "persist": true,
+      "min": 0,
+      "max": 50
+    },
+    {
+      "id": 1282,
+      "key": "midi.parts_port",
+      "type": "enum",
+      "default": "parts",
+      "value": "parts",
+      "persist": true,
+      "values": [
+        "parts",
+        "main"
+      ]
+    },
+    {
+      "id": 2048,
+      "key": "modes.duet",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2049,
+      "key": "modes.sequencer",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2050,
+      "key": "modes.drums",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2051,
+      "key": "modes.song",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2052,
+      "key": "modes.prism",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2053,
+      "key": "modes.bass",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2054,
+      "key": "modes.ableton",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2055,
+      "key": "modes.volca",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2056,
+      "key": "modes.bounce",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2057,
+      "key": "modes.cradle",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2058,
+      "key": "modes.sand",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2059,
+      "key": "modes.ripples",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2060,
+      "key": "modes.orbits",
+      "type": "bool",
+      "default": true,
+      "value": true,
+      "persist": true
+    },
+    {
+      "id": 2304,
+      "key": "layout.melodic",
+      "type": "enum",
+      "default": "rows",
+      "value": "rows",
+      "persist": true,
+      "values": [
+        "rows",
+        "columns",
+        "fourths",
+        "keys",
+        "fifths",
+        "tonnetz",
+        "quarter_tones"
+      ]
+    },
+    {
+      "id": 2560,
+      "key": "seq.lock",
+      "type": "enum",
+      "default": "off",
+      "value": "off",
+      "persist": true,
+      "values": [
+        "off",
+        "bar"
+      ]
     }
   ],
   "scales": {

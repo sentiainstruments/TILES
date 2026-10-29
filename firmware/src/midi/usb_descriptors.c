@@ -1,4 +1,4 @@
-/* Composite USB device: CDC (diagnostics console) + MIDI (two cables) +
+/* Composite USB device: CDC (diagnostics console) + MIDI (three cables) +
  * vendor (settings, usb_vendor/) + picotool reset interface.
  *
  * Built with TinyUSB's per-class descriptor macros (patterns from its
@@ -86,14 +86,15 @@ enum {
     STRID_VENDOR,
     STRID_MIDI_PORT_MAIN,
     STRID_MIDI_PORT_DAW,
+    STRID_MIDI_PORT_PARTS,
 };
 
-/* Two MIDI ports (cables) on one USB-MIDI interface; see
+/* Three MIDI ports (cables) on one USB-MIDI interface; see
  * midi/midi_ports.h. Built from TinyUSB's per-cable macros: one
  * embedded+external jack pair per cable, each named (the jack string is
  * the port name hosts show), then each endpoint lists its embedded jacks
  * in cable order, which defines the cable numbers. */
-#define MIDI_NUM_CABLES 2u
+#define MIDI_NUM_CABLES 3u
 #define TILES_MIDI_DESC_LEN \
     (TUD_MIDI_DESC_HEAD_LEN + MIDI_NUM_CABLES * TUD_MIDI_DESC_JACK_LEN + 2u * TUD_MIDI_DESC_EP_LEN(MIDI_NUM_CABLES))
 TU_VERIFY_STATIC(MIDI_NUM_CABLES == TILES_USB_MIDI_NUM_CABLES, "descriptor cable count vs midi_ports.h");
@@ -111,17 +112,20 @@ uint8_t const desc_fs_configuration[] = {
     /* interface, string, notification EP + size, data EPs (out, in) + size */
     TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, STRID_CDC, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
 
-    /* MIDI: cable 0 = MAIN ("MIDI"), cable 1 = DAW ("DAW"). TinyUSB's jack
-     * macros count cables from 1. */
+    /* MIDI: cable 0 = MAIN ("MIDI"), cable 1 = DAW ("DAW"), cable 2 = PARTS
+     * ("Parts"). TinyUSB's jack macros count cables from 1. */
     TUD_MIDI_DESC_HEAD(ITF_NUM_MIDI, STRID_MIDI, MIDI_NUM_CABLES),
     TUD_MIDI_DESC_JACK_DESC(1, STRID_MIDI_PORT_MAIN),
     TUD_MIDI_DESC_JACK_DESC(2, STRID_MIDI_PORT_DAW),
+    TUD_MIDI_DESC_JACK_DESC(3, STRID_MIDI_PORT_PARTS),
     TUD_MIDI_DESC_EP(EPNUM_MIDI_OUT, 64, MIDI_NUM_CABLES),
     TUD_MIDI_JACKID_IN_EMB(1),
     TUD_MIDI_JACKID_IN_EMB(2),
+    TUD_MIDI_JACKID_IN_EMB(3),
     TUD_MIDI_DESC_EP(EPNUM_MIDI_IN, 64, MIDI_NUM_CABLES),
     TUD_MIDI_JACKID_OUT_EMB(1),
     TUD_MIDI_JACKID_OUT_EMB(2),
+    TUD_MIDI_JACKID_OUT_EMB(3),
 
     /* interface, string, EP out & in, EP size */
     TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, STRID_VENDOR, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
@@ -221,8 +225,9 @@ static char const *string_desc_arr[] = {
     NULL, /* 4: diagnostics interface, built with the unit label */
     "SENTIA TILES MIDI",
     "SENTIA TILES Control",
-    "MIDI", /* MAIN port's jacks (midi/midi_ports.h) */
-    "DAW",  /* DAW port's jacks */
+    "MIDI",  /* MAIN port's jacks (midi/midi_ports.h) */
+    "DAW",   /* DAW port's jacks */
+    "Parts", /* PARTS port's jacks */
 };
 
 static uint16_t desc_str[40 + 1];

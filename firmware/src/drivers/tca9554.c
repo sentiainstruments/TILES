@@ -43,6 +43,25 @@ bool tiles_tca9554_set_select(tiles_tca9554_t *dev, uint8_t channel) {
     return write_reg(dev, REG_OUTPUT_PORT, dev->shadow_output);
 }
 
+bool tiles_tca9554_select_and_enable(tiles_tca9554_t *dev, uint8_t channel, uint8_t mux_index) {
+    uint8_t enable_bit;
+    switch (mux_index) {
+        case 1: enable_bit = TILES_TCA9554_PORT_MUX1_ENABLE_N; break;
+        case 2: enable_bit = TILES_TCA9554_PORT_MUX2_ENABLE_N; break;
+        case 3: enable_bit = TILES_TCA9554_PORT_MUX3_ENABLE_N; break;
+        default: return false;
+    }
+    if (channel > 7u) {
+        return false;
+    }
+    /* One register write: every output changes at once, so no other mux is
+     * ever enabled on the new select lines. */
+    uint8_t output = (uint8_t)((dev->shadow_output & ~0x07u) | (channel & 0x07u));
+    output = (uint8_t)((output | all_muxes_disabled_bits()) & ~(1u << enable_bit));
+    dev->shadow_output = output;
+    return write_reg(dev, REG_OUTPUT_PORT, dev->shadow_output);
+}
+
 bool tiles_tca9554_enable_mux(tiles_tca9554_t *dev, uint8_t mux_index) {
     uint8_t enable_bit;
     switch (mux_index) {

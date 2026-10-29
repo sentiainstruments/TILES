@@ -16,23 +16,30 @@ the device talks to TILES.
 
 ## Two MIDI ports
 
-TILES shows up as two USB MIDI ports, like Launchkey, Push or KeyLab
+TILES shows up as three USB MIDI ports, like Launchkey, Push or KeyLab
 (`firmware/src/midi/midi_ports.h`). Each unit's name carries its unit
 number (`firmware/src/board/unit_id.h`); unit 2's are:
 
 - **SENTIA TILES 2 (MIDI)** in Live ("SENTIA TILES 2 MIDI" elsewhere):
-  the instrument. Notes, MPE, pedals, and clock/Start/Stop for sync.
-  Record and play synths from this one. The DIN jack carries the same.
+  the instrument you play: the MPE zone (channel 1 and its member
+  channels), pedals, and clock/Start/Stop for sync. Nothing else, so an
+  MPE track listening to all channels hears only your playing.
+- **SENTIA TILES 2 (Parts)**: everything else that makes notes, each on
+  its channel: sequencer lanes (13-16), chords (12: Duet's strip, Prism),
+  Bouncing notes and games (11), drums (10), Song tracks (2-9) and Volca
+  (1-16). Give each part its own track on this port and channel. Output
+  only. Setting `midi.parts_port main` puts them back on the MIDI port.
+  The DIN jack carries both the MIDI and the Parts port.
 - **SENTIA TILES 2 (DAW)** in Live ("SENTIA TILES 2 DAW" elsewhere): the
   control surface script's own port. Transport and Ableton-mode
   messages go out on it; clip colors and the TILES DISPLAY notes come
   back on it. Never on DIN, never meant for a track.
 
-Drum mode plays on **MIDI channel 10** of the MIDI port, in Drum Rack
+Drum mode plays on **MIDI channel 10** of the Parts port, in Drum Rack
 order (first bank C1-G1 = Live's first 8 pads, `firmware/src/services/
 drum_seq.h`). Give the Drum Rack its own track with input "SENTIA TILES N
-(MIDI)", channel 10, and monitor In; the melodic track's input then
-wants channels 1-9 (or all, if it should hear the drums too).
+(Parts)", channel 10, and monitor In. The melodic (MPE) track takes
+"SENTIA TILES N (MIDI)", all channels.
 
 A Live set made with one unit doesn't find another by itself: pick the
 other unit's ports in the set and in Preferences. (Firmware before 0.2.1
@@ -62,6 +69,8 @@ named every unit plain "SENTIA TILES".)
    - **In: SENTIA TILES 2 (DAW)**: Track **off** (without the script
      loaded, its messages would otherwise record into clips).
    - **Out: SENTIA TILES 2 (DAW)**: nothing needed.
+   - **In: SENTIA TILES 2 (Parts)**: Track **on** (the sequencer, drums
+     and the other parts record from it), MPE off, Sync off.
 
 Ableton only auto-loads scripts it ships with. The script declares its
 ports and USB ID to Live (`__init__.py`, `get_capabilities()`, the same
@@ -81,8 +90,9 @@ changed. In **Audio MIDI Setup -> Window -> Show MIDI Studio**:
   0.2.1): double-click its icon and rename it **SENTIA TILES N**, N being
   its unit number (`tools/tiles_control.py info` shows `unit=`). The name
   stays with that board, whichever USB port it's in.
-- One port instead of two: quit Live, unplug TILES, delete every
-  greyed-out **SENTIA TILES** icon, and plug TILES back in.
+- Missing ports (one instead of two, or no **(Parts)** after updating to
+  0.9.3): quit Live, unplug TILES, delete every greyed-out **SENTIA
+  TILES** icon, and plug TILES back in.
 
 ## Two units at once
 

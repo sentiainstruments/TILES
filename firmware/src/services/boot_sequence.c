@@ -44,7 +44,7 @@ static float smoothstep01(float t) {
 
 /* Buttons (row 0) light first as the source; the flood moves down through
  * pad rows 1-4 with a wide soft edge. Underglow off. */
-#define RAIN_DURATION_MS 1600u
+#define RAIN_DURATION_MS 1450u
 #define RAIN_ORIGIN_ROW 0.0f /* the button row, where the flood starts */
 #define RAIN_TARGET_ROW 4.0f /* the bottom pad row, where it ends */
 #define RAIN_EDGE_WIDTH 1.6f /* wide, soft leading edge */
@@ -73,7 +73,7 @@ static float rain_level(uint8_t row, uint8_t col, uint32_t elapsed_ms) {
 
 /* ---- Phase 2: fade phase 1's end state to complete dark ---- */
 
-#define FADE_DURATION_MS 700u
+#define FADE_DURATION_MS 630u
 
 static float fade_level(uint32_t elapsed_ms) {
     float t = smoothstep01((float)elapsed_ms / (float)FADE_DURATION_MS);
@@ -83,9 +83,9 @@ static float fade_level(uint32_t elapsed_ms) {
 /* ---- Phase 3: one slow Sentia magenta pulse ---- */
 
 /* Pads + underglow only (buttons are monochrome). Smoothstep rise and fall. */
-#define PULSE_RISE_MS 700u
-#define PULSE_HOLD_MS 500u
-#define PULSE_FALL_MS 1200u
+#define PULSE_RISE_MS 630u
+#define PULSE_HOLD_MS 450u
+#define PULSE_FALL_MS 1080u
 #define PULSE_TOTAL_MS (PULSE_RISE_MS + PULSE_HOLD_MS + PULSE_FALL_MS)
 
 #define MAGENTA_R 1.0f
@@ -126,6 +126,7 @@ static void write_frame_white(white_level_fn_t level_fn, uint32_t elapsed_ms) {
         /* Underglow stays off in phases 1-2. */
         tiles_lighting_set_standby_underglow_rgb(i, 0.0f, 0.0f, 0.0f);
     }
+    tiles_lighting_flush_standby(); /* no main loop yet to send it */
 }
 
 static float phase1_level(uint8_t row, uint8_t col, uint32_t elapsed_ms) {
@@ -196,6 +197,7 @@ static void run_phase3_magenta_pulse(void) {
         for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
             tiles_lighting_set_standby_underglow_rgb(i, MAGENTA_R * env, MAGENTA_G * env, MAGENTA_B * env);
         }
+        tiles_lighting_flush_standby();
 
         if (done) {
             break;

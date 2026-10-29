@@ -42,6 +42,13 @@ typedef void (*tiles_midi_in_sysex_callback_t)(tiles_midi_port_t port, const uin
 typedef void (*tiles_midi_in_note_callback_t)(uint8_t channel, uint8_t note, uint8_t velocity, bool note_on,
                                                uint32_t now_ms);
 
+/* Fired per Song Position Pointer (0xF2), from the Real-Time source in
+ * charge (the clock's), as MIDI beats: sixteenth notes since the song's
+ * start. A DAW sends it before a Continue when playing from mid-song. One
+ * listener (services/midi_clock.c). */
+typedef void (*tiles_midi_in_song_position_callback_t)(uint16_t sixteenths, uint32_t now_ms);
+void tiles_midi_in_set_song_position_callback(tiles_midi_in_song_position_callback_t callback);
+
 /* Up to TILES_MIDI_IN_MAX_CALLBACKS listeners per kind, no allocation.
  * False if the table is full. */
 #define TILES_MIDI_IN_MAX_CALLBACKS 4u

@@ -1,6 +1,6 @@
 #pragma once
 
-/* Power-on animation, run once at boot (~4.7 s):
+/* Power-on animation, run once at boot (~4.2 s):
  *   1. White "rain" floods down from the function buttons (row 0, the
  *      source) through pad rows 1-4. Underglow off.
  *   2. Buttons and pads fade to dark together.
@@ -24,7 +24,7 @@
 #include <stdbool.h>
 
 /* Call after tiles_lighting_init(), tiles_buttons_init() and
- * tiles_hall_init(). Blocks ~4.7 s. False if the final baseline recapture
+ * tiles_hall_init(). Blocks ~4.2 s. False if the final baseline recapture
  * failed for any initialized pad (that pad keeps its init baseline); the
  * animation always completes. */
 bool tiles_boot_sequence_run(void);

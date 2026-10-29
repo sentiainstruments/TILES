@@ -16,8 +16,8 @@ before re-tuning a constant or reviving an approach that was dropped.
 
 | Module | Role |
 |---|---|
-| `touch` | Both MPR121s → per-pad touched state. |
-| `hall` | 24 TMAG5273s through the muxes → per-pad X/Y/Z and depth. Touched pads are read every pass; the rest round-robin. Rest baseline with slow drift correction. |
+| `touch` | Both MPR121s → per-pad touched state. Sets a controller up again if it resets. |
+| `hall` | 24 TMAG5273s through the muxes → per-pad X/Y/Z and depth. Touched pads are read every pass (X/Y/Z); the rest round-robin (Z only). One mux channel left open between reads. Rest baseline kept true by `rest_guard`; sensors that fail or reset are set up again while no pad is touched. |
 | `buttons` | 6 function buttons (debounced) and their LEDs. Owns both PCA9685s (shared with haptics). |
 | `pedal` | 1/4" jack: sustain (CC64) or expression (CC11); sustain style SYNTH (CC64) or HOLD (TILES holds notes). |
 | `power` | Power mode from the TPS2121 status pin + USB → budgets, LED ceiling, haptic voices, CV permission. |
@@ -38,11 +38,18 @@ before re-tuning a constant or reviving an approach that was dropped.
 
 | Module | Role |
 |---|---|
-| `op_mode` | Mode menu and the modes: melodic, sequencer, bass guitar, chord, Song (beta), Ableton, drums. Scale picker, pattern bank, captures, Live transport. The button map is in `op_mode.h`. |
-| `drum_seq` | Drum mode: 16 or 32 steps (two pages, diamond flips) on columns 1-4, 8 drums on columns 5-6 (tap selects, push plays, circle + push rolls), banks of 8 in Drum Rack order, MIDI channel 10, saved through `storage/log_store`. The step engine, layout and save format are `drum_pattern` (no hardware; tested). |
+| `op_mode` | The mode menu (one column per family, each with its own colours; each mode's underglow its colour) and the modes: melodic, Duet (chord + melody), sequencer, Song (beta), bass guitar, Ableton, plus the switch into drums / Volca (`drum_seq`), Prism (`harmony`), Bouncing notes (`bounce`) and the physics modes (`physics`). Scale picker, pattern bank, captures, Live transport. The button map is in `op_mode.h`. |
+| `physics`, `physics_core` | The physics modes: Ripples (stones that drop every bar, rings playing on the sixteenths), Sand (a melody poured in sand: pile height = pitch, a triplet playhead), Orbits (planets round a sun in whole-beat periods), Newton's cradle (knocks on the beat for ever). One set of moves (what you place loops and stays lit, strike it again to remove it; circle + hold clears; square = the mode's other physics), the shared tempo pulled onto the clock's grid, MIDI channel 11. The simulations are `physics_core` (no hardware; tested). |
+| `bounce`, `bounce_core` | Bouncing notes: 12 lanes (6 shown, circle + "-"/"+" scroll), a ball bouncing in each from a height of 1-4 pads, playing the lane's scale note when it lands; on the shared clock, MIDI channel 11. The physics is `bounce_core` (no hardware; tested). |
+| `harmony`, `harmony_core` | Prism mode: a chord machine; a chord type and extensions on the right shape the root played on the left. Chromatic roots (columns 1-3); voicing (column 4), quality (column 5) and extensions (column 6), pressed by depth and latched onto the sounding chord; root bass; pedal strum; key lock from the scale picker (roots outside it dark and silent, chords unchanged). The chord maths is `harmony_core` (no hardware; tested). |
+| `light_effects` | The light effects while playing (the Feel menu's Light effects menu): each note lights its pad and the pads around it, mechanical-keyboard style, drawn by `lighting` over the normal look. No hardware; tested. |
+| `rest_guard` | A pad's rest position: slow drift, a re-zero when an untouched key reads pressed for 0.6 s, and silence for a pad touched while its rest was taken until it's seen at rest. No hardware; tested. |
+| `strike_settle` | When a struck pad's note can go: as soon as its velocity is known (the key stopped going down, or the depth score is full), at most the 20 ms follow-through after the strike depth. Used by `expression` and `harmony`. No hardware; tested. |
+| `play_state` | Mode, scale, key and octave saved to flash (through `storage/log_store`, never erasing while the clock runs) and restored at power-up. Tested natively. |
+| `drum_seq` | Drum mode (and Volca mode: the same, each drum a C on its own MIDI channel 1-16, purple): 16 or 32 steps (two pages, diamond flips) on columns 1-4, 8 drums on columns 5-6 (tap selects, push plays, circle + push rolls), banks of 8 in Drum Rack order, MIDI channel 10, saved through `storage/log_store`. The step engine, layout and save format are `drum_pattern` (no hardware; tested). |
 | `octave_control` | "-"/"+" octave shift and transpose mode. |
 | `expression_control` | Square: pitch bend toggle, expression menu; circle + square: MPE on/off. |
-| `lighting` | Pad LEDs and underglow; power-derived brightness ceiling; idle colors by note role; indicator priority on the underglow. |
+| `lighting` | Pad LEDs and underglow; power-derived brightness ceiling; idle colors by note role; indicator priority on the underglow; on touched pads, every mode: hue turns toward Sentia blue with pressure, brightness swells down with bend; LED intensity (Feel menu row 4) scales pads, underglow and button LEDs. |
 | `standby` | Screensaver animations and deep sleep; circle holds. |
 | `boot_sequence` | Power-on animation (+ a Hall baseline recapture). |
 | `game_mode` | Snake, Tile Breaker, Tile Drop, Paddle, Echo. |
@@ -80,9 +87,10 @@ before re-tuning a constant or reviving an approach that was dropped.
   explicit enable; PCA9685 outputs stay disabled until configured.
 - **Persistence.** User-tunable values are settings (`../profiles/`).
   Sequencer patterns and the Song library are saved to flash by
-  `op_mode.c` (`../storage/flash_map.h`). Scale/key/octave, the active
-  mode and running sequencer lanes survive a crash reboot
-  (`__uninitialized_ram`), not a power cycle.
+  `op_mode.c` (`../storage/flash_map.h`). Scale/key/octave and the
+  active mode survive a power cycle (`play_state`, saved ~2 s after a
+  change) and a crash reboot (`__uninitialized_ram`); running sequencer
+  lanes survive only a crash reboot.
 - **Unmeasured constants.** Most timing and feel constants are marked
   as first guesses in their comments; the measured ones say what
   capture they came from. Re-measure before retuning.

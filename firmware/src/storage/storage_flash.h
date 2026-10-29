@@ -24,3 +24,11 @@ const tiles_kv_ops_t *tiles_storage_content_ops(void);
 /* And for drum mode's pattern, below the content store. */
 bool tiles_storage_drum_region_safe(void);
 const tiles_kv_ops_t *tiles_storage_drum_ops(void);
+
+/* And for the mode, scale, key and octave (services/play_state.c). */
+bool tiles_storage_state_region_safe(void);
+const tiles_kv_ops_t *tiles_storage_state_ops(void);
+
+/* And for the sequencer's autosave (services/op_mode.c), lowest. */
+bool tiles_storage_seq_region_safe(void);
+const tiles_kv_ops_t *tiles_storage_seq_ops(void);

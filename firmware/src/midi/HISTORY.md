@@ -518,3 +518,36 @@ owner's feedback that prompted each change.
   boards 2 and 4 were renamed in its MIDI setup after flashing
   (`daw-integration/README.md`, "stale device"). The string callback
   builds the name with snprintf like the CDC one (`desc_str_set()`).
+- **A third USB-MIDI port, "Parts" (0.9.3, 2026-10-19).** Asked: "we need
+  a way to use MPE and target all MPE channels in Ableton without receiving
+  the other channels running other features". An MPE track in Live listens
+  to all 16 channels of its port, so on one port it also got the drums
+  (10), Bouncing notes and games (11), chords (12), sequencer lanes
+  (13-16), Song tracks (2-9) and Volca (1-16).
+  - usb_descriptors.c: cable 2, jack string "Parts" (TinyUSB's per-cable
+    jack macros, as for MIDI and DAW). Output only: midi_in.c ignores it.
+  - midi_out.c: channel messages on channels 10-16 go to it by themselves;
+    tiles_midi_out_parts_begin()/end() send anything else there (Song
+    tracks and the sequencer lanes in op_mode.c part_note_on/off(), drums
+    and Volca in drum_seq.c drum_midi_on/off()). Panic also goes out on it.
+    MAIN keeps the MPE zone, pedals, clock and Start/Stop. DIN carries both.
+  - Setting midi.parts_port (0x0502): `parts` (default) or `main` (the old
+    single port). macOS may need its cached device deleted in MIDI Studio
+    before the new port shows (daw-integration/README.md).
+- **Builds are named Alpha N (2026-10-23).** Asked: "naming cant be 1.0
+  because thats release ready, lets move to another naming convention"
+  (0.9.9 was also the last number the BCD bcdDevice could hold). Picked:
+  Alpha 1, 2, ... while features change, then Beta 1, 2, ... once they
+  freeze, then 1.0. product_identity.h: TILES_FW_STAGE (alpha = 0, beta =
+  1) and TILES_FW_BUILD replace TILES_FW_VERSION_*. INFO reports
+  `firmware=alpha.1`; bcdDevice is 0xSNNN (stage digit, build in BCD); the
+  Identity Reply's software revision is stage, build high 7 bits, build
+  low 7 bits, 0. This build is Alpha 1.
+- **Point builds: Alpha N.P (2026-10-23, at Alpha 4).** Asked: "dont call
+  each push alpha new number. do incremental changes for small things, a
+  whole new alpha is for a big architecture change or new features or
+  layouts". TILES_FW_POINT added: small builds are Alpha 4.1, 4.2 ...; N
+  moves only for big changes. INFO `firmware=alpha.4` / `alpha.4.1`;
+  bcdDevice 0xSNPP (N 0-9, P 0-99, a static assert guards it); Identity
+  Reply stage, N, P, 0. Alpha 1-4 keep their numbers (unit 2 had already
+  reported alpha.3, so renumbering would have gone backwards).

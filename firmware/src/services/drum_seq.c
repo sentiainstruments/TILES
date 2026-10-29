@@ -8,6 +8,7 @@
 #include "hall.h"
 #include "haptics.h"
 #include "kv_store.h"
+#include "light_effects.h"
 #include "log_store.h"
 #include "lighting.h"
 #include "midi_channels.h"
@@ -47,7 +48,7 @@
 #define DRUM_SAVE_QUIET_MS 2000u
 #define DRUM_SAVE_RETRY_MS 30000u
 
-/* Levels; steps in the mode's lime, drum pads in their bank's green. */
+/* Levels; steps in the mode's orange, drum pads in their bank's shade. */
 #define DRUM_STEP_ARMED_LEVEL 0.35f
 #define DRUM_PLAYHEAD_LEVEL 0.15f /* white, on an empty step */
 #define DRUM_PAD_USED_LEVEL 0.4f
@@ -103,7 +104,9 @@ static bool s_storage;
 static bool s_dirty;
 static uint32_t s_changed_ms;
 static uint32_t s_retry_after_ms;
-static bool s_step_entered; /* the player started a step this scan */
+/* The player started a step since the last persist_service() (advance runs
+ * more often than the scan). */
+static bool s_step_entered;
 static uint32_t s_saves;
 static uint16_t s_saved_bytes;
 static uint8_t s_blob[TILES_LOG_MAX_PAYLOAD];
@@ -114,9 +117,53 @@ static uint32_t now_ms(void) {
 
 /* ---- the player's MIDI output ---- */
 
+/* Drum Rack (channel 10, the drum's own note) or Volca (drum_seq.h). */
+static bool s_volca;
+
+/* Volca: the drum's MIDI channel (0-15) from its Drum Rack note; false past
+ * channel 16 or below C1. */
+static bool volca_channel(uint8_t note, uint8_t *channel) {
+    if (note < TILES_DRUM_FIRST_NOTE || note - TILES_DRUM_FIRST_NOTE >= 16u) {
+        return false;
+    }
+    *channel = (uint8_t)(note - TILES_DRUM_FIRST_NOTE);
+    return true;
+}
+
+/* On the Parts USB port either way (midi/midi_ports.h): Volca's channels
+ * 1-16 would otherwise reach a DAW's MPE track on the MIDI port. */
+static void drum_midi_on(uint8_t note, uint8_t velocity) {
+    uint8_t channel;
+    tiles_midi_out_parts_begin();
+    if (!s_volca) {
+        tiles_midi_note_on(TILES_MIDI_CH_DRUMS, note, velocity);
+    } else if (volca_channel(note, &channel)) {
+        tiles_midi_note_on(channel, TILES_VOLCA_NOTE, velocity);
+    }
+    tiles_midi_out_parts_end();
+}
+
+static void drum_midi_off(uint8_t note) {
+    uint8_t channel;
+    tiles_midi_out_parts_begin();
+    if (!s_volca) {
+        tiles_midi_note_off(TILES_MIDI_CH_DRUMS, note, 0u);
+    } else if (volca_channel(note, &channel)) {
+        tiles_midi_note_off(channel, TILES_VOLCA_NOTE, 0u);
+    }
+    tiles_midi_out_parts_end();
+}
+
+/* The mode's color: orange, or cyan in Volca mode. */
+static void mode_color(float *r, float *g, float *b) {
+    *r = s_volca ? TILES_VOLCA_COLOR_R : TILES_DRUM_SEQ_COLOR_R;
+    *g = s_volca ? TILES_VOLCA_COLOR_G : TILES_DRUM_SEQ_COLOR_G;
+    *b = s_volca ? TILES_VOLCA_COLOR_B : TILES_DRUM_SEQ_COLOR_B;
+}
+
 static void out_note_on(uint8_t note, uint8_t velocity, void *ctx) {
     (void)ctx;
-    tiles_midi_note_on(TILES_MIDI_CH_DRUMS, note, velocity);
+    drum_midi_on(note, velocity);
     uint32_t now = now_ms();
     for (uint8_t v = 0; v < TILES_DRUM_VOICES; v++) {
         if (tiles_drum_note(s_bank, v) == note) {
@@ -131,16 +178,19 @@ static void out_note_on(uint8_t note, uint8_t velocity, void *ctx) {
         }
     }
     /* The selected drum's hits pulse their step pad, so a finger resting on
-     * the grid feels the beat. */
+     * the grid feels the beat, and light it (the light effect's sequencer
+     * version). */
     if (s_shown && note == tiles_drum_note(s_bank, s_voice) && !s_rep_active &&
         s_player.step / TILES_DRUM_PAGE_STEPS == s_page) {
-        tiles_haptics_trigger_touch_pulse(tiles_drum_pad_for_step(s_player.step));
+        uint8_t step_pad = tiles_drum_pad_for_step(s_player.step);
+        tiles_haptics_trigger_touch_pulse(step_pad);
+        tiles_fx_playback_hit(step_pad, velocity, now);
     }
 }
 
 static void out_note_off(uint8_t note, void *ctx) {
     (void)ctx;
-    tiles_midi_note_off(TILES_MIDI_CH_DRUMS, note, 0u);
+    drum_midi_off(note);
 }
 
 static uint32_t out_random(void *ctx) {
@@ -175,8 +225,9 @@ static void end_live_notes(void) {
     step_roll_end();
     for (uint8_t v = 0; v < TILES_DRUM_VOICES; v++) {
         if (s_drum_sounding[v]) {
-            tiles_midi_note_off(TILES_MIDI_CH_DRUMS, s_drum_sounding_note[v], 0u);
+            drum_midi_off(s_drum_sounding_note[v]);
             tiles_haptics_stop(tiles_drum_pad_for_voice(v));
+            tiles_fx_release(tiles_drum_pad_for_voice(v), now_ms());
             s_drum_sounding[v] = false;
         }
         s_drum_awaiting[v] = false;
@@ -228,6 +279,19 @@ void tiles_drum_seq_init(const tiles_kv_ops_t *ops) {
     resync_touches();
 }
 
+void tiles_drum_seq_set_volca(bool volca) {
+    if (volca == s_volca) {
+        return;
+    }
+    end_live_notes();
+    tiles_drum_player_end_all(&s_player, &s_out);
+    s_volca = volca;
+}
+
+bool tiles_drum_seq_is_volca(void) {
+    return s_volca;
+}
+
 void tiles_drum_seq_enter(void) {
     resync_touches();
 }
@@ -242,6 +306,10 @@ void tiles_drum_seq_end_all_notes(void) {
 }
 
 /* ---- transport and banks ---- */
+
+void tiles_drum_seq_set_phase_lock(bool on) {
+    s_player.phase_lock = on;
+}
 
 bool tiles_drum_seq_is_running(void) {
     return s_player.running;
@@ -292,8 +360,16 @@ void tiles_drum_seq_advance(tiles_midi_clock_state_t clock, bool shown) {
     s_clock_running = clock.running;
     uint32_t started = s_player.step_started_pulse;
     uint8_t step = s_player.step;
-    tiles_drum_player_advance(&s_player, &s_pattern, &s_out, clock.pulse_count, clock.running, clock.start_edge);
-    s_step_entered = s_player.step_started_pulse != started || s_player.step != step;
+    if (clock.start_edge && s_player.running) {
+        /* At the song position, so a DAW playing from mid-song lands right. */
+        tiles_drum_player_start_at(&s_player, &s_pattern, &s_out, clock.pulse_count, clock.song_pulse);
+    } else {
+        tiles_drum_player_advance(&s_player, &s_pattern, &s_out, clock.pulse_count, clock.song_pulse, clock.running,
+                                  clock.start_edge);
+    }
+    if (s_player.step_started_pulse != started || s_player.step != step) {
+        s_step_entered = true;
+    }
 }
 
 /* ---- saving ---- */
@@ -308,6 +384,8 @@ static bool any_pad_touched(void) {
 }
 
 void tiles_drum_seq_persist_service(uint32_t now, bool clock_running) {
+    bool step_entered = s_step_entered;
+    s_step_entered = false;
     if (!s_storage) {
         return;
     }
@@ -323,7 +401,7 @@ void tiles_drum_seq_persist_service(uint32_t now, bool clock_running) {
         (s_retry_after_ms != 0u && (int32_t)(now - s_retry_after_ms) < 0) || any_pad_touched()) {
         return;
     }
-    if (clock_running && s_player.running && (!s_step_entered || tiles_drum_player_repeats_pending(&s_player))) {
+    if (clock_running && s_player.running && (!step_entered || tiles_drum_player_repeats_pending(&s_player))) {
         return; /* playing: right after a step starts, nothing else due */
     }
     bool truncated = false;
@@ -357,11 +435,12 @@ tiles_drum_seq_store_info_t tiles_drum_seq_get_store_info(void) {
 
 static void drum_hit(uint8_t voice, uint8_t pad, uint8_t velocity) {
     if (s_drum_sounding[voice]) {
-        tiles_midi_note_off(TILES_MIDI_CH_DRUMS, s_drum_sounding_note[voice], 0u);
+        drum_midi_off(s_drum_sounding_note[voice]);
     }
     uint8_t note = tiles_drum_note(s_bank, voice);
-    tiles_midi_note_on(TILES_MIDI_CH_DRUMS, note, velocity);
+    drum_midi_on(note, velocity);
     tiles_haptics_trigger_kick(pad, velocity);
+    tiles_fx_hit(pad, velocity, now_ms()); /* the light effect, as in play */
     s_drum_sounding[voice] = true;
     s_drum_sounding_note[voice] = note;
     s_drum_fired_ms[voice] = now_ms();
@@ -413,8 +492,9 @@ static void handle_drum_pad(uint8_t voice, uint8_t pad, bool touched, bool was, 
         }
     } else if (was) {
         if (s_drum_sounding[voice]) {
-            tiles_midi_note_off(TILES_MIDI_CH_DRUMS, s_drum_sounding_note[voice], 0u);
+            drum_midi_off(s_drum_sounding_note[voice]);
             tiles_haptics_stop(pad);
+            tiles_fx_release(pad, now);
             s_drum_sounding[voice] = false;
         }
         s_drum_awaiting[voice] = false;
@@ -507,20 +587,28 @@ void tiles_drum_seq_handle_input(uint32_t now) {
 
 /* ---- rendering ---- */
 
-/* Each bank of 8 drums has its own green on the drum pads, so a new set
- * reads as new: lime (the first bank, the mode's color), a darker green,
- * a cooler green, olive, then around again. */
-static void bank_green(float level, float *r, float *g, float *b) {
-    static const float GREENS[4][3] = {
+/* Each bank of 8 drums has its own shade of the mode's color on the drum
+ * pads, so a new set reads as new. Drum mode: orange (the first bank), a
+ * redder one, amber, rose. Volca mode: cyan, a darker cyan, a paler one, a
+ * bluer one. Then around again. */
+static void bank_shade(float level, float *r, float *g, float *b) {
+    static const float WARMS[4][3] = {
         {TILES_DRUM_SEQ_COLOR_R, TILES_DRUM_SEQ_COLOR_G, TILES_DRUM_SEQ_COLOR_B},
-        {0.0f, 0.5f, 0.05f},
-        {0.0f, 1.0f, 0.45f},
-        {0.25f, 0.45f, 0.0f},
+        {1.0f, 0.1f, 0.0f},
+        {1.0f, 0.6f, 0.0f},
+        {1.0f, 0.05f, 0.25f},
     };
+    static const float CYANS[4][3] = {
+        {TILES_VOLCA_COLOR_R, TILES_VOLCA_COLOR_G, TILES_VOLCA_COLOR_B},
+        {0.0f, 0.4f, 0.55f},
+        {0.35f, 0.9f, 1.0f},
+        {0.0f, 0.45f, 1.0f},
+    };
+    const float (*shades)[3] = s_volca ? CYANS : WARMS;
     uint8_t i = (uint8_t)((((int)s_bank % 4) + 4) % 4);
-    *r = GREENS[i][0] * level;
-    *g = GREENS[i][1] * level;
-    *b = GREENS[i][2] * level;
+    *r = shades[i][0] * level;
+    *g = shades[i][1] * level;
+    *b = shades[i][2] * level;
 }
 
 static float slow_pulse(uint32_t now, float period_ms, float lo, float hi) {
@@ -557,8 +645,9 @@ static void render_buttons(uint32_t now, float beat_flash, float diamond_led, bo
 
 static void render_underglow(void) {
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
-        tiles_lighting_set_standby_underglow_rgb(i, TILES_DRUM_SEQ_COLOR_R, TILES_DRUM_SEQ_COLOR_G,
-                                                 TILES_DRUM_SEQ_COLOR_B);
+        float r, g, b;
+        mode_color(&r, &g, &b);
+        tiles_lighting_set_standby_underglow_rgb(i, r, g, b);
     }
 }
 
@@ -592,8 +681,9 @@ void tiles_drum_seq_render(uint32_t now, float beat_flash, float diamond_led, bo
             float level = DRUM_STEP_ARMED_LEVEL * (0.3f + 0.7f * (float)s_pattern.probability[note][step] / 100.0f);
             float blue = DRUM_STEP_ARMED_LEVEL * (float)(s_pattern.ratchet[note][step] - 1u) /
                          (float)(TILES_DRUM_MAX_RATCHET - 1u);
-            tiles_lighting_set_standby_pad_rgb(pad, TILES_DRUM_SEQ_COLOR_R * level, TILES_DRUM_SEQ_COLOR_G * level,
-                                               blue);
+            float r, g, b;
+            mode_color(&r, &g, &b);
+            tiles_lighting_set_standby_pad_rgb(pad, r * level, g * level, fmaxf(b * level, blue));
         } else {
             tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
         }
@@ -604,14 +694,20 @@ void tiles_drum_seq_render(uint32_t now, float beat_flash, float diamond_led, bo
         if (now - s_drum_cleared_ms[v] < DRUM_CLEAR_FLASH_MS && s_drum_cleared_ms[v] != 0u) {
             r = 1.0f; g = 0.0f; b = 0.0f; /* cleared */
         } else if (s_drum_sounding[v]) {
-            r = g = b = 1.0f; /* held after a push */
+            /* Held after a push: white, or Touch colour's tint. */
+            float tint[3];
+            if (tiles_fx_pressed_colour(pad, tint)) {
+                r = tint[0]; g = tint[1]; b = tint[2];
+            } else {
+                r = g = b = 1.0f;
+            }
         } else if (s_drum_fired_any[v] && now - s_drum_fired_ms[v] < DRUM_FIRE_FLASH_MS) {
             r = g = b = DRUM_FIRE_FLASH_LEVEL;
         } else if (v == s_voice) {
             r = DRUM_BLUE_R; g = DRUM_BLUE_G; b = DRUM_BLUE_B;
         } else {
             bool used = tiles_drum_pattern_note_has_steps(&s_pattern, tiles_drum_note(s_bank, v));
-            bank_green(used ? DRUM_PAD_USED_LEVEL : DRUM_PAD_EMPTY_LEVEL, &r, &g, &b);
+            bank_shade(used ? DRUM_PAD_USED_LEVEL : DRUM_PAD_EMPTY_LEVEL, &r, &g, &b);
         }
         tiles_lighting_set_standby_pad_rgb(pad, r, g, b);
     }
