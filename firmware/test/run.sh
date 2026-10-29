@@ -30,38 +30,6 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_mpe_alloc.c src/se
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_drum_pattern.c src/services/drum_pattern.c -o /tmp/sentia_tiles_test_drum_pattern
 /tmp/sentia_tiles_test_drum_pattern
 
-# Harmony mode's chord colours, key fitting and glide voicing.
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_harmony_core.c src/services/harmony_core.c -o /tmp/sentia_tiles_test_harmony_core
-/tmp/sentia_tiles_test_harmony_core
-
-# Bouncing notes' balls: drop, landings, polyrhythm.
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_bounce_core.c src/services/bounce_core.c -lm -o /tmp/sentia_tiles_test_bounce_core
-/tmp/sentia_tiles_test_bounce_core
-
-# The physics modes: Ripples, Sand, Orbits, Newton's cradle.
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_physics_core.c src/services/physics_core.c -lm -o /tmp/sentia_tiles_test_physics_core
-/tmp/sentia_tiles_test_physics_core
-
-# Strike settle: when a struck pad's note can go before the follow-through ends.
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_strike_settle.c src/services/strike_settle.c -o /tmp/sentia_tiles_test_strike_settle
-/tmp/sentia_tiles_test_strike_settle
-
-# Sequencer autosave blob: round trip, empty patterns, truncation, damage.
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_seq_pattern.c src/services/seq_pattern.c -o /tmp/sentia_tiles_test_seq_pattern
-/tmp/sentia_tiles_test_seq_pattern
-
-# Rest guard: a pad's rest position stays true (drift, re-zero, unconfirmed).
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_rest_guard.c src/services/rest_guard.c -o /tmp/sentia_tiles_test_rest_guard
-/tmp/sentia_tiles_test_rest_guard
-
-# Light effects: each lights where it should and fades; Off does nothing.
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_light_effects.c src/services/light_effects.c -lm -o /tmp/sentia_tiles_test_light_effects
-/tmp/sentia_tiles_test_light_effects
-
-# MIDI clock: an external Start begins on its first Clock, on a beat boundary.
-cc -std=c11 -Wall -Wextra -Wpedantic -Itest/stubs -Isrc/services -Isrc/midi test/test_midi_clock.c src/services/midi_clock.c -lm -o /tmp/sentia_tiles_test_midi_clock
-/tmp/sentia_tiles_test_midi_clock | grep -v '^\[midi_clock\]' # its own Start/Stop logging
-
 # Flash store (power-cut simulation) and the settings table on top of it.
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/storage test/test_kv_store.c src/storage/kv_store.c -o /tmp/sentia_tiles_test_kv_store
 /tmp/sentia_tiles_test_kv_store
@@ -69,10 +37,6 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/storage test/test_kv_store.c src/stor
 # The append-only log under drum mode's pattern (saves without erasing while playing).
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/storage test/test_log_store.c src/storage/log_store.c src/storage/kv_store.c -o /tmp/sentia_tiles_test_log_store
 /tmp/sentia_tiles_test_log_store
-
-# Mode, scale, key and octave across a power cycle (on the log above, into the real note map).
-cc -std=c11 -Wall -Wextra -Wpedantic -Itest/stubs -Isrc/storage -Isrc/services -Isrc/board test/test_play_state.c src/services/play_state.c src/services/note_map.c src/board/pad_config.c src/storage/log_store.c src/storage/kv_store.c -o /tmp/sentia_tiles_test_play_state
-/tmp/sentia_tiles_test_play_state
 
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/profiles -Isrc/storage test/test_settings.c src/profiles/settings.c src/profiles/settings_persist.c src/storage/kv_store.c -lm -o /tmp/sentia_tiles_test_settings
 /tmp/sentia_tiles_test_settings

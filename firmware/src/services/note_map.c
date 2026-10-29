@@ -14,11 +14,6 @@
 static tiles_scale_mode_t __uninitialized_ram(s_scale);
 static int8_t __uninitialized_ram(s_octave_shift);
 static int8_t __uninitialized_ram(s_key_offset);
-/* Chord mode's chord strip has its own octave (circle + "-"/"+"). */
-static int8_t s_chord_octave_shift;
-static tiles_melodic_layout_t s_layout;
-/* Layouts are melodic mode's (op_mode.c switches this); elsewhere Rows. */
-static bool s_layout_enabled = true;
 
 void tiles_note_map_init(bool crash_recovered) {
     if (!crash_recovered) {
@@ -26,8 +21,6 @@ void tiles_note_map_init(bool crash_recovered) {
         s_octave_shift = 0;
         s_key_offset = 0;
     }
-    s_chord_octave_shift = 0;
-    s_layout = TILES_LAYOUT_ROWS;
 }
 
 /* ---- Bass guitar mode ----------------------------------------------------
@@ -196,99 +189,6 @@ static const bool s_pitch_class_is_natural[12] = {
 static uint8_t pad_degree(const tiles_pad_config_t *cfg) {
     uint8_t musical_row = (uint8_t)(4u - cfg->row);
     return (uint8_t)(musical_row * 6u + (cfg->col - 1u));
-}
-
-static uint8_t current_scale_note_count(void);
-
-/* The columns layout (note_map.h): three 2-pad-wide columns, each rising
- * two notes a row from the bottom. A scale of up to 7 notes starts each
- * column on the root, an octave above the one before (so a 7-note scale's
- * top root repeats at the next column's foot, and shorter scales repeat a
- * few more notes); 8 or more (chromatic too) run on, column after column. */
-#define COLUMNS_LAYOUT_SLOTS 8u
-static uint8_t columns_degree(const tiles_pad_config_t *cfg) {
-    uint8_t column = (uint8_t)((cfg->col - 1u) / 2u);
-    uint8_t slot = (uint8_t)((4u - cfg->row) * 2u + (cfg->col - 1u) % 2u);
-    uint8_t count = current_scale_note_count();
-    uint8_t step = count < COLUMNS_LAYOUT_SLOTS ? count : COLUMNS_LAYOUT_SLOTS;
-    return (uint8_t)(column * step + slot);
-}
-
-static tiles_melodic_layout_t active_layout(void) {
-    return s_layout_enabled ? s_layout : TILES_LAYOUT_ROWS;
-}
-
-/* Keys, Tonnetz and Quarter tones place pitches, not scale degrees: a
- * scale only lights them (out-of-scale pads dark, still playable, like
- * sharps in Rows). */
-static bool layout_is_absolute(tiles_melodic_layout_t layout) {
-    return layout == TILES_LAYOUT_KEYS || layout == TILES_LAYOUT_TONNETZ || layout == TILES_LAYOUT_QUARTER_TONES;
-}
-
-/* A musical interval in scale steps for the current scale (a fourth is 3
- * steps of a 7-note scale, 2 of a pentatonic, 5 semitones chromatic). */
-static uint8_t interval_steps(uint8_t semitones) {
-    uint8_t count = current_scale_note_count();
-    return (uint8_t)((count * semitones + 6u) / 12u);
-}
-
-/* The melodic surface's degree for `cfg` under the selected layout (the
- * degree-based ones). */
-static uint8_t melodic_degree(const tiles_pad_config_t *cfg) {
-    uint8_t col = (uint8_t)(cfg->col - 1u), row_up = (uint8_t)(4u - cfg->row);
-    switch (active_layout()) {
-    case TILES_LAYOUT_COLUMNS:
-        return columns_degree(cfg);
-    case TILES_LAYOUT_FOURTHS:
-        return (uint8_t)(col + row_up * interval_steps(5u));
-    case TILES_LAYOUT_FIFTHS:
-        return (uint8_t)(col + row_up * interval_steps(7u));
-    default:
-        return pad_degree(cfg);
-    }
-}
-
-/* Fifths spans the most: it starts an octave lower. */
-static int8_t melodic_octave_shift(void);
-
-/* The absolute layouts: semitones above the base note (before octave and
- * key), -1 for a pad with no note (Keys' gaps), and the quarter-tone
- * offset in cents.
- *   Keys          a piano in row pairs: white keys on the lower row of the
- *                 pair (C D E F G A, then B C D E F G), black keys above
- *                 the white key on their left, no key between E-F or B-C.
- *   Tonnetz       right = up a fifth, up a row = up a major third, folded
- *                 into C3..F#5: a major triad is an L of three pads.
- *   Quarter tones the 24 pads are one octave in 24 steps; odd pads sit
- *                 50 cents up (expression.c bends their note, MPE only). */
-static const uint8_t KEYS_WHITE[12] = {0u, 2u, 4u, 5u, 7u, 9u, 11u, 12u, 14u, 16u, 17u, 19u};
-static int absolute_semitones(const tiles_pad_config_t *cfg, uint8_t *cents) {
-    int col = cfg->col - 1, row_up = 4 - cfg->row;
-    *cents = 0u;
-    switch (active_layout()) {
-    case TILES_LAYOUT_KEYS: {
-        int white = KEYS_WHITE[(row_up / 2) * 6 + col];
-        if (row_up % 2 == 0) {
-            return white;
-        }
-        int pc = white % 12;
-        return (pc == 0 || pc == 2 || pc == 5 || pc == 7 || pc == 9) ? white + 1 : -1;
-    }
-    case TILES_LAYOUT_TONNETZ: {
-        int raw = col * 7 + row_up * 4; /* never negative: -1 means no note */
-        while (raw > 30) {
-            raw -= 12;
-        }
-        return raw;
-    }
-    case TILES_LAYOUT_QUARTER_TONES: {
-        int step = row_up * 6 + col;
-        *cents = (uint8_t)((step % 2) * 50);
-        return step / 2;
-    }
-    default:
-        return 0;
-    }
 }
 
 /* ---- Scale interval tables ---------------------------------------------
@@ -489,30 +389,6 @@ int8_t tiles_note_map_get_octave_shift(void) {
     return s_octave_shift;
 }
 
-void tiles_note_map_set_chord_octave_shift(int8_t octaves) {
-    if (octaves > (int8_t)TILES_NOTE_MAP_MAX_OCTAVE_SHIFT) {
-        octaves = (int8_t)TILES_NOTE_MAP_MAX_OCTAVE_SHIFT;
-    }
-    if (octaves < -(int8_t)TILES_NOTE_MAP_MAX_OCTAVE_SHIFT) {
-        octaves = -(int8_t)TILES_NOTE_MAP_MAX_OCTAVE_SHIFT;
-    }
-    s_chord_octave_shift = octaves;
-}
-
-int8_t tiles_note_map_get_chord_octave_shift(void) {
-    return s_chord_octave_shift;
-}
-
-void tiles_note_map_set_layout(tiles_melodic_layout_t layout) {
-    if ((unsigned)layout < (unsigned)TILES_NUM_LAYOUTS) {
-        s_layout = layout;
-    }
-}
-
-tiles_melodic_layout_t tiles_note_map_get_layout(void) {
-    return s_layout;
-}
-
 void tiles_note_map_set_key_offset(int8_t offset) {
     int wrapped = (int)offset % 12;
     if (wrapped < 0) {
@@ -540,23 +416,19 @@ static tiles_scale_table_t current_scale_table(void) {
     return scale_table_with_fallback(s_scale);
 }
 
-static uint8_t current_scale_note_count(void) {
-    return current_scale_table().count;
-}
-
 /* Folds `degree` through an explicit table (chord mode needs a table other
- * than the selected one), at `octave` octaves up. */
-static int note_for_degree(tiles_scale_table_t table, uint8_t degree, int8_t octave) {
+ * than the selected one). */
+static int note_for_scale_degree_using(tiles_scale_table_t table, uint8_t degree) {
     uint8_t octave_num = (uint8_t)(degree / table.count);
     uint8_t degree_in_octave = (uint8_t)(degree % table.count);
     int interval = (int)octave_num * 12 + (int)table.intervals[degree_in_octave];
-    return (int)TILES_NOTE_MAP_BASE_NOTE + interval + (int)octave * 12 + (int)s_key_offset;
+    return (int)TILES_NOTE_MAP_BASE_NOTE + interval + (int)s_octave_shift * 12 + (int)s_key_offset;
 }
 
-static int note_for_scale_degree_using(tiles_scale_table_t table, uint8_t degree) {
-    return note_for_degree(table, degree, s_octave_shift);
+/* Normal play uses the selected scale. */
+static int note_for_scale_degree(uint8_t degree) {
+    return note_for_scale_degree_using(current_scale_table(), degree);
 }
-
 
 /* The chord strip's table: the selected scale if it has 7 notes (so Dorian,
  * Lydian etc. color the chords), else Ionian. Checked by note count, so a
@@ -588,8 +460,7 @@ void tiles_note_map_get_chord_notes(uint8_t logical_pad, uint8_t out_notes[TILES
         CHORD_ELEVENTH_DEGREE_STEP,
         CHORD_THIRTEENTH_DEGREE_STEP};
     for (uint8_t i = 0; i < TILES_NOTE_MAP_CHORD_NUM_NOTES; i++) {
-        int note = note_for_degree(table, (uint8_t)(root_degree + degree_steps[i]), s_chord_octave_shift) -
-                   CHORD_OCTAVE_DOWN_SEMITONES;
+        int note = note_for_scale_degree_using(table, (uint8_t)(root_degree + degree_steps[i])) - CHORD_OCTAVE_DOWN_SEMITONES;
         if (note < 0) {
             note = 0;
         }
@@ -629,19 +500,10 @@ uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
         return (uint8_t)note;
     }
 
-    int note;
-    if (layout_is_absolute(active_layout())) {
-        uint8_t cents;
-        int semis = absolute_semitones(cfg, &cents);
-        if (semis < 0) {
-            return 0u; /* no note here (tiles_note_map_pad_has_note()) */
-        }
-        note = (int)TILES_NOTE_MAP_BASE_NOTE + semis + (int)s_octave_shift * 12 + (int)s_key_offset;
-    } else {
-        /* Degree = position in the selected layout (rows: the bottom-to-top,
-         * left-to-right sweep). */
-        note = note_for_degree(current_scale_table(), melodic_degree(cfg), melodic_octave_shift());
-    }
+    /* Degree = position in the bottom-to-top (row 4 first), left-to-right
+     * sweep. */
+    uint8_t degree = pad_degree(cfg);
+    int note = note_for_scale_degree(degree);
     if (note < 0) {
         note = 0;
     }
@@ -684,74 +546,16 @@ uint8_t tiles_note_map_quantize_to_scale(uint8_t note) {
     return note;
 }
 
-/* The absolute layouts' role checks: the pad's pitch relative to the key
- * (-1 for no note or a quarter tone, which play no role). */
-static int absolute_role(const tiles_pad_config_t *cfg) {
-    uint8_t cents;
-    int semis = absolute_semitones(cfg, &cents);
-    if (semis < 0 || cents != 0u) {
-        return -1;
-    }
-    return ((semis % 12) + 12) % 12;
-}
-
-static bool scale_has(tiles_scale_table_t table, int interval) {
-    for (uint8_t i = 0u; i < table.count; i++) {
-        if (table.intervals[i] == interval) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool absolute_layout_pad(const tiles_pad_config_t *cfg) {
-    return !s_chord_mode_active && !s_guitar_mode_active && layout_is_absolute(active_layout()) && cfg != NULL;
-}
-
-bool tiles_note_map_pad_has_note(uint8_t logical_pad) {
-    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
-    if (!absolute_layout_pad(cfg)) {
-        return cfg != NULL;
-    }
-    uint8_t cents;
-    return absolute_semitones(cfg, &cents) >= 0;
-}
-
-uint8_t tiles_note_map_get_pad_cents(uint8_t logical_pad) {
-    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
-    if (!absolute_layout_pad(cfg)) {
-        return 0u;
-    }
-    uint8_t cents;
-    (void)absolute_semitones(cfg, &cents);
-    return cents;
-}
-
-void tiles_note_map_set_layout_enabled(bool enabled) {
-    s_layout_enabled = enabled;
-}
-
-bool tiles_note_map_get_layout_enabled(void) {
-    return s_layout_enabled;
-}
-
-static int8_t melodic_octave_shift(void) {
-    return active_layout() == TILES_LAYOUT_FIFTHS ? (int8_t)(s_octave_shift - 1) : s_octave_shift;
-}
-
 bool tiles_note_map_is_root_pad(uint8_t logical_pad) {
     const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
     if (cfg == NULL) {
         return false;
     }
-    if (absolute_layout_pad(cfg)) {
-        return absolute_role(cfg) == 0;
-    }
     /* The root repeats every table.count degrees (every table starts at 0);
      * key offset cancels out. Chord mode uses its own degree sweep and the
      * selected scale's count, matching what its melody grid plays. The chord
      * strip is painted one color anyway, so its result doesn't matter. */
-    uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : melodic_degree(cfg);
+    uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : pad_degree(cfg);
     uint8_t scale_note_count = current_scale_table().count;
     return (degree % scale_note_count) == 0u;
 }
@@ -764,10 +568,7 @@ bool tiles_note_map_is_fifth_pad(uint8_t logical_pad) {
     if (cfg == NULL) {
         return false;
     }
-    if (absolute_layout_pad(cfg)) {
-        return absolute_role(cfg) == 7 && scale_has(current_scale_table(), 7);
-    }
-    uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : melodic_degree(cfg);
+    uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : pad_degree(cfg);
     tiles_scale_table_t table = current_scale_table();
     return table.intervals[degree % table.count] == 7;
 }
@@ -777,12 +578,7 @@ bool tiles_note_map_is_third_pad(uint8_t logical_pad) {
     if (cfg == NULL) {
         return false;
     }
-    if (absolute_layout_pad(cfg)) {
-        tiles_scale_table_t t = current_scale_table();
-        int third = scale_has(t, 4) ? 4 : (scale_has(t, 3) ? 3 : -2);
-        return absolute_role(cfg) == third;
-    }
-    uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : melodic_degree(cfg);
+    uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : pad_degree(cfg);
     tiles_scale_table_t table = current_scale_table();
     bool has_major = false;
     for (uint8_t i = 0u; i < table.count; i++) {
@@ -794,14 +590,6 @@ bool tiles_note_map_is_third_pad(uint8_t logical_pad) {
 }
 
 bool tiles_note_map_is_natural_pad(uint8_t logical_pad) {
-    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
-    if (absolute_layout_pad(cfg)) {
-        /* Dark: no note, a quarter tone, or out of the scale. */
-        int role = absolute_role(cfg);
-        if (role < 0 || !scale_has(current_scale_table(), role)) {
-            return false;
-        }
-    }
     /* get_note() returns 0 (C, natural) out of range: the documented default. */
     uint8_t note = tiles_note_map_get_note(logical_pad);
     return s_pitch_class_is_natural[note % 12u];

@@ -35,7 +35,7 @@ static void fresh(void) {
 
 /* Feeds pulses from..to (inclusive) one per scan, clock running. */
 static void run(uint32_t from, uint32_t to) {
-    for (uint32_t p = from; p <= to; p++) tiles_drum_player_advance(&pl, &pat, &out, p, p, true, false);
+    for (uint32_t p = from; p <= to; p++) tiles_drum_player_advance(&pl, &pat, &out, p, true, false);
 }
 
 int main(void) {
@@ -83,7 +83,7 @@ int main(void) {
     for (uint8_t s = 0; s < 16; s += 4) tiles_drum_pattern_toggle(&pat, 36, s);   /* kick 1, 5, 9, 13 */
     for (uint8_t s = 2; s < 16; s += 4) tiles_drum_pattern_toggle(&pat, 42, s);   /* hat on the offbeats */
     tiles_drum_player_start(&pl, true);
-    tiles_drum_player_advance(&pl, &pat, &out, 0, 0, true, true);                     /* Start */
+    tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);                     /* Start */
     assert(rec.on[36] == 1 && rec.on[42] == 0 && rec.last_velocity == TILES_DRUM_STEP_VELOCITY && pl.step == 0);
     run(1, 5);
     assert(rec.on[36] == 1 && rec.off[36] == 0);                                   /* still step 1 */
@@ -99,8 +99,8 @@ int main(void) {
     tiles_drum_pattern_toggle(&pat, 36, 0);
     tiles_drum_pattern_toggle(&pat, 38, 3);
     tiles_drum_player_start(&pl, true);
-    tiles_drum_player_advance(&pl, &pat, &out, 0, 0, true, true);
-    tiles_drum_player_advance(&pl, &pat, &out, 19, 19, true, false);                   /* 3 steps at once */
+    tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
+    tiles_drum_player_advance(&pl, &pat, &out, 19, true, false);                   /* 3 steps at once */
     assert(pl.step == 3 && rec.on[38] == 1 && rec.on[36] == 1);
 
     /* 6. ratchet: 4 hits within one step, at pulses 0, 1, 2, 3 */
@@ -108,7 +108,7 @@ int main(void) {
     tiles_drum_pattern_toggle(&pat, 40, 0);
     tiles_drum_pattern_set_ratchet(&pat, 40, 0, 4);
     tiles_drum_player_start(&pl, true);
-    tiles_drum_player_advance(&pl, &pat, &out, 0, 0, true, true);
+    tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
     assert(rec.on[40] == 1);
     run(1, 1); assert(rec.on[40] == 2 && rec.off[40] == 1);                       /* each repeat retriggers */
     run(2, 5); assert(rec.on[40] == 4);
@@ -118,7 +118,7 @@ int main(void) {
     tiles_drum_pattern_toggle(&pat, 40, 0);
     tiles_drum_pattern_set_ratchet(&pat, 40, 0, 2);
     tiles_drum_player_start(&pl, true);
-    tiles_drum_player_advance(&pl, &pat, &out, 0, 0, true, true);
+    tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
     run(1, 2); assert(rec.on[40] == 1);
     run(3, 3); assert(rec.on[40] == 2);
 
@@ -130,7 +130,7 @@ int main(void) {
         tiles_drum_pattern_toggle(&pat, 52, s); tiles_drum_pattern_set_probability(&pat, 52, s, 50);
     }
     tiles_drum_player_start(&pl, true);
-    tiles_drum_player_advance(&pl, &pat, &out, 0, 0, true, true);
+    tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
     run(1, 6 * 160);
     assert(rec.on[50] == 0 && rec.on[51] == 161 && rec.on[52] > 40 && rec.on[52] < 121);
 
@@ -156,7 +156,7 @@ int main(void) {
     fresh();
     for (uint8_t s = 0; s < 16; s++) tiles_drum_pattern_toggle(&pat, 36, s);
     tiles_drum_player_start(&pl, true);
-    tiles_drum_player_advance(&pl, &pat, &out, 0, 0, true, true);
+    tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
     run(1, 30);                                     /* on step 6 */
     assert(pl.step == 5);
     tiles_drum_player_pause(&pl);
@@ -173,14 +173,14 @@ int main(void) {
     fresh();
     tiles_drum_pattern_toggle(&pat, 36, 0);
     tiles_drum_player_start(&pl, true);
-    tiles_drum_player_advance(&pl, &pat, &out, 0, 0, true, true);
-    tiles_drum_player_advance(&pl, &pat, &out, 1, 1, false, false);
+    tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
+    tiles_drum_player_advance(&pl, &pat, &out, 1, false, false);
     assert(rec.off[36] == 1 && pl.running);
 
     /* 11. stopped: a Start from elsewhere doesn't play it */
     fresh();
     tiles_drum_pattern_toggle(&pat, 36, 0);
-    tiles_drum_player_advance(&pl, &pat, &out, 0, 0, true, true);
+    tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
     assert(rec.events == 0);
 
     /* 12. saving: sparse, round-trips, clamps, survives damage */
@@ -227,7 +227,7 @@ int main(void) {
     tiles_drum_pattern_toggle(&pat, 40, 0);
     tiles_drum_pattern_set_ratchet(&pat, 40, 0, 2);
     tiles_drum_player_start(&pl, true);
-    tiles_drum_player_advance(&pl, &pat, &out, 0, 0, true, true);
+    tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
     assert(tiles_drum_player_repeats_pending(&pl));
     run(1, 3);
     assert(!tiles_drum_player_repeats_pending(&pl));
@@ -240,7 +240,7 @@ int main(void) {
     assert(tiles_drum_pattern_length(&pat) == 32);
     assert(tiles_drum_pad_for_step(20) == tiles_drum_pad_for_step(4));           /* same pad, page 2 */
     tiles_drum_player_start(&pl, true);
-    tiles_drum_player_advance(&pl, &pat, &out, 0, 0, true, true);
+    tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
     run(1, 6 * 20);                                                              /* to step 21 */
     assert(pl.step == 20 && rec.on[38] == 1);
     run(6 * 20 + 1, 6 * 32);                                                     /* wraps after step 32 */
@@ -262,7 +262,7 @@ int main(void) {
     tiles_drum_pattern_toggle(&pat, 38, 10);
     tiles_drum_pattern_toggle(&pat, 40, 12);
     tiles_drum_player_start(&pl, true);
-    tiles_drum_player_advance(&pl, &pat, &out, 0, 0, true, true);
+    tiles_drum_player_advance(&pl, &pat, &out, 0, true, true);
     run(1, 20);                                      /* on step 4 */
     pl.muted = true;
     tiles_drum_player_fire_step(&pl, &pat, &out, 9, 77);
@@ -279,52 +279,8 @@ int main(void) {
     tiles_drum_pattern_toggle(&pat, 36, 3);
     pl.muted = true;
     tiles_drum_player_fire_step(&pl, &pat, &out, 3, 100);
-    tiles_drum_player_advance(&pl, &pat, &out, 105, 105, false, false);
+    tiles_drum_player_advance(&pl, &pat, &out, 105, false, false);
     assert(rec.on[36] == 1 && rec.off[36] == 0);
-
-    /* start_at: a Start 5 sixteenths into the song plays step 6 now, on the grid */
-    {
-        tiles_drum_player_t pl2;
-        tiles_drum_player_init(&pl2);
-        pl2.running = true;
-        tiles_drum_player_start_at(&pl2, &pat, &out, 1000u, 5u * TILES_DRUM_CLOCKS_PER_STEP);
-        assert(pl2.step == 5u && pl2.step_started_pulse == 1000u);
-        tiles_drum_player_start_at(&pl2, &pat, &out, 1000u, 5u * TILES_DRUM_CLOCKS_PER_STEP + 2u);
-        assert(pl2.step == 5u && pl2.step_started_pulse == 998u);
-    }
-    /* Phase lock: a pattern started mid-song joins on the next step at the
-     * song's step and stays on it with one that played from the top */
-    {
-        tiles_drum_pattern_t pat2;
-        tiles_drum_pattern_clear(&pat2);
-        tiles_drum_pattern_toggle(&pat2, 36, 0);
-        tiles_drum_player_t a, b;
-        tiles_drum_player_init(&a);
-        tiles_drum_player_init(&b);
-        a.phase_lock = b.phase_lock = true;
-        tiles_drum_player_start(&a, true);
-        tiles_drum_player_advance(&a, &pat2, &out, 0u, 0u, true, true); /* from the top */
-        for (uint32_t p = 1u; p <= 40u; p++) {
-            tiles_drum_player_advance(&a, &pat2, &out, p, p, true, false);
-        }
-        tiles_drum_player_start(&b, false);                              /* joins at pulse 41 */
-        tiles_drum_player_advance(&b, &pat2, &out, 41u, 41u, true, false); /* mid-step: waits */
-        assert(b.pending_start);
-        for (uint32_t p = 41u; p <= 400u; p++) {
-            tiles_drum_player_advance(&a, &pat2, &out, p, p, true, false);
-            tiles_drum_player_advance(&b, &pat2, &out, p, p, true, false);
-            if (!b.pending_start) {
-                assert(b.step == a.step);
-            }
-        }
-        assert(!b.pending_start && b.step == a.step);
-        tiles_drum_pattern_toggle(&pat2, 36, 20); /* page 2: 32 steps, still together */
-        for (uint32_t p = 401u; p <= 800u; p++) {
-            tiles_drum_player_advance(&a, &pat2, &out, p, p, true, false);
-            tiles_drum_player_advance(&b, &pat2, &out, p, p, true, false);
-            assert(b.step == a.step && a.step == (p / TILES_DRUM_CLOCKS_PER_STEP) % 32u);
-        }
-    }
 
     printf("drum_pattern: all tests pass\n");
     return 0;

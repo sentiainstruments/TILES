@@ -83,9 +83,7 @@ bool tiles_drum_pattern_decode(tiles_drum_pattern_t *p, const uint8_t *in, uint1
  * Follows MIDI clock pulses like a sequencer lane (services/op_mode.c):
  * runs only while both its own `running` flag and the shared clock run; a
  * clock Start restarts it at step 1; a manual start waits for the nearest
- * beat, or, with `phase_lock`, for the next step and joins on the step it
- * would be on had it played from the song's top (midi_clock.h song_pulse),
- * staying there, so every locked pattern keeps the same bar line. Every armed note on a step fires at the step's start, each rolling
+ * beat. Every armed note on a step fires at the step's start, each rolling
  * its own probability; ratchets add evenly spaced repeats within the step.
  * A hit ends at the next hit of the same note or when the step ends. */
 typedef struct {
@@ -101,7 +99,6 @@ typedef struct {
     bool pending_restart; /* at that beat: step 1 (true) or resume (false) */
     uint8_t step;         /* 0-31: the step playing or parked on */
     bool muted;           /* a step roll owns the notes: the pattern runs on silently (slip) */
-    bool phase_lock;      /* steps follow the song position (setting seq.lock) */
     uint32_t step_started_pulse;
     bool sounding[TILES_DRUM_NOTES];
     uint8_t hits_total[TILES_DRUM_NOTES]; /* this step's hits for the note, 0 = not firing */
@@ -127,11 +124,7 @@ bool tiles_drum_player_repeats_pending(const tiles_drum_player_t *pl);
  * pattern plays on from wherever it has got to. */
 void tiles_drum_player_fire_step(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat,
                                  const tiles_drum_output_t *out, uint8_t step, uint8_t velocity);
-/* A clock Start `song_pulse` pulses into the song (midi_clock.h): the step
- * the pattern would be on had it played from the top, now. */
-void tiles_drum_player_start_at(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat,
-                                const tiles_drum_output_t *out, uint32_t pulse_count, uint32_t song_pulse);
-/* Call every scan with the clock snapshot (pulse count, song position,
- * running, start_edge: a Start at the song's top). */
+/* Call every scan with the clock snapshot (pulse count, running,
+ * start_edge). */
 void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat, const tiles_drum_output_t *out,
-                               uint32_t pulse_count, uint32_t song_pulse, bool clock_running, bool start_edge);
+                               uint32_t pulse_count, bool clock_running, bool start_edge);

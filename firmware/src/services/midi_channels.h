@@ -18,9 +18,7 @@
  *   Channel  10     The drum sequencer (TILES_MIDI_CH_DRUMS): General MIDI's
  *                   percussion channel, so a GM kit or a Drum Rack plays it
  *                   as drums. Nothing else ever sends there.
- *   Channel  11     Game mode (TILES_MIDI_CH_GAME), and bouncing notes
- *                   and the physics modes (TILES_MIDI_CH_BOUNCE; physics.h;
- *                   a game never runs with them).
+ *   Channel  11     Game mode (TILES_MIDI_CH_GAME).
  *   Channel  12     Chord mode (TILES_MIDI_CH_CHORD).
  *   Channels 13-16  The 4 sequencer lanes (lane 0 = channel 16).
  *
@@ -66,7 +64,6 @@
 #define TILES_MIDI_CH_SEQ_LANE_3 12u /* channel 13 */
 #define TILES_MIDI_CH_CHORD 11u      /* channel 12 */
 #define TILES_MIDI_CH_GAME 10u       /* channel 11 */
-#define TILES_MIDI_CH_BOUNCE TILES_MIDI_CH_GAME /* bouncing notes (bounce.h) */
 
 /* General MIDI percussion: the drum sequencer, and nothing else. */
 #define TILES_MIDI_CH_DRUMS 9u /* channel 10 */

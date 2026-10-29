@@ -16,10 +16,6 @@
  *               layouts (two alternating slots)
  *   -2 sectors  Drum mode's pattern              services/drum_seq.c
  *               (two alternating slots)
- *   -2 sectors  Mode, scale, key, octave         services/play_state.c
- *               (two alternating slots)
- *   -2 sectors  Sequencer autosave (log)         services/op_mode.c
- *               (two alternating slots)
  *   ...         free
  *   0           application image */
 
@@ -38,9 +34,3 @@
 
 #define TILES_FLASH_DRUM_SLOTS 2u
 #define TILES_FLASH_DRUM_OFFSET (TILES_FLASH_CONTENT_OFFSET - FLASH_SECTOR_SIZE * TILES_FLASH_DRUM_SLOTS)
-
-#define TILES_FLASH_STATE_SLOTS 2u
-#define TILES_FLASH_STATE_OFFSET (TILES_FLASH_DRUM_OFFSET - FLASH_SECTOR_SIZE * TILES_FLASH_STATE_SLOTS)
-
-#define TILES_FLASH_SEQ_SLOTS 2u
-#define TILES_FLASH_SEQ_OFFSET (TILES_FLASH_STATE_OFFSET - FLASH_SECTOR_SIZE * TILES_FLASH_SEQ_SLOTS)

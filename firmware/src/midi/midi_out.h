@@ -24,29 +24,9 @@
  * when full) lives in services/expression.c. Pedals reach all notes via
  * the Master Channel, not a broadcast; only panic broadcasts. */
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include "midi_ports.h"
-
-/* The PARTS USB port (midi/midi_ports.h): channel messages on MIDI
- * channels 10-16 (status nibble >= TILES_MIDI_FIRST_PART_CHANNEL) go there,
- * and anything sent between parts_begin and parts_end (nestable: Song
- * tracks and Volca, which use 1-9 too). Separate is the default; false
- * (setting midi.parts_port = main) keeps everything on MAIN. DIN gets it
- * all either way. */
-#define TILES_MIDI_FIRST_PART_CHANNEL 9u /* status nibble: MIDI channel 10 */
-void tiles_midi_out_set_parts_separate(bool separate);
-bool tiles_midi_out_get_parts_separate(void);
-void tiles_midi_out_parts_begin(void);
-void tiles_midi_out_parts_end(void);
-
-/* Messages sent between begin and end (nestable) leave USB in one transfer
- * instead of a pass apart: wrap anything that sounds at the same moment (a
- * chord, a step's drums, a note's setup and Note-On). midi_out.c has the
- * details. End right after the burst: nothing goes out until then. */
-void tiles_midi_out_batch_begin(void);
-void tiles_midi_out_batch_end(void);
 
 #define TILES_MIDI_MPE_MASTER_CHANNEL 0u       /* status nibble; 0 = MIDI channel 1 */
 #define TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL 1u /* status nibble; 1 = MIDI channel 2 */

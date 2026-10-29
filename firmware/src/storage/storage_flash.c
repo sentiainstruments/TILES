@@ -17,8 +17,6 @@ _Static_assert(TILES_KV_PAGE_SIZE == FLASH_PAGE_SIZE, "kv_store page size must b
 _Static_assert(TILES_KV_NUM_SLOTS == TILES_FLASH_SETTINGS_SLOTS, "flash_map.h and kv_store.h disagree on slot count");
 _Static_assert(TILES_KV_NUM_SLOTS == TILES_FLASH_CONTENT_SLOTS, "flash_map.h and kv_store.h disagree on slot count");
 _Static_assert(TILES_KV_NUM_SLOTS == TILES_FLASH_DRUM_SLOTS, "flash_map.h and kv_store.h disagree on slot count");
-_Static_assert(TILES_KV_NUM_SLOTS == TILES_FLASH_STATE_SLOTS, "flash_map.h and kv_store.h disagree on slot count");
-_Static_assert(TILES_KV_NUM_SLOTS == TILES_FLASH_SEQ_SLOTS, "flash_map.h and kv_store.h disagree on slot count");
 
 static bool region_safe(uint32_t region_offset) {
     uintptr_t image_end = (uintptr_t)&__flash_binary_end - XIP_BASE;
@@ -37,14 +35,6 @@ bool tiles_storage_drum_region_safe(void) {
     return region_safe(TILES_FLASH_DRUM_OFFSET);
 }
 
-bool tiles_storage_state_region_safe(void) {
-    return region_safe(TILES_FLASH_STATE_OFFSET);
-}
-
-bool tiles_storage_seq_region_safe(void) {
-    return region_safe(TILES_FLASH_SEQ_OFFSET);
-}
-
 /* The ops take no context, so each region gets thin wrappers (bottom of the
  * file) around these, which take the region's flash offset. */
 static bool region_read(uint32_t base, uint8_t slot, uint32_t offset, uint8_t *buf, uint32_t len) {
@@ -60,12 +50,9 @@ static bool region_read(uint32_t base, uint8_t slot, uint32_t offset, uint8_t *b
  * flash_range_*() don't disable them, so we do. The watchdog is fed before
  * and after, not during (watchdog_update() lives in flash); same pattern
  * as the pattern bank in services/op_mode.c. A sector erase takes tens of
- * ms, a page program well under 1 ms. settings_persist.c saves with the
- * pads idle and the clock stopped; the content store when the app pushes;
- * drum mode with the pads idle, just after a step starts, erasing only with
- * the clock stopped (drum_seq.c); the sequencer's autosave (op_mode.c) and
- * the play state (play_state.c) the same; the pattern bank and Song
- * (op_mode.c) once the clock stops. */
+ * ms, a page program well under 1 ms. settings_persist.c only saves with
+ * the pads idle; the content store saves when the app pushes; drum mode
+ * saves with the pads idle, just after a step starts (drum_seq.c). */
 static bool region_erase(uint32_t base, uint8_t slot) {
     if (slot >= TILES_KV_NUM_SLOTS) {
         return false;
@@ -104,8 +91,6 @@ static bool region_program(uint32_t base, uint8_t slot, uint32_t offset, const u
 REGION_OPS(settings, TILES_FLASH_SETTINGS_OFFSET)
 REGION_OPS(content, TILES_FLASH_CONTENT_OFFSET)
 REGION_OPS(drum, TILES_FLASH_DRUM_OFFSET)
-REGION_OPS(state, TILES_FLASH_STATE_OFFSET)
-REGION_OPS(seq, TILES_FLASH_SEQ_OFFSET)
 
 const tiles_kv_ops_t *tiles_storage_settings_ops(void) {
     return &settings_ops;
@@ -117,12 +102,4 @@ const tiles_kv_ops_t *tiles_storage_content_ops(void) {
 
 const tiles_kv_ops_t *tiles_storage_drum_ops(void) {
     return &drum_ops;
-}
-
-const tiles_kv_ops_t *tiles_storage_state_ops(void) {
-    return &state_ops;
-}
-
-const tiles_kv_ops_t *tiles_storage_seq_ops(void) {
-    return &seq_ops;
 }

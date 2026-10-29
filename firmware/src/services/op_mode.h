@@ -3,34 +3,21 @@
 /* Operation modes and their menus: what the pad grid and the triangle,
  * diamond, "-"/"+" and circle buttons do in each mode.
  *
- * ---- Modes (triangle opens the mode menu) ----------------------------------
- * One column per family, the first of each on row 1 (nearest the buttons),
- * more of the family below it, each mode's underglow and resting pads its
- * menu colour (MENU_SLOTS in op_mode.c):
- *   column 1  Melodic     (magenta)  default. Notes via expression.c.
- *             Duet        (pink)     chord mode: columns 1-2 play chords
- *                                    (op_mode.c), columns 3-6 a melody grid.
- *             Bass guitar (lilac)    rows = strings, columns = frets;
- *                                    "-"/"+" shift the fret window.
- *   column 2  Sequencer   (scarlet)  4 lanes x 24 steps (below).
- *             Drums       (orange)   16/32-step drum sequencer on MIDI
- *                                    channel 10, Drum Rack order; circle +
- *                                    triangle flips its page (drum_seq.h).
- *             Song        (amber)    BETA, untested on hardware: a 24-slot
- *                                    looper, 128 steps per pattern.
- *   column 3  Prism       (blue)     chord machine (harmony.h).
- *   column 4  Ableton     (teal)     Scene Launch: clip grid for Live's
- *                                    Session View (daw-integration/).
- *             Volca       (cyan)     drum mode for a Volca Sample, each drum
- *                                    on its own channel (drum_seq.h).
- *   columns 5-6, physical modelling and experimental, each in the colour of
- *   what it models:
- *   column 5  Bouncing notes (lime)  balls bouncing in the columns
- *                                    (bounce.h).
- *             Newton's cradle (steel), Sand (sand)   (physics.h)
- *   column 6  Ripples (water), Orbits (night sky)   (physics.h)
- * Every mode but melodic can be taken off the menu (settings modes.*, for
- * the companion app); taking off the one in use returns to melodic.
+ * ---- Modes (triangle opens the mode menu: one pad per mode) --------------
+ *   1 Melodic      (magenta)  default. Notes via services/expression.c.
+ *   2 Sequencer    (red)      4 lanes x 24 steps (below).
+ *   3 Drums        (lime)     16/32-step drum sequencer on MIDI channel
+ *                             10, Drum Rack note order; circle + triangle
+ *                             flips its step page (services/drum_seq.h).
+ *   4 Chord        (blue)     columns 1-2 play chords (op_mode.c), columns
+ *                             3-6 are a melody grid (expression.c).
+ *   5 Song         (yellow)   BETA, untested on hardware: a 24-slot
+ *                             looper, 128 steps per pattern.
+ *   6 Ableton      (teal)     Scene Launch: clip grid for Live's Session
+ *                             View (daw-integration/).
+ *   7 Bass guitar  (amber)    rows = strings, columns = frets; "-"/"+"
+ *                             shift the fret window (note_map.h). First
+ *                             pad of row 2: row 1 is full.
  * The current mode pulses white in the menu. A pick (press past half)
  * takes effect once the finger lifts, so it can't play a note in the new
  * mode. Melodic, bass guitar and chord pass notes through expression.c;
@@ -90,12 +77,6 @@ void tiles_op_mode_init(bool crash_recovered);
  * anything that reads the ownership accessors below. */
 void tiles_op_mode_scan(void);
 
-/* Steps playback (sequencer lanes, Song tracks, drums, Bouncing notes) on
- * the clock, between the scans: main.c calls it after its slower services
- * (with fresh USB, MIDI input and clock), so a Clock arriving mid-pass is
- * played within a fraction of a pass. */
-void tiles_op_mode_playback_tick(void);
-
 /* True while a menu is open or the mode draws the whole grid itself
  * (sequencer, Ableton, Song except while capturing or picking a pitch).
  * Other grid owners (games, expression menu, transpose, standby) are
@@ -129,7 +110,7 @@ bool tiles_op_mode_has_menu_open(void);
 
 
 /* True while a Song capture is recording. services/lighting.c shows the
- * yellow recording pulse on the underglow. */
+ * amber recording underglow. */
 bool tiles_op_mode_song_capture_is_active(void);
 
 /* True if `note` is sounding on the slot a Song capture is recording, so
@@ -162,52 +143,3 @@ bool tiles_op_mode_pattern_flash_underglow_color(float *out_r, float *out_g, flo
  * a mode by name (melodic, chord, sequencer, bass, song, ableton, drums),
  * closing any menu. False for an unknown name. */
 bool tiles_op_mode_test_set_mode(const char *name);
-
-/* The menu entries the companion app can add or remove (settings modes.*).
- * Melodic is always on. */
-typedef enum {
-    TILES_MENU_DUET = 0,
-    TILES_MENU_SEQUENCER,
-    TILES_MENU_DRUMS,
-    TILES_MENU_SONG,
-    TILES_MENU_PRISM,
-    TILES_MENU_BASS,
-    TILES_MENU_ABLETON,
-    TILES_MENU_VOLCA,
-    TILES_MENU_BOUNCE,
-    TILES_MENU_CRADLE,
-    TILES_MENU_SAND,
-    TILES_MENU_RIPPLES,
-    TILES_MENU_ORBITS,
-    TILES_MENU_ENTRY_COUNT
-} tiles_op_mode_menu_entry_t;
-
-/* Phase lock (setting seq.lock, from software only; off by default): a
- * sequencer lane or the drums started while others play joins on the next
- * step, on the step it would be on had it played from the song's top, and
- * stays there. 16-step patterns then share the bar line; other lengths
- * keep their place from the top. */
-void tiles_op_mode_set_phase_lock(bool on);
-
-/* The sequencer's autosave, for INFO (seq.*). */
-typedef struct {
-    bool storage;   /* its flash region is usable */
-    bool pending;   /* a change not saved yet */
-    bool truncated; /* the last save didn't fit every pattern */
-    uint16_t saved_bytes;
-    uint32_t saves;
-} tiles_op_mode_seq_store_info_t;
-tiles_op_mode_seq_store_info_t tiles_op_mode_get_seq_store_info(void);
-bool tiles_op_mode_get_phase_lock(void);
-
-/* Off: the pad goes dark and can't be picked; if that mode is in use, back
- * to melodic. */
-void tiles_op_mode_set_menu_entry_enabled(tiles_op_mode_menu_entry_t entry, bool enabled);
-bool tiles_op_mode_get_menu_entry_enabled(tiles_op_mode_menu_entry_t entry);
-
-/* A square click (services/expression_control.c), outside the Feel menu.
- * True if the mode took it: the modes that draw the whole grid (sequencer,
- * drums, Song, Prism, Ableton, Bouncing notes) never toggle pitch bend with
- * it; Bouncing notes turns Real gravity on/off. False: it toggles bend.
- * Square held opens the Feel menu in every mode. */
-bool tiles_op_mode_handle_square_click(void);
