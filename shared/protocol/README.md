@@ -56,7 +56,7 @@ CONTENT LIST\n            every record in the content store, one line each, then
 CONTENT CLEAR\n           wipe the content store (every custom scale): OK
 TEST LEDS <0-100>\n       bench only: every LED white at that % (current measurement)
 TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
-TEST MODE <name>\n        bench only: switch mode (melodic duet sequencer bass song ableton drums volca prism bounce ripples sand orbits cradle)
+TEST MODE <name>\n        bench only: switch mode (melodic chord sequencer bass song ableton drums)
 TEST OFF\n                bench only: back to normal
 ```
 
@@ -68,44 +68,17 @@ Errors: `bad-value` = not parseable as the setting's type (`1.5x`, `true` for a
 bool); `out-of-range` = parsed but outside the setting's range, or an unknown
 enum name. A value never partially applies.
 
-No binary framing, no capability negotiation -- a command is answered by
-exactly the response(s) it produces, in order, before the next command is
-read (the device won't start the next command until the previous response
-has been fully sent). Good enough for occasional, human- or script-driven
-settings changes; genuinely insufficient for high-rate telemetry (live sensor
-streaming), deferred to whatever protocol version eventually covers that.
-Replies can be long (SCHEMA is
+No sequence IDs, no binary framing, no capability negotiation -- a
+command is answered by exactly the response(s) it produces, in order,
+before the next command is read (the device won't start the next command until
+the previous response has been fully sent). Good enough for occasional, human-
+or script-driven settings changes; genuinely insufficient for high-rate
+telemetry (live sensor streaming) or anything needing to stay correct
+under request/response interleaving -- both explicitly deferred to
+whatever protocol version eventually covers that. Replies can be long (SCHEMA is
 ~5 KB; LIST, SCHEMA, SCALES and CONTENT LIST are streamed, so they have no
 size limit) and arrive across many 64-byte USB packets: **read lines, not
 packets**, and read until the final `OK` (or an `ERR` line).
-
-### Request tags (firmware 0.3.7+)
-
-A command may start with a tag, `@` plus 1-16 of `A-Z a-z 0-9 _ -`, and a
-space. Every line of its reply then starts with the same tag:
-
-```
-@7 GET pedal.mode\n      ->  @7 sustain
-@8 LIST\n                ->  @8 pedal.mode=sustain  ...  @8 OK
-@9\n                     ->  @9 ERR missing-command
-@a+b GET x\n             ->  ERR bad-tag   (untagged: the tag couldn't be read)
-```
-
-Untagged commands are answered untagged, exactly as before. Tags let a host
-match every line to its request and skip lines that aren't its answer --
-for instance the rest of a long reply that was still streaming when the
-previous app quit (the device can't tell the interface was released, so
-those lines wait for the next reader). Replies still come in command order;
-a host that reads from several places at once should still send one command
-at a time (the companion app queues them: `companion-app/src/main/usb.ts`).
-Firmware before 0.3.7 answers a tagged command `ERR unknown-command`,
-untagged; a host can fall back to plain commands on that.
-
-Don't write a batch of commands without reading: the device stops reading
-while a reply waits to be collected, so the write stalls and can time out
-partway through a line. From 0.3.8 a partial line (no newline yet) is
-dropped after 1 s with nothing arriving while the device waits for input,
-so a half-sent command can't glue itself onto the next one.
 
 ### REBOOT
 
@@ -168,13 +141,7 @@ refused, not clamped); the default is whatever the owning module boots with --
 | 0x0406 | `look.echo_secondary_g_percent` | uint | 0 - 100 | `18` | yes |
 | 0x0407 | `look.echo_secondary_b_percent` | uint | 0 - 100 | `12` | yes |
 | 0x0408 | `look.echo_flash_ms` | uint | 0 - 2000 (0 = no flash) | `180` | yes |
-| 0x0409 | `look.pressure_hue_degrees` | uint | 0 - 90 (0 = off) | `40` | yes |
-| 0x040A | `look.bend_dim_percent` | uint | 0 - 90 (0 = off) | `50` | yes |
-| 0x040B | `look.led_intensity_percent` | uint | 0 - 100 (0 = off) | `100` | yes |
-| 0x040C | `look.play_effect` | enum | `off`, `afterglow`, `ripple`, `cross`, `halo`, `warmth`, `prism_ripple`, `touch_colour`, `heatmap`, `fireworks`, `rise`, `ink` (the light effect while playing; Feel menu, circle + square) | `off` | yes |
 | 0x0500 | `midi.din_trs_type` | enum | `a`, `b` (TRS polarity of DIN MIDI OUT) | `a` | yes |
-| 0x0501 | `midi.clock_lead_ms` | uint | 0 - 50 (ms early that pulses come through when following a DAW's clock, so the notes they trigger land on its grid; 0 = off) | `15` | yes |
-| 0x0502 | `midi.parts_port` | enum | `parts` (the sequencer, drums, Volca, Bouncing notes, Song tracks, chords and games on their own USB port, "Parts"), `main` (all on the MIDI port) | `parts` | yes |
 | 0x0600 | `features.melodic_harmonics` | bool | | `1` | yes |
 | 0x0601 | `features.harmonics.arm_ms` | uint | 0 - 1000 (ms a struck note is held alone before other touches may pluck) | `150` | yes |
 | 0x0602 | `features.harmonics.confirm_ms` | uint | 0 - 500 (ms a touch waits before plucking) | `40` | yes |
@@ -186,21 +153,6 @@ refused, not clamped); the default is whatever the owning module boots with --
 | 0x0704 | `color.accidental` | color | `RRGGBB` or `none` | `000000` (dark) | yes |
 | 0x0705 | `color.custom_pads` | bool | | `0` | yes |
 | 0x0710 - 0x0727 | `color.pad.01` ... `color.pad.24` | color | `RRGGBB` or `none` | `none` | yes |
-| 0x0800 | `modes.duet` | bool | | `1` | yes |
-| 0x0801 | `modes.sequencer` | bool | | `1` | yes |
-| 0x0802 | `modes.drums` | bool | | `1` | yes |
-| 0x0803 | `modes.song` | bool | | `1` | yes |
-| 0x0804 | `modes.prism` | bool | | `1` | yes |
-| 0x0805 | `modes.bass` | bool | | `1` | yes |
-| 0x0806 | `modes.ableton` | bool | | `1` | yes |
-| 0x0807 | `modes.volca` | bool | | `1` | yes |
-| 0x0808 | `modes.bounce` | bool | | `1` | yes |
-| 0x0809 | `modes.cradle` | bool | | `1` | yes |
-| 0x080A | `modes.sand` | bool | | `1` | yes |
-| 0x080B | `modes.ripples` | bool | | `1` | yes |
-| 0x080C | `modes.orbits` | bool | | `1` | yes |
-| 0x0900 | `layout.melodic` | enum | `rows` (the default), `columns`, `fourths`, `keys`, `fifths`, `tonnetz`, `quarter_tones` (melodic mode's note layout; Feel menu, circle + triangle; firmware/src/services/note_map.h) | `rows` | yes |
-| 0x0A00 | `seq.lock` | enum | `off`, `bar`: a sequencer lane or the drums started while others play joins on the next step at the step it would be on had it played from the song's top, and stays there (16-step patterns share the bar line). No hardware gesture (firmware/src/services/op_mode.h) | `off` | yes |
 
 Ids `0x0401`-`0x0404` (`look.natural_pad_percent`, `look.root_pad_percent`,
 `look.fifth_pad_percent`, `look.fifth_red_tint_percent`) were retired in
@@ -209,27 +161,7 @@ its default. A saved value for one of them is ignored.
 
 The `look.*` values are whole percent of the **fixed** LED brightness ceiling
 (50% USB-only / 90% external power) -- no setting can raise the ceiling itself.
-See `firmware/src/services/lighting.h` for what each tier is. Two act on
-touched pads in every mode: `look.pressure_hue_degrees` turns a pad's colour
-toward Sentia blue (#94ABF9) by up to that many degrees at full pressure (white
-tints partway toward it instead), brightness unchanged, with MPE on only; `look.bend_dim_percent`
-is how much a bending pad's brightness falls at full bend (a smooth swell).
-`look.led_intensity_percent` scales the pads, underglow and button LEDs below the ceiling
-(the Feel menu's row 4 sets 0, 4, 16, 36, 64 or 100; 0 = off).
-
-`modes.*` add or remove modes from the mode menu (triangle), for the companion
-app: `0` takes the pad off the menu (dark, can't be picked), `1` puts it back.
-Melodic is always there; turning off the mode in use switches to melodic.
-`modes.duet` is the chord + melody mode, `modes.prism` the chord machine,
-`modes.bounce` Bouncing notes, `modes.cradle` Newton's cradle, and
-`modes.sand`, `modes.ripples`, `modes.orbits` the other physics modes. The
-menu itself is laid out by family, one column each: melodic / Duet / bass
-(magenta, pink, lilac), sequencers (sequencer scarlet, drums orange, Song
-amber), Prism (blue), hardware (Ableton teal, Volca cyan), then two columns of
-physical modelling and experimental modes, each in the colour of what it
-models: Bouncing notes (lime), Newton's cradle (steel), Sand (sand); Ripples
-(water), Orbits (night sky). A mode's underglow and resting pads are always
-its menu colour.
+See `firmware/src/services/lighting.h` for what each tier is.
 
 `cv_gate.enabled` being true here does **not** mean CV/gate is actually
 driving anything -- `services/power.h`'s own external-power confirmation
@@ -345,7 +277,7 @@ untouched (`RESET ALL` is theirs).
 
 ### INFO
 
-`key=value` lines, then `OK`: `unit=2/4`, `firmware=alpha.4` or `alpha.4.1` (stage.build[.point]; product_identity.h), `settings=<n>`,
+`key=value` lines, then `OK`: `unit=2/4`, `firmware=0.2.7`, `settings=<n>`,
 `power=usb_only|external_only|usb_and_external|fault` and its
 `power.budget_ma`, `power.led_ceiling_percent`, `power.haptic_voices`; the
 settings store's `store.*` (loaded, restored, slot, seq, saved_bytes, writes,
@@ -353,15 +285,8 @@ last_result, pending, failures); the content store's
 `content.storage=ok|none|newer-format`, `content.scales=<n>/9`,
 `content.records`, `content.bytes=<used>/<capacity>`, `content.writes`,
 `content.last_result`; main-loop timing `loop.avg_us`, `loop.max_us` (last
-second) and `loop.max_ever_us`; sensor health `hall.rezeros`,
-`hall.unconfirmed`, `hall.reinits`, `hall.dead`, `touch.recoveries`; the
-sequencer's autosave `seq.storage`, `seq.saved_bytes`, `seq.saves`,
-`seq.pending`, `seq.truncated`; boot timing `boot.ms` (power-on to the main loop) and
-`boot.sensors_ms`; drum mode's store `drums.storage`,
-`drums.saved_bytes`, `drums.saves`, `drums.pending`; the play state (mode,
-scale, key, octave kept across power cycles) `state.storage`,
-`state.saved=mode:<n> scale:<n> octave:<n> key:<n>` (once something is
-saved), `state.saves`, `state.pending`. New keys may be added;
+second) and `loop.max_ever_us`; drum mode's store `drums.storage`,
+`drums.saved_bytes`, `drums.saves`, `drums.pending`. New keys may be added;
 ignore ones you don't know.
 
 ## Persistence

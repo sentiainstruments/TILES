@@ -291,16 +291,8 @@ static void enter_step(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat,
     }
 }
 
-void tiles_drum_player_start_at(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat,
-                                const tiles_drum_output_t *out, uint32_t pulse_count, uint32_t song_pulse) {
-    pl->pending_start = false;
-    pl->step_started_pulse = pulse_count - song_pulse % TILES_DRUM_CLOCKS_PER_STEP;
-    enter_step(pl, pat, out,
-               (uint8_t)((song_pulse / TILES_DRUM_CLOCKS_PER_STEP) % tiles_drum_pattern_length(pat)));
-}
-
 void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern_t *pat, const tiles_drum_output_t *out,
-                               uint32_t pulse_count, uint32_t song_pulse, bool clock_running, bool start_edge) {
+                               uint32_t pulse_count, bool clock_running, bool start_edge) {
     if (!pl->running) {
         if (!pl->muted) {
             tiles_drum_player_end_all(pl, out);
@@ -309,7 +301,9 @@ void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern
     }
     if (start_edge) {
         /* A clock Start (or the first tap-tempo start): step 1 now. */
-        tiles_drum_player_start_at(pl, pat, out, pulse_count, 0u);
+        pl->pending_start = false;
+        pl->step_started_pulse = pulse_count;
+        enter_step(pl, pat, out, 0u);
         return;
     }
     if (!clock_running) {
@@ -318,15 +312,6 @@ void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern
         if (!pl->muted) {
             tiles_drum_player_end_all(pl, out);
         }
-        return;
-    }
-    if (pl->pending_start && pl->phase_lock) {
-        /* Locked: on the next step boundary (or just past it), where it would
-         * be had it played from the song's top. */
-        if (song_pulse % TILES_DRUM_CLOCKS_PER_STEP > 1u) {
-            return;
-        }
-        tiles_drum_player_start_at(pl, pat, out, pulse_count, song_pulse);
         return;
     }
     if (pl->pending_start) {
@@ -369,12 +354,5 @@ void tiles_drum_player_advance(tiles_drum_player_t *pl, const tiles_drum_pattern
     /* Several steps' worth of pulses between scans: jump, don't replay. */
     uint32_t steps = elapsed / TILES_DRUM_CLOCKS_PER_STEP;
     pl->step_started_pulse += steps * TILES_DRUM_CLOCKS_PER_STEP;
-    uint8_t length = tiles_drum_pattern_length(pat);
-    if (pl->phase_lock) {
-        /* The song's step, so a length change (page 2 armed) can't shift it. */
-        uint32_t song_step = (pl->step_started_pulse - (pulse_count - song_pulse)) / TILES_DRUM_CLOCKS_PER_STEP;
-        enter_step(pl, pat, out, (uint8_t)(song_step % length));
-    } else {
-        enter_step(pl, pat, out, (uint8_t)((pl->step + steps) % length));
-    }
+    enter_step(pl, pat, out, (uint8_t)((pl->step + steps) % tiles_drum_pattern_length(pat)));
 }

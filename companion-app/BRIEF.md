@@ -101,9 +101,6 @@ TILES Control"**. Match on the interface name, not only the ID. Older
 boards may still report `0x2E8A:0x100A`.
 
 **Protocol (V1, text):** one command per line, one or more reply lines.
-One command at a time: send the next only after the reply ends (`src/main/usb.ts`
-queues them and tags each, `@<n> GET ...`, so a stray line can't be taken
-as the answer; see "Request tags" in the spec).
 Full spec: `../shared/protocol/README.md`. Working reference client:
 `../tools/tiles_control.py` (~200 lines of Python -- read this first).
 
@@ -114,7 +111,7 @@ GET <key>         -> the value, or ERR ...
 SET <key> <value> -> OK, or ERR unknown-key / bad-value / out-of-range
 RESET <key>|ALL   -> back to default
 SAVE              -> write to flash now (it also auto-saves ~2 s after the last change)
-INFO              -> unit=2/4, firmware=alpha.1, power, flash-store and content-store status...
+INFO              -> unit=2/4, firmware=0.2.7, power, flash-store and content-store status...
 REBOOT BOOTSEL    -> reboots into the bootloader for a firmware update (no reply)
 REBOOT APP        -> plain restart
 SCALES            -> every custom scale: "1 Hirajoshi 0,2,3,7,8 pack=japan item=hirajoshi version=1"; then OK

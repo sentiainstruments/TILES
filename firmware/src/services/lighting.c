@@ -1,21 +1,12 @@
 #include "lighting.h"
 
-#include "board_layout.h"
 #include "board_pins.h"
-#include "buttons.h"
 #include "crash_indicator.h"
 #include "debug_mode.h"
-#include "expression.h"
-#include "expression_control.h"
-#include "game_mode.h"
-#include "hall.h"
-#include "light_effects.h"
 #include "note_map.h"
 #include "op_mode.h"
 #include "pad_config.h"
 #include "power.h"
-#include "standby.h"
-#include "touch.h"
 
 #include "pico/time.h"
 
@@ -70,50 +61,6 @@
 #define TILES_LIGHTING_ECHO_SECONDARY_G 0.18f
 #define TILES_LIGHTING_ECHO_SECONDARY_B 0.12f
 
-/* ---- Pressure hue and bend dimming, on every touched pad ------------------
- * The last step before a pad is written, in every mode (not games, the
- * sleep animation or the bench test), so a pad answers the same way
- * whatever colour it shows:
- *   - Pressure turns the pad's colour toward Sentia blue: its hue moves
- *     toward PRESSURE_TARGET_HUE_DEG by up to
- *     TILES_LIGHTING_PRESSURE_HUE_DEGREES at full pressure, the short way
- *     round and never past it, with saturation and brightness (HSV value)
- *     kept, so nothing gets brighter or draws more current. White and greys
- *     have no hue to turn; they take on a tint of that blue instead, up to
- *     PRESSURE_NEUTRAL_SAT saturation (partway: "not fully"), blended in as
- *     a colour's own saturation falls below PRESSURE_NEUTRAL_BELOW_SAT (no
- *     jump between the two). Pressed white used to go toward Sentia
- *     magenta; blue reads better against the magenta landmarks.
- *     Pressure is the pad's Hall depth past the strike threshold, scaled to
- *     expression.aftertouch_sensitivity like MIDI pressure, so the light
- *     follows what the note does. Smoothed a little (PRESSURE_SMOOTHING).
- *     MPE only: with MPE off, pressure is one channel-wide value, not the
- *     pad's own, so the pads don't show it.
- *   - A bending note's pad swells darker as it bends: brightness falls
- *     with the bend (expression.c's amount, 0..1 of the pad's full bend)
- *     to 1 - TILES_LIGHTING_BEND_DIM at full bend, eased over
- *     BEND_SWELL_MS each way so it swells rather than steps. A flicker
- *     (6-24 Hz) was tried first; a smooth dim reads better. It never goes
- *     dark.
- * Pads showing either are rewritten every PAD_LIVE_REFRESH_MS. They take
- * the pass's one pad write from the round-robin, which waits: a pad write
- * is ~0.3 ms (two mux writes on I2C plus the 120 us latch; unmeasured). All first guesses:
- * "slight, but visible". The amounts are settings
- * (look.pressure_hue_degrees, look.bend_dim_percent); 0 turns either off. */
-#define TILES_LIGHTING_PRESSURE_HUE_DEGREES 40u
-#define TILES_LIGHTING_BEND_DIM 0.5f
-/* Sentia blue: the brand periwinkle #94ABF9 (quick start guide, web
- * player), hue ~226 degrees. */
-#define PRESSURE_TARGET_HUE_DEG 226.0f
-/* Neutral tint saturation at full pressure, for the default hue amount
- * (scaled with look.pressure_hue_degrees, so one setting moves both). */
-#define PRESSURE_NEUTRAL_SAT 0.45f
-#define PRESSURE_NEUTRAL_BELOW_SAT 0.15f
-#define PRESSURE_SMOOTHING 0.3f
-#define BEND_SWELL_MS 60.0f
-#define PAD_LIVE_REFRESH_MS 12u
-#define PAD_FX_EPSILON 0.005f
-
 /* The constants above are the DEFAULTS of the look.* settings. s_look[] is
  * what pad_desired_rgb() reads; settings can change it live over USB and
  * save it to flash. Stored in whole percent (tints: 0.35 -> 35). The power
@@ -126,9 +73,6 @@ static uint16_t s_look[TILES_LOOK_COUNT] = {
     [TILES_LOOK_ECHO_SECONDARY_G_PERCENT] = LOOK_PCT(TILES_LIGHTING_ECHO_SECONDARY_G),
     [TILES_LOOK_ECHO_SECONDARY_B_PERCENT] = LOOK_PCT(TILES_LIGHTING_ECHO_SECONDARY_B),
     [TILES_LOOK_ECHO_FLASH_MS] = TILES_LIGHTING_ECHO_FLASH_MS,
-    [TILES_LOOK_PRESSURE_HUE_DEGREES] = TILES_LIGHTING_PRESSURE_HUE_DEGREES,
-    [TILES_LOOK_BEND_DIM_PERCENT] = LOOK_PCT(TILES_LIGHTING_BEND_DIM),
-    [TILES_LOOK_LED_INTENSITY_PERCENT] = 100u,
 };
 
 #define TILES_LOOK_MAX_FLASH_MS 2000u
@@ -211,56 +155,16 @@ static uint32_t scheme_color_for_pad(uint8_t logical_pad) {
     return s_scheme[TILES_SCHEME_NOTE] != TILES_LIGHTING_COLOR_NONE ? s_scheme[TILES_SCHEME_NOTE] : 0x000000u;
 }
 
-void tiles_lighting_melodic_rest_rgb(uint8_t logical_pad, float rgb[3]) {
-    rgb[0] = rgb[1] = rgb[2] = 0.0f;
-    if (!tiles_note_map_pad_has_note(logical_pad)) {
-        return;
-    }
-    if (tiles_note_map_get_pad_cents(logical_pad) != 0u) {
-        float level = look_fraction(TILES_LOOK_IDLE_BASELINE_PERCENT) * 0.35f;
-        rgb[0] = 0.58f * level;
-        rgb[1] = 0.67f * level;
-        rgb[2] = 0.98f * level;
-        return;
-    }
-    uint32_t c = scheme_color_for_pad(logical_pad);
-    rgb[0] = (float)((c >> 16) & 0xFFu) / 255.0f;
-    rgb[1] = (float)((c >> 8) & 0xFFu) / 255.0f;
-    rgb[2] = (float)(c & 0xFFu) / 255.0f;
-}
-
 uint16_t tiles_lighting_get_look(tiles_look_param_t param) {
     return param < TILES_LOOK_COUNT ? s_look[param] : 0u;
 }
-
-static void write_underglow(void);
-static bool s_initialized;
 
 void tiles_lighting_set_look(tiles_look_param_t param, uint16_t value) {
     if (param >= TILES_LOOK_COUNT) {
         return;
     }
-    uint16_t max = param == TILES_LOOK_ECHO_FLASH_MS          ? TILES_LOOK_MAX_FLASH_MS
-                   : param == TILES_LOOK_PRESSURE_HUE_DEGREES ? 90u
-                                                               : 100u;
-    uint16_t old = s_look[param];
+    uint16_t max = (param == TILES_LOOK_ECHO_FLASH_MS) ? TILES_LOOK_MAX_FLASH_MS : 100u;
     s_look[param] = value > max ? max : value;
-    /* Pads pick a new intensity up on the round-robin; the underglow is only
-     * written on change, so push it now. */
-    if (param == TILES_LOOK_LED_INTENSITY_PERCENT && s_look[param] != old && s_initialized) {
-        write_underglow();
-    }
-}
-
-/* LED intensity (Feel menu row 4) as a factor, 1 while the Feel menu is
- * open so it stays readable at "off". Applies to the pads, the normal
- * underglow and the button LEDs (handed to buttons.c each pass), not to
- * the underglow indicators (crash, debug, captures). */
-static float led_intensity(void) {
-    if (tiles_expression_control_owns_pad_grid()) {
-        return 1.0f;
-    }
-    return look_fraction(TILES_LOOK_LED_INTENSITY_PERCENT);
 }
 
 /* Underglow's own fixed brightness (out of 255), NOT scaled by the power
@@ -308,18 +212,9 @@ static tiles_sk6805_chain_t s_pad_chain;
 static tiles_tca9554_t s_led_mux;
 static float s_pad_press[TILES_NUM_PADS]; /* touch-driven, white, floored at the idle level */
 static tiles_rgb01_t s_pad_standby_rgb[TILES_NUM_PADS]; /* standby color, no floor */
-/* What each pad last showed of it (valid = written since standby began):
- * standby colours go out STANDBY_WRITES_PER_PASS pads a pass, biggest
- * change first, so no screen change (a menu opening, a game frame, the
- * screensaver) sends 24 pads at once and holds the loop (and the
- * playback ticks) ~7 ms. */
-static tiles_rgb01_t s_standby_written[TILES_NUM_PADS];
-static bool s_standby_written_valid[TILES_NUM_PADS];
-#define STANDBY_WRITES_PER_PASS 3u
 static tiles_rgb01_t s_underglow_rgb[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
-/* The underglow outside standby: the active mode's colour (white until set). */
-static tiles_rgb01_t s_mode_underglow = {1.0f, 1.0f, 1.0f};
 static uint8_t s_service_cursor;
+static bool s_initialized;
 /* Bench test white level (0-255), 0 = off. See tiles_lighting_set_test_white(). */
 static uint8_t s_test_white_level;
 static uint8_t s_test_white_percent;
@@ -327,21 +222,6 @@ static bool s_standby_active;
 /* Whether a crash/debug/pattern/capture override owned the underglow last
  * frame (restore on release; see tiles_lighting_service()). */
 static bool s_underglow_override_was_active;
-/* Pressure hue / bend dimming state per pad (see "Pressure hue" above). */
-static float s_pad_pressure[TILES_NUM_PADS];     /* 0..1, smoothed */
-static float s_pad_bend[TILES_NUM_PADS];         /* 0..1, eased (BEND_SWELL_MS) */
-static bool s_pad_fx_shown[TILES_NUM_PADS];      /* last write carried an effect */
-static uint32_t s_pad_written_ms[TILES_NUM_PADS];
-static uint32_t s_fx_updated_ms;
-static uint8_t s_live_cursor;
-/* The playing light effect (light_effects.h) as each pad was last written,
- * so a pass sends the pads whose effect changed most. */
-static float s_play_fx_written[TILES_NUM_PADS][3];
-#define PLAY_FX_WRITES_PER_PASS 2u /* a pad write is ~0.3 ms */
-#define PLAY_FX_CHANGE_MIN 0.02f
-/* The standby frame is a step grid: the effect draws over it
- * (tiles_lighting_set_grid_effects()). */
-static bool s_grid_fx;
 
 static float clamp01(float v) {
     if (v < 0.0f) {
@@ -359,202 +239,11 @@ static uint8_t underglow_channel_level(float channel_0_to_1) {
     return (uint8_t)((float)TILES_LIGHTING_UNDERGLOW_LEVEL * clamp01(channel_0_to_1));
 }
 
-static void rgb_to_hsv(tiles_rgb01_t c, float *h, float *s, float *v) {
-    float mx = fmaxf(c.r, fmaxf(c.g, c.b));
-    float d = mx - fminf(c.r, fminf(c.g, c.b));
-    *v = mx;
-    *s = mx > 0.0f ? d / mx : 0.0f;
-    if (d <= 0.0f) {
-        *h = 0.0f;
-    } else if (mx == c.r) {
-        *h = 60.0f * fmodf((c.g - c.b) / d + 6.0f, 6.0f);
-    } else if (mx == c.g) {
-        *h = 60.0f * ((c.b - c.r) / d + 2.0f);
-    } else {
-        *h = 60.0f * ((c.r - c.g) / d + 4.0f);
-    }
-}
-
-static tiles_rgb01_t hsv_to_rgb(float h, float s, float v) {
-    h = fmodf(h, 360.0f);
-    if (h < 0.0f) {
-        h += 360.0f;
-    }
-    float c = v * s;
-    float x = c * (1.0f - fabsf(fmodf(h / 60.0f, 2.0f) - 1.0f));
-    float m = v - c;
-    tiles_rgb01_t out;
-    switch ((int)(h / 60.0f)) {
-    case 0:
-        out = (tiles_rgb01_t){c, x, 0.0f};
-        break;
-    case 1:
-        out = (tiles_rgb01_t){x, c, 0.0f};
-        break;
-    case 2:
-        out = (tiles_rgb01_t){0.0f, c, x};
-        break;
-    case 3:
-        out = (tiles_rgb01_t){0.0f, x, c};
-        break;
-    case 4:
-        out = (tiles_rgb01_t){x, 0.0f, c};
-        break;
-    default:
-        out = (tiles_rgb01_t){c, 0.0f, x};
-        break;
-    }
-    return (tiles_rgb01_t){out.r + m, out.g + m, out.b + m};
-}
-
-/* Pressure 0..1 from Hall depth: past the strike threshold, full at the
- * aftertouch full scale (as MIDI pressure). */
-static float pressure_from_depth(uint16_t depth) {
-    float floor = TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA;
-    float full = (float)tiles_expression_get_aftertouch_sensitivity();
-    if (full < floor + 1.0f) {
-        full = floor + 1.0f;
-    }
-    return clamp01(((float)depth - floor) / (full - floor));
-}
-
-static bool pad_fx_allowed(void) {
-    return s_test_white_level == 0u && !tiles_game_mode_is_active() && !tiles_standby_is_active() &&
-           !tiles_standby_is_deep_sleep();
-}
-
-static bool pad_fx_active(uint8_t pad_index) {
-    return pad_fx_allowed() && (s_pad_pressure[pad_index] > PAD_FX_EPSILON || s_pad_bend[pad_index] > 0.0f);
-}
-
-/* Once per pass: each pad's pressure (touched pads only) and eased bend. */
-static void update_pad_fx(uint32_t now_ms) {
-    float dt_s = (float)(now_ms - s_fx_updated_ms) / 1000.0f;
-    s_fx_updated_ms = now_ms;
-    if (dt_s > 0.1f) {
-        dt_s = 0.1f;
-    }
-    float swell = 1.0f - expf(-dt_s * 1000.0f / BEND_SWELL_MS); /* per-pass easing */
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        uint8_t pad = (uint8_t)(i + 1u);
-        if (tiles_touch_is_touched(pad) && tiles_expression_is_mpe_enabled()) {
-            float target = pressure_from_depth(tiles_hall_get_depth(pad));
-            s_pad_pressure[i] += PRESSURE_SMOOTHING * (target - s_pad_pressure[i]);
-        } else {
-            s_pad_pressure[i] = 0.0f;
-        }
-        float bend = tiles_expression_get_pad_bend_amount(pad);
-        s_pad_bend[i] += swell * (bend - s_pad_bend[i]);
-        if (bend == 0.0f && s_pad_bend[i] < 0.002f) {
-            s_pad_bend[i] = 0.0f;
-        }
-    }
-}
-
-/* The pressure hue and bend dimming on top of a pad's colour. */
-static tiles_rgb01_t apply_pad_fx(uint8_t pad_index, tiles_rgb01_t c) {
-    if (!pad_fx_active(pad_index)) {
-        return c;
-    }
-    float hue_degrees = (float)s_look[TILES_LOOK_PRESSURE_HUE_DEGREES];
-    float p = s_pad_pressure[pad_index];
-    if (p > PAD_FX_EPSILON && hue_degrees > 0.0f) {
-        float h, s, v;
-        rgb_to_hsv((tiles_rgb01_t){clamp01(c.r), clamp01(c.g), clamp01(c.b)}, &h, &s, &v);
-        /* Toward the target hue, the short way, never past it. */
-        float gap = fmodf(PRESSURE_TARGET_HUE_DEG - h + 540.0f, 360.0f) - 180.0f; /* -180..180 */
-        float turn = fminf(fabsf(gap), p * hue_degrees);
-        tiles_rgb01_t turned = hsv_to_rgb(h + (gap < 0.0f ? -turn : turn), s, v);
-        float neutral = 1.0f - clamp01(s / PRESSURE_NEUTRAL_BELOW_SAT);
-        if (neutral > 0.0f) {
-            float tint_sat = clamp01(p * PRESSURE_NEUTRAL_SAT * hue_degrees / (float)TILES_LIGHTING_PRESSURE_HUE_DEGREES);
-            tiles_rgb01_t tint = hsv_to_rgb(PRESSURE_TARGET_HUE_DEG, tint_sat, v);
-            turned.r += neutral * (tint.r - turned.r);
-            turned.g += neutral * (tint.g - turned.g);
-            turned.b += neutral * (tint.b - turned.b);
-        }
-        c = turned;
-    }
-    float dim = look_fraction(TILES_LOOK_BEND_DIM_PERCENT) * s_pad_bend[pad_index];
-    if (dim > 0.0f) {
-        float level = 1.0f - dim;
-        c.r *= level;
-        c.g *= level;
-        c.b *= level;
-    }
-    return c;
-}
-
-static bool grid_fx_on(void) {
-    return s_grid_fx && s_standby_active && tiles_fx_get() != TILES_FX_OFF &&
-           !tiles_expression_control_owns_pad_grid();
-}
-
-/* Under standby: the frame's colour, with a step grid's light effect
- * screened over it. */
-static tiles_rgb01_t standby_pad_rgb(uint8_t pad_index, uint32_t now_ms) {
-    tiles_rgb01_t c = s_pad_standby_rgb[pad_index];
-    float fx[3];
-    if (grid_fx_on() && tiles_fx_pad_light((uint8_t)(pad_index + 1u), now_ms, fx)) {
-        c.r = 1.0f - (1.0f - clamp01(c.r)) * (1.0f - fx[0]);
-        c.g = 1.0f - (1.0f - clamp01(c.g)) * (1.0f - fx[1]);
-        c.b = 1.0f - (1.0f - clamp01(c.b)) * (1.0f - fx[2]);
-    }
-    return c;
-}
-
-/* A pad's resting look (no touch, echo or capture): bass frets, the chord
- * strip, layout gaps and quarter tones, custom colours, the scheme. */
-static tiles_rgb01_t pad_idle_rgb(uint8_t logical_pad) {
-    /* Bass guitar mode: neck-style coloring in the mode's lilac
-     * (TILES_LIGHTING_BASS_*). Unmarked frets at the idle level; inlay frets
-     * brighter; octave (double-dot) frets brightest. */
-    if (tiles_note_map_is_guitar_mode_active()) {
-        bool is_octave = false;
-        float level = look_fraction(TILES_LOOK_IDLE_BASELINE_PERCENT);
-        if (tiles_note_map_is_guitar_fret_marker_pad(logical_pad, &is_octave)) {
-            level = is_octave ? 1.0f : 0.75f;
-        }
-        return (tiles_rgb01_t){level * TILES_LIGHTING_BASS_R, level * TILES_LIGHTING_BASS_G,
-                               level * TILES_LIGHTING_BASS_B};
-    }
-
-    /* Chord mode's chord strip: one solid blue for the whole region. The
-     * melody grid needs no branch (the root/natural checks are chord-aware). */
-    if (tiles_note_map_is_chord_region_pad(logical_pad)) {
-        float level = look_fraction(TILES_LOOK_IDLE_BASELINE_PERCENT);
-        return (tiles_rgb01_t){0.0f, 0.0f, level};
-    }
-
-    /* Layouts (note_map.h): a pad with no note (Keys' gaps) is dark; a
-     * quarter tone a dim Sentia blue, apart from the semitones. */
-    if (!tiles_note_map_pad_has_note(logical_pad)) {
-        return (tiles_rgb01_t){0.0f, 0.0f, 0.0f};
-    }
-    if (tiles_note_map_get_pad_cents(logical_pad) != 0u) {
-        float level = look_fraction(TILES_LOOK_IDLE_BASELINE_PERCENT) * 0.35f;
-        return (tiles_rgb01_t){0.58f * level, 0.67f * level, 0.98f * level};
-    }
-
-    /* Custom pad colours (advanced), melodic mode only: the map is drawn for
-     * melodic mode's layout, so chord mode's melody grid keeps the scheme. */
-    if (s_custom_pads_enabled && !tiles_note_map_is_chord_mode_active()) {
-        uint32_t own = tiles_lighting_get_pad_color(logical_pad);
-        if (own != TILES_LIGHTING_COLOR_NONE) {
-            return rgb01_from_color(own);
-        }
-    }
-
-    /* Idle melodic colouring by note role: the colour scheme. */
-    return rgb01_from_color(scheme_color_for_pad(logical_pad));
-}
-
 /* What a pad's r/g/b wants (0.0-1.0) in every state, before the ceiling
- * (applied in write_pad()) and the pressure hue / bend dimming
- * (apply_pad_fx()). The single source of truth for a pad's look. */
-static tiles_rgb01_t pad_look_rgb(uint8_t pad_index) {
+ * (applied in write_pad()). The single source of truth for a pad's look. */
+static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
     if (s_standby_active) {
-        return standby_pad_rgb(pad_index, to_ms_since_boot(get_absolute_time()));
+        return s_pad_standby_rgb[pad_index];
     }
     if (s_pad_press[pad_index] > 0.0f) {
         /* Touched pad: floored at the idle level, never dark. */
@@ -575,9 +264,8 @@ static tiles_rgb01_t pad_look_rgb(uint8_t pad_index) {
     }
 
     /* Melodic echo: incoming notes (from TILES DISPLAY; see
-     * daw-integration/README.md) light a pale green, flashing in from white
-     * (the bass frets' green is deeper and never flashes). After the
-     * live-touch check, before the idle looks. */
+     * daw-integration/README.md) light green, a color nothing else here uses.
+     * After the live-touch check, before the idle looks. */
     uint8_t echo_note = tiles_note_map_get_note(logical_pad);
     bool echo_primary = tiles_op_mode_incoming_note_is_sounding(0, echo_note);
     bool echo_secondary = tiles_op_mode_incoming_note_is_sounding(1, echo_note);
@@ -604,131 +292,36 @@ static tiles_rgb01_t pad_look_rgb(uint8_t pad_index) {
         return (tiles_rgb01_t){mix, 1.0f, mix};
     }
 
-    /* Under a light effect the resting look dims, so the effect's light
-     * has room above it. */
-    tiles_rgb01_t idle = pad_idle_rgb(logical_pad);
-    if (tiles_fx_get() != TILES_FX_OFF) {
-        idle.r *= TILES_LIGHTING_FX_REST_LEVEL;
-        idle.g *= TILES_LIGHTING_FX_REST_LEVEL;
-        idle.b *= TILES_LIGHTING_FX_REST_LEVEL;
+    /* Bass guitar mode: neck-style coloring. Unmarked frets are amber at the
+     * idle level; inlay frets brighter; octave (double-dot) frets brightest. */
+    if (tiles_note_map_is_guitar_mode_active()) {
+        bool is_octave = false;
+        if (tiles_note_map_is_guitar_fret_marker_pad(logical_pad, &is_octave)) {
+            float level = is_octave ? 1.0f : 0.75f;
+            return (tiles_rgb01_t){level, level * 0.5f, 0.0f};
+        }
+        float level = look_fraction(TILES_LOOK_IDLE_BASELINE_PERCENT);
+        return (tiles_rgb01_t){level, level * 0.5f, 0.0f};
     }
-    return idle;
-}
 
-/* The effect's light on a pad now: none under standby (menus and the modes
- * that draw the whole grid) or with no effect picked. */
-static bool play_fx_light(uint8_t pad_index, uint32_t now_ms, float rgb[3]) {
-    if (s_standby_active || tiles_fx_get() == TILES_FX_OFF) {
-        rgb[0] = rgb[1] = rgb[2] = 0.0f;
-        return false;
+    /* Chord mode's chord strip: one solid blue for the whole region. The
+     * melody grid needs no branch (the root/natural checks are chord-aware). */
+    if (tiles_note_map_is_chord_region_pad(logical_pad)) {
+        float level = look_fraction(TILES_LOOK_IDLE_BASELINE_PERCENT);
+        return (tiles_rgb01_t){0.0f, 0.0f, level};
     }
-    return tiles_fx_pad_light((uint8_t)(pad_index + 1u), now_ms, rgb);
-}
 
-/* The look with the playing light effect over it. A held pad stays white
- * (Touch colour tints it); the rest get the effect's light blended over
- * (screen: light over light). Records what was drawn. */
-static tiles_rgb01_t pad_desired_rgb(uint8_t pad_index) {
-    float fx[3];
-    bool lit = play_fx_light(pad_index, to_ms_since_boot(get_absolute_time()), fx);
-    for (uint8_t c = 0; c < 3u; c++) {
-        s_play_fx_written[pad_index][c] = fx[c];
-    }
-    tiles_rgb01_t look = pad_look_rgb(pad_index);
-    if (s_standby_active || tiles_fx_get() == TILES_FX_OFF) {
-        return look;
-    }
-    float tint[3];
-    if (s_pad_press[pad_index] > 0.0f) {
-        if (tiles_fx_pressed_colour((uint8_t)(pad_index + 1u), tint)) {
-            return (tiles_rgb01_t){look.r * tint[0], look.g * tint[1], look.b * tint[2]};
+    /* Custom pad colours (advanced), melodic mode only: the map is drawn for
+     * melodic mode's layout, so chord mode's melody grid keeps the scheme. */
+    if (s_custom_pads_enabled && !tiles_note_map_is_chord_mode_active()) {
+        uint32_t own = tiles_lighting_get_pad_color(logical_pad);
+        if (own != TILES_LIGHTING_COLOR_NONE) {
+            return rgb01_from_color(own);
         }
-        return look;
     }
-    if (lit) {
-        look.r = 1.0f - (1.0f - clamp01(look.r)) * (1.0f - fx[0]);
-        look.g = 1.0f - (1.0f - clamp01(look.g)) * (1.0f - fx[1]);
-        look.b = 1.0f - (1.0f - clamp01(look.b)) * (1.0f - fx[2]);
-    }
-    return look;
-}
 
-static void write_pad(uint8_t pad_index);
-
-/* Under standby: up to STANDBY_WRITES_PER_PASS pads whose standby colour
- * (with a step grid's effect) differs most from what they show (one never
- * written since standby began goes first). True if it wrote any. */
-static bool service_standby_frame(uint32_t now_ms) {
-    if (grid_fx_on()) {
-        tiles_fx_step(now_ms);
-    }
-    tiles_rgb01_t target[TILES_NUM_PADS];
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        target[i] = standby_pad_rgb(i, now_ms);
-    }
-    bool any = false;
-    for (uint8_t n = 0; n < STANDBY_WRITES_PER_PASS; n++) {
-        uint8_t best = TILES_NUM_PADS;
-        float best_change = 0.004f;
-        for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-            const tiles_rgb01_t *want = &target[i], *shown = &s_standby_written[i];
-            float change = !s_standby_written_valid[i]
-                               ? 2.0f
-                               : fmaxf(fabsf(want->r - shown->r), fmaxf(fabsf(want->g - shown->g), fabsf(want->b - shown->b)));
-            if (change > best_change) {
-                best_change = change;
-                best = i;
-            }
-        }
-        if (best == TILES_NUM_PADS) {
-            break;
-        }
-        write_pad(best);
-        any = true;
-    }
-    return any;
-}
-
-/* While a light effect animates: up to PLAY_FX_WRITES_PER_PASS pads whose
- * effect changed most since written. True if it wrote any (the pass's
- * usual write then waits). */
-static bool service_play_fx(uint32_t now_ms) {
-    if (s_standby_active || tiles_fx_get() == TILES_FX_OFF) {
-        return false;
-    }
-    tiles_fx_step(now_ms);
-    bool busy = tiles_fx_busy(now_ms);
-    float now_light[TILES_NUM_PADS][3];
-    float change[TILES_NUM_PADS];
-    bool any = false;
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        float shown = s_play_fx_written[i][0] + s_play_fx_written[i][1] + s_play_fx_written[i][2];
-        if (!busy && shown < 0.004f) {
-            change[i] = 0.0f; /* nothing animating, nothing left to clear */
-            continue;
-        }
-        play_fx_light(i, now_ms, now_light[i]);
-        change[i] = fmaxf(fabsf(now_light[i][0] - s_play_fx_written[i][0]),
-                          fmaxf(fabsf(now_light[i][1] - s_play_fx_written[i][1]),
-                                fabsf(now_light[i][2] - s_play_fx_written[i][2])));
-    }
-    for (uint8_t n = 0; n < PLAY_FX_WRITES_PER_PASS; n++) {
-        uint8_t best = TILES_NUM_PADS;
-        float best_change = PLAY_FX_CHANGE_MIN;
-        for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-            if (change[i] >= best_change) {
-                best_change = change[i];
-                best = i;
-            }
-        }
-        if (best == TILES_NUM_PADS) {
-            break;
-        }
-        write_pad(best);
-        change[best] = 0.0f;
-        any = true;
-    }
-    return any;
+    /* Idle melodic colouring by note role: the colour scheme. */
+    return rgb01_from_color(scheme_color_for_pad(logical_pad));
 }
 
 static void write_pad(uint8_t pad_index /* 0-23 */) {
@@ -737,22 +330,15 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
         return;
     }
 
-    s_pad_fx_shown[pad_index] = pad_fx_active(pad_index);
-    s_pad_written_ms[pad_index] = to_ms_since_boot(get_absolute_time());
-    tiles_rgb01_t desired = pad_desired_rgb(pad_index);
-    if (s_standby_active) {
-        s_standby_written[pad_index] = desired;
-        s_standby_written_valid[pad_index] = true;
-    }
     uint32_t pixel;
     if (s_test_white_level != 0u) {
         pixel = tiles_sk6805_pack_rgb(s_test_white_level, s_test_white_level, s_test_white_level);
     } else {
-        desired = apply_pad_fx(pad_index, desired);
-        float scale = (float)static_ceiling_level() * led_intensity();
-        uint8_t r = (uint8_t)(scale * clamp01(desired.r));
-        uint8_t g = (uint8_t)(scale * clamp01(desired.g));
-        uint8_t b = (uint8_t)(scale * clamp01(desired.b));
+        tiles_rgb01_t desired = pad_desired_rgb(pad_index);
+        uint8_t ceiling = static_ceiling_level();
+        uint8_t r = (uint8_t)((float)ceiling * clamp01(desired.r));
+        uint8_t g = (uint8_t)((float)ceiling * clamp01(desired.g));
+        uint8_t b = (uint8_t)((float)ceiling * clamp01(desired.b));
         pixel = tiles_sk6805_pack_rgb(r, g, b);
     }
 
@@ -760,9 +346,9 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
      * write) so a report shows which blocking step a hang was in. Both steps
      * are timeout-bounded. */
     tiles_debug_trace('i');
-    /* Select + enable in one I2C write (the bank is already disabled after
-     * the last pixel); two writes a pixel instead of four. */
-    tiles_tca9554_select_and_enable(&s_led_mux, cfg->led.mux_channel, cfg->led.mux_index);
+    tiles_tca9554_disable_all_muxes(&s_led_mux);
+    tiles_tca9554_set_select(&s_led_mux, cfg->led.mux_channel);
+    tiles_tca9554_enable_mux(&s_led_mux, cfg->led.mux_index);
     tiles_debug_trace('w');
     tiles_sk6805_write(&s_pad_chain, &pixel, 1);
     /* 'x' = tiles_sk6805_write() returned (it once hung inside despite its
@@ -884,9 +470,8 @@ static void write_underglow(void) {
     uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
         const tiles_rgb01_t *c = &s_underglow_rgb[i];
-        float k = led_intensity();
-        pixels[i] = tiles_sk6805_pack_rgb(underglow_channel_level(c->r * k), underglow_channel_level(c->g * k),
-                                           underglow_channel_level(c->b * k));
+        pixels[i] = tiles_sk6805_pack_rgb(underglow_channel_level(c->r), underglow_channel_level(c->g),
+                                           underglow_channel_level(c->b));
     }
     /* Same 'w'/'x' marks as write_pad(). */
     tiles_debug_trace('w');
@@ -919,7 +504,7 @@ bool tiles_lighting_init(void) {
         s_pad_standby_rgb[i] = (tiles_rgb01_t){0.0f, 0.0f, 0.0f};
     }
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
-        s_underglow_rgb[i] = s_mode_underglow;
+        s_underglow_rgb[i] = (tiles_rgb01_t){1.0f, 1.0f, 1.0f};
     }
     s_service_cursor = 0;
     s_initialized = false;
@@ -1054,72 +639,22 @@ void tiles_lighting_service(void) {
     }
     s_underglow_override_was_active = underglow_override_active;
 
-    /* Button LEDs follow the LED intensity (no-op unless it changed). */
-    tiles_buttons_set_led_intensity(led_intensity());
-
-    /* One pad write per pass: a pad showing pressure hue / bend dimming (or
-     * one that just stopped) that's due, taking turns; else the round-robin. */
-    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-    update_pad_fx(now_ms);
-    for (uint8_t n = 0; n < TILES_NUM_PADS; n++) {
-        uint8_t i = (uint8_t)((s_live_cursor + n) % TILES_NUM_PADS);
-        if ((pad_fx_active(i) || s_pad_fx_shown[i]) && now_ms - s_pad_written_ms[i] >= PAD_LIVE_REFRESH_MS) {
-            write_pad(i);
-            s_live_cursor = (uint8_t)((i + 1u) % TILES_NUM_PADS);
-            return;
-        }
-    }
-    /* Then a standby screen's changes, or the playing light effect, before
-     * the round-robin. */
-    if (s_standby_active ? service_standby_frame(now_ms) : service_play_fx(now_ms)) {
-        return;
-    }
     write_pad(s_service_cursor);
     s_service_cursor = (uint8_t)((s_service_cursor + 1u) % TILES_NUM_PADS);
 }
 
-void tiles_lighting_set_mode_underglow(float r, float g, float b) {
-    s_mode_underglow = (tiles_rgb01_t){clamp01(r), clamp01(g), clamp01(b)};
-    if (s_standby_active) {
-        return; /* the standby owner draws the underglow; restored on release */
-    }
-    for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
-        s_underglow_rgb[i] = s_mode_underglow;
-    }
-    if (s_initialized) {
-        write_underglow();
-    }
-}
-
-void tiles_lighting_set_grid_effects(bool on) {
-    s_grid_fx = on;
-    tiles_fx_set_sequencer(on);
-}
-
 void tiles_lighting_set_standby_active(bool active) {
-    if (active && !s_standby_active) {
-        for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-            s_standby_written_valid[i] = false; /* the pads show the normal look */
-        }
-    }
     s_standby_active = active;
 
     if (!active) {
         /* Pads repaint on their own (touch calls set_pad_press every scan); the
-         * underglow has no other driver, so restore it here: the mode's colour. */
+         * underglow has no other driver, so restore it here. */
         for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
-            s_underglow_rgb[i] = s_mode_underglow;
+            s_underglow_rgb[i] = (tiles_rgb01_t){1.0f, 1.0f, 1.0f};
         }
         if (s_initialized) {
             write_underglow();
         }
-    }
-}
-
-void tiles_lighting_set_standby_frame(const float rgb[][3], uint8_t max_writes) {
-    (void)max_writes; /* service_standby_frame() paces every standby write */
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        tiles_lighting_set_standby_pad_rgb((uint8_t)(i + 1u), rgb[i][0], rgb[i][1], rgb[i][2]);
     }
 }
 
@@ -1133,83 +668,11 @@ void tiles_lighting_set_standby_pad_rgb(uint8_t logical_pad, float r, float g, f
     if (stored->r == c.r && stored->g == c.g && stored->b == c.b) {
         return;
     }
-    *stored = c; /* tiles_lighting_service() sends it (service_standby_frame()) */
-}
+    *stored = c;
 
-void tiles_lighting_flush_standby(void) {
-    if (!s_standby_active || !s_initialized) {
-        return;
-    }
-    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        tiles_rgb01_t want = standby_pad_rgb(i, now_ms), shown = s_standby_written[i];
-        if (!s_standby_written_valid[i] || fabsf(want.r - shown.r) > 0.004f || fabsf(want.g - shown.g) > 0.004f ||
-            fabsf(want.b - shown.b) > 0.004f) {
-            write_pad(i);
-        }
-    }
-}
-
-/* Underglow from the pads. The floor keeps the mode's colour faintly at
- * rest; a pad's light reaches an LED with weight exp(-d^2 / 2) for d pads
- * from its anchor (1 right above it, 0.6 next to it, 0.14 two away).
- * Changes under 1/64 aren't sent. First guesses. */
-#define GLOW_FLOOR 0.15f
-#define GLOW_RELEASE_MS 120.0f
-#define GLOW_SEND_INTERVAL_MS 16u
-#define GLOW_STEPS 64.0f
-static float s_glow_weight[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS][TILES_NUM_PADS];
-static bool s_glow_weight_ready;
-static float s_glow[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS][3];
-static uint32_t s_glow_ms;
-static uint32_t s_glow_sent_ms;
-
-void tiles_lighting_set_standby_underglow_from_pads(const float rgb[][3], float base_r, float base_g, float base_b) {
-    if (!s_standby_active) {
-        return;
-    }
-    if (!s_glow_weight_ready) {
-        for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
-            for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
-                for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-                    float dr = (float)row - (float)g_tiles_underglow_anchor[i].row;
-                    float dc = (float)col - (float)g_tiles_underglow_anchor[i].col;
-                    s_glow_weight[i][board_pad_for_row_col(row, col) - 1u] = expf(-(dr * dr + dc * dc) * 0.5f);
-                }
-            }
-        }
-        s_glow_weight_ready = true;
-    }
-    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-    float fall = 1.0f - expf(-(float)(now_ms - s_glow_ms) / GLOW_RELEASE_MS);
-    s_glow_ms = now_ms;
-    const float base[3] = {base_r, base_g, base_b};
-    for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
-        for (uint8_t ch = 0; ch < 3u; ch++) {
-            float want = GLOW_FLOOR * clamp01(base[ch]);
-            for (uint8_t p = 0; p < TILES_NUM_PADS; p++) {
-                want = fmaxf(want, clamp01(rgb[p][ch]) * s_glow_weight[i][p]);
-            }
-            float *g = &s_glow[i][ch];
-            *g = want > *g ? want : *g + (want - *g) * fall; /* up at once, down slowly */
-        }
-    }
-    if (now_ms - s_glow_sent_ms < GLOW_SEND_INTERVAL_MS) {
-        return;
-    }
-    bool changed = false;
-    for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
-        tiles_rgb01_t c = {roundf(s_glow[i][0] * GLOW_STEPS) / GLOW_STEPS, roundf(s_glow[i][1] * GLOW_STEPS) / GLOW_STEPS,
-                           roundf(s_glow[i][2] * GLOW_STEPS) / GLOW_STEPS};
-        tiles_rgb01_t *stored = &s_underglow_rgb[i];
-        if (stored->r != c.r || stored->g != c.g || stored->b != c.b) {
-            *stored = c;
-            changed = true;
-        }
-    }
-    if (changed && s_initialized) {
-        write_underglow(); /* one chain write for all four */
-        s_glow_sent_ms = now_ms;
+    /* Immediate write, as in set_pad_press_internal(). */
+    if (s_initialized) {
+        write_pad(pad_index);
     }
 }
 
