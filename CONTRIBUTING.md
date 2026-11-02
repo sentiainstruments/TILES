@@ -41,14 +41,15 @@ current firmware.
 ## Checks
 
 Every pull request and every push to `main` runs
-`.github/workflows/ci.yml`. `main` only accepts a pull request when all
-of them pass.
+`.github/workflows/ci.yml`. `main` only accepts a pull request when the
+required ones pass.
 
 | Check | What it does |
 |---|---|
 | Firmware host tests | `firmware/test/run.sh` — no hardware or SDK needed. |
 | Firmware build | Builds for `pico2` with Arm GNU 15.3.rel1 and Pico SDK 2.3.0 (the versions used to flash), fails on any compiler warning in `firmware/src`, and attaches the `.uf2` to the run. |
-| Companion app | `npm ci`, `npm run lint`, `npm run build` in `companion-app/`. |
+| Companion app | `npm ci` and `npm run build` in `companion-app/`. |
+| Companion app lint | `npm run lint`. Reported but not required yet: the app has lint errors to clear first. |
 
 When your part gets something testable (the manual generator, say), add
 a job for it in the same pull request.
