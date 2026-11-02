@@ -2,8 +2,11 @@
 
 How a TILES manual looks and reads: the quick start and the full manual
 at start.sentiainstruments.com, and every manual `manuals/` makes for a
-custom mapping. Owner: Mats2000. Change it by pull request, not by
-drifting from it.
+custom mapping. Owner: Mats2000.
+
+**Fixed:** the colours and the two typefaces (Exo 2 and Sora). Everything
+else here is the current direction and can evolve: change it by pull
+request, not by drifting from it.
 
 ## Principles
 
@@ -31,7 +34,7 @@ drifting from it.
 Agree with Mats2000 which format a generated manual uses before
 building it.
 
-## Colour
+## Colour (fixed)
 
 | Name | Value | Job |
 |---|---|---|
@@ -45,7 +48,7 @@ building it.
 
 ## Type
 
-- **Exo 2** for titles (600/700) and **Sora** for everything else
+- Fixed: **Exo 2** for titles (600/700) and **Sora** for everything else
   (300/400). No other typeface anywhere — not for labels, not for
   numbers, not for a "technical" look. Get that from spacing, uppercase
   and tracking.

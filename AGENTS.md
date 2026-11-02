@@ -16,7 +16,8 @@ form of how the team works is `CONTRIBUTING.md`.
   GitHub refuses direct pushes to `main`.
 - **Never force-push or delete someone else's branch.** To catch up,
   merge `main` into your branch (`git merge origin/main`); don't rebase
-  anything you have pushed.
+  anything you have pushed (Sam may rebase his own `sam/...` branches).
+  Only Mats2000 pushes to `firmware/...` branches.
 - **Stay in your folder** (owners below). A change in someone else's
   folder goes in its own pull request, and that folder's owner reviews it.
 - **The parts meet only in `shared/`** (protocol, mapping file,
@@ -26,9 +27,14 @@ form of how the team works is `CONTRIBUTING.md`.
   know goes in the nearest README/AGENTS.md or the pull request — never
   only in a chat or in one AI tool's private memory, which nobody else's
   tool can read.
-- **No AI attribution.** No `Co-Authored-By:` trailer for an AI and no
-  "Generated with ..." footer in pull requests, from any tool. GitHub
-  shows the trailer as a commit-author badge; commits are the person's.
+- **No AI watermarks, anywhere.** Nothing that says an AI made it: no
+  `Co-Authored-By:` trailer, no "Generated with ..." line, no generator
+  meta tag or hidden marker, in commits, pull requests, issues, code,
+  docs or anything we ship (generated manuals included). Turn off your
+  tool's attribution setting. Work is signed by the person.
+- **Sentia fonts and colours are fixed:** Exo 2 and Sora only, and the
+  palette in `docs/style/manuals.md`. The rest of the style guide is the
+  current direction and can evolve.
 - **Name nothing outside Sentia in user-facing text** (manuals, guides,
   app UI) without Mats2000's OK. Describe a TILES feature in its own
   terms, never by comparison with another instrument or product.
