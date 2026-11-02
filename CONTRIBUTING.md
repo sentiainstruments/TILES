@@ -49,7 +49,12 @@ required ones pass.
 | Firmware host tests | `firmware/test/run.sh` — no hardware or SDK needed. |
 | Firmware build | Builds for `pico2` with Arm GNU 15.3.rel1 and Pico SDK 2.3.0 (the versions used to flash), fails on any compiler warning in `firmware/src`, and attaches the `.uf2` to the run. |
 | Companion app | `npm ci` and `npm run build` in `companion-app/`. |
-| Companion app lint | `npm run lint`. Reported but not required yet: the app has lint errors to clear first. |
+| Companion app lint | `npm run lint`. |
+
+Required today: the two firmware checks. Both companion app checks
+report on every pull request but don't block yet: the app on `main`
+has type errors and lint errors to clear first, and each becomes
+required once it is green.
 
 When your part gets something testable (the manual generator, say), add
 a job for it in the same pull request.

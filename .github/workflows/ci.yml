@@ -92,8 +92,9 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build
 
-  # Reported on every pull request but not yet required by main: the app
-  # has lint errors to clear first. Make it required once it is green.
+  # Both companion app checks report on every pull request but are not
+  # required by main yet: the app on main has type errors (build) and lint
+  # errors to clear first. Make each required once it is green.
   companion-app-lint:
     name: Companion app lint
     runs-on: ubuntu-24.04
