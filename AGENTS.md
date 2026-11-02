@@ -57,6 +57,10 @@ form of how the team works is `CONTRIBUTING.md`.
 
 ## Conventions
 
+- Comments: few and short, one or two lines, only the why that isn't
+  obvious from the code. No history ("used to", "now") or quoted
+  feedback: that goes in the commit message. Long explanations go in the
+  nearest README.
 - Prefer the README/AGENTS.md closest to what you're editing over this
   top-level file or general knowledge — module-local docs carry the
   actual design history and hardware constraints; this file only routes
