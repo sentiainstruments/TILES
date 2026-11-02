@@ -14,6 +14,7 @@ void tiles_loop_stats_mark(uint32_t now_us) {
     if (!s_started) {
         s_started = true;
         s_boot_us = s_last_us = s_window_start_us = now_us;
+        s_done.boot_ms = now_us / 1000u;
         return;
     }
     uint32_t pass = now_us - s_last_us;

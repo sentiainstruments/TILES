@@ -1246,7 +1246,7 @@
         "bit_rate_hz_typ": 800000,
         "color_order": "GRB",
         "reset_low_us_min": 80,
-        "firmware_reset_low_us": 300
+        "firmware_reset_low_us": 120
       },
       "mux_control": {
         "s0_port": 0,
@@ -1544,7 +1544,7 @@
       "hall_frame_hz_target": 120,
       "button_debounce_ms": 10,
       "motor_start_stagger_ms": 15,
-      "sk6805_reset_low_us": 300,
+      "sk6805_reset_low_us": 120,
       "configuration_storage": "Pico flash, versioned schema + CRC + two alternating slots"
     },
     "mpe_default": {

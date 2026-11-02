@@ -28,8 +28,8 @@
  *   circle        tap tempo (no external clock).
  *   diamond       DAW transport, as in the other play modes.
  *
- * Colors: lime is the mode's (underglow, steps); each bank of drums has its
- * own green on the drum pads; the selected drum is blue, and so is the
+ * Colors: orange is the mode's (underglow, steps); each bank of drums has
+ * its own orange-red shade on the drum pads; the selected drum is blue, and so is the
  * playhead on a step that sounds; a drum flashes white as it plays; triangle
  * lights on page 2. The beat keeps playing in the background in every other
  * mode, like the sequencer's lanes. The pattern saves itself after every
@@ -42,11 +42,27 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* The mode's color (menu pad, underglow, armed steps): lime, not used by
- * any other mode or indicator. */
-#define TILES_DRUM_SEQ_COLOR_R 0.5f
-#define TILES_DRUM_SEQ_COLOR_G 1.0f
+/* The mode's color (menu pad, underglow, armed steps): orange, between the
+ * Sequencer's scarlet and Song's amber (op_mode.c's sequencer family). */
+#define TILES_DRUM_SEQ_COLOR_R 1.0f
+#define TILES_DRUM_SEQ_COLOR_G 0.32f
 #define TILES_DRUM_SEQ_COLOR_B 0.0f
+
+/* Volca mode: this same drum mode (same pattern, gestures and saving) for a
+ * Volca Sample on multi-channel firmware (one part per MIDI channel): drum
+ * k (the k-th from C1: the first bank's eight, then the next bank's) plays
+ * C (TILES_VOLCA_NOTE) on MIDI channel k, 1-16, instead of its Drum Rack
+ * note on channel 10. Drums past channel 16 send nothing. Cyan where drum
+ * mode is orange. op_mode.c's menu turns it on and off. */
+#define TILES_VOLCA_NOTE 60u /* C4: the sample at its own pitch */
+#define TILES_VOLCA_COLOR_R 0.0f /* cyan: the hardware family, with Ableton's teal */
+#define TILES_VOLCA_COLOR_G 0.75f
+#define TILES_VOLCA_COLOR_B 1.0f
+
+/* Switches the drum output between Drum Rack (false) and Volca (true).
+ * Notes still sounding are ended first, on the routing they started on. */
+void tiles_drum_seq_set_volca(bool volca);
+bool tiles_drum_seq_is_volca(void);
 
 /* Loads the saved pattern. ops NULL: no flash region, nothing saved. */
 void tiles_drum_seq_init(const tiles_kv_ops_t *ops);
@@ -85,6 +101,8 @@ void tiles_drum_seq_flip_page(void);
  * shared clock). start: at the nearest beat, from step 1 if `restart`. */
 bool tiles_drum_seq_is_running(void);
 void tiles_drum_seq_start(bool restart);
+/* Phase lock (setting seq.lock via op_mode.h): drum_pattern.h's player. */
+void tiles_drum_seq_set_phase_lock(bool on);
 void tiles_drum_seq_pause(void);
 void tiles_drum_seq_rewind(void);
 

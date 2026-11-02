@@ -28,17 +28,41 @@
  * and shows 4 rows of 6-pad sliders:
  *   row 1 (top)    haptics intensity (services/haptics.c)
  *   row 2          pitch bend sensitivity (services/expression.c)
- *   row 3          reserved for a future Y axis (stored, not used yet)
- *   row 4 (bottom) aftertouch sensitivity (services/expression.c)
- * Tapping a pad selects that column (1-6) and applies it at once
- * (piecewise_column_value() maps columns to values for every row). Column
- * 4 is each row's default, 5-6 stronger, 2-3 weaker. Row 1 column 1 is
- * haptics OFF and blinks when selected. The selected pad pulses white (the
- * menu standard); the others sit at a dim magenta.
+ *   row 3          pressure (aftertouch) sensitivity (services/expression.c)
+ *   row 4 (bottom) LED intensity: pads, underglow and button LEDs
+ *                  (services/lighting.c look.led_intensity_percent)
+ * Tapping a pad selects that column (1-6) and applies it at once. Rows 1-3:
+ * column 4 is the default, 5-6 stronger, 2-3 weaker
+ * (piecewise_column_value()). Row 4: column 6 (the default) is the full
+ * brightness the power mode allows, column 1 is off. Column 1 of rows 1
+ * and 4 is a real OFF and blinks when selected. The selected pad pulses
+ * white (the menu standard); the others sit at a dim magenta. The menu
+ * itself always shows at full brightness, so LEDs set to off can be turned
+ * back on.
  *
  * While visible, expression.c starts no NEW strikes (a tap only moves a
  * slider; notes already sounding finish normally), and octave_control.c
  * ignores "-"/"+" (see tiles_expression_control_owns_pad_grid()).
+ *
+ * ---- Deeper menus, from the Feel menu ------------------------------------
+ * With the Feel menu up (square held, or locked open), a short circle press
+ * (under 0.8 s) opens one in its place:
+ *   circle + square   (square held, tap circle; or locked open, circle and
+ *                     square together or one after the other): Light
+ *                     effects. Pad 1 off (default), 2-6 the white effects,
+ *                     7-12 the colour ones (light_effects.h), 13-24 empty.
+ *   circle + triangle Layouts: pads 1-7 Rows (default), Columns,
+ *                     Fourths, Keys, Fifths, Tonnetz, Quarter tones
+ *                     (note_map.h), the rest empty.
+ * Each menu has its own colour: the Feel menu magenta, Light effects amber
+ * (underglow and the Off pad), Layouts cyan (pads and underglow).
+ * The current pick pulses white. A finger resting on a pad (no press)
+ * previews it on the whole grid after ~0.3 s: Light effects plays the
+ * touched pad as if pressed, over and over, soft to hard and back; Layouts
+ * shows the layout's resting colours.
+ * A press picks it and closes; lifting goes back, nothing changed; any
+ * button closes without picking. Settings look.play_effect and
+ * layout.melodic.
  *
  * ---- Circle + square held 2 s: MPE on/off -----------------------------
  * Toggles tiles_expression_set_mpe_enabled() (the `expression.mpe_enabled`

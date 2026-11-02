@@ -30,6 +30,7 @@
 #define REG_SOFT_RESET 0x80u
 
 #define NUM_ELECTRODES 12u
+#define ECR_RUN 0x8Fu
 
 #define TOUCH_THRESHOLD 12u
 /* Release threshold 9 (quickstart value is 6): the smaller hysteresis gap
@@ -116,7 +117,7 @@ bool tiles_mpr121_init(tiles_mpr121_t *dev, i2c_inst_t *bus, uint8_t addr) {
 
     /* Run Mode (5.11): CL=10b (baseline tracking, seeded from the first
      * reading), no proximity channel, all 12 electrodes -> 0x8F. */
-    return write_reg(bus, addr, REG_ECR, 0x8Fu);
+    return write_reg(bus, addr, REG_ECR, ECR_RUN);
 }
 
 uint16_t tiles_mpr121_read_touched(tiles_mpr121_t *dev, bool *ok) {
@@ -130,4 +131,9 @@ uint16_t tiles_mpr121_read_touched(tiles_mpr121_t *dev, bool *ok) {
     }
     /* buf[0] = ELE0-7; buf[1] bits 0-3 = ELE8-11 (bits 4-7 are not touch data). */
     return (uint16_t)(buf[0] | ((buf[1] & 0x0Fu) << 8));
+}
+
+bool tiles_mpr121_running(tiles_mpr121_t *dev) {
+    uint8_t ecr;
+    return read_regs(dev->bus, dev->addr, REG_ECR, &ecr, 1) && ecr == ECR_RUN;
 }

@@ -116,15 +116,45 @@ motor ~28 mA running. At USB-only's 50% the worst case (every LED white,
 Owned by `services/hall.c`:
 
 - **Rest baseline:** each pad's rest Z is captured at init and again at
-  the end of the boot animation. Both assume hands off the pads. The
-  serial calibration command `r` recaptures every pad on demand
-  (`diagnostics/calibration.h`).
-- **Drift tracker:** a pad's baseline creeps toward its reading only
-  while the pad is untouched and each read stays within 8 counts of the
-  previous one for 400 ms, and then only by 1/128 of the gap per
-  qualifying read, never a snap. This follows slow thermal and
-  mechanical drift through a session without mistaking a slow press for
-  drift.
+  the end of the boot animation. Both assume hands off the pads; a pad
+  the touch sensor reports touched at the second capture keeps its old
+  baseline, unconfirmed (below). The serial calibration command `r`
+  recaptures every pad on demand (`diagnostics/calibration.h`).
+- **Rest guard** (`services/rest_guard.h`), fed every untouched read:
+  - Drift: a pad's baseline creeps toward its reading only while the pad
+    is untouched and each read stays within 8 counts of the previous one
+    for 400 ms, and then only by 1/128 of the gap per qualifying read.
+    This follows slow thermal and mechanical drift through a session
+    without mistaking a slow press for drift.
+  - Re-zero: untouched and steady for 600 ms at least a strike's depth
+    (150) from the baseline, the baseline jumps to the reading. Keys
+    spring back, so an untouched key can't be held down: the baseline
+    was taken pressed (a finger on the key at start-up). Found on unit 2
+    (2026-10-23): pad 6, baseline taken under a finger, played on its
+    release instead of its press.
+  - Unconfirmed: no depth (the pad can't play or press) until a steady
+    400 ms untouched sets the baseline.
+  INFO reports `hall.rezeros` and `hall.unconfirmed`.
+
+## Sensor and controller upkeep
+
+- **Hall sensors** (`services/hall.c`), only while no pad is touched (a
+  retry costs about a millisecond): a pad whose reads fail 10 times in a
+  row is set aside; it, and any sensor that never set up, is retried one
+  every 2 s. One pad's config is checked every 250 ms (each pad every
+  ~6 s): a sensor that lost power answers but stays in standby, and is
+  configured again. INFO `hall.reinits`, `hall.dead`.
+- **Touch controllers** (`services/touch.c`): each checked once a second
+  (one register read); one that fails two checks in a row (reset by
+  static or a power glitch, it sits in Stop Mode reporting nothing; or
+  never set up) is set up again. INFO `touch.recoveries`. Not done: re-
+  taking a controller's baselines when a pad reads touched for minutes
+  with no press (Alpha 5): it fired 28 times in normal playing on unit 2
+  and left pads less sensitive (a baseline taken under a hovering hand),
+  so it was removed in Alpha 5.2.
+- **After a crash restart** (`main.c`): all notes off on every port once
+  at start and again when USB mounts, since notes held then never get
+  their Note-Off.
 - **Why both gates:** each alone is foolable. A light resting finger may
   not register as touched, and slow drift and a very slow press look
   alike in variance alone. Untouched also implies no note is sounding

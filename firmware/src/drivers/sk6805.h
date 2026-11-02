@@ -15,7 +15,10 @@
 
 #include "hardware/pio.h"
 
-#define TILES_SK6805_RESET_LOW_US 300u
+/* Data held low this long latches the pixel. The SK6805-EC15's minimum is
+ * 80 us (docs/hardware board map led_systems); 120 leaves margin. (300 was
+ * the WS2812B-V5's 280 us rule, which this part doesn't need.) */
+#define TILES_SK6805_RESET_LOW_US 120u
 
 typedef struct {
     PIO pio;

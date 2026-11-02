@@ -1,5 +1,8 @@
 # Firmware build output
 firmware/build/
+firmware/build-unit*/
+# Update kits (tools/make_update_kit.sh)
+dist/
 firmware/cmake-build-*/
 
 # Copied in from the pico-sdk checkout per firmware/BUILD.md, not project code

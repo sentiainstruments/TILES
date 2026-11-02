@@ -44,6 +44,7 @@
 #include "services/octave_control.h"
 #include "services/op_mode.h"
 #include "services/pedal.h"
+#include "services/play_state.h"
 #include "services/power.h"
 #include "services/standby.h"
 #include "services/touch.h"
@@ -61,6 +62,15 @@ static void tiles_power_recover_haptics_and_buttons(tiles_power_state_t new_stat
     tiles_buttons_resync_pca9685();
     tiles_haptics_resync_hardware();
     printf("[power] recovered haptics/buttons hardware after a power-mode change\n");
+}
+
+/* See the main loop. */
+static void timing_tick(void) {
+    tiles_debug_trace('t');
+    tud_task();
+    tiles_midi_in_scan();
+    tiles_midi_clock_scan();
+    tiles_op_mode_playback_tick();
 }
 
 int main(void) {
@@ -122,6 +132,10 @@ int main(void) {
      * its first user. */
     tiles_note_map_init(crash_recovered);
 
+    /* ...and across a power cycle: the saved scale/key/octave go back into
+     * note_map now, the saved mode at op_mode init. */
+    tiles_play_state_init(tiles_storage_state_region_safe() ? tiles_storage_state_ops() : NULL, crash_recovered);
+
     /* "-"/"+": octave shift (claims their LEDs; needs buttons init). */
     tiles_octave_control_init();
 
@@ -150,7 +164,7 @@ int main(void) {
         printf("[hall] one or more pads failed sensor init -- see per-pad status\n");
     }
 
-    /* Boot animation (~4.7 s, ends with a Hall baseline recapture), skipped
+    /* Boot animation (~4.2 s, ends with a Hall baseline recapture), skipped
      * on a crash recovery: the sensors never lost power, so the baseline taken
      * at init is already valid. */
     if (crash_recovered) {
@@ -225,6 +239,17 @@ int main(void) {
      * so a saved "MPE off" announces a withdrawn zone. */
     tiles_expression_announce_mpe_zone();
 
+    /* Between the slower services: USB, MIDI input, the clock and playback
+     * again, so a Clock arriving mid-pass is stepped on (and a USB transfer
+     * that finished is followed by the next one) within a fraction of a
+     * pass, not at the next one (tiles_op_mode_playback_tick()). */
+    /* After a crash restart, notes a host or a DIN synth was holding never get
+     * their Note-Off: all notes off now (DIN, and USB if it's back already)
+     * and again once USB mounts. */
+    bool panic_on_mount = crash_recovered;
+    if (crash_recovered) {
+        tiles_midi_send_panic();
+    }
     while (true) {
         tiles_loop_stats_mark(time_us_32());
         /* Must run every pass: it IS the USB stack (control transfers, CDC and
@@ -239,6 +264,10 @@ int main(void) {
         static bool s_mpe_was_mounted = false;
         bool mpe_mounted_now = tud_midi_mounted();
         if (mpe_mounted_now && !s_mpe_was_mounted) {
+            if (panic_on_mount) {
+                tiles_midi_send_panic();
+                panic_on_mount = false;
+            }
             tiles_expression_announce_mpe_zone();
         }
         s_mpe_was_mounted = mpe_mounted_now;
@@ -289,6 +318,7 @@ int main(void) {
         tiles_octave_control_scan();
         tiles_debug_trace('u');
         tiles_touch_scan();
+        timing_tick();
         tiles_debug_trace('d');
         tiles_pedal_scan();
         tiles_debug_trace('C');
@@ -318,8 +348,10 @@ int main(void) {
         }
         tiles_debug_trace('L');
         tiles_lighting_service();
+        timing_tick();
         tiles_debug_trace('H');
         tiles_hall_scan();
+        timing_tick();
         /* Non-blocking. */
         tiles_debug_trace('c');
         tiles_calibration_scan();
@@ -329,6 +361,7 @@ int main(void) {
         /* After expression, which triggers/updates/stops the envelopes. */
         tiles_debug_trace('K');
         tiles_haptics_scan();
+        timing_tick();
         /* End of pass in the debug trace; push it to the host. No-ops unless
          * debug mode is on. */
         tiles_debug_trace_str("\r\n");

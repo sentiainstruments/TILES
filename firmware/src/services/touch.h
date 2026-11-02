@@ -13,10 +13,18 @@
 bool tiles_touch_init(void);
 
 /* Rereads both controllers (two register reads total), updates every pad
- * and pushes each to lighting (touched 1.0, untouched 0.0). Call every
+ * and pushes each to lighting (touched 1.0, untouched 0.0); a controller
+ * that reset is set up again (checked once a second). Call every
  * main-loop pass. */
 void tiles_touch_scan(void);
 
 /* Touched state for one pad (1-24). False if out of range or its
  * controller failed init. */
 bool tiles_touch_is_touched(uint8_t logical_pad);
+
+/* For INFO: controllers set up again since boot (one that reset, or came
+ * back after failing). */
+typedef struct {
+    uint32_t recoveries;
+} tiles_touch_info_t;
+tiles_touch_info_t tiles_touch_get_info(void);
