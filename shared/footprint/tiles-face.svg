@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 792 613" fill="none" stroke="#171d3a" stroke-width="1.5">
+  <title>TILES face: the six keys and 24 pads, from the instrument footprint</title>
+  <path id="key-minus" transform="translate(40.6 4.4)" d="M77.6 0H30.7A30.7 30.7 0 0 0 30.7 61.4H77.6Z"/>
+  <path id="key-plus" transform="translate(133.6 4.4)" d="M0 0H49.9A30.7 30.7 0 0 1 49.9 61.4H0Z"/>
+  <path id="key-triangle" transform="translate(411.3 3.6)" d="M1.3 53.8C0 56.3 1 59.4 3.6 60.7C4.3 61 5.1 61.2 5.9 61.2L57 61.2C59.9 61.2 62.2 58.9 62.2 56.1C62.2 55.3 62 54.5 61.7 53.8L36.1 3.6C34.8 1.1 31.7 0 29.1 1.3C28.1 1.8 27.3 2.6 26.8 3.6Z"/>
+  <path id="key-diamond" transform="translate(515.3 3.6)" d="M35.7 60.6L61.4 35.2C63.4 33.2 63.4 30 61.4 28L35.1 2C33.1 0 29.8 0 27.8 2L2 27.4C0 29.4 0 32.6 2 34.6L28.3 60.6C30.3 62.6 33.6 62.6 35.7 60.6Z"/>
+  <path id="key-square" transform="translate(619.4 4.4)" d="M15.6 0C7 0 0 6.8 0 15.3L0 46.1C0 54.5 7 61.4 15.6 61.4L46.8 61.4C55.4 61.4 62.4 54.5 62.4 46.1L62.4 15.3C62.4 6.8 55.4 0 46.8 0Z"/>
+  <path id="key-circle" transform="translate(723.3 4.4)" d="M62.4 30.7C62.4 13.7 48.4 0 31.2 0C14 0 0 13.7 0 30.7C0 47.7 14 61.4 31.2 61.4C48.4 61.4 62.4 47.7 62.4 30.7Z"/>
+  <rect id="pad-1" x="6.32" y="106.78" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-2" x="141.41" y="106.78" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-3" x="276.5" y="106.78" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-4" x="411.59" y="106.78" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-5" x="546.68" y="106.78" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-6" x="681.77" y="106.78" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-7" x="6.32" y="239.92" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-8" x="141.41" y="239.92" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-9" x="276.5" y="239.92" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-10" x="411.59" y="239.92" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-11" x="546.68" y="239.92" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-12" x="681.77" y="239.92" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-13" x="6.32" y="373.06" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-14" x="141.41" y="373.06" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-15" x="276.5" y="373.06" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-16" x="411.59" y="373.06" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-17" x="546.68" y="373.06" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-18" x="681.77" y="373.06" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-19" x="6.32" y="506.2" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-20" x="141.41" y="506.2" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-21" x="276.5" y="506.2" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-22" x="411.59" y="506.2" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-23" x="546.68" y="506.2" width="103.91" height="102.42" rx="15.5"/>
+  <rect id="pad-24" x="681.77" y="506.2" width="103.91" height="102.42" rx="15.5"/>
+</svg>

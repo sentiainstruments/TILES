@@ -1,0 +1,94 @@
+# The checks main requires (CONTRIBUTING.md, "Checks"). Every job runs on
+# every pull request so required checks never sit waiting.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, firmware/board-bringup]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  firmware-tests:
+    name: Firmware host tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: firmware/test/run.sh
+
+  firmware-build:
+    name: Firmware build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # The versions used to flash units (firmware/BUILD.md).
+      ARM_TOOLCHAIN: 15.3.rel1
+      ARM_TOOLCHAIN_SHA256: 563bebb2b97d53382b956d6ee1fe61e2cae26699901417234a37df505ef9b5fa
+      PICO_SDK_TAG: 2.3.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Arm GNU toolchain
+        run: |
+          name="arm-gnu-toolchain-$ARM_TOOLCHAIN-x86_64-arm-none-eabi"
+          curl -sSfL -o "$RUNNER_TEMP/$name.tar.xz" \
+            "https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/$ARM_TOOLCHAIN/$name.tar.xz"
+          echo "$ARM_TOOLCHAIN_SHA256  $RUNNER_TEMP/$name.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/$name.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$name/bin" >> "$GITHUB_PATH"
+      - name: Pico SDK
+        run: |
+          git clone -q --depth 1 -b "$PICO_SDK_TAG" https://github.com/raspberrypi/pico-sdk.git "$RUNNER_TEMP/pico-sdk"
+          git -C "$RUNNER_TEMP/pico-sdk" submodule update -q --init --depth 1 lib/tinyusb
+          echo "PICO_SDK_PATH=$RUNNER_TEMP/pico-sdk" >> "$GITHUB_ENV"
+          cp "$RUNNER_TEMP/pico-sdk/external/pico_sdk_import.cmake" firmware/
+      - name: Build
+        run: |
+          arm-none-eabi-gcc --version | head -1
+          cmake -S firmware -B firmware/build -DPICO_BOARD=pico2
+          cmake --build firmware/build -j 4 2>&1 | tee build.log
+      - name: No warnings in our code
+        run: |
+          # firmware/AGENTS.md: a clean build has zero warnings. Only our
+          # sources count; the SDK's own helper builds are not ours to fix.
+          if grep -E "/firmware/src/[^:]*:[0-9]+(:[0-9]+)?: warning:" build.log; then
+            echo "::error::Compiler warnings in firmware/src (listed above)."
+            exit 1
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: firmware-${{ github.sha }}
+          path: firmware/build/**/*.uf2
+          if-no-files-found: error
+          retention-days: 14
+
+  companion-app:
+    name: Companion app
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: companion-app
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: companion-app/package-lock.json
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run lint
+      - run: npm run build

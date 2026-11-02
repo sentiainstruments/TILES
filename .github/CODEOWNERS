@@ -1,0 +1,15 @@
+# Who must approve a pull request into main, by path (see CONTRIBUTING.md).
+# Later lines win. Sentia (Mats2000) owns everything; the others co-own
+# their area, so either listed owner can approve someone else's change.
+
+*                   @Mats2000
+
+/companion-app/     @Mats2000 @Samrepasky4
+/shared/mapping/    @Mats2000 @Samrepasky4
+/manuals/           @Mats2000 @sebastianruedac
+
+# The rules themselves stay with Sentia.
+/.github/           @Mats2000
+/.agent/            @Mats2000
+/AGENTS.md          @Mats2000
+/CONTRIBUTING.md    @Mats2000
