@@ -62,6 +62,10 @@ void tiles_buttons_set_override_led(uint8_t button_id, float level_0_to_1);
  * _2, else NULL. Never call tiles_pca9685_init() on it (see above). */
 tiles_pca9685_t *tiles_buttons_pca9685_for_addr(uint8_t addr);
 
+/* LED intensity (Feel menu row 4, services/lighting.c) for every button
+ * LED, 0 (off) to 1 (as drawn). Redraws them all when it changes. */
+void tiles_buttons_set_led_intensity(float intensity_0_to_1);
+
 /* ---- Power-transition recovery (main.c) ---------------------------------
  *
  * Both PCA9685s sit on a rail the power-source switch disturbs: a glitch

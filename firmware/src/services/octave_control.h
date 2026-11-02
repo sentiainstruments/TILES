@@ -1,7 +1,9 @@
 #pragma once
 
 /* Default function of SW1 ("-") and SW2 ("+"): octave shift down/up, in
- * +/-TILES_NOTE_MAP_MAX_OCTAVE_SHIFT (3) steps. services/note_map.c owns
+ * +/-TILES_NOTE_MAP_MAX_OCTAVE_SHIFT (3) steps. In chord mode, circle +
+ * "-"/"+" moves the chord strip's own octave instead (the LEDs show it
+ * while circle is held) and plain "-"/"+" only the melody. services/note_map.c owns
  * the value; this is the button controller. Steps fire on RELEASE, so the
  * first button of the "-"+"+" combo (humans never press both in the same
  * tick) doesn't also step the octave.
@@ -34,6 +36,7 @@
  * mechanism; the other four buttons are untouched. */
 
 #include <stdbool.h>
+#include <stdint.h>
 
 void tiles_octave_control_init(void);
 
@@ -44,3 +47,8 @@ void tiles_octave_control_scan(void);
 
 /* True while transpose mode owns the pad grid (main.c skips standby). */
 bool tiles_octave_control_is_transpose_active(void);
+
+/* What "-"/"+"'s LEDs show now (the octave, or transpose's pulse), for a
+ * mode that draws every LED itself and keeps "-"/"+" as octave (the
+ * physics modes, services/physics.h). */
+void tiles_octave_control_led_levels(uint32_t now_ms, float *minus_level, float *plus_level);

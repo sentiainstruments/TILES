@@ -9,6 +9,11 @@
  * ports, so units played together stay apart in a DAW; see
  * midi/usb_descriptors.c), the CDC interface name ("SENTIA TILES
  * Diagnostics (Unit N/M)"), the vendor INFO reply (`unit=`) and a boot
- * printf (main.c). */
+ * printf (main.c).
+ *
+ * A build for another unit can also set it without editing this file:
+ * cmake -DTILES_UNIT=N (tools/make_update_kit.sh builds one per unit). */
+#ifndef TILES_UNIT_NUMBER
 #define TILES_UNIT_NUMBER 2u
+#endif
 #define TILES_UNIT_COUNT 4u

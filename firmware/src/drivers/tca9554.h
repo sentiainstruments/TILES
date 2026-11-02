@@ -33,9 +33,14 @@ bool tiles_tca9554_init(tiles_tca9554_t *dev, i2c_inst_t *bus, uint8_t addr);
 bool tiles_tca9554_disable_all_muxes(tiles_tca9554_t *dev);
 
 /* Sets the shared S0-S2 select lines to `channel` (0-7). Call only while
- * all mux banks are disabled (see above). */
+ * all mux banks are disabled (see above), or use select_and_enable(),
+ * which changes both in one write. */
 bool tiles_tca9554_set_select(tiles_tca9554_t *dev, uint8_t channel);
 
 /* Disables all banks, then enables exactly one (1, 2 or 3). Call
  * tiles_tca9554_set_select() first. */
 bool tiles_tca9554_enable_mux(tiles_tca9554_t *dev, uint8_t mux_index);
+
+/* set_select() and enable_mux() in one I2C write (the outputs change
+ * together, so it's glitch-free); the pad LED path's per-pixel select. */
+bool tiles_tca9554_select_and_enable(tiles_tca9554_t *dev, uint8_t channel, uint8_t mux_index);

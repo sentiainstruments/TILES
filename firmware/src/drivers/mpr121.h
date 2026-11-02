@@ -26,3 +26,9 @@ bool tiles_mpr121_init(tiles_mpr121_t *dev, i2c_inst_t *bus, uint8_t addr);
  * read, safe to call continuously. On I2C failure returns 0 and sets
  * *ok=false (if ok != NULL). */
 uint16_t tiles_mpr121_read_touched(tiles_mpr121_t *dev, bool *ok);
+
+/* True if the chip is still in the Run Mode init set (one register read:
+ * ECR). After a reset (a power glitch, static) it sits in Stop Mode and
+ * reports nothing touched while still answering; false then, or on a
+ * failed read. */
+bool tiles_mpr121_running(tiles_mpr121_t *dev);

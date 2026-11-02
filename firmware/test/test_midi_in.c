@@ -32,6 +32,8 @@ static uint8_t rts[256]; static int nrt;
 static uint8_t sysex[8][16]; static size_t sysex_len[8]; static tiles_midi_port_t sysex_port[8]; static int nsx;
 static void on_note(uint8_t ch, uint8_t n, uint8_t v, bool on, uint32_t t) { (void)t; notes[nnotes++] = (note_ev_t){ch, n, v, on}; }
 static void on_rt(uint8_t b, uint32_t t) { (void)t; rts[nrt++] = b; }
+static int spp_count; static uint16_t spp_last;
+static void on_spp(uint16_t pos, uint32_t t) { (void)t; spp_count++; spp_last = pos; }
 static void on_sx(tiles_midi_port_t port, const uint8_t *d, size_t l) { memcpy(sysex[nsx], d, l); sysex_port[nsx] = port; sysex_len[nsx++] = l; }
 static void reset(void) { usb_h = usb_t = din_h = din_t = 0; din_loss = false; nnotes = nrt = nsx = 0; tiles_midi_in_init();
     tiles_midi_in_register_note_callback(on_note); tiles_midi_in_register_realtime_callback(on_rt); tiles_midi_in_register_sysex_callback(on_sx); g_now_ms = 10000; }
@@ -129,6 +131,22 @@ int main(void) {
     /* 12. packets on a cable this device doesn't have, or with a reserved CIN, are ignored */
     reset(); usb_raw(0x29, 0x90, 60, 100); usb_raw(0x00, 0x90, 61, 100); USB(0x90, 62, 100); tiles_midi_in_scan();
     assert(nnotes == 1 && notes[0].note == 62);
+
+    /* 13. Song Position Pointer: 14-bit sixteenths, from USB (a 3-byte System Common packet) and
+     * DIN; no running status after it; a note right after still parses */
+    reset(); tiles_midi_in_set_song_position_callback(on_spp); spp_count = 0;
+    USB(0xF2, 0x05, 0x01); tiles_midi_in_scan();
+    assert(spp_count == 1 && spp_last == (uint16_t)(5 + (1 << 7)));
+    g_now_ms += 600; /* USB's hold on Real-Time over: DIN may take it */
+    DIN(0xF2, 0x10, 0x00, 0x20, 0x91, 60, 100); tiles_midi_in_scan(); /* a stray data byte after: dropped */
+    assert(spp_count == 2 && spp_last == 0x10 && nnotes == 1 && notes[0].note == 60);
+    /* from a port that isn't the clock's: ignored */
+    reset(); tiles_midi_in_set_song_position_callback(on_spp); spp_count = 0;
+    DAW(0xF8); tiles_midi_in_scan();
+    USB(0xF2, 0x05, 0x00); tiles_midi_in_scan();
+    assert(spp_count == 0);
+    DAW(0xF2, 0x07, 0x00); tiles_midi_in_scan();
+    assert(spp_count == 1 && spp_last == 7);
 
     printf("midi_in (USB MAIN + DAW + DIN): all tests pass\n");
     return 0;

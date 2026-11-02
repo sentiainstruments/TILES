@@ -27,10 +27,138 @@
  * bug in the caller. */
 #define SYSEX_SEND_BUF_MAX 32u
 
-static void usb_write(uint8_t cable, const char *what, const uint8_t *msg, uint32_t len) {
-    if (!tud_midi_mounted()) {
+/* Batches (tiles_midi_out_batch_begin()/end()): messages that belong
+ * together (a chord, the drums on one step, a note's setup and its
+ * Note-On) are held and handed to TinyUSB in one write, so they leave in
+ * one USB transfer. Written one by one, the first packet starts a transfer
+ * on its own and the rest wait until it's done and the next tud_task()
+ * notices: about a main-loop pass (~2 ms) behind the first.
+ *
+ * Channel messages only: TinyUSB's stream write packs those exactly as
+ * tiles_usb_midi_pack() does, and it flushes once at the end. Anything
+ * else (SysEx, Real-Time) or another cable sends the batch first and goes
+ * on its own, so the order never changes. If the host stalls and a stream
+ * write stops inside a message, TinyUSB keeps the half message; the stream
+ * path is then avoided until USB remounts (which clears it). DIN is
+ * unaffected (it queues anyway). */
+#define MIDI_BATCH_MAX_MESSAGES 16u /* one 64-byte transfer */
+static uint8_t s_batch_depth;
+static uint8_t s_batch_cable;
+static uint8_t s_batch_bytes[MIDI_BATCH_MAX_MESSAGES * 3u];
+static uint8_t s_batch_ends[MIDI_BATCH_MAX_MESSAGES]; /* where each message ends */
+static uint8_t s_batch_count;
+static bool s_stream_dirty;
+static bool s_was_mounted;
+
+static void batch_flush(void) {
+    if (s_batch_count == 0u) {
         return;
     }
+    uint32_t len = s_batch_ends[s_batch_count - 1u];
+    uint32_t sent = 0u;
+    uint32_t deadline_ms = to_ms_since_boot(get_absolute_time()) + MIDI_SEND_RETRY_TIMEOUT_MS;
+    while (sent < len) {
+        sent += tud_midi_n_stream_write(0, s_batch_cable, s_batch_bytes + sent, len - sent);
+        if (sent >= len) {
+            break;
+        }
+        if (to_ms_since_boot(get_absolute_time()) >= deadline_ms) {
+            printf("[midi_out] batch dropped at byte %u/%u (host still not draining after %ums retry)\n",
+                   (unsigned)sent, (unsigned)len, (unsigned)MIDI_SEND_RETRY_TIMEOUT_MS);
+            bool on_boundary = sent == 0u;
+            for (uint8_t i = 0; i < s_batch_count; i++) {
+                on_boundary = on_boundary || s_batch_ends[i] == sent;
+            }
+            s_stream_dirty = !on_boundary;
+            break;
+        }
+        tud_task();
+    }
+    s_batch_count = 0u;
+}
+
+void tiles_midi_out_batch_begin(void) {
+    if (s_batch_depth < 255u) {
+        s_batch_depth++;
+    }
+}
+
+void tiles_midi_out_batch_end(void) {
+    if (s_batch_depth > 0u && --s_batch_depth == 0u) {
+        batch_flush();
+    }
+}
+
+/* A complete channel message: status 0x80-0xEF with its data bytes. */
+static bool is_channel_message(const uint8_t *msg, uint32_t len) {
+    if (len < 2u || msg[0] < 0x80u || msg[0] > 0xEFu) {
+        return false;
+    }
+    uint8_t kind = (uint8_t)(msg[0] & 0xF0u);
+    return len == ((kind == 0xC0u || kind == 0xD0u) ? 2u : 3u);
+}
+
+/* The PARTS port (midi/midi_ports.h): channels 10-16 go there by
+ * themselves; Song tracks and Volca, which use 1-9 as well, wrap their
+ * sends in tiles_midi_out_parts_begin()/end(). Only channel messages:
+ * pedals, clock and the rest stay on MAIN. */
+static bool s_parts_separate = true;
+static uint8_t s_parts_depth;
+
+void tiles_midi_out_set_parts_separate(bool separate) {
+    s_parts_separate = separate;
+}
+
+bool tiles_midi_out_get_parts_separate(void) {
+    return s_parts_separate;
+}
+
+void tiles_midi_out_parts_begin(void) {
+    if (s_parts_depth < 255u) {
+        s_parts_depth++;
+    }
+}
+
+void tiles_midi_out_parts_end(void) {
+    if (s_parts_depth > 0u) {
+        s_parts_depth--;
+    }
+}
+
+static uint8_t cable_for_channel_message(uint8_t status) {
+    if (!s_parts_separate) {
+        return TILES_USB_MIDI_CABLE_MAIN;
+    }
+    if (s_parts_depth > 0u || (status & 0x0Fu) >= TILES_MIDI_FIRST_PART_CHANNEL) {
+        return TILES_USB_MIDI_CABLE_PARTS;
+    }
+    return TILES_USB_MIDI_CABLE_MAIN;
+}
+
+static void usb_write(uint8_t cable, const char *what, const uint8_t *msg, uint32_t len) {
+    bool mounted = tud_midi_mounted();
+    if (mounted && !s_was_mounted) {
+        s_stream_dirty = false; /* a fresh mount resets TinyUSB's stream state */
+    }
+    s_was_mounted = mounted;
+    if (!mounted) {
+        s_batch_count = 0u;
+        return;
+    }
+    if (s_batch_depth > 0u && !s_stream_dirty && is_channel_message(msg, len)) {
+        if (s_batch_count > 0u && (cable != s_batch_cable || s_batch_count >= MIDI_BATCH_MAX_MESSAGES)) {
+            batch_flush();
+        }
+        uint8_t start = s_batch_count > 0u ? s_batch_ends[s_batch_count - 1u] : 0u;
+        for (uint32_t i = 0; i < len; i++) {
+            s_batch_bytes[start + i] = msg[i];
+        }
+        s_batch_cable = cable;
+        s_batch_ends[s_batch_count] = (uint8_t)(start + len);
+        s_batch_count++;
+        return;
+    }
+    batch_flush(); /* what's held goes first */
     uint8_t packets[TILES_USB_MIDI_MAX_PACKETS][4];
     size_t count = tiles_usb_midi_pack(cable, msg, len, packets, TILES_USB_MIDI_MAX_PACKETS);
     uint32_t deadline_ms = to_ms_since_boot(get_absolute_time()) + MIDI_SEND_RETRY_TIMEOUT_MS;
@@ -60,13 +188,13 @@ static void send1(uint8_t status) {
 static void send2(uint8_t status, uint8_t data1) {
     uint8_t msg[2] = {status, data1};
     tiles_din_midi_send(msg, sizeof(msg));
-    usb_write(TILES_USB_MIDI_CABLE_MAIN, "send2", msg, sizeof(msg));
+    usb_write(cable_for_channel_message(status), "send2", msg, sizeof(msg));
 }
 
 static void send3(uint8_t status, uint8_t data1, uint8_t data2) {
     uint8_t msg[3] = {status, data1, data2};
     tiles_din_midi_send(msg, sizeof(msg));
-    usb_write(TILES_USB_MIDI_CABLE_MAIN, "send3", msg, sizeof(msg));
+    usb_write(cable_for_channel_message(status), "send3", msg, sizeof(msg));
 }
 
 void tiles_midi_note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
@@ -123,10 +251,12 @@ void tiles_midi_send_daw_cc(uint8_t channel, uint8_t controller, uint8_t value) 
 #define MIDI_BROADCAST_CHANNEL_COUNT 15u
 
 void tiles_midi_send_cc_broadcast(uint8_t controller, uint8_t value) {
+    tiles_midi_out_batch_begin();
     tiles_midi_send_cc(TILES_MIDI_MPE_MASTER_CHANNEL, controller, value);
     for (uint8_t i = 0; i < MIDI_BROADCAST_CHANNEL_COUNT; i++) {
         tiles_midi_send_cc((uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + i), controller, value);
     }
+    tiles_midi_out_batch_end();
 }
 
 /* Standard hardware panic: CC 123 (All Notes Off) is the usual cure,
@@ -141,6 +271,14 @@ void tiles_midi_send_panic(void) {
     tiles_midi_send_cc_broadcast(64u, 0u); /* Damper Pedal (Sustain) off */
     tiles_midi_send_cc_broadcast(123u, 0u); /* All Notes Off */
     tiles_midi_send_cc_broadcast(120u, 0u); /* All Sound Off */
+    if (s_parts_separate) {
+        /* Song tracks and Volca play channels 1-9 on PARTS too (DIN gets the
+         * panic twice; harmless). */
+        tiles_midi_out_parts_begin();
+        tiles_midi_send_cc_broadcast(123u, 0u);
+        tiles_midi_send_cc_broadcast(120u, 0u);
+        tiles_midi_out_parts_end();
+    }
 }
 
 void tiles_midi_send_pitch_bend(uint8_t channel, uint16_t bend_14bit) {
