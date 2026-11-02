@@ -1,12 +1,7 @@
 #pragma once
 
-/* NXP/Freescale MPR121 12-electrode capacitive touch controller.
- *
- * Register map and init per the datasheet (Rev 4, 02/2013). Baseline
- * filter values are Freescale's quickstart configuration (AN3891 covers
- * tuning). Touch/release thresholds are 12/9 (see mpr121.c). Final
- * per-electrode sensitivity is a calibration task on the assembled unit;
- * this driver's job is reliable detection. */
+/* MPR121 12-electrode capacitive touch (datasheet Rev 4). Quickstart
+ * baseline filters; thresholds 12/9 (mpr121.c). */
 
 #include <stdbool.h>
 #include <stdint.h>

@@ -1,25 +1,8 @@
 #pragma once
 
-/* Power-on animation, run once at boot (~4.2 s):
- *   1. White "rain" floods down from the function buttons (row 0, the
- *      source) through pad rows 1-4. Underglow off.
- *   2. Buttons and pads fade to dark together.
- *   3. One slow Sentia magenta (#FF00FF) pulse on pads + underglow. The
- *      buttons stay dark: they are monochrome PWM and can't show magenta.
- * Everything is smoothstep-eased with wide soft edges (linear, narrow
- * edges looked jumpy).
- *
- * The time is used for a second Hall baseline capture at the end, after
- * power and temperature have settled a little
- * (tiles_hall_recapture_baseline()).
- *
- * Blocking by design, since nothing else needs to run yet. The frame wait
- * pumps tud_task() (boot_frame_delay()): nothing else services USB, and a
- * plain sleep would stall enumeration during boot.
- *
- * Uses the same standby rendering hooks as services/standby.c
- * (tiles_lighting_set_standby_active() etc.) and board/board_layout.h's
- * grid. */
+/* Power-on animation (~4.2 s, blocking): white rain from the keys down the
+ * pads, a fade to dark, one slow magenta pulse. Ends with a second Hall
+ * baseline capture. Frame waits pump tud_task() so USB enumerates. */
 
 #include <stdbool.h>
 

@@ -1,31 +1,13 @@
 #pragma once
 
-/* DIN MIDI byte queues: the hardware-free half of midi/din_midi.c (rings,
- * classification, coalescing), tested natively
- * (firmware/test/test_din_midi_queue.c). din_midi.c is the thin PIO/UART
- * layer that feeds and drains them.
- *
- * Why TX is more than a FIFO: DIN runs at 31,250 baud, ~1 ms per 3-byte
- * message, and MPE expression (per-note bend and pressure, pedal CCs on
- * several channels) easily outruns it. So:
- *
- *   - RELIABLE: Note On/Off, sustain and other CCs, Program Change...
- *     Queued in order, never merged, dropped only if the queue is truly
- *     full (counted). A lost Note-Off is a stuck note.
- *   - COALESCED: Pitch Bend, Channel Pressure and the continuous CCs (mod,
- *     expression, slide). Only the latest value per (channel, kind) is
- *     kept and sent when the wire has room. The final value (e.g. back to
- *     center) is never lost.
- *   - Order kept where it matters: a channel's pending continuous values
- *     are flushed before any reliable message on that channel, so "bend to
- *     center, then Note-Off" arrives in that order.
- *   - System Real-Time bytes jump the queue (a separate small queue drained
- *     first; they are legal between any two bytes).
- * SysEx and System Common are not sent to DIN (midi/midi_out.c).
- *
- * Threading: each ring has one producer and one consumer, so no locks.
- * TX: main context produces, the PIO TX-FIFO interrupt consumes. RX: the
- * UART RX interrupt produces, main (tiles_midi_in_scan()) consumes. */
+/* DIN byte queues, the hardware-free half of din_midi.c (tested natively).
+ * At 31,250 baud MPE outruns the wire, so:
+ *   - RELIABLE (notes, sustain, other CCs): in order, never merged; a lost
+ *     Note-Off is a stuck note.
+ *   - COALESCED (bend, pressure, continuous CCs): latest per channel and
+ *     kind, flushed before any reliable message on that channel.
+ *   - Real-Time jumps the queue. No SysEx or System Common.
+ * One producer and one consumer per ring, so no locks. */
 
 #include <stdbool.h>
 #include <stdint.h>

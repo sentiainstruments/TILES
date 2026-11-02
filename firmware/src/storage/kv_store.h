@@ -1,29 +1,11 @@
 #pragma once
 
-/* Two-slot, CRC-protected blob store: the hardware-free half of storage/,
- * used under the settings table (profiles/settings.h) and the content store
- * (profiles/content.h), one tiles_kv_t each on its own flash region.
- *
- * Guarantee: one caller-defined payload (up to TILES_KV_MAX_PAYLOAD) lives
- * in one of two flash sectors. A save goes to the OTHER slot and only
- * counts once complete and verified, so a power cut at any instant leaves
- * the previous payload intact. Boot picks the newest valid slot.
- *
- * Slot layout (little-endian, 20-byte header, then the payload):
- *   0  u32 magic            TILES_KV_MAGIC
- *   4  u16 layout_version   this header's layout (TILES_KV_LAYOUT_VERSION)
- *   6  u16 payload_version  the CALLER's schema version
- *   8  u32 seq              increasing; newest valid slot wins
- *  12  u16 payload_len
- *  14  u16 reserved (0)
- *  16  u32 crc32            over bytes 0..15 and the payload
- * A save erases the slot, programs every page except the first, then the
- * first page (with the magic) LAST. A torn write has no magic or a bad
- * CRC, so it can never look valid.
- *
- * Flash access goes through tiles_kv_ops_t, so this runs natively in
- * firmware/test/test_kv_store.c, including a simulated power cut after
- * every erase/program step. storage/storage_flash.c supplies the real ops. */
+/* Two-slot CRC-protected blob store (tested natively, power cuts included).
+ * A save goes to the other slot, first page (with the magic) last, so a
+ * power cut leaves the previous payload; boot takes the newest valid slot.
+ * Header, little-endian: 0 u32 magic, 4 u16 layout_version, 6 u16
+ * payload_version, 8 u32 seq, 12 u16 payload_len, 14 u16 0, 16 u32 crc32
+ * (over 0..15 and the payload). */
 
 #include <stdbool.h>
 #include <stdint.h>

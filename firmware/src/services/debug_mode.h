@@ -1,29 +1,11 @@
 #pragma once
 
-/* Debug mode and crash recorder, for finding real-hardware freezes.
- *
- * Hold diamond+square+circle (triangle UP) for 8 s to toggle. While on,
- * the underglow pulses Sentia magenta (services/lighting.c overrides it
- * whatever mode owns rendering; red means a crash, see
- * crash_indicator.h) and trace characters stream live over the USB-CDC
- * console: the last character before the stream stops is where it hung.
- *
- * Tracing never uses printf(): a blocked USB-CDC printf was itself the
- * cause of several freezes. tiles_debug_trace()/_str() use tud_cdc_write()
- * directly, which never blocks (checked against TinyUSB's cdc_device.c);
- * if nobody drains the console, trace bytes are dropped, never waited for.
- *
- * ---- Surviving the freeze -------------------------------------------------
- * Always on, whether or not debug mode is toggled:
- *
- * 1. Every trace call is also recorded into a ring buffer in
- *    `__uninitialized_ram`, which survives a reset (unlike .bss).
- * 2. A 1 s hardware watchdog turns a hung main loop (main.c feeds it once
- *    per pass) into a reset instead of a frozen instrument. On the next
- *    boot, watchdog_enable_caused_reboot() (false after a normal picotool
- *    reflash) triggers copying the ring into a persistent snapshot. The
- *    next time debug mode is entered, that snapshot is printed once as a
- *    crash report before live tracing continues. */
+/* Debug mode and crash recorder. Hold diamond + square + circle 8 s: the
+ * underglow pulses magenta and trace characters stream on the CDC console
+ * (the last one before it stops is where it hung). Tracing never printf()s
+ * (a blocked printf caused freezes); unread bytes drop.
+ * Always on: traces go to a ring in __uninitialized_ram, and a 1 s watchdog
+ * turns a hang into a reset; the next debug session prints the ring. */
 
 #include <stdbool.h>
 

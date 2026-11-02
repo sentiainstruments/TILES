@@ -50,14 +50,10 @@
 
 /* ---- Hazard / status pins ----------------------------------------------- */
 
-/* PCA9685 shared OE (pin 23 on both chips, active low), per the fab
- * flying-probe netlist (NET_25). NOT an address strap, despite the
- * original handoff doc; don't bring back the old name
- * TILES_GPIO_PCA9685_ADDR_STRAP. The net has only a 10k pull-up (R66) and
- * the two OE inputs, so driving it low is uncontended. Left high-Z at boot
- * (all PCA9685 outputs off) until board_pca9685_enable_outputs(), which
- * must only run once every channel is configured: OE makes the registers
- * (or the POR pin-low state, if a chip failed init) live at once. */
+/* PCA9685 shared OE (pin 23 on both chips, active low; netlist NET_25), not
+ * an address strap. Only a 10k pull-up on the net. High-Z at boot (outputs
+ * off) until board_pca9685_enable_outputs(), which must run only once every
+ * channel is configured. */
 #define TILES_GPIO_PCA9685_OE 20u
 
 #define TILES_GPIO_TOUCH_IRQ_N 21u      /* shared MPR121 IRQ, active low */

@@ -1,27 +1,16 @@
 #pragma once
 
-/* Every flash region the firmware uses, in ONE place so no two features
- * claim the same sector.
- *
- * All at the END of flash, far from the application image (~160 KB);
- * storage_flash.c checks at boot that the image hasn't grown into them and
- * refuses to write if it has. `picotool load` only writes the image's
- * range, so settings and saved patterns survive a firmware update.
- *
- *   top of flash (PICO_FLASH_SIZE_BYTES)
- *   -1 sector   Sequencer pattern bank           services/op_mode.c
- *   -4 sectors  Song mode store                  services/op_mode.c
- *   -2 sectors  Settings (two alternating slots) profiles/settings_persist.c
- *   -2 sectors  Content: custom scales, later    profiles/content.c
- *               layouts (two alternating slots)
- *   -2 sectors  Drum mode's pattern              services/drum_seq.c
- *               (two alternating slots)
- *   -2 sectors  Mode, scale, key, octave         services/play_state.c
- *               (two alternating slots)
- *   -2 sectors  Sequencer autosave (log)         services/op_mode.c
- *               (two alternating slots)
- *   ...         free
- *   0           application image */
+/* Every flash region, in one place, at the end of flash (the image is
+ * ~160 KB; storage_flash.c refuses to write if it grows into them).
+ * picotool only writes the image, so saved data survives updates.
+ *   top -1 sector   sequencer pattern bank      op_mode.c
+ *       -4          Song store                  op_mode.c
+ *       -2          settings                    settings_persist.c
+ *       -2          content (custom scales)     content.c
+ *       -2          drum pattern                drum_seq.c
+ *       -2          mode, scale, key, octave    play_state.c
+ *       -2          sequencer autosave          op_mode.c
+ *   0               application image */
 
 #include "hardware/flash.h"
 

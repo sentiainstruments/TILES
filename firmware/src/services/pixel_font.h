@@ -1,16 +1,8 @@
 #pragma once
 
-/* Tiny pixel font for the pad grid: 4x4 per glyph (one pixel per pad row,
- * 4 columns), monochrome (callers pick the color). Used by the standby
- * marquee (services/standby.c) and the transpose key letter
- * (services/octave_control.c).
- *
- * Format: 4 column bytes per glyph, left to right; bit0 = row 1 (top) ...
- * bit3 = row 4. Monospaced: narrow letters (I, T) leave columns dark.
- *
- * Hand-drawn in the style of the "FOUR BIT" pixel font, since no existing
- * font is designed for 4 rows. Only what's used exists: A-G (note names),
- * I/L/S/T (the "TILES -" marquee), a dash and a space. */
+/* 4x4 pixel font for the pad grid (marquee, transpose letter): 4 column
+ * bytes per glyph, bit0 = top row. Hand-drawn; only A-G, I/L/S/T, dash and
+ * space exist. */
 
 #include <stdint.h>
 

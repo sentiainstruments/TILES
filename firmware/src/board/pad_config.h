@@ -1,12 +1,8 @@
 #pragma once
 
-/* Canonical 24-pad routing table: logical pad (1-24) -> touch electrode,
- * Hall mux/channel, LED mux/channel and haptic PWM channel. Everything else
- * works in logical pad ids and asks board_pad_config() for wiring; nothing
- * else hard-codes a pad's mux channel or address.
- *
- * Source of truth: docs/hardware/sentia_tiles_board_map_v1.json. If the
- * board changes, that file changes first and this table follows. */
+/* The 24-pad routing table: logical pad (1-24) -> touch electrode, Hall
+ * mux/channel, LED mux/channel, haptic channel. Nothing else hard-codes
+ * wiring. Source: docs/hardware/sentia_tiles_board_map_v1.json. */
 
 #include <stdint.h>
 #include "board_pins.h"

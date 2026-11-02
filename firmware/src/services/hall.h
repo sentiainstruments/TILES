@@ -1,28 +1,11 @@
 #pragma once
 
-/* Hall sensor scanning: reads the 24 TMAG5273s through their TCA9548A
- * channels (one channel open at a time across the three muxes: a read
- * switches from the last one) into a per-pad X/Y/Z array; a key at rest
- * reads Z only. Sensors that fail, or reset and stop measuring, are set
- * up again in the background while no pad is touched.
- *
- * Touched pads (services/touch.h) are read every call; untouched pads
- * round-robin one per call. Round-robin alone reaches a pad only every ~24
- * calls (~50 ms), far too slow to see a 30-80 ms strike, which
- * services/expression.c needs for velocity. A pad just released is also
- * read every call until it reads below TILES_HALL_KEY_UP_DEPTH (the key
- * came back up) or TILES_HALL_RELEASE_FOLLOW_MS passes: otherwise its depth
- * stays at the last pressed reading after the finger leaves, and
- * expression.c can't tell a lift from a touch dropout over a held key.
- *
- * Provides raw XYZ, a per-pad rest baseline (captured at init and at the
- * end of the boot animation, then kept true by services/rest_guard.h:
- * drift, a re-zero when an untouched key reads pressed, and silence for a
- * pad touched as its baseline was taken; docs/architecture/
- * defaults-and-safeguards.md "Pad baseline calibration and drift
- * compensation"), and a depth magnitude from it. Depth uses Z
- * for every pad (same doc, "Sensing": straight vertical travel,
- * flat-mounted sensor). No per-pad calibration curve yet. */
+/* Hall scanning: the 24 TMAG5273s through the muxes into per-pad X/Y/Z.
+ * Touched pads read every call, the rest round-robin (~50 ms each, too slow
+ * for a strike); a released pad keeps being read until its key is up, so
+ * expression.c can tell a lift from a dropout. Depth is Z from the rest
+ * baseline, kept true by rest_guard.h. Failed sensors are retried while no
+ * pad is touched. */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -35,14 +18,9 @@ typedef struct {
     bool valid;              /* false if the last read failed or the pad never initialized */
 } tiles_hall_sample_t;
 
-/* Disables all Hall mux channels, then sets up each sensor in turn
- * (select, identify, init, capture rest-Z baseline, deselect). Call after
- * board_i2c_init(). False if any sensor failed; see
- * tiles_hall_last_init_ok(). Failed pads are skipped by the scan instead of
- * blocking the rest.
- *
- * The baseline assumes nothing rests on the pads at power-on; if it did,
- * the rest guard re-zeroes the pad once it's let go (rest_guard.h). */
+/* Sets up every sensor and captures rest baselines; after board_i2c_init().
+ * False if any failed (it's skipped, not blocking). A pad touched at
+ * power-on is re-zeroed by the rest guard once let go. */
 bool tiles_hall_init(void);
 
 /* True if pad (1-24)'s sensor was identified and configured at init. */
@@ -57,13 +35,9 @@ void tiles_hall_scan(void);
 /* Latest raw sample for pad 1-24. Zeroed and invalid if out of range. */
 tiles_hall_sample_t tiles_hall_get_sample(uint8_t logical_pad);
 
-/* Recaptures every initialized pad's rest-Z baseline from a fresh read,
- * like init does (same "at rest now" assumption), at the end of the boot
- * animation and from the serial calibration flow (diagnostics/
- * calibration.h). A pad touched meanwhile keeps its old baseline, marked
- * unconfirmed: it reports no depth until seen at rest (rest_guard.h).
- * Uninitialized pads are skipped. False if any read failed; that pad
- * keeps its old baseline. */
+/* Recaptures rest baselines (end of the boot animation, calibration). A pad
+ * touched meanwhile keeps its old one, unconfirmed. False if a read
+ * failed. */
 bool tiles_hall_recapture_baseline(void);
 
 /* |Z - rest Z| for one pad: an uncalibrated distance from rest, >= 0

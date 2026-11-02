@@ -1,40 +1,17 @@
 #pragma once
 
-/* Drum sequencer mode: a 16-step drum machine on the grid, playing a Drum
- * Rack (or any General MIDI drum kit) on MIDI channel 10
- * (TILES_MIDI_CH_DRUMS). The layout, note map and step engine are in
- * services/drum_pattern.h; this file is the hardware side. services/op_mode.c
- * owns the mode switch, the buttons' shared gestures and the clock.
- *
- *   columns 1-4   the selected drum's steps, one page of 16. Touch: on /
- *                 off, at once (no hold gesture). Circle + a step: every
- *                 drum on that step rolls while held, at once: a step
- *                 repeat at first, then 2, 3, 4 hits per step the harder
- *                 you push, every hit at the same velocity. Slip style:
- *                 the pattern runs on silently underneath and plays on
- *                 from where it got to on release. Nothing is recorded.
- *   columns 5-6   8 drums (C1-G1 in Live's names on the first bank). Tap:
- *                 select (its steps show on the left). Push: play it, with
- *                 the strike's velocity. A finger resting on a drum (not
- *                 pushing) feels a strong kick on each of its steps as the
- *                 pattern plays. Circle + hold 1 s: clear its steps; on to
- *                 3 s: clear the whole pattern.
- *   circle + triangle  the other page (steps 17-32). Anything on page 2
- *                 makes the pattern 32 steps; an empty page 2, 16. (Drums
- *                 follow no scale, so this isn't the scale picker here.)
- *   "-" / "+"     stop / start ("-" twice rewinds). With no clock coming
- *                 in, "+" restarts the clock: step 1 now, not quantized.
- *   circle + "-"/"+"  the previous / next 8 drums.
- *   circle        tap tempo (no external clock).
- *   diamond       DAW transport, as in the other play modes.
- *
- * Colors: orange is the mode's (underglow, steps); each bank of drums has
- * its own orange-red shade on the drum pads; the selected drum is blue, and so is the
- * playhead on a step that sounds; a drum flashes white as it plays; triangle
- * lights on page 2. The beat keeps playing in the background in every other
- * mode, like the sequencer's lanes. The pattern saves itself after every
- * change (its own flash region, through storage/log_store.h, which never
- * erases while the clock runs) and comes back at power-on. */
+/* Drum sequencer mode, hardware side (engine: drum_pattern.h), channel 10.
+ *   columns 1-4    the selected drum's 16 steps: touch toggles; circle +
+ *                  step rolls every drum on it (harder = more hits), slip
+ *                  style, recording nothing
+ *   columns 5-6    8 drums: tap selects, push plays; a resting finger
+ *                  feels its steps; circle + hold 1 s clears it, 3 s all
+ *   circle + triangle  page 2 (steps 17-32)
+ *   "-" / "+"      stop / start; circle + "-"/"+" previous / next 8 drums
+ *   circle         tap tempo; diamond: DAW transport
+ * Orange; the selected drum and sounding playhead blue. Plays on in other
+ * modes; saves itself after every change (log_store, never erasing while
+ * the clock runs). */
 
 #include "kv_store.h"
 #include "midi_clock.h"

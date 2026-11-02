@@ -1,20 +1,12 @@
 #pragma once
 
-/* The step sequencer's pattern (services/op_mode.c plays and edits it) and
- * its autosave form. Hardware-free, so firmware/test/test_seq_pattern.c
- * runs it natively.
- *
- * Autosave blob (little-endian, version TILES_SEQ_BLOB_VERSION), sparse
- * like drum_pattern.h's: only patterns that differ from an empty one.
- *   u8 viewed lane, u8 playing pattern per lane (4)
- *   then per pattern, the four playing ones first:
- *     u8 index (lane * 6 + pattern), u8 length, u8 flags (bit 0: chance on),
- *     u32 armed, u32 has-pitch, u32 edited (chance or repeats not default),
- *     per has-pitch step: u8 note count (0-4), the notes,
- *     per edited step: u8 chance, u8 repeats.
- * Encoding stops before a pattern that wouldn't fit and says so
- * (`truncated`). Decoding resets everything first, clamps values and
- * stops at a damaged record. */
+/* The sequencer's pattern and its autosave blob (tested natively). Blob,
+ * little-endian, sparse:
+ *   u8 viewed lane, u8 playing pattern per lane (4), then per pattern:
+ *   u8 index, u8 length, u8 flags, u32 armed, u32 has-pitch, u32 edited,
+ *   per has-pitch step: u8 count + notes; per edited step: chance, repeats.
+ * Encoding stops before a pattern that won't fit (`truncated`); decoding
+ * resets, clamps and stops at a damaged record. */
 
 #include <stdbool.h>
 #include <stdint.h>

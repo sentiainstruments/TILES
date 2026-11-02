@@ -1,19 +1,8 @@
 #pragma once
 
-/* MPE Member Channel choice: which channel a new note gets, and which note
- * gives up its channel when all are busy. Pure functions over a slot
- * table, tested natively (firmware/test/test_mpe_alloc.c);
- * services/expression.c owns the table and does the sending.
- *
- * Follows MMA RP-053 v1.0 section 3.2: a new note goes on a free channel,
- * preferring the one that last carried the SAME note (so a re-struck note
- * retriggers its own voice instead of stacking a copy), otherwise the one
- * idle longest (so release tails and pedal-held notes finish before their
- * channel is reused). Lowest-free-first, the old rule, kept landing new
- * notes on channels still ringing, cutting tails or bending them.
- *
- * TILES never puts two notes on one channel, so "fewest active notes" is
- * simply "free". */
+/* MPE Member Channel choice (RP-053 3.2), pure and tested natively: a free
+ * channel, preferring the one that last carried the same note, else the
+ * one idle longest (so tails finish); when full, steal the oldest. */
 
 #include <stdbool.h>
 #include <stdint.h>

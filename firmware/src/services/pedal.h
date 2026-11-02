@@ -1,18 +1,9 @@
 #pragma once
 
-/* Pedal input: 1/4" TRS jack, GP26/ADC0. One signal, so the jack does
- * sustain OR expression, like most keyboards' single assignable pedal input.
- *
- *   - Sustain (CC64, default): binary, hysteresis + debounce.
- *   - Expression (CC11): linear, heel (low reading) = 0, toe = 127, the
- *     usual TRS expression-pedal wiring. Not yet verified with a real
- *     expression pedal on this circuit.
- *
- * Mode, polarity and sustain style are settings (`pedal.*`, see
- * profiles/settings_table.c); there is no on-device gesture for them.
- * Polarity defaults to normally-open (unpressed reads high via the pull-up).
- * Auto-sensing polarity/disconnect is not built; see
- * docs/architecture/defaults-and-safeguards.md "Pedal polarity". */
+/* Pedal input (1/4" TRS, GP26/ADC0): sustain (CC64, default) or expression
+ * (CC11, heel 0 to toe 127; untested with a real pedal). Mode, polarity
+ * and style are settings only (pedal.*); polarity defaults to normally
+ * open. */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -31,13 +22,9 @@ typedef enum {
 
 #define TILES_PEDAL_DEFAULT_MODE TILES_PEDAL_MODE_SUSTAIN
 
-/* Who does the sustaining (setting `pedal.sustain_style`):
- *   - SYNTH (default, standard MIDI): CC64; the synth holds released notes.
- *     Sustain covers the whole channel/zone, harmonic plucks included.
- *   - HOLD: no CC64; services/expression.c keeps real notes on while the
- *     pedal is down (tiles_pedal_is_holding_notes()). Harmonic plucks still
- *     end on time. The synth never sees a pedal, so recorded notes are just
- *     longer. */
+/* Sustain style: SYNTH (default) sends CC64 and the synth holds notes,
+ * harmonics included; HOLD sends no CC64 and expression.c keeps real notes
+ * on itself. */
 typedef enum {
     TILES_PEDAL_SUSTAIN_SYNTH = 0,
     TILES_PEDAL_SUSTAIN_HOLD = 1,

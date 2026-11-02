@@ -1,14 +1,8 @@
 #pragma once
 
-/* MIDI input: the ONE reader of USB MIDI (both cables) and DIN. Two
- * readers on the same FIFO would race for bytes, so everything else
- * (services/midi_clock.c, Scene Launch, the melodic echo, identity)
- * registers callbacks here.
- *
- * Parses Real-Time bytes, SysEx frames (0xF0 ... 0xF7) and Note-On/Off,
- * with running status. Other channel-voice messages (CC, Program Change,
- * pressure, pitch bend) are consumed to keep alignment but not dispatched;
- * nothing needs them yet. */
+/* MIDI input: the one reader of USB MIDI and DIN (two readers would race);
+ * everything else registers callbacks. Dispatches Real-Time, SysEx and
+ * Note-On/Off, with running status; other messages are consumed only. */
 
 #include <stdbool.h>
 #include <stddef.h>
