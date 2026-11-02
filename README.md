@@ -9,13 +9,15 @@ the shared definitions that keep them in sync.
 - **`firmware/`** — Pico 2 firmware (Pico SDK C/C++ + TinyUSB). Modular by
   subsystem: `board/`, `drivers/`, `services/`, `midi/`, `usb_vendor/`,
   `profiles/`, `diagnostics/`, `storage/`. See `firmware/README.md`.
+- **`manuals/`** — On-demand manuals for custom mappings, in the Sentia
+  style. See `manuals/AGENTS.md`.
 - **`companion-app/`** — Self-contained desktop configurator (Electron), in
   the spirit of ROLI Dashboard / Roland editors. Remaps pads, edits scales
   and profiles, runs calibration, and streams live diagnostics over USB.
   See `companion-app/README.md`.
-- **`shared/`** — The single source of truth for anything both sides must
-  agree on: the canonical 24-pad board map and the USB vendor protocol
-  definition. Firmware and companion app both consume this instead of
+- **`shared/`** — The single source of truth for anything two parts must
+  agree on: the USB vendor protocol definition, the mapping file, TILES'
+  footprint for drawings, and later the canonical 24-pad board map. Firmware and companion app both consume this instead of
   duplicating hardware/protocol knowledge.
 - **`docs/hardware/`** — Canonical hardware authority for Rev A0: the
   firmware handoff doc, the machine-readable board map, and the firmware
@@ -57,8 +59,8 @@ companion-app UI, diagnostics — hand-rolls its own copy of either.
 - **`shared/`** — `protocol/` documents the v1 text settings protocol the
   firmware implements. `board-map/` is not authored yet; the firmware's
   `board/pad_config.c` is kept by hand against `docs/hardware/`.
-- **`companion-app/`** — planned (brief, package manifest, settings
-  fixture); no app code yet.
+- **`companion-app/`** — in development (Sam).
+- **`manuals/`** — starting (Sebastian).
 
 ## Before any unit leaves the building
 
@@ -80,7 +82,8 @@ only allowed for in-house testing (details, and how to replace each, in
   companion app) is implemented but has never been tried on a Windows
   machine.
 
-## For agents
+## Working here
 
-Start at `AGENTS.md` — it routes to the module-specific doc you actually
-need instead of duplicating it here.
+People and agents alike: start at `AGENTS.md` (team rules, who owns
+what, where to read next) and `CONTRIBUTING.md` (how a change reaches
+`main`).

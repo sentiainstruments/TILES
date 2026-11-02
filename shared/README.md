@@ -1,14 +1,18 @@
 # shared/
 
-The single source of truth that `firmware/` and `companion-app/` both
-consume, instead of each keeping its own copy of hardware or protocol
-knowledge.
+The single source of truth that `firmware/`, `companion-app/` and
+`manuals/` consume, instead of each keeping its own copy of hardware,
+protocol or drawing knowledge.
 
 - **`board-map/`** — the canonical 24-pad table (which touch electrode,
   Hall mux/channel, LED mux/channel, haptic PWM channel, and FPC number
   each logical pad uses), extending `docs/hardware/sentia_tiles_board_map_v1.json`
   with whatever the runtime/config layer needs (default note/scale
   assignment, calibration slot references, etc.).
+- **`mapping/`** — the file a custom mapping travels in, from the
+  companion app to `manuals/`. Not frozen yet; see its README.
+- **`footprint/`** — TILES' face (key outlines, pad grid) from the
+  instrument footprint, for every drawing of TILES.
 - **`protocol/`** — the USB vendor interface wire protocol: command/
   response message IDs, packet framing, versioning, and the calibration/
   diagnostics/remap message definitions.
