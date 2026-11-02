@@ -26,7 +26,8 @@ before re-tuning a constant or reviving an approach that was dropped.
 
 | Module | Role |
 |---|---|
-| `expression` | Touch + Hall fusion: strike detection, velocity, pressure, per-note pitch bend from tilt, vibrato, release velocity, melodic harmonics, MPE channel allocation. |
+| `expression` | Touch + Hall fusion: strike detection, velocity, pressure, release velocity, melodic harmonics, MPE channel allocation; feeds `bend_core`. |
+| `bend_core` | Per-note pitch bend from sideways tilt, with its smoothing, baseline, deadzone and vibrato. No hardware; tested, and recorded captures replay through it. |
 | `note_map` | Pad → note: scales (picker order), key, octave, bass guitar frets, chord strip + melody grid. |
 | `mpe_alloc` | Pure MPE channel choice / steal order (MMA RP-053 3.2). Tested. |
 | `midi_channels` | The 16-channel map: fixed parts (drums 10, game 11, chord 12, sequencer 13-16), pool 2-9 shared by Song and the live MPE zone. Tested. |

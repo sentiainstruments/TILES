@@ -46,6 +46,10 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_physics_core.c src
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_strike_settle.c src/services/strike_settle.c -o /tmp/sentia_tiles_test_strike_settle
 /tmp/sentia_tiles_test_strike_settle
 
+# Pitch bend from tilt: settling, straight presses, tilt direction, range, deadzone.
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_bend_core.c src/services/bend_core.c -lm -o /tmp/sentia_tiles_test_bend_core
+/tmp/sentia_tiles_test_bend_core
+
 # Sequencer autosave blob: round trip, empty patterns, truncation, damage.
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_seq_pattern.c src/services/seq_pattern.c -o /tmp/sentia_tiles_test_seq_pattern
 /tmp/sentia_tiles_test_seq_pattern

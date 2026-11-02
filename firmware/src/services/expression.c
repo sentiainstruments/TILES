@@ -16,6 +16,7 @@
 #include "op_mode.h"
 #include "light_effects.h"
 #include "pedal.h"
+#include "bend_core.h"
 #include "strike_settle.h"
 
 #include "pico/time.h"
@@ -116,48 +117,13 @@ static uint8_t release_velocity_from_fall_rate(float fall_rate) {
     return (uint8_t)((float)RELEASE_VELOCITY_MIN + t * (float)(RELEASE_VELOCITY_MAX - RELEASE_VELOCITY_MIN));
 }
 
-/* ---- Pitch bend from tilt ------------------------------------------------
- * Uses the field's direction (component / |B|), which cancels depth to
- * first order. Magnitude from X and Y, sign from X alone. Per note (each
- * MPE note has its own channel); recentred at the next note's setup, not at
- * Note-Off (that snapped release tails). */
-#define PITCH_BEND_CENTER 8192u
+/* ---- Pitch bend from tilt: bend_core.h ------------------------------------ */
+#define PITCH_BEND_CENTER TILES_BEND_CENTER
 
 /* Cosine delta for full bend; smaller = more sensitive (Feel menu). 0.065
  * from captured comfortable tilts (median 0.053, max 0.085). Predates the
  * depth compensation: may need a fresh capture. */
 static float s_pitch_bend_max_cosine_deviation = 0.065f;
-
-/* Deadzone, as a soft knee. Straight presses moved the cosine up to ~0.05;
- * depth-gated recentring removed most of that, so 0.025. Changed alone:
- * revert first if plain presses start bending. */
-#define PITCH_BEND_DEADZONE_COSINE_DELTA 0.025f
-
-/* Settle time before the bend baseline is taken (bend stays centred): 25 ms
- * read the transient as bend, 250 ms started bends late. Unmeasured. */
-#define PITCH_BEND_SETTLE_MS 120u
-
-/* Slow baseline recentring toward the smoothed X/Y while no bend run is
- * active, snapping fast while depth changes (pressure only couples into
- * tilt then). A bend held many seconds may relax. Unmeasured. */
-#define PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW 0.002f
-/* Baseline rate while depth is actively changing (depth_activity ~1): a
- * bit faster than one smoothing stage (0.08), so it keeps up with a strike
- * without being as noisy as raw samples. Unmeasured. */
-#define PITCH_BEND_BASELINE_RECENTER_ALPHA_FAST 0.25f
-/* Smoothed signed depth rate that counts as fully pressing (signed: depth
- * wobbles during a tilt). First guess. */
-#define PITCH_BEND_DEPTH_ACTIVITY_FULL_SCALE 8.0f
-
-/* A deviation ramps to full weight over this long, so mechanical give
- * (flickers within 100-200 ms) stays small. Unmeasured; lower only with a
- * fresh capture. */
-#define PITCH_BEND_ARM_MS 30u
-
-/* Two-stage EMA on X/Y/magnitude against 6-15 Hz tremor. Invariant: the
- * live delta and the recentre target read the same, fully cascaded stage
- * (splitting it, twice, brought back pressure bend). */
-#define PITCH_BEND_SMOOTHING_ALPHA 0.08f
 
 typedef enum {
     PAD_STATE_IDLE = 0,
@@ -229,54 +195,14 @@ typedef struct {
      * (s_non_mpe_owner_pad). */
     uint32_t touch_claim_seq;
 
-    /* Per-note pitch bend state. pitch_bend_active = whether bend was enabled
-     * when THIS note fired (toggling mid-hold doesn't change it). */
+    /* Per-note pitch bend. pitch_bend_active = whether bend was enabled when
+     * THIS note fired (toggling mid-hold doesn't change it). */
     bool pitch_bend_active;
-    /* Bend baseline: taken after PITCH_BEND_SETTLE_MS, then recentred while no
-     * run is active. */
-    float pitch_bend_baseline_x;
-    float pitch_bend_baseline_y;
-    /* Previous tick's smoothed depth, for pitch_bend_smoothed_depth_rate
-     * (which drives depth_activity and the adaptive baseline rate). */
-    float pitch_bend_prev_depth;
-    /* EMA of the signed depth delta: a tilt's wobble cancels, so only real
-     * pressing reads as activity. */
-    float pitch_bend_smoothed_depth_rate;
-    /* First smoothing stage: the initial baseline, and where the pad settles. */
-    float pitch_bend_smoothed_x;
-    float pitch_bend_smoothed_y;
-    /* Second cascade stage. Both the live delta (current_cosine_x/y) and the
-     * baseline recenter target read THIS stage (see PITCH_BEND_SMOOTHING_ALPHA
-     * for why they must match). */
-    float pitch_bend_smoothed_x2;
-    float pitch_bend_smoothed_y2;
-    /* One stage: magnitude is read identically by both cosine terms, so its
-     * lag cancels out. */
-    float pitch_bend_smoothed_magnitude;
-    /* Magnitude used by both cosine terms; frozen while a bend run is active,
-     * like the baseline (see the scan loop). */
-    float pitch_bend_run_magnitude;
-    /* The compensated delta for this tick. Set directly (no third smoothing
-     * stage; see the scan loop). */
-    float pitch_bend_smoothed_delta;
-    bool pitch_bend_baseline_settled;
-    uint32_t pitch_bend_claim_ms;
+    tiles_bend_t bend;
     uint16_t pitch_bend_last_sent;
     /* The bend's centre for this note: 8192, or above it for a quarter tone
      * (bend_center_for()). */
     uint16_t bend_center;
-    /* Run tracking for PITCH_BEND_ARM_MS: run_active = the delta is outside
-     * the deadzone; run_positive = which side (a sign flip starts a new run);
-     * run_start_ms = when this run began. */
-    bool pitch_bend_run_active;
-    bool pitch_bend_run_positive;
-    uint32_t pitch_bend_run_start_ms;
-    /* Separate fast-wiggle vibrato detector (see VIBRATO_ENERGY_NOISE_FLOOR):
-     * wiggle_energy = smoothed gap between the two cascade stages;
-     * wiggle_active/_start_ms confirm it the same way as the run fields. */
-    float pitch_bend_wiggle_energy;
-    bool pitch_bend_wiggle_active;
-    uint32_t pitch_bend_wiggle_start_ms;
 
     /* HOLD sustain style: this pad's released note, kept on until the pedal
      * lifts (one per pad); held_* captured at release. */
@@ -758,160 +684,10 @@ void tiles_expression_init(void) {
     }
 }
 
-/* Returns X, Y and |B| = sqrt(x^2+y^2+z^2) separately: the depth
- * compensation needs the current magnitude and the baseline X/Y per axis. */
-static void hall_xy_and_magnitude(int16_t x, int16_t y, int16_t z, float *x_out, float *y_out, float *magnitude_out) {
-    float fx = (float)x;
-    float fy = (float)y;
-    float fz = (float)z;
-    *x_out = fx;
-    *y_out = fy;
-    *magnitude_out = sqrtf(fx * fx + fy * fy + fz * fz);
-}
-
-/* component / |B|; a near-zero |B| returns 0. */
-static float direction_cosine_from(float x_component, float magnitude) {
-    if (magnitude < 1.0f) {
-        return 0.0f;
-    }
-    return x_component / magnitude;
-}
-
-/* Confidence ramp: 0..1 over PITCH_BEND_ARM_MS of a run, then 1.
- * `hold_ms` = how long the current run has lasted (0 = none). */
-static float pitch_bend_confidence_multiplier(uint32_t hold_ms) {
-    if (hold_ms >= PITCH_BEND_ARM_MS) {
-        return 1.0f;
-    }
-    return (float)hold_ms / (float)PITCH_BEND_ARM_MS;
-}
-
-/* The MPE spec's default bend range: what a receiver uses if it ignores
- * RPN 0. */
-#define PITCH_BEND_MPE_SPEC_DEFAULT_RANGE_SEMITONES 48.0f
-
-/* Max tilt = 12 semitones even on a receiver stuck at 48 (common synths
- * ignore RPN 0), so output peaks at 25% of full scale. RPNs still sent. */
+/* Max tilt = the declared range on the receiver's default 48-semitone
+ * scale (bend_core.c). */
 #define PITCH_BEND_WIRE_RANGE_COMPENSATION \
-    ((float)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES / PITCH_BEND_MPE_SPEC_DEFAULT_RANGE_SEMITONES)
-
-/* Linear on purpose: an ease-out curve was reverted (it amplified the
- * confidence ramp and steepened the low end, where playing lives). */
-
-/* Cosine delta -> 14-bit bend: soft-knee deadzone, then the confidence
- * ramp. Updates the pad's run tracking. */
-static uint16_t pitch_bend_14bit_from_cosine_delta(pad_expr_t *s, float delta, uint32_t now_ms) {
-    float magnitude = fabsf(delta);
-    bool positive = delta >= 0.0f;
-    float sign = positive ? 1.0f : -1.0f;
-    if (magnitude <= PITCH_BEND_DEADZONE_COSINE_DELTA) {
-        /* Inside the deadzone: no run. */
-        s->pitch_bend_run_active = false;
-        magnitude = 0.0f;
-    } else {
-        /* A run starts on the first deviation past the deadzone, not on each sign
-         * flip (a held tilt flips constantly); only the deadzone ends it. */
-        if (!s->pitch_bend_run_active) {
-            s->pitch_bend_run_active = true;
-            s->pitch_bend_run_start_ms = now_ms;
-        }
-        s->pitch_bend_run_positive = positive;
-        magnitude -= PITCH_BEND_DEADZONE_COSINE_DELTA;
-    }
-
-    float usable_range = s_pitch_bend_max_cosine_deviation - PITCH_BEND_DEADZONE_COSINE_DELTA;
-    if (usable_range < 0.01f) {
-        /* If the menu ever sets sensitivity at or below the deadzone, keep a
-         * small usable range instead of dividing by zero. */
-        usable_range = 0.01f;
-    }
-    float normalized = sign * (magnitude / usable_range);
-
-    uint32_t hold_ms = s->pitch_bend_run_active ? (now_ms - s->pitch_bend_run_start_ms) : 0u;
-    normalized *= pitch_bend_confidence_multiplier(hold_ms);
-
-    if (normalized > 1.0f) {
-        normalized = 1.0f;
-    }
-    if (normalized < -1.0f) {
-        normalized = -1.0f;
-    }
-    int32_t bend = (int32_t)s->bend_center + (int32_t)(normalized * 8191.0f * PITCH_BEND_WIRE_RANGE_COMPENSATION);
-    if (bend < 0) {
-        bend = 0;
-    }
-    if (bend > 16383) {
-        bend = 16383;
-    }
-    return (uint16_t)bend;
-}
-
-/* Separate vibrato detector: reads the gap between the two smoothing stages
- * and adds on top, leaving the tilt path alone. The smoothing kills fast
- * wiggles (12% of a tilt's bend); captured gap: still ~7.5, tilt ~8.5, fast
- * wiggle ~16. */
-#define VIBRATO_ENERGY_NOISE_FLOOR 8.0f
-/* Energy for full vibrato depth (a real wiggle sustains ~16). 8..16 is a
- * soft knee, so a borderline gesture fades in rather than clicking on. */
-#define VIBRATO_ENERGY_FULL_SCALE 16.0f
-/* Wiggle energy must stay above the floor this long first (a released tilt
- * blips for one tick). */
-#define VIBRATO_ARM_MS 80u
-/* Fixed rate, not tracked from the gesture (too little signal for a
- * stable estimate). 5.5 Hz is inside natural string/voice vibrato
- * (4-8 Hz). */
-#define VIBRATO_RATE_HZ 5.5f
-/* Peak added depth in wire units: ~0.9 semitone (after the wire
- * compensation, 12 semitones ~ 2047 units, ~171 per semitone). A design
- * choice; tune by ear. */
-#define VIBRATO_MAX_WIRE_DEPTH 150.0f
-/* Local pi: M_PI isn't guaranteed on this newlib target. */
-#define TILES_EXPRESSION_VIBRATO_PI 3.14159265358979323846f
-
-/* Adds the vibrato to an already computed bend value, after
- * pitch_bend_14bit_from_cosine_delta(), so it can't affect the tilt path. */
-static uint16_t pitch_bend_apply_vibrato(pad_expr_t *s, uint16_t bend, uint32_t now_ms) {
-    bool above_floor = s->pitch_bend_wiggle_energy > VIBRATO_ENERGY_NOISE_FLOOR;
-    if (above_floor) {
-        if (!s->pitch_bend_wiggle_active) {
-            s->pitch_bend_wiggle_active = true;
-            s->pitch_bend_wiggle_start_ms = now_ms;
-        }
-    } else {
-        s->pitch_bend_wiggle_active = false;
-    }
-
-    uint32_t hold_ms = s->pitch_bend_wiggle_active ? (now_ms - s->pitch_bend_wiggle_start_ms) : 0u;
-    float confirm = (hold_ms >= VIBRATO_ARM_MS) ? 1.0f : (float)hold_ms / (float)VIBRATO_ARM_MS;
-
-    float energy_above_floor = s->pitch_bend_wiggle_energy - VIBRATO_ENERGY_NOISE_FLOOR;
-    if (energy_above_floor < 0.0f) {
-        energy_above_floor = 0.0f;
-    }
-    float depth = energy_above_floor / (VIBRATO_ENERGY_FULL_SCALE - VIBRATO_ENERGY_NOISE_FLOOR);
-    if (depth > 1.0f) {
-        depth = 1.0f;
-    }
-    depth *= confirm;
-    if (depth <= 0.0f) {
-        return bend;
-    }
-
-    /* Phase via integer modulo before converting to float: a raw uptime in ms
-     * cast to float loses precision and would drift the LFO over long uptimes. */
-    uint32_t period_ms = (uint32_t)(1000.0f / VIBRATO_RATE_HZ);
-    uint32_t phase_ms = now_ms % period_ms;
-    float lfo = sinf(2.0f * TILES_EXPRESSION_VIBRATO_PI * (float)phase_ms / (float)period_ms);
-
-    int32_t with_vibrato = (int32_t)bend + (int32_t)(depth * VIBRATO_MAX_WIRE_DEPTH * lfo);
-    if (with_vibrato < 0) {
-        with_vibrato = 0;
-    }
-    if (with_vibrato > 16383) {
-        with_vibrato = 16383;
-    }
-    return (uint16_t)with_vibrato;
-}
+    ((float)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES / TILES_BEND_RECEIVER_DEFAULT_RANGE_SEMITONES)
 
 /* Centers every pad that is bending (with MPE, several can be) and turns
  * their bend off. Used when pitch bend is switched off. */
@@ -1083,7 +859,7 @@ static uint16_t bend_center_for(uint8_t pad) {
     if (cents == 0u || !s_mpe_enabled) {
         return PITCH_BEND_CENTER;
     }
-    float wire = 8192.0f * ((float)cents / 100.0f) / PITCH_BEND_MPE_SPEC_DEFAULT_RANGE_SEMITONES;
+    float wire = 8192.0f * ((float)cents / 100.0f) / TILES_BEND_RECEIVER_DEFAULT_RANGE_SEMITONES;
     return (uint16_t)((int32_t)PITCH_BEND_CENTER + (int32_t)(wire + 0.5f));
 }
 
@@ -1093,30 +869,9 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
         return;
     }
     tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
-    float x, y, magnitude;
-    hall_xy_and_magnitude(hs.x, hs.y, hs.z, &x, &y, &magnitude);
-    /* Seed every smoothing stage with the current reading, so there's no fake
-     * ramp up from 0 on each note. */
-    s->pitch_bend_smoothed_x = x;
-    s->pitch_bend_smoothed_x2 = x;
-    s->pitch_bend_smoothed_y = y;
-    s->pitch_bend_smoothed_y2 = y;
-    s->pitch_bend_smoothed_magnitude = magnitude;
-    s->pitch_bend_run_magnitude = magnitude;
-    /* Fresh depth read, not s->smoothed_depth (still the previous note's
-     * value at this point), so depth_activity doesn't start with a false
-     * jump. */
-    s->pitch_bend_prev_depth = (float)tiles_hall_get_depth(pad);
-    /* Reset, so the previous note's rate can't bias the first ticks. */
-    s->pitch_bend_smoothed_depth_rate = 0.0f;
-    s->pitch_bend_smoothed_delta = 0.0f;
-    s->pitch_bend_baseline_settled = false;
-    s->pitch_bend_claim_ms = now_ms;
+    /* A fresh depth read: s->smoothed_depth is still the previous note's. */
+    tiles_bend_start(&s->bend, hs.x, hs.y, hs.z, (float)tiles_hall_get_depth(pad), s->bend_center, now_ms);
     s->pitch_bend_last_sent = s->bend_center;
-    s->pitch_bend_run_active = false;
-    /* Reset, so the previous note's energy can't bias the vibrato detector. */
-    s->pitch_bend_wiggle_energy = 0.0f;
-    s->pitch_bend_wiggle_active = false;
 }
 
 /* The most recently struck held pad other than `exclude_pad` (0 if none).
@@ -1473,106 +1228,16 @@ void tiles_expression_scan(void) {
          * (keeping each pad's filters warm), but only the owner's is sent. */
         if (s->pitch_bend_active) {
             tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
-            if (hs.valid) {
-                float x, y, magnitude;
-                hall_xy_and_magnitude(hs.x, hs.y, hs.z, &x, &y, &magnitude);
-
-                /* Two-stage cascade for X/Y, one stage for magnitude, every tick. Both the
-                 * live delta and the baseline recenter read x2/y2. */
-                s->pitch_bend_smoothed_x += PITCH_BEND_SMOOTHING_ALPHA * (x - s->pitch_bend_smoothed_x);
-                s->pitch_bend_smoothed_x2 += PITCH_BEND_SMOOTHING_ALPHA * (s->pitch_bend_smoothed_x - s->pitch_bend_smoothed_x2);
-                s->pitch_bend_smoothed_y += PITCH_BEND_SMOOTHING_ALPHA * (y - s->pitch_bend_smoothed_y);
-                s->pitch_bend_smoothed_y2 += PITCH_BEND_SMOOTHING_ALPHA * (s->pitch_bend_smoothed_y - s->pitch_bend_smoothed_y2);
-                s->pitch_bend_smoothed_magnitude += PITCH_BEND_SMOOTHING_ALPHA * (magnitude - s->pitch_bend_smoothed_magnitude);
-
-                /* Vibrato energy from the gap between the two stages (read only), updated
-                 * every tick so it's settled when needed. */
-                {
-                    float wiggle_residual_x = s->pitch_bend_smoothed_x - s->pitch_bend_smoothed_x2;
-                    float wiggle_residual_y = s->pitch_bend_smoothed_y - s->pitch_bend_smoothed_y2;
-                    float wiggle_residual_magnitude =
-                        sqrtf(wiggle_residual_x * wiggle_residual_x + wiggle_residual_y * wiggle_residual_y);
-                    s->pitch_bend_wiggle_energy +=
-                        PITCH_BEND_SMOOTHING_ALPHA * (wiggle_residual_magnitude - s->pitch_bend_wiggle_energy);
-                }
-
-                /* Smoothed SIGNED depth delta (see pitch_bend_smoothed_depth_rate), with
-                 * the same alpha as X/Y. */
-                s->pitch_bend_smoothed_depth_rate +=
-                    PITCH_BEND_SMOOTHING_ALPHA * ((s->smoothed_depth - s->pitch_bend_prev_depth) -
-                                                   s->pitch_bend_smoothed_depth_rate);
-
-                /* 0 (depth steady) .. 1 (changing fast), clamped (see
-                 * PITCH_BEND_DEPTH_ACTIVITY_FULL_SCALE). */
-                float depth_activity = fabsf(s->pitch_bend_smoothed_depth_rate) / PITCH_BEND_DEPTH_ACTIVITY_FULL_SCALE;
-                if (depth_activity > 1.0f) {
-                    depth_activity = 1.0f;
-                }
-
-                s->pitch_bend_prev_depth = s->smoothed_depth;
-
-                if (!s->pitch_bend_baseline_settled) {
-                    /* Stay centered until PITCH_BEND_SETTLE_MS, then take the baseline from
-                     * the settled cascade. */
-                    if ((now_ms - s->pitch_bend_claim_ms) >= PITCH_BEND_SETTLE_MS) {
-                        s->pitch_bend_baseline_x = s->pitch_bend_smoothed_x2;
-                        s->pitch_bend_baseline_y = s->pitch_bend_smoothed_y2;
-                        s->pitch_bend_baseline_settled = true;
-                        s->pitch_bend_smoothed_delta = 0.0f;
-                    }
-                } else {
-                    /* Recentre only while no run is confirmed (last tick's state), blending
-                     * SLOW..FAST by depth activity. */
-                    if (!s->pitch_bend_run_active) {
-                        /* Activity is cubed: FAST is ~125x SLOW, and a linear blend let sensor
-                         * noise erase real tilts. */
-                        float activity_shaped = depth_activity * depth_activity * depth_activity;
-                        float recenter_alpha = PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW +
-                                                (PITCH_BEND_BASELINE_RECENTER_ALPHA_FAST -
-                                                 PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW) *
-                                                    activity_shaped;
-                        s->pitch_bend_baseline_x += recenter_alpha * (s->pitch_bend_smoothed_x2 - s->pitch_bend_baseline_x);
-                        s->pitch_bend_baseline_y += recenter_alpha * (s->pitch_bend_smoothed_y2 - s->pitch_bend_baseline_y);
-                        /* Magnitude frozen with the baseline during a run (see below). */
-                        s->pitch_bend_run_magnitude = s->pitch_bend_smoothed_magnitude;
-                    }
-
-                    float baseline_x_at_depth = s->pitch_bend_baseline_x;
-                    float baseline_y_at_depth = s->pitch_bend_baseline_y;
-
-                    /* Depth compensation: compare against the baseline cosine predicted at the
-                     * current magnitude, so a pure depth change gives exactly 0. Invariants
-                     * (each broke things): both terms divide by this tick's same magnitude;
-                     * both use the fully cascaded x2/y2; during a confirmed run the magnitude
-                     * is frozen. Sign: predicted - current. */
-                    float predicted_baseline_cosine_x =
-                        direction_cosine_from(baseline_x_at_depth, s->pitch_bend_run_magnitude);
-                    float current_cosine_x =
-                        direction_cosine_from(s->pitch_bend_smoothed_x2, s->pitch_bend_run_magnitude);
-                    float delta_x = predicted_baseline_cosine_x - current_cosine_x;
-
-                    float predicted_baseline_cosine_y =
-                        direction_cosine_from(baseline_y_at_depth, s->pitch_bend_run_magnitude);
-                    float current_cosine_y =
-                        direction_cosine_from(s->pitch_bend_smoothed_y2, s->pitch_bend_run_magnitude);
-                    float delta_y = predicted_baseline_cosine_y - current_cosine_y;
-
-                    float combined_magnitude = sqrtf(delta_x * delta_x + delta_y * delta_y);
-                    float raw_delta_this_tick = (delta_x >= 0.0f) ? combined_magnitude : -combined_magnitude;
-
-                    /* No third smoothing stage here (X/Y/magnitude are already cascaded; a
-                     * third stage made bends too slow to start). smoothed_delta is simply set. */
-                    s->pitch_bend_smoothed_delta = raw_delta_this_tick;
-                    float delta = s->pitch_bend_smoothed_delta;
-                    uint16_t bend = pitch_bend_14bit_from_cosine_delta(s, delta, now_ms);
-                    bend = pitch_bend_apply_vibrato(s, bend, now_ms);
-                    if (bend != s->pitch_bend_last_sent) {
-                        /* This pad's current bend, for resyncing channel 1 (MPE off). */
-                        s->pitch_bend_last_sent = bend;
-                        if (s_mpe_enabled || s_non_mpe_owner_pad == pad) {
-                            tiles_midi_send_pitch_bend(s->midi_channel, bend);
-                        }
-                    }
+            const tiles_bend_config_t bend_cfg = {s_pitch_bend_max_cosine_deviation,
+                                                  (float)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES};
+            uint16_t bend;
+            if (hs.valid &&
+                tiles_bend_step(&s->bend, &bend_cfg, hs.x, hs.y, hs.z, s->smoothed_depth, now_ms, &bend) &&
+                bend != s->pitch_bend_last_sent) {
+                /* This pad's current bend, for resyncing channel 1 (MPE off). */
+                s->pitch_bend_last_sent = bend;
+                if (s_mpe_enabled || s_non_mpe_owner_pad == pad) {
+                    tiles_midi_send_pitch_bend(s->midi_channel, bend);
                 }
             }
         }
