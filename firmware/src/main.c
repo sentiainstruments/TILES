@@ -1,12 +1,7 @@
 /* SENTIA TILES firmware entry point: brings every subsystem up in the safe
- * boot order (docs/hardware/SENTIA_FIRMWARE_CODEX_START.md), then runs the
- * cooperative main loop, one scan per module per pass.
- *
- * Boot rules: outputs stay off until configured; a subsystem that fails
- * init disables itself and never blocks the rest; a crash-recovery reboot
- * (watchdog) skips the slow, print-only steps so the instrument is back
- * fast. What each module does: firmware/README.md and each module's
- * README. */
+ * boot order, then runs the cooperative main loop. Outputs stay off until
+ * configured; a failed subsystem disables itself; a crash-recovery boot
+ * skips the slow steps. Modules: firmware/README.md. */
 
 #include <stdio.h>
 
@@ -51,11 +46,8 @@
 #include "storage/storage_flash.h"
 #include "usb_vendor/usb_vendor.h"
 
-/* Power-change callback (registered below): a power-source switch can
- * reset the two PCA9685s (button LEDs + haptic motors) without resetting
- * the MCU. Re-assert OE (cheap insurance), then reconfigure the chips,
- * then let buttons and haptics repaint their state. `new_state` is unused;
- * both resync functions read what they need live. */
+/* A power switch can reset the PCA9685s without the MCU: re-assert OE,
+ * reconfigure, then let buttons and haptics repaint. */
 static void tiles_power_recover_haptics_and_buttons(tiles_power_state_t new_state) {
     (void)new_state;
     board_pca9685_enable_outputs();
@@ -74,11 +66,8 @@ static void timing_tick(void) {
 }
 
 int main(void) {
-    /* Read once, first thing (a scratch-register read, safe before any init),
-     * and reused for every skippable boot step. Each boot printf can block up
-     * to the stdio timeout with no terminal attached; a crash-recovery boot
-     * skips them and the boot animation so it's back as fast as USB
-     * re-enumerates. */
+    /* Read once, first: a crash-recovery boot skips the boot prints (each can
+     * block on the stdio timeout) and the animation. */
     bool crash_recovered = watchdog_enable_caused_reboot();
 
     /* Before ANYTHING else: every init below writes crash-recorder traces into
@@ -239,10 +228,8 @@ int main(void) {
      * so a saved "MPE off" announces a withdrawn zone. */
     tiles_expression_announce_mpe_zone();
 
-    /* Between the slower services: USB, MIDI input, the clock and playback
-     * again, so a Clock arriving mid-pass is stepped on (and a USB transfer
-     * that finished is followed by the next one) within a fraction of a
-     * pass, not at the next one (tiles_op_mode_playback_tick()). */
+    /* Between the slower services: USB, MIDI in, clock and playback again, so a
+     * Clock arriving mid-pass is stepped within a fraction of a pass. */
     /* After a crash restart, notes a host or a DIN synth was holding never get
      * their Note-Off: all notes off now (DIN, and USB if it's back already)
      * and again once USB mounts. */
@@ -252,10 +239,8 @@ int main(void) {
     }
     while (true) {
         tiles_loop_stats_mark(time_us_32());
-        /* Must run every pass: it IS the USB stack (control transfers, CDC and
-         * MIDI data). pico_stdio_usb's background servicing is compiled out when
-         * tinyusb_device is linked directly, so without this call nothing is
-         * serviced (the console printed nothing and MIDI never reached the host). */
+        /* Must run every pass: it is the USB stack (pico_stdio_usb's background
+         * servicing is compiled out with tinyusb_device linked directly). */
         tiles_debug_trace('T');
         tud_task();
 

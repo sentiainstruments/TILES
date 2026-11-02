@@ -1,46 +1,22 @@
 #pragma once
 
-/* Pad -> MIDI note mapping: one owner for "which note does this pad play"
- * (scale, key, octave, plus the bass guitar and chord layouts).
- *
- * Default layout: the bottom row holds the lowest notes, ascending left to
- * right, and each row up continues where the row below ended. In logical
- * pad numbers (pad 1 = top-left, pad 24 = bottom-right), chromatic:
- *
- *   pads 19-24 (row 4)    = C, C#, D, D#, E, F      (pad 19 = lowest)
- *   pads 13-18 (row 3)    = F#, G, G#, A, A#, B
- *   pads 7-12  (row 2)    = C ... F                 (next octave)
- *   pads 1-6   (row 1)    = F# ... B                (highest)
- *
- * 24 pads = 2 octaves chromatic. A scale maps each pad's position (degree
- * 0-23) through its interval table, wrapping to the next octave every N
- * degrees (N = notes in the scale). Adding a scale = an enum value + a
- * table in note_map.c; the layout code doesn't change. */
+/* Pad -> MIDI note: scale, key, octave, and the bass guitar and chord
+ * layouts. Default: the bottom row is lowest, left to right, each row up
+ * continuing the one below (pad 19 lowest, pad 6 highest); 24 pads = 2
+ * octaves chromatic. A scale folds positions through its interval table; a
+ * new scale is an enum value plus a table. */
 
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Call once, early in main(). With `crash_recovered` (from
- * watchdog_enable_caused_reboot()), scale/octave/key are left as they were:
- * they live in __uninitialized_ram and survived the reset (see
- * note_map.c). This covers watchdog resets only; RAM doesn't survive power
- * off. */
+/* Call once, early. With `crash_recovered`, scale/octave/key are kept
+ * (__uninitialized_ram survives a watchdog reset, not power off). */
 void tiles_note_map_init(bool crash_recovered);
 
-/* Scales, one pad each in the scale picker (SCALE_GRID_ORDER in
- * note_map.c): chromatic first (the way back), then major, minor, and the
- * rest; pads 16-24 are CUSTOM_* placeholders.
- *
- * PHRYGIAN, LOCRIAN, COMBINATION_DIMINISHED and RAGA_TODI still have
- * correct tables but are no longer on the picker (trimmed for a less
- * overwhelming menu: kept the approachable and "fun" exotic scales). Their
- * enum values stay so nothing else churns.
- *
- * CUSTOM_1..9 take their tables from tiles_note_map_set_custom_scale()
- * (the content store, profiles/content.c, pushes them from the companion
- * app). An empty one (tiles_note_map_scale_is_defined() is false) is
- * unavailable on the picker, and get_note() falls back to chromatic if it
- * is selected anyway (e.g. its scale was deleted while in use). */
+/* Scales in picker order (SCALE_GRID_ORDER): chromatic, major, minor, ...;
+ * pads 16-24 are CUSTOM_1..9 (from the companion app; an empty one isn't
+ * selectable and falls back to chromatic). PHRYGIAN, LOCRIAN,
+ * COMBINATION_DIMINISHED and RAGA_TODI are off the picker; values stay. */
 typedef enum {
     TILES_SCALE_CHROMATIC = 0,
     TILES_SCALE_IONIAN,
@@ -83,10 +59,8 @@ tiles_scale_mode_t tiles_note_map_scale_for_grid_slot(uint8_t slot_1_to_24);
 /* True if `scale` has an interval table; false for an empty CUSTOM_* slot. */
 bool tiles_note_map_scale_is_defined(tiles_scale_mode_t scale);
 
-/* Custom scales, slot 1-9 = TILES_SCALE_CUSTOM_1..9. `intervals` are
- * semitones above the root: 1-12 of them, starting at 0, strictly
- * increasing, all below 12 (tiles_note_map_custom_scale_valid()). count 0
- * empties the slot. Returns false (slot unchanged) for a bad slot or table. */
+/* Custom scale slot 1-9: 1-12 intervals from 0, strictly rising, below 12.
+ * count 0 empties it. False (unchanged) for a bad slot or table. */
 #define TILES_NOTE_MAP_NUM_CUSTOM_SCALES 9u
 #define TILES_NOTE_MAP_MAX_SCALE_NOTES 12u
 bool tiles_note_map_custom_scale_valid(const int8_t *intervals, uint8_t count);
@@ -102,10 +76,8 @@ uint8_t tiles_note_map_get_custom_scale(uint8_t slot_1_to_9, int8_t *out);
 void tiles_note_map_set_scale(tiles_scale_mode_t scale);
 tiles_scale_mode_t tiles_note_map_get_scale(void);
 
-/* Octave shift in whole octaves, set by services/octave_control.c
- * ("-"/"+") but owned here with the rest of the mapping.
- * +/-3 matches the LED patterns and keeps the 24-pad span well inside
- * 0-127 (12..107): a UX bound, not a MIDI-range clamp. */
+/* Octave shift (set by octave_control.c). +/-3 keeps the span in 12..107:
+ * a UX bound. */
 #define TILES_NOTE_MAP_MAX_OCTAVE_SHIFT 3
 void tiles_note_map_set_octave_shift(int8_t octaves);
 int8_t tiles_note_map_get_octave_shift(void);
@@ -115,29 +87,16 @@ int8_t tiles_note_map_get_octave_shift(void);
 void tiles_note_map_set_chord_octave_shift(int8_t octaves);
 int8_t tiles_note_map_get_chord_octave_shift(void);
 
-/* Melodic layouts (the Layouts menu: Feel menu, circle + triangle;
- * setting layout.melodic). Melodic mode's surface only (chord mode's grid
- * and bass guitar keep theirs).
- *   ROWS     the default above: rows of 6, each continuing the row below.
- *   COLUMNS  three 2-pad-wide columns rising from the bottom, two notes a
- *            row (pad 19 C, 20 C#, 13 D, 14 D#, ... then the next column).
- *            With a scale of up to 7 notes each column starts on the root,
- *            an octave above the last (a 7-note scale: C to C, the top C
- *            repeated at the next column's foot, three octaves in all);
- *            8 or more notes, chromatic too, run on without repeats. */
-/*   FOURTHS  rows a fourth apart (in key: that many scale steps), like
- *            Push, guitar or bass.
- *   KEYS     a piano in row pairs: white keys below, black keys above the
- *            white key on their left, gaps silent and dark.
- *   FIFTHS   rows a fifth apart (in key: that many steps), like violin or
- *            cello, starting an octave lower.
- *   TONNETZ  right = up a fifth, up a row = up a major third, folded into
- *            C3..F#5: a major triad is an L of three pads.
- *   QUARTER_TONES  one octave in 24 steps; odd pads sound 50 cents up
- *            (expression.c bends them, MPE only).
- * Keys, Tonnetz and Quarter tones place pitches: a scale lights them
- * (out-of-scale pads dark but playable, like sharps in Rows). Layouts menu
- * pads 1-7 in this order. */
+/* Melodic layouts (Layouts menu; layout.melodic), melodic mode only.
+ *   ROWS     the default above.
+ *   COLUMNS  three 2-pad columns rising two notes a row; scales of up to 7
+ *            notes restart each column on the root, an octave up. */
+/*   FOURTHS  rows a fourth apart (in key: scale steps).
+ *   KEYS     a piano in row pairs, black keys above white, gaps silent.
+ *   FIFTHS   rows a fifth apart, an octave lower.
+ *   TONNETZ  right = a fifth, up = a major third, in C3..F#5.
+ *   QUARTER_TONES  one octave in 24 steps; odd pads bent 50 cents (MPE).
+ * Keys, Tonnetz and Quarter tones: the scale lights pads, all play. */
 typedef enum {
     TILES_LAYOUT_ROWS = 0,
     TILES_LAYOUT_COLUMNS,
@@ -168,24 +127,16 @@ int8_t tiles_note_map_get_key_offset(void);
  * octave (or bass guitar / chord layout). 0 for an out-of-range pad. */
 uint8_t tiles_note_map_get_note(uint8_t logical_pad);
 
-/* Nearest note to `note` that is in the current scale and key (`note`
- * itself if it already is). The sequencer stores notes unchanged and runs
- * them through this when they play, so changing the scale changes what
- * you hear without rewriting patterns. Searches outward by semitone
- * (lower neighbor wins a tie), at most an octave. */
+/* Nearest in-scale note (lower wins a tie, within an octave). Stored
+ * sequencer notes play through this, so a scale change needs no rewrite. */
 uint8_t tiles_note_map_quantize_to_scale(uint8_t note);
 
-/* True if this pad plays the tonic (for idle lighting). Positional:
- * transposing changes what the root pads play, not which pads they are.
- * The count depends on the scale: 2 in chromatic and 7-note scales, more
- * for shorter ones (pentatonic 5, whole tone 4, diminished 3). False for
- * an out-of-range pad. */
+/* True if the pad plays the tonic (positional: transposing doesn't move
+ * it). For idle lighting; false out of range. */
 bool tiles_note_map_is_root_pad(uint8_t logical_pad);
 
-/* True if this pad's degree is a PERFECT fifth (7 semitones) above the
- * tonic, checked against the interval table, not the degree position (a
- * scale without a perfect fifth gets no fifth pads). Chord-mode aware.
- * For idle lighting. False out of range. */
+/* True if the pad is a perfect fifth above the tonic, by interval (a scale
+ * without one has none). For idle lighting; false out of range. */
 bool tiles_note_map_is_fifth_pad(uint8_t logical_pad);
 
 /* The scale's third: the major third (4 semitones) if the scale has one,
@@ -197,10 +148,8 @@ bool tiles_note_map_is_third_pad(uint8_t logical_pad);
 bool tiles_note_map_is_natural_pad(uint8_t logical_pad);
 
 /* ---- Bass guitar mode --------------------------------------------------
- * Each row is a string, each column a fret (standard 4-string bass tuning,
- * TAB order; see note_map.c). While active, get_note() uses this instead
- * of the scale layout, so expression.c's whole pipeline plays it unchanged.
- * Set by services/op_mode.c's bass guitar mode. */
+ * Rows are strings, columns frets (4-string tuning, TAB order). While on,
+ * get_note() uses it, so expression.c plays it unchanged. */
 void tiles_note_map_set_guitar_mode(bool active);
 bool tiles_note_map_is_guitar_mode_active(void);
 
@@ -209,20 +158,13 @@ bool tiles_note_map_is_guitar_mode_active(void);
 void tiles_note_map_set_guitar_fret_offset(uint8_t offset);
 uint8_t tiles_note_map_get_guitar_fret_offset(void);
 
-/* True if the pad's current fret carries a standard neck inlay
- * (3/5/7/9/15/17/19/21, double dots at 12/24). Marks the whole column,
- * like a real inlay. *out_is_octave (if non-NULL) flags 12/24. For idle
- * lighting; bass guitar mode only. */
+/* True if the pad's fret has a neck inlay (3/5/7/9/15/17/19/21; 12 and 24
+ * set *out_is_octave). Bass guitar idle lighting. */
 bool tiles_note_map_is_guitar_fret_marker_pad(uint8_t logical_pad, bool *out_is_octave);
 
 /* ---- Chord mode --------------------------------------------------------
- * Columns 1-2 (8 pads) are a chord strip read bottom-to-top, left-to-right
- * like the rest of the board; columns 3-6 are a 4x4 melody grid using the
- * normal scale folding (see note_map.c chord_mode_degree()).
- *
- * Chord pads are claimed by services/op_mode.c, which plays
- * tiles_note_map_get_chord_notes() directly (one MIDI note can't be a
- * chord). Melody pads go through expression.c's normal pipeline. */
+ * Columns 1-2 are the chord strip (op_mode.c plays its chords); columns
+ * 3-6 a 4x4 melody grid through expression.c. */
 void tiles_note_map_set_chord_mode(bool active);
 bool tiles_note_map_is_chord_mode_active(void);
 
@@ -230,15 +172,8 @@ bool tiles_note_map_is_chord_mode_active(void);
  * which paints the strip one color. */
 bool tiles_note_map_is_chord_region_pad(uint8_t logical_pad);
 
-/* The diatonic chord stack for a chord pad: root, 3rd, 5th, 7th, 9th,
- * 11th, 13th (indices 0-6), built by stacking thirds in a 7-note scale so
- * the triad quality follows the scale like an auto-chord organ. Already
- * one octave below the matching melody note. Uses the current scale if it
- * has 7 notes, else Ionian (stacked thirds only make real chords in a
- * diatonic scale).
- *
- * Always the same 7 notes for a pad: voicing (spread, bass note, how many
- * voices per pressure tier) is op_mode.c's job and is deliberately static
- * and predictable. Writes zeros for a non-chord pad. */
+/* A chord pad's diatonic stack: root, 3rd ... 13th (0-6), from the current
+ * scale if it has 7 notes, else Ionian; an octave below the melody. Always
+ * the same 7 notes (voicing is op_mode.c's). Zeros for a non-chord pad. */
 #define TILES_NOTE_MAP_CHORD_NUM_NOTES 7u
 void tiles_note_map_get_chord_notes(uint8_t logical_pad, uint8_t out_notes[TILES_NOTE_MAP_CHORD_NUM_NOTES]);

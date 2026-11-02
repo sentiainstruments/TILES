@@ -20,15 +20,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* Square LED: HELD matches normal press feedback; TOGGLE_ON is the resting
- * glow while pitch bend is on, a little dimmer than a press ("less ... but
- * not by a lot"). First guess. */
+/* Square LED: HELD = press feedback; TOGGLE_ON = the glow while bend is on,
+ * a little dimmer. First guess. */
 #define SQUARE_LED_HELD_LEVEL 1.0f
 #define SQUARE_LED_TOGGLE_ON_LEVEL 0.8f
 
-/* Circle+square hold that toggles MPE, edge-latched (s_mpe_toggle_fired)
- * so one long hold fires once. The same gesture once toggled an
- * "expression mute" (since removed). */
+/* Circle + square hold toggles MPE, edge-latched (fires once per hold). */
 #define EXPRESSION_MPE_TOGGLE_HOLD_MS 2000u
 
 /* Square held ALONE this long locks the menu open (sticky); the menu
@@ -48,10 +45,7 @@
 #define SENTIA_MAGENTA_G 0.0f
 #define SENTIA_MAGENTA_B 1.0f
 
-/* Unselected pads sit at this fraction of magenta, not dark: readable but
- * clearly not selected. 0.5 matches the scale picker's
- * OP_SCALE_AVAILABLE_LEVEL so both menus look the same. The "off"
- * indicator's dim phase uses the same level. Unmeasured. */
+/* Unselected pads at half magenta, matching the scale picker. Unmeasured. */
 #define SUBMENU_UNSELECTED_LEVEL 0.5f
 
 /* Menu standard: the selected/active item is always bright pulsing white
@@ -90,11 +84,8 @@ typedef enum {
 static const uint8_t LED_INTENSITY_BY_COLUMN[EXPRESSION_SUBMENU_MAX_COLUMN] = {0u, 4u, 16u, 36u, 64u, 100u};
 #define LED_INTENSITY_DEFAULT_COLUMN EXPRESSION_SUBMENU_MAX_COLUMN
 
-/* Selected column (1-6) per row: 4 for rows 1-3, 6 for LED intensity. Row 1
- * (top) = haptics, row 4 (bottom) = LED intensity. Pad taps and square's
- * "-"/"+" both change it through apply_row(). LED intensity is a saved
- * setting, so its row shows the column nearest the current value
- * (selected_column()) rather than this. */
+/* Selected column (1-6) per row (top = haptics, bottom = LED intensity).
+ * LED intensity is saved, so its row shows the nearest column instead. */
 static uint8_t s_row_column[EXPRESSION_SUBMENU_NUM_ROWS];
 
 /* s_submenu_sticky survives a square release once locked; s_submenu_visible
@@ -128,10 +119,8 @@ static bool s_square_alone_was_held;
 static uint32_t s_square_alone_hold_start_ms;
 static bool s_submenu_toggle_fired;
 
-/* Column 1..6 -> value, linear between three anchors: column 1, column 4
- * (the default) and column 6. Every row uses this shape; only the anchor
- * values differ, and "stronger" can be larger or smaller (bend and
- * aftertouch sensitivity are smaller-is-stronger). */
+/* Column 1..6 -> value, linear between column 1, column 4 (default) and
+ * column 6. For bend and pressure, smaller is stronger. */
 static float piecewise_column_value(uint8_t column, float value_col1, float value_col4, float value_col6) {
     if (column <= EXPRESSION_SUBMENU_DEFAULT_COLUMN) {
         float t = (float)(column - EXPRESSION_SUBMENU_MIN_COLUMN) /
@@ -151,14 +140,8 @@ static void apply_row_haptics(uint8_t column) {
     tiles_haptics_set_intensity(value);
 }
 
-/* Row 2: pitch bend sensitivity (max cosine deviation; SMALLER is more
- * sensitive). Default 0.065 comes from captured data: a deliberate tilt
- * on this hardware rarely exceeds ~0.085 (see expression.c).
- *
- * Not the usual symmetric spread: with the deadzone at 0.04, half the
- * default (0.0325) would sit below it and do nothing. Column 1 (0.10) and
- * column 6 (0.055) come from the captured deliberate-tilt range (median
- * 0.0526, p90 0.0626). */
+/* Row 2: bend sensitivity (smaller = more). Default 0.065 from captured
+ * tilts; not symmetric, since half of it would sit inside the deadzone. */
 static void apply_row_pitch_bend(uint8_t column) {
     float value = piecewise_column_value(column, 0.10f, 0.065f, 0.055f);
     tiles_expression_set_pitch_bend_sensitivity(value);
@@ -328,10 +311,8 @@ static void close_deep(void) {
     s_circle_press_had_long_action = true;
 }
 
-/* Light effects menu: pad 1 off, pads 2-6 the white effects, 7-12 the
- * colour ones (light_effects.h order), 13-24 empty for later. Layouts
- * menu: pads 1-7 in note_map.h's order, the rest empty. A pad picks and
- * closes; any button closes without picking. */
+/* Light effects: pad 1 off, 2-6 white effects, 7-12 colour ones. Layouts:
+ * pads 1-7 in note_map.h's order. A pad picks; any key closes. */
 static bool deep_slot_valid(uint8_t pad) {
     return s_deep == DEEP_EFFECTS ? pad <= (uint8_t)TILES_FX_COUNT : pad <= (uint8_t)TILES_NUM_LAYOUTS;
 }
@@ -382,14 +363,9 @@ static void deep_slot_rgb(uint8_t pad, float rgb[3]) {
     }
 }
 
-/* Both deeper menus: a finger resting on a pad (no press) previews it on
- * the whole grid after DEEP_PREVIEW_DELAY_MS (a brush past a pad shows
- * nothing): Light effects plays the touched pad as if it were pressed,
- * repeatedly, soft to hard and back (the colour effects' hues follow
- * velocity), over the melodic look dimmed as in play; Layouts shows the layout's resting colours (roots, fifths,
- * sharps, gaps, quarter tones). A press (Hall past the strike depth) picks
- * it and closes; lifting goes back to the menu, nothing changed. A touch on
- * another pad moves the preview there. */
+/* A resting finger previews the pad after DEEP_PREVIEW_DELAY_MS: Light
+ * effects plays it soft to hard and back, Layouts shows the resting
+ * colours. A press picks; lifting goes back unchanged. */
 #define DEEP_PRESS_DEPTH TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA
 #define DEEP_PREVIEW_DELAY_MS 300u /* first guess */
 #define DEEP_FRAME_WRITES 3u /* pads per scan (lighting.h: standby frame) */
@@ -649,10 +625,8 @@ void tiles_expression_control_scan(void) {
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
     bool square_held = tiles_button_is_pressed(TILES_SQUARE_BUTTON_ID);
 
-    /* While asleep, let standby handle square/circle: the menu opens the
-     * instant square is held, which claims the grid, and main.c doesn't run
-     * standby's wake logic while something owns the grid, so square couldn't
-     * wake the board. Edge tracking stays current. */
+    /* Asleep: leave square and circle to standby, or the menu would claim the
+     * grid and square couldn't wake the board. */
     if (tiles_standby_is_active() || tiles_standby_is_deep_sleep()) {
         s_square_was_held = square_held;
         s_circle_was_held = circle_held;

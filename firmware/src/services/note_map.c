@@ -6,11 +6,8 @@
 
 #include "pico/platform/sections.h"
 
-/* In __uninitialized_ram (like the crash recorder's ring) so scale, octave
- * and key survive a watchdog reset; ordinary statics are re-initialized
- * on every reset. Such variables can't have initializers, so the
- * fresh-boot defaults are set in tiles_note_map_init() unless this boot is
- * a crash recovery. */
+/* __uninitialized_ram, so scale, octave and key survive a watchdog reset;
+ * no initializers, so tiles_note_map_init() sets fresh-boot defaults. */
 static tiles_scale_mode_t __uninitialized_ram(s_scale);
 static int8_t __uninitialized_ram(s_octave_shift);
 static int8_t __uninitialized_ram(s_key_offset);
@@ -31,9 +28,7 @@ void tiles_note_map_init(bool crash_recovered) {
 }
 
 /* ---- Bass guitar mode ----------------------------------------------------
- * Standard 4-string bass tuning E1 A1 D2 G2 (MIDI 28/33/38/43), strings a
- * fourth apart. Rows follow TAB notation: highest string on top, so row 1
- * (nearest the buttons) = G2 and row 4 = E1. */
+ * E1 A1 D2 G2 (MIDI 28/33/38/43), TAB order: row 1 = G2, row 4 = E1. */
 #define GUITAR_NUM_STRINGS 4u
 #define GUITAR_VISIBLE_FRETS 6u
 #define GUITAR_MAX_FRET 24u /* a common full-size neck */
@@ -118,9 +113,7 @@ bool tiles_note_map_is_guitar_fret_marker_pad(uint8_t logical_pad, bool *out_is_
 }
 
 /* ---- Chord mode -------------------------------------------------------
- * See note_map.h. Columns 1-2 are the 8-pad chord strip, columns 3-6 the
- * 4x4 melody grid; both use the same bottom-to-top, left-to-right degree
- * sweep as pad_degree(), narrowed to their width. */
+ * Strip and melody grid use pad_degree()'s sweep, narrowed to their width. */
 #define CHORD_REGION_MAX_COL 2u
 #define CHORD_REGION_NUM_COLS 2u
 #define CHORD_MELODY_MIN_COL 3u
@@ -137,10 +130,8 @@ bool tiles_note_map_is_guitar_fret_marker_pad(uint8_t logical_pad, bool *out_is_
 #define CHORD_NINTH_DEGREE_STEP 8u
 #define CHORD_ELEVENTH_DEGREE_STEP 10u
 #define CHORD_THIRTEENTH_DEGREE_STEP 12u
-/* Stacked scale-degree thirds only make real thirds and fifths in a 7-note
- * scale; on chromatic (the boot default) they made "random 3-note groups".
- * So the chord strip always harmonizes against a 7-note scale: see
- * chord_mode_scale_table(). */
+/* Stacked thirds only make real chords in a 7-note scale (on chromatic they
+ * were random groups), so the strip always uses one. */
 #define CHORD_DIATONIC_SCALE_NOTE_COUNT 7u
 
 static bool s_chord_mode_active;
@@ -200,11 +191,8 @@ static uint8_t pad_degree(const tiles_pad_config_t *cfg) {
 
 static uint8_t current_scale_note_count(void);
 
-/* The columns layout (note_map.h): three 2-pad-wide columns, each rising
- * two notes a row from the bottom. A scale of up to 7 notes starts each
- * column on the root, an octave above the one before (so a 7-note scale's
- * top root repeats at the next column's foot, and shorter scales repeat a
- * few more notes); 8 or more (chromatic too) run on, column after column. */
+/* Columns layout: scales of up to 7 notes restart each column on the root,
+ * an octave up; 8 or more run on. */
 #define COLUMNS_LAYOUT_SLOTS 8u
 static uint8_t columns_degree(const tiles_pad_config_t *cfg) {
     uint8_t column = (uint8_t)((cfg->col - 1u) / 2u);
@@ -251,16 +239,8 @@ static uint8_t melodic_degree(const tiles_pad_config_t *cfg) {
 /* Fifths spans the most: it starts an octave lower. */
 static int8_t melodic_octave_shift(void);
 
-/* The absolute layouts: semitones above the base note (before octave and
- * key), -1 for a pad with no note (Keys' gaps), and the quarter-tone
- * offset in cents.
- *   Keys          a piano in row pairs: white keys on the lower row of the
- *                 pair (C D E F G A, then B C D E F G), black keys above
- *                 the white key on their left, no key between E-F or B-C.
- *   Tonnetz       right = up a fifth, up a row = up a major third, folded
- *                 into C3..F#5: a major triad is an L of three pads.
- *   Quarter tones the 24 pads are one octave in 24 steps; odd pads sit
- *                 50 cents up (expression.c bends their note, MPE only). */
+/* Absolute layouts: semitones above the base note, -1 = no note (Keys'
+ * gaps), plus the quarter-tone offset in cents. */
 static const uint8_t KEYS_WHITE[12] = {0u, 2u, 4u, 5u, 7u, 9u, 11u, 12u, 14u, 16u, 17u, 19u};
 static int absolute_semitones(const tiles_pad_config_t *cfg, uint8_t *cents) {
     int col = cfg->col - 1, row_up = 4 - cfg->row;
@@ -292,9 +272,7 @@ static int absolute_semitones(const tiles_pad_config_t *cfg, uint8_t *cents) {
 }
 
 /* ---- Scale interval tables ---------------------------------------------
- * Semitones from the tonic, standard definitions. One array per scale plus
- * a {pointer, count} lookup, since lengths vary (5-12 notes) and folding
- * needs the real count. */
+ * Semitones from the tonic, with a {pointer, count} lookup (5-12 notes). */
 static const int8_t CHROMATIC_INTERVALS[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 static const int8_t IONIAN_INTERVALS[] = {0, 2, 4, 5, 7, 9, 11};
 static const int8_t DORIAN_INTERVALS[] = {0, 2, 3, 5, 7, 9, 10};
@@ -612,12 +590,8 @@ uint8_t tiles_note_map_get_note(uint8_t logical_pad) {
     }
 
     if (s_chord_mode_active) {
-        /* Chord-strip pads never play through here (they use
-         * get_chord_notes()); this returns their root at melodic pitch only so a
-         * stray call gets something sane.
-         *
-         * Melody-grid pads (col 3-6) play here with the SELECTED scale, like a
-         * small melodic mode. Only the chord strip needs the 7-note table. */
+        /* Chord-strip pads play via get_chord_notes(); this returns their root
+         * only so a stray call is sane. Melody pads use the selected scale. */
         uint8_t degree = chord_mode_degree(cfg);
         int note = note_for_scale_degree_using(current_scale_table(), degree);
         if (note < 0) {
@@ -747,10 +721,7 @@ bool tiles_note_map_is_root_pad(uint8_t logical_pad) {
     if (absolute_layout_pad(cfg)) {
         return absolute_role(cfg) == 0;
     }
-    /* The root repeats every table.count degrees (every table starts at 0);
-     * key offset cancels out. Chord mode uses its own degree sweep and the
-     * selected scale's count, matching what its melody grid plays. The chord
-     * strip is painted one color anyway, so its result doesn't matter. */
+    /* The root repeats every table.count degrees; the key offset cancels. */
     uint8_t degree = s_chord_mode_active ? chord_mode_degree(cfg) : melodic_degree(cfg);
     uint8_t scale_note_count = current_scale_table().count;
     return (degree % scale_note_count) == 0u;
