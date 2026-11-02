@@ -69,14 +69,10 @@ static float s_tap_interval_ms; /* averaged ms per quarter note, valid once esta
 /* In microseconds: whole milliseconds per pulse ran 120 BPM at 119. */
 static uint64_t s_next_virtual_pulse_due_us;
 
-/* Clock lead (setting midi.clock_lead_ms, tiles_midi_clock_set_lead_ms()):
- * following an external clock, each pulse is let through this long before
- * it is due, predicted from the spacing of the last Clocks, so the notes it
- * triggers make up the round trip they lose (the DAW's clock out, USB both
- * ways, this board's pass, the DAW stamping what comes back) and land on
- * the DAW's grid. At most LEAD_MAX_FRACTION of a pulse (never a whole pulse
- * early), and only once LEAD_MIN_CLOCKS Clocks have set the pace; the
- * downbeat after a Start can't be foreseen and comes as it arrives. */
+/* Clock lead (midi.clock_lead_ms): each external pulse is let through this
+ * early, predicted from recent spacing, so notes make up the round trip and
+ * land on the DAW's grid. At most part of a pulse, only once the pace is
+ * set; the downbeat after a Start comes as it arrives. */
 #define LEAD_MAX_FRACTION 0.75f
 #define LEAD_PACE_CLOCKS 25u /* up to 24 intervals: a beat */
 #define LEAD_MIN_CLOCKS 3u
@@ -121,10 +117,8 @@ void tiles_midi_clock_init(void) {
 
 static void catch_up_to_visible(void);
 
-/* Waits for the next Clock to start there, `position` pulses into the song,
- * with the counter set so that Clock's count has the song position's phase
- * in the beat (pulse_count % 24 matches the DAW's beats). Stopped
- * meanwhile, so nothing steps across the jump. */
+/* Waits for the next Clock to start `position` pulses into the song, phase
+ * aligned to the DAW's beats; stopped meanwhile. */
 static void start_on_next_clock(uint32_t position) {
     s_running = false;
     s_start_pending = true;
@@ -365,13 +359,9 @@ static void midi_clock_on_realtime_byte(uint8_t realtime_byte, uint32_t now_ms) 
         break;
     case MIDI_REALTIME_START:
         printf("[midi_clock] real Start (0xFA) received, pulse_count=%lu\n", (unsigned long)s_pulse_count);
-        /* Playback starts on the next Clock, the downbeat: step 1 then, and
-         * every later step a whole number of steps after it, on the DAW's grid
-         * (starting here put every step after the first one Clock early when
-         * the Start arrived a pass before its Clock). The counter is set so
-         * that Clock lands on a beat boundary (pulse_count % 24 == 0 on the
-         * DAW's beats), which the quantized starts and the beat flash read;
-         * stopped meanwhile, so nothing steps across the jump. */
+        /* Playback starts on the next Clock, the downbeat, with the counter set so
+         * it lands on a beat (starting here put steps one Clock early). Stopped
+         * meanwhile. */
         s_spp_valid = false; /* a Start is always the top */
         start_on_next_clock(0u);
         s_last_external_pulse_ms = now_ms;
@@ -413,12 +403,8 @@ static void midi_clock_on_realtime_byte(uint8_t realtime_byte, uint32_t now_ms) 
 void tiles_midi_clock_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
-    /* External clock appearing counts as a Start. If Live was already playing
-     * before TILES was listening (or the port reconnected), only Clock bytes
-     * arrive, no Start, and the sequencer never latched on. So when external
-     * clock becomes active: running = true (external clock has priority) and
-     * start_edge = true, which re-anchors every lane's step phase to the
-     * current pulse_count. Real Start/Stop still behave as before. */
+    /* External clock appearing counts as a Start (Live may have been playing
+     * before TILES listened, sending only Clocks), so every lane re-anchors. */
     bool external_active_now = tiles_midi_clock_external_active(now_ms);
     if (external_active_now != s_external_was_active) {
         /* Log acquire/loss. If ACQUIRED never prints while Live plays, Live isn't

@@ -1,57 +1,17 @@
 #pragma once
 
-/* Bouncing notes mode: every column is a lane where a ball bounces; it plays
- * the lane's note each time it lands on the bottom pad. The physics is
- * services/bounce_core.h; this file is the hardware side. services/op_mode.c
- * owns the mode switch, the shared buttons and the clock.
- *
- *   pads          tap: the column's ball drops from that pad's height
- *                 (bottom = 1 .. top = 4) and keeps bouncing; the same
- *                 height again stops it (off). Higher drops land less often
- *                 and louder: heights 1-4 land every 1, 2, 4, 6 eighths.
- *                 Taps act on the lift.
- *   hold a pad    picks the column's pitch, as a held sequencer step does:
- *                 the pads turn into the melodic surface with the lane's
- *                 note pulsing white; touch any pad for its note (circle +
- *                 triangle backs out). The balls keep bouncing meanwhile.
- *   circle + "-"/"+"  scroll one column: 12 lanes, 6 shown. All pads flash
- *                 pink at either end.
- *   "-" / "+"     stop / start as in the sequencer ("-" twice drops every
- *                 ball back to its top; "+" with no clock coming in starts
- *                 at once and restarts the clock; following a DAW's clock,
- *                 every ball lands on its next beat, so they bounce on its
- *                 grid).
- *   circle        tap tempo.
- *   square        click: Real gravity on/off (its LED lit while on); held:
- *                 the Feel menu, as in every mode.
- *
- * Real gravity, the expressive version: a tap throws the column's ball as
- * it lifts (the pad's row sets the base height, how hard you hit adds up
- * to two pads, off the top of the grid and back; a hold only picks the
- * pitch), and every landing keeps 70% of
- * the height, so it bounces lower, faster and softer until it rests: the
- * accelerating rhythm of a dropped ball, in free time scaled by the tempo
- * (bounce_core.h). Each tap throws again.
- * "-" catches every ball, "+" throws every lane again as it last was.
- * Switching either way keeps every ball where it is and the notes sounding:
- * gravity takes the plain balls from their height and point in the bounce,
- * and back, each ball takes the plain height nearest its apex.
- *
- * Lane pitches: the scale (circle + triangle) from the key note up, lane 1 the
- * key note itself, at the octave set elsewhere; chromatic = 12 semitones. A
- * picked pitch stays put (key and octave changes don't move it) but is
- * fitted to the scale, like a sequencer step's.
- * Notes on MIDI channel 11 (shared with the games, which never run at the
- * same time). The balls keep bouncing when you switch modes, like the
- * sequencer; "-" stops them.
- *
- * Lights: a lane's drop height dim, its ball bright and gliding between
- * pads on a parabola (timed by the clock between steps), a landing flashes
- * white and fades;
- * each lane its own hue, deep blue on lane 1 through violet and magenta to
- * hot pink on lane 12, so scrolling shows where you are; an empty lane shows a faint
- * bottom pad. The underglow is lit from above by the balls, over a faint
- * lime. */
+/* Bouncing notes mode, hardware side (physics: bounce_core.h). Every column
+ * is a lane whose ball plays the lane's note on landing.
+ *   tap             drop the ball from that height (1-4: every 1, 2, 4, 6
+ *                   eighths); the same height again stops it
+ *   hold a pad      pick the lane's pitch on the melodic surface
+ *   circle + "-"/"+"  scroll (12 lanes, 6 shown)
+ *   "-" / "+"       stop / start, as in the sequencer; circle: tap tempo
+ *   square          Real gravity on/off: throws that lose 30% height each
+ *                   landing, in free time
+ * Lanes climb the scale from the key note (lane 1 = key note); a picked
+ * pitch stays put. Channel 11. Keeps playing in other modes. Each lane its
+ * own hue, deep blue to hot pink; underglow lit from above, over lime. */
 
 #include "midi_clock.h"
 

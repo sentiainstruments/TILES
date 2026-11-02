@@ -25,81 +25,35 @@
 #include <math.h>
 #include <stdio.h>
 
-/* Shared "visible but not the active thing" level: a pressed pad's floor,
- * bass frets, the chord strip. 50 matches the menus' available-item level
- * (OP_SCALE_AVAILABLE_LEVEL), so resting brightness is one standard
- * (raised 10 -> 25 -> 50 over "too dim" feedback). A fraction of the power
- * ceiling, like every level here. */
+/* "Visible but not active" level: pressed floor, bass frets, chord strip;
+ * matches the menus' available level. A fraction of the ceiling. */
 #define TILES_LIGHTING_IDLE_BASELINE_PERCENT 50u
 
-/* Default colour scheme: the original melodic look, as colours.
- *   - root: Sentia magenta (#FF00FF) at 40% -> 0x660066;
- *   - fifth: violet, blue with 35% red (hue ~261 deg vs root 300, blue
- *     240), at 40% -> 0x240066;
- *   - other notes: white at 21% ("dim 30% the white", after 30) ->
- *     0x363636, below root and fifth so the landmarks and the echo stand out;
- *   - accidentals (sharps/black keys) dark: the one exception to "pads never
- *     go fully dark";
- *   - third: no highlight (a third landmark was tried and dropped; the
- *     app can turn it on).
- * Brightness order to keep: pressed (100% white) > echo (100% of its
- * colour, flash to white) > root and fifth > other notes. */
+/* Default scheme: root magenta 40%, fifth violet 40%, other notes white 21%,
+ * accidentals dark, third unhighlighted. Keep the order: pressed > echo >
+ * root and fifth > other notes. */
 #define TILES_LIGHTING_SCHEME_ROOT 0x660066u
 #define TILES_LIGHTING_SCHEME_THIRD TILES_LIGHTING_COLOR_NONE
 #define TILES_LIGHTING_SCHEME_FIFTH 0x240066u
 #define TILES_LIGHTING_SCHEME_NOTE 0x363636u
 #define TILES_LIGHTING_SCHEME_ACCIDENTAL 0x000000u
 
-/* Melodic echo (op_mode.c "live echo of an incoming melody"). The color is
- * already full-scale, and the power ceiling isn't raised, so it gets
- * brighter within the ceiling instead:
- *   - a little red and blue mixed into the green
- *     (TILES_LIGHTING_ECHO_SUSTAIN_TINT) uses all three dies: a paler,
- *     brighter green, still clearly not a pressed pad's white;
- *   - an onset flash from full white easing to that green over
- *     TILES_LIGHTING_ECHO_FLASH_MS, so every note lands visibly. White at
- *     the ceiling is what a pressed pad shows, so it's within budget.
- * Unmeasured. */
+/* Melodic echo: green with a little red and blue (all three dies, so
+ * brighter within the ceiling), flashing in from white. Unmeasured. */
 #define TILES_LIGHTING_ECHO_SUSTAIN_TINT 0.35f
 #define TILES_LIGHTING_ECHO_FLASH_MS 180u
 
-/* Second TILES DISPLAY (echo layer 1): the same onset flash, settling on a
- * soft warm red, R full with small G and B. Blue stays below green so it
- * reads coral, not pink (pink is the root's color); too much green drifts
- * orange (Song capture's color). Unmeasured; these two are the knobs. */
+/* Second echo layer: the same flash, settling on a soft warm red (coral,
+ * not the root's pink or Song's orange). Unmeasured. */
 #define TILES_LIGHTING_ECHO_SECONDARY_G 0.18f
 #define TILES_LIGHTING_ECHO_SECONDARY_B 0.12f
 
 /* ---- Pressure hue and bend dimming, on every touched pad ------------------
- * The last step before a pad is written, in every mode (not games, the
- * sleep animation or the bench test), so a pad answers the same way
- * whatever colour it shows:
- *   - Pressure turns the pad's colour toward Sentia blue: its hue moves
- *     toward PRESSURE_TARGET_HUE_DEG by up to
- *     TILES_LIGHTING_PRESSURE_HUE_DEGREES at full pressure, the short way
- *     round and never past it, with saturation and brightness (HSV value)
- *     kept, so nothing gets brighter or draws more current. White and greys
- *     have no hue to turn; they take on a tint of that blue instead, up to
- *     PRESSURE_NEUTRAL_SAT saturation (partway: "not fully"), blended in as
- *     a colour's own saturation falls below PRESSURE_NEUTRAL_BELOW_SAT (no
- *     jump between the two). Pressed white used to go toward Sentia
- *     magenta; blue reads better against the magenta landmarks.
- *     Pressure is the pad's Hall depth past the strike threshold, scaled to
- *     expression.aftertouch_sensitivity like MIDI pressure, so the light
- *     follows what the note does. Smoothed a little (PRESSURE_SMOOTHING).
- *     MPE only: with MPE off, pressure is one channel-wide value, not the
- *     pad's own, so the pads don't show it.
- *   - A bending note's pad swells darker as it bends: brightness falls
- *     with the bend (expression.c's amount, 0..1 of the pad's full bend)
- *     to 1 - TILES_LIGHTING_BEND_DIM at full bend, eased over
- *     BEND_SWELL_MS each way so it swells rather than steps. A flicker
- *     (6-24 Hz) was tried first; a smooth dim reads better. It never goes
- *     dark.
- * Pads showing either are rewritten every PAD_LIVE_REFRESH_MS. They take
- * the pass's one pad write from the round-robin, which waits: a pad write
- * is ~0.3 ms (two mux writes on I2C plus the 120 us latch; unmeasured). All first guesses:
- * "slight, but visible". The amounts are settings
- * (look.pressure_hue_degrees, look.bend_dim_percent); 0 turns either off. */
+ * Last step before a pad is written, in every mode. Pressure turns the hue
+ * toward Sentia blue (greys take a partial blue tint), keeping brightness;
+ * a bending note dims smoothly with the bend. MPE only for pressure. Live
+ * pads refresh every PAD_LIVE_REFRESH_MS (a pad write is ~0.3 ms). First
+ * guesses; look.pressure_hue_degrees and look.bend_dim_percent, 0 = off. */
 #define TILES_LIGHTING_PRESSURE_HUE_DEGREES 40u
 #define TILES_LIGHTING_BEND_DIM 0.5f
 /* Sentia blue: the brand periwinkle #94ABF9 (quick start guide, web
@@ -114,11 +68,8 @@
 #define PAD_LIVE_REFRESH_MS 12u
 #define PAD_FX_EPSILON 0.005f
 
-/* The constants above are the DEFAULTS of the look.* settings. s_look[] is
- * what pad_desired_rgb() reads; settings can change it live over USB and
- * save it to flash. Stored in whole percent (tints: 0.35 -> 35). The power
- * ceiling is applied after all of this and is not a setting, so no setting
- * can raise LED current. */
+/* Defaults of the look.* settings; s_look[] is what's read, changeable over
+ * USB. The power ceiling applies after and isn't a setting. */
 #define LOOK_PCT(fraction) ((uint16_t)((fraction) * 100.0f + 0.5f))
 static uint16_t s_look[TILES_LOOK_COUNT] = {
     [TILES_LOOK_IDLE_BASELINE_PERCENT] = TILES_LIGHTING_IDLE_BASELINE_PERCENT,
@@ -252,10 +203,8 @@ void tiles_lighting_set_look(tiles_look_param_t param, uint16_t value) {
     }
 }
 
-/* LED intensity (Feel menu row 4) as a factor, 1 while the Feel menu is
- * open so it stays readable at "off". Applies to the pads, the normal
- * underglow and the button LEDs (handed to buttons.c each pass), not to
- * the underglow indicators (crash, debug, captures). */
+/* LED intensity (Feel row 4), 1 while the Feel menu is open. Pads, normal
+ * underglow and key LEDs; not the underglow indicators. */
 static float led_intensity(void) {
     if (tiles_expression_control_owns_pad_grid()) {
         return 1.0f;
@@ -263,30 +212,16 @@ static float led_intensity(void) {
     return look_fraction(TILES_LOOK_LED_INTENSITY_PERCENT);
 }
 
-/* Underglow's own fixed brightness (out of 255), NOT scaled by the power
- * ceiling: at the USB ceiling it barely glowed. 4 LEDs are a small
- * share of the budget (included in the accounting below), and a steady
- * halo doesn't compete with pad feedback. */
+/* Underglow's own fixed level, not scaled by the ceiling (it barely glowed
+ * at the USB ceiling); 4 LEDs, counted in the budget. */
 #define TILES_LIGHTING_UNDERGLOW_LEVEL 230u
 
 #define TILES_LIGHTING_NUM_UNDERGLOW_PIXELS 4u
 
 /* ---- Pad brightness ceiling: static, deliberately -------------------------
- * One flat ceiling from the power mode, never recomputed from how many
- * pads are lit (a load-aware ceiling made the whole board's brightness
- * shift with playing, which looks like a brownout).
- *
- * Budget, measured on unit 4 over USB with an inline meter (2026-10-06,
- * docs/hardware/current-measurements.md; tools/current_test.py):
- *   - Board without LEDs or motors (MCU, sensors, ICs, button LEDs):
- *     ~80 mA (the datasheet estimate was ~220 mA).
- *   - LEDs: ~4.1 mA per percent with all 28 white, ~0.41 A at 100%
- *     (~14.6 mA per pixel; the board map's model said 16).
- *   - Motors: ~28 mA each running at full duty, ~0.11 A for 4 (estimated
- *     60-100 mA each). Start-up surges are short and not captured.
- * Worst case at the USB ceiling (50%): 80 + 205 (pads) + ~24 (underglow at
- * its fixed level) + 110 (4 motors) = ~0.42 A of 500 mA. External (2500
- * mA) at 90%: ~0.6 A. Normal playing measured 0.15-0.35 A on USB (37%). */
+ * Never recomputed from how many pads are lit (that looked like a
+ * brownout). Measured on unit 4 (docs/hardware/current-measurements.md):
+ * worst case at the USB ceiling ~0.42 A of 500 mA; playing 0.15-0.35 A. */
 static uint8_t static_ceiling_level(void) {
     uint8_t ceiling_percent = tiles_power_get_state().led_brightness_ceiling_percent;
     return (uint8_t)((255u * ceiling_percent) / 100u);
@@ -308,11 +243,8 @@ static tiles_sk6805_chain_t s_pad_chain;
 static tiles_tca9554_t s_led_mux;
 static float s_pad_press[TILES_NUM_PADS]; /* touch-driven, white, floored at the idle level */
 static tiles_rgb01_t s_pad_standby_rgb[TILES_NUM_PADS]; /* standby color, no floor */
-/* What each pad last showed of it (valid = written since standby began):
- * standby colours go out STANDBY_WRITES_PER_PASS pads a pass, biggest
- * change first, so no screen change (a menu opening, a game frame, the
- * screensaver) sends 24 pads at once and holds the loop (and the
- * playback ticks) ~7 ms. */
+/* What each pad last showed of it: standby colours go out a few pads a
+ * pass, biggest change first, so a screen change doesn't hold the loop. */
 static tiles_rgb01_t s_standby_written[TILES_NUM_PADS];
 static bool s_standby_written_valid[TILES_NUM_PADS];
 #define STANDBY_WRITES_PER_PASS 3u
@@ -564,20 +496,15 @@ static tiles_rgb01_t pad_look_rgb(uint8_t pad_index) {
     }
     uint8_t logical_pad = (uint8_t)(pad_index + 1u);
 
-    /* Song capture running: flash the pad the currently sounding captured note
-     * lives on, over whatever mode is showing. After the live-touch check
-     * (a real touch wins), before the idle looks. Not for chord-strip pads,
-     * whose get_note() isn't a real note. (There is no "current step" marker
-     * for Song's 128 steps yet; see op_mode.h.) */
+    /* Song capture: flash the pad of the captured note sounding now, after the
+     * live-touch check. Not chord-strip pads. */
     if (tiles_op_mode_song_capture_is_active() && !tiles_note_map_is_chord_region_pad(logical_pad) &&
         tiles_op_mode_song_capture_is_note_sounding(tiles_note_map_get_note(logical_pad))) {
         return (tiles_rgb01_t){1.0f, 0.6f, 0.0f};
     }
 
-    /* Melodic echo: incoming notes (from TILES DISPLAY; see
-     * daw-integration/README.md) light a pale green, flashing in from white
-     * (the bass frets' green is deeper and never flashes). After the
-     * live-touch check, before the idle looks. */
+    /* Melodic echo: incoming notes light pale green, flashing in from white.
+     * After the live-touch check. */
     uint8_t echo_note = tiles_note_map_get_note(logical_pad);
     bool echo_primary = tiles_op_mode_incoming_note_is_sounding(0, echo_note);
     bool echo_secondary = tiles_op_mode_incoming_note_is_sounding(1, echo_note);
@@ -785,10 +712,8 @@ static float debug_underglow_pulse_level(uint32_t now_ms) {
     return DEBUG_UNDERGLOW_PULSE_MIN + (DEBUG_UNDERGLOW_PULSE_MAX - DEBUG_UNDERGLOW_PULSE_MIN) * raw;
 }
 
-/* Writes straight to the LEDs, bypassing s_underglow_rgb[]/standby
- * ownership, so it shows whatever mode or menu owns rendering. When debug
- * mode ends, the normal path takes over again. R and B share the pulse so
- * the color stays magenta. */
+/* Straight to the LEDs, past standby, so it shows over any mode. R and B
+ * share the pulse so it stays magenta. */
 static void write_debug_underglow(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
     float pulse = debug_underglow_pulse_level(now_ms);
@@ -832,12 +757,8 @@ static void write_crash_underglow(void) {
     tiles_debug_trace('x');
 }
 
-/* Song capture indicator: an amber pulse, straight to the LEDs like the
- * two above, because the mode's own pad grid stays visible underneath
- * while capturing (melodic/chord/bass don't claim standby), so the
- * underglow is the only place left. Amber is used by nothing else. Song
- * mode's own grid shows a steady yellow instead (op_mode.c
- * render_song_underglow()). */
+/* Song capture: an amber underglow pulse, straight to the LEDs (the pads
+ * stay the mode's own). Amber is used by nothing else. */
 #define SONG_CAPTURE_UNDERGLOW_PULSE_PERIOD_MS 900.0f
 #define SONG_CAPTURE_UNDERGLOW_PULSE_MIN 0.35f
 #define SONG_CAPTURE_UNDERGLOW_PULSE_MAX 1.0f
@@ -1010,9 +931,7 @@ void tiles_lighting_service(void) {
     }
 
     /* Underglow override priority: crash > pattern flash > debug > Song
-     * capture. Crash first (debug mode can survive a crash reboot, and the
-     * crash is the surprise); the brief pattern confirmation beats the ambient
-     * debug pulse. */
+     * capture. */
     bool underglow_override_active = false;
     float pattern_flash_r, pattern_flash_g, pattern_flash_b;
     /* Logs which override owns the underglow, on change only (for debugging
@@ -1045,10 +964,8 @@ void tiles_lighting_service(void) {
         s_debug_last_override_kind = debug_override_kind;
     }
 
-    /* Nothing else redraws the underglow every frame (pads have the
-     * round-robin), so when an override stops, push s_underglow_rgb[] once;
-     * otherwise it stays frozen at the pulse's last level (seen: the crash
-     * dismiss left solid red). */
+    /* Nothing redraws the underglow every frame, so push it once when an
+     * override stops (or it freezes at the pulse's last level). */
     if (s_underglow_override_was_active && !underglow_override_active) {
         write_underglow();
     }
@@ -1150,10 +1067,8 @@ void tiles_lighting_flush_standby(void) {
     }
 }
 
-/* Underglow from the pads. The floor keeps the mode's colour faintly at
- * rest; a pad's light reaches an LED with weight exp(-d^2 / 2) for d pads
- * from its anchor (1 right above it, 0.6 next to it, 0.14 two away).
- * Changes under 1/64 aren't sent. First guesses. */
+/* Underglow from the pads: a dim floor of the mode's colour, plus each pad's
+ * light weighted exp(-d^2 / 2) by distance. First guesses. */
 #define GLOW_FLOOR 0.15f
 #define GLOW_RELEASE_MS 120.0f
 #define GLOW_SEND_INTERVAL_MS 16u

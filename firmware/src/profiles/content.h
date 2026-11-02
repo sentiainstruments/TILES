@@ -1,28 +1,12 @@
 #pragma once
 
-/* Content store: things the companion app pushes onto the device, as
- * opposed to settings (profiles/settings.h), which tune what's built in.
- * Today: custom scales in the scale picker's CUSTOM_1..9 slots. Built so
- * layouts and other data content can join later without a format change,
- * and so every item can say which pack it came from (packs are sold; see
- * docs/architecture/content-packs.md).
- *
- * Storage: one blob in its own two-slot kv_store region (flash_map.h), a
- * list of records, little-endian:
- *   u8 type   TILES_CONTENT_TYPE_*
- *   u8 slot   per type (scales: 1-9)
- *   u16 len   body bytes
- *   body
- * A record of a type this firmware doesn't know is kept as-is (listed, never
- * applied), so a downgrade-then-edit doesn't throw away newer content.
- *
- * Scale body: u16 version, u8 count, count x i8 interval, then three short
- * strings (u8 length + bytes, no terminator): name, pack, item.
- *
- * Every change is written to flash before it is applied or acknowledged
- * (one kv write, tens of ms with interrupts off), so "OK" means saved. On a
- * failed write nothing changes. Hardware-free: firmware/test/test_content.c
- * runs it natively against a simulated flash. */
+/* Content store: what the companion app pushes (today: custom scales in
+ * CUSTOM_1..9), each item tagged with its pack (content-packs.md). One blob
+ * in a two-slot kv_store region, records of:
+ *   u8 type, u8 slot, u16 len, body   (little-endian)
+ * Unknown types are kept as-is. Scale body: u16 version, u8 count, count x
+ * i8 interval, then name, pack, item (u8 length + bytes). Every change is
+ * saved before it's applied, so "OK" means saved. Tested natively. */
 
 #include "kv_store.h"
 

@@ -1,15 +1,8 @@
 #pragma once
 
-/* TI TMAG5273A1 3-axis Hall-effect sensor.
- *
- * Register map from the TI datasheet (SLYS045C, section 8). Configures
- * continuous measurement, X/Y/Z enabled, +/-80 mT on every axis (the
- * handoff's starting range to avoid saturation), 1x averaging (fastest),
- * no CRC, standard sequential reads. Angle/gain/offset/threshold features
- * are left to calibration.
- *
- * All 24 sensors share address 0x35 and are reached one at a time through
- * the Hall muxes. services/hall selects the channel around each call. */
+/* TMAG5273A1 3-axis Hall sensor (datasheet SLYS045C): continuous X/Y/Z,
+ * +/-80 mT, 1x averaging, no CRC. All 24 share address 0x35 behind the
+ * muxes; services/hall selects the channel. */
 
 #include <stdbool.h>
 #include <stdint.h>

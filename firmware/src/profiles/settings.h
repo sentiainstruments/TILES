@@ -1,28 +1,12 @@
 #pragma once
 
-/* The settings table: one registry of every user-tunable value, and the
- * one thing both the USB control interface and flash persistence talk to.
- * A setting is ONE row in profiles/settings_table.c (id, key, type, range,
- * getter, setter) and gets GET/SET/LIST/SCHEMA/RESET over USB, range
- * checking and saving to flash. Adding a setting never touches the protocol.
- *
- * Design rules:
- *  - The MODULES are the source of truth. get()/set() call the owning
- *    module (pedal, expression, lighting, ...); the table keeps no copy
- *    that could drift, and on-device changes look the same as app changes.
- *  - A DEFAULT is captured from the module at boot, before saved values
- *    are applied, so the schema always reports what the module really
- *    boots with.
- *  - Persistence is SPARSE: only non-default values are saved. Blank flash
- *    means all defaults, and untouched settings follow a new build's
- *    defaults. (A value explicitly set equal to today's default follows
- *    future changes too; deliberate, and the safer choice.)
- *  - IDs are permanent: the id is what flash and a future binary protocol
- *    use; the key is for humans. Never reuse or renumber; leave a gap.
- *
- * This file and settings.c are pure logic, tested natively
- * (firmware/test/test_settings.c). settings_table.c is the hardware
- * binding; settings_persist.c is the debounced save/load over storage/. */
+/* The settings table: every user-tunable value, one row each in
+ * settings_table.c, with GET/SET/LIST/SCHEMA/RESET over USB and saving.
+ *  - Modules are the source of truth; the table keeps no copy.
+ *  - Defaults are captured from the modules at boot.
+ *  - Only non-default values are saved (blank flash = all defaults).
+ *  - IDs are permanent: never reuse or renumber.
+ * Pure logic, tested natively (test_settings.c). */
 
 #include <stdbool.h>
 #include <stddef.h>

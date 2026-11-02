@@ -1,13 +1,9 @@
 #pragma once
 
-/* Function buttons (debounced, 10 ms per the handoff's scheduler defaults)
- * and their PCA9685-driven LEDs. By default a button's LED is lit while
- * it is held; standby and per-button overrides can take the LEDs over.
- *
- * Owns both PCA9685 chips. services/haptics.c's 24 motor channels share
- * them and get them through tiles_buttons_pca9685_for_addr(); calling
- * tiles_pca9685_init() again would force every channel off and glitch
- * running motors. */
+/* Function keys (debounced 10 ms) and their LEDs, lit while held unless
+ * standby or an override takes them. Owns both PCA9685s: haptics.c gets
+ * them via tiles_buttons_pca9685_for_addr() (re-initializing would glitch
+ * running motors). */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -27,27 +23,18 @@ void tiles_buttons_scan(void);
  * square, circle). False if out of range. */
 bool tiles_button_is_pressed(uint8_t button_id);
 
-/* ---- Standby animation hooks (services/standby.c) ----------------------
- *
- * true: tiles_buttons_scan() stops writing LEDs (button state keeps
- * updating, since standby needs a press to wake), leaving them to
- * tiles_buttons_set_standby_led(). false: repaints every LED from its
- * current state at once (scan only writes on edges, so clearing the flag
- * alone would leave the animation's last frame). */
+/* ---- Standby animation hooks ----------------------------------------------
+ * true: scan stops writing LEDs (keys still read) for
+ * tiles_buttons_set_standby_led(). false: repaints every LED at once. */
 void tiles_buttons_set_standby_active(bool active);
 
 /* Sets button 1-6's LED to 0.0 (dark) - 1.0 (lit) via 12-bit PWM. No-op
  * unless standby is active. */
 void tiles_buttons_set_standby_led(uint8_t button_id, float level_0_to_1);
 
-/* ---- Per-button LED override (e.g. services/octave_control.c) ----------
- *
- * For a button whose LED shows something else (e.g. the octave
- * indicator on "-"/"+"). Per button and at any time, unlike standby.
- *
- * true: scan stops writing this LED (press state still tracked), leaving
- * it to tiles_buttons_set_override_led(). false: repaints it from its
- * current state at once. */
+/* ---- Per-key LED override (e.g. the octave indicator) ---------------------
+ * true: scan stops writing this LED for tiles_buttons_set_override_led().
+ * false: repaints it at once. */
 void tiles_buttons_set_override_active(uint8_t button_id, bool active);
 
 /* Sets an overridden button's LED to 0.0-1.0. No-op unless overridden,
@@ -66,13 +53,8 @@ tiles_pca9685_t *tiles_buttons_pca9685_for_addr(uint8_t addr);
  * LED, 0 (off) to 1 (as drawn). Redraws them all when it changes. */
 void tiles_buttons_set_led_intensity(float intensity_0_to_1);
 
-/* ---- Power-transition recovery (main.c) ---------------------------------
- *
- * Both PCA9685s sit on a rail the power-source switch disturbs: a glitch
- * can silently reset their configuration without resetting the RP2350
- * (pulling the power plug once killed haptics this way). Re-runs the boot
- * configuration on both chips and repaints the default-mode button LEDs
- * (standby/override LEDs are redrawn by their owners every frame). Called
- * from main.c's power-change callback, followed by
- * tiles_haptics_resync_hardware(): the chips must be configured first. */
+/* ---- Power-transition recovery ------------------------------------------
+ * A power switch can reset both PCA9685s without the RP2350 (it once killed
+ * haptics). Re-runs their setup and repaints the key LEDs; called before
+ * tiles_haptics_resync_hardware(). */
 void tiles_buttons_resync_pca9685(void);

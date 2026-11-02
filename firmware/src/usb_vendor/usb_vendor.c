@@ -625,21 +625,9 @@ static void handle_line(char *line) {
         return;
     }
 
-    /* REBOOT BOOTSEL | APP: the scriptable path. (picotool's -f uses the
-     * standard USB reset interface instead; see tusb_config.h.)
-     *
-     * Both flush the "OK" by hand first, with a bounded wait (pump_out()
-     * alone only reaches the peripheral FIFO, not the host).
-     *
-     * BOOTSEL enters the ROM USB bootloader (reset_usb_boot() never
-     * returns). No activity LED is wired, hence the 0 arguments.
-     *
-     * APP is a warm restart into this firmware, booting as from power-on
-     * (not a crash recovery: watchdog_reboot() clears the marker that
-     * watchdog_enable_caused_reboot() reads), to test a fresh boot or
-     * unstick a non-USB subsystem. It must not return to the main loop:
-     * that feeds the watchdog every pass, which kept a delayed reboot from
-     * ever firing. */
+    /* REBOOT BOOTSEL | APP: flush "OK" first. BOOTSEL enters the ROM
+     * bootloader; APP warm-restarts as from power-on. Never return to the main
+     * loop (it feeds the watchdog, which kept the reboot from firing). */
     if (strcmp(cmd, "REBOOT") == 0) {
         char *what = strtok(NULL, " ");
         bool bootsel = what != NULL && strcmp(what, "BOOTSEL") == 0;

@@ -27,15 +27,9 @@ static volatile bool s_rx_overflow;
 
 static uint32_t s_tx_dropped;
 
-/* Running status (MIDI 1.0): a repeated status byte is omitted, which on
- * 31,250 baud (~32 us/byte) is real bandwidth. DIN only: USB-MIDI packets
- * always carry a full status. Done here, at the point wire bytes are
- * queued; callers always hand over full messages.
- *
- * s_last_wire_status = status of the last message written to the ring (0 =
- * none). Nothing that reaches tx_push() can cancel running status: System
- * Common and SysEx are rejected earlier, and Real-Time bytes use the
- * separate RT queue (and don't cancel it anyway). */
+/* Running status (DIN only; USB packets carry full status), applied as
+ * wire bytes are queued. s_last_wire_status: 0 = none. Nothing reaching
+ * tx_push() can cancel it. */
 static uint8_t s_last_wire_status;
 
 /* ---- coalescing slots ----

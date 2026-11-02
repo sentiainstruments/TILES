@@ -185,16 +185,11 @@ static const char *const PLAY_EFFECT_NAMES[] = {"off",          "afterglow",    
                                                 "heatmap",      "fireworks",    "rise",    "ink"};
 static const char *const LAYOUT_NAMES[] = {"rows", "columns", "fourths", "keys", "fifths", "tonnetz", "quarter_tones"};
 
-/* THE TABLE. One row per setting. Rules:
- *  - `id` is permanent (it is what is written to flash and what a binary protocol will use): never
- *    reuse or renumber one -- retire it by leaving a gap. Ids are grouped by hundreds:
- *    0x01xx pedal, 0x02xx expression, 0x03xx CV/gate, 0x04xx LED look, 0x05xx MIDI, 0x06xx features,
- *    0x07xx colours, 0x08xx the mode menu's entries.
- *  - `key` is the human/script name.
- *  - The range is what the setting will accept -- wide enough for any value that is actually useful,
- *    narrow enough to refuse something nonsensical (or unsafe for the CV output).
- *  - The DEFAULT is not written here: it is captured from the module at boot (settings.h).
- * Values are {min, max} in the order below; `.u` for bool/uint/enum, `.i` for int, `.f` for float. */
+/* THE TABLE, one row per setting. `id` is permanent (flash uses it): never
+ * reuse or renumber. Grouped by hundreds: 0x01 pedal, 0x02 expression,
+ * 0x03 CV/gate, 0x04 LED look, 0x05 MIDI, 0x06 features, 0x07 colours,
+ * 0x08 mode menu. Ranges refuse nonsense (and anything unsafe for CV).
+ * Defaults come from the modules. Values {min, max}: .u, .i or .f. */
 static const tiles_setting_def_t TABLE[] = {
     /* pedal */
     TILES_SETTING(0x0100, "pedal.mode", TILES_SETTING_ENUM, {.u = 0}, {.u = 1}, PEDAL_MODE_NAMES, get_pedal_mode,

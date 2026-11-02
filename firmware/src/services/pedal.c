@@ -14,13 +14,9 @@
 #define SUSTAIN_PRESS_THRESHOLD (ADC_MAX / 4u)
 #define SUSTAIN_RELEASE_THRESHOLD (ADC_MAX * 3u / 4u)
 
-/* Asymmetric debounce (time the new state must hold before it is accepted).
- *   - PRESS 10 ms: sustain must engage at once, or a note released right
- *     after pressing slips through un-sustained.
- *   - RELEASE 80 ms: longer than the contact-chatter dropouts measured on
- *     a real rig (up to 55 ms mid-hold; each one released every sustained
- *     note), shorter than the quickest deliberate lift (~150 ms). A late
- *     release is inaudible; a spurious one cannot be undone. */
+/* Asymmetric debounce: press 10 ms (sustain must engage at once); release
+ * 80 ms, above measured chatter (up to 55 ms) and below the fastest real
+ * lift (~150 ms). A spurious release can't be undone. */
 #define SUSTAIN_PRESS_DEBOUNCE_MS 10u
 #define SUSTAIN_RELEASE_DEBOUNCE_MS 80u
 
@@ -59,15 +55,9 @@ static bool low_side_means_pressed(void) {
     return s_polarity == TILES_PEDAL_POLARITY_NORMALLY_OPEN;
 }
 
-/* Where pedal CCs go (strict standard MIDI):
- *   - the Zone Master Channel (ch 1). MPE (RP-053 2.3.1) puts pedals on the
- *     Master Channel only; with MPE off every note is on ch 1 anyway.
- *   - the fixed single-channel parts (chord, game, sequencer lanes), which
- *     sit outside the zone.
- * Never the Member/Song pool (ch 2-9) or ch 10. Do not broaden this to a
- * 16-channel broadcast: a host that only sustains on the note's own channel
- * is not set up for MPE and should use non-MPE mode. Background:
- * services/HISTORY.md. */
+/* Pedal CCs go to the Master Channel (RP-053 2.3.1) and the fixed parts,
+ * never the Member pool or channel 10. Don't broaden to all 16: a host that
+ * needs that isn't set up for MPE. */
 static void send_pedal_cc(uint8_t controller, uint8_t value) {
     static const uint8_t k_fixed_part_channels[] = {
         TILES_MIDI_CH_CHORD,      TILES_MIDI_CH_GAME,       TILES_MIDI_CH_SEQ_LANE_0,

@@ -23,51 +23,25 @@
 #include <math.h>
 #include <stdio.h>
 
-/* Melodic harmonics (see "Melodic harmonics" below): hold ONE pad with a
- * real press, then lightly touch others to pluck its harmonics. Setting
- * `features.melodic_harmonics`, default on. */
+/* Melodic harmonics: hold one pad, lightly touch others to pluck its
+ * harmonics (setting features.melodic_harmonics, default on). */
 static bool s_harmonics_enabled = true;
 
 /* ============================================================================
- * Strike detection: a note needs real depth travel
- * (MIN_STRIKE_DEPTH_DELTA), not just touch. Velocity comes mainly from how
- * deep the strike goes (see "Velocity").
- *
- * From a capture of ~140 real touches: Hall depth moves in 16-count steps;
- * bare contact and settling read 32 (the most common value) up to ~96,
- * while deliberate presses reached 192-736 (full press ~900-1450).
+ * Strike detection: a note needs real depth travel, not just touch. From
+ * ~140 captured touches (16-count steps): contact and settling read 32-96,
+ * deliberate presses 192-736, a full press ~900-1450.
  * ========================================================================== */
 
-/* Treat touch as still down for this long after the last raw "touched"
- * reading. A hard, percussive hit can bounce the finger off the surface for
- * a few ms; read as a release, that cancelled the strike just before its
- * peak and the note never fired. Short, so real releases stay snappy
- * (the MPR121 release threshold was tuned for that). Unmeasured. */
+/* Touch counts as down this long after the last touched reading: a hard hit
+ * can bounce the finger off and cancel the strike. Unmeasured. */
 #define TOUCH_DROPOUT_GRACE_MS 12u
 
-/* A resting finger's touch can drop out for longer than that. Two rules
- * keep it from replaying the note (the key is still down, so the re-touch
- * read as a new hard strike: a note-off, a fresh note-on and a kick under
- * a finger that never moved):
- *   - A sounding note whose key the Hall still reads as pressed (depth >=
- *     MIN_STRIKE_DEPTH_DELTA) outlives a dropout for up to
- *     PRESSED_DROPOUT_GRACE_MS. A key that comes up ends it at once, so real
- *     releases stay snappy; the limit stops a key held down without a
- *     finger from hanging the note.
- *   - A touch that begins with the key already pressed is an instant
- *     strike (a hard hit can bottom out before touch registers) only if
- *     the key was up (< TILES_HALL_KEY_UP_DEPTH) within
- *     STRIKE_FROM_REST_MS. Otherwise the finger never left: the pad waits,
- *     silent and without a touch tick, for the key to come up, then
- *     detects a strike as usual.
- * Both need a fresh depth after the finger leaves: hall.c keeps reading a
- * released pad until its key reads up. Without that the depth froze at
- * the last pressed reading (an untouched pad is re-read only every
- * ~50 ms), a real lift looked like a dropout over a held key, and quick
- * repeated presses on one pad were swallowed. "Up" is above bare contact
- * (a resting finger reads up to ~96), so a finger left lightly on the pad
- * can still re-arm it. First guesses: the dropouts aren't measured; a
- * hard hit's touch lag is a few tens of ms at most. */
+/* A resting finger's touch can drop out longer, which replayed the note. A
+ * sounding note whose key still reads pressed outlives a dropout for up to
+ * PRESSED_DROPOUT_GRACE_MS; a touch that starts on a pressed key strikes
+ * only if the key was up within STRIKE_FROM_REST_MS, else it waits for the
+ * key to come up. Relies on hall.c's fresh depth after release. Guesses. */
 #define PRESSED_DROPOUT_GRACE_MS 300u
 #define STRIKE_FROM_REST_MS 150u
 
@@ -76,18 +50,13 @@ static bool s_harmonics_enabled = true;
  * guess, under the lift of a fast repeated tap. */
 #define TOUCH_PULSE_MIN_GAP_MS 60u
 
-/* Depth travel since touch-down that makes it a press (and the point where
- * velocity measurement starts). A touch that never gets here plays
- * nothing, like a key that's touched but not pressed. 150 sits in the gap
- * the capture found (contact <= ~96, presses >= ~192). 300 was tried to
- * stop fast shallow flicks reading hard, but made light, slow playing
- * impossible; velocity now handles the flick case (see "Velocity"). */
+/* Depth travel that makes a press (and starts velocity). 150 sits in the
+ * captured gap (contact <= ~96, presses >= ~192); 300 made light playing
+ * impossible. */
 #define MIN_STRIKE_DEPTH_DELTA TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA
 
-/* Retrigger without lifting: while a note is held, depth easing back to
- * near rest (<= this) arms a new strike. Kept close to rest so ordinary
- * pressure changes during a held note don't retrigger; a slow deliberate
- * fade-out can still dip below it. Unmeasured. */
+/* While held, depth easing back near rest re-arms a strike (retrigger
+ * without lifting). Unmeasured. */
 #define RETRIGGER_ARM_DEPTH_DELTA 40.0f
 
 /* Ignore retrigger for this long after a note fires, so the post-impact
@@ -96,32 +65,10 @@ static bool s_harmonics_enabled = true;
 #define RETRIGGER_GRACE_MS 50u
 
 /* ---- Velocity: depth over a short follow-through, plus a little speed ----
- * Not acceleration: differencing 3 coarse (16-count) depth samples was
- * noise, so hard hits often failed and light presses read randomly hard.
- *
- * Two measurements:
- *   - strike_time_ms: time from touch-down to crossing
- *     MIN_STRIKE_DEPTH_DELTA (like a keybed's two-contact timing; ~0 for a
- *     very fast hit).
- *   - peak_depth: how far the strike keeps going during the
- *     follow-through after the crossing (strike_settle.h: up to
- *     TILES_STRIKE_FOLLOWTHROUGH_MS, cut short once the key stops going
- *     down or the depth score is full, so the note isn't held back).
- * Time alone can't tell a quick light tap from a quick hard hit (both
- * cross the threshold at once), and depth read at the instant of crossing
- * can be faked by a fast graze. Over the short follow-through, a light
- * touch (fast or slow) plateaus near the threshold while a real hit keeps
- * going, much like a piano hammer needs real force to travel fast. So
- * depth dominates (STRIKE_DEPTH_WEIGHT 0.85) with a small speed bias
- * (0.15). A touch released before the follow-through ends commits at once
- * with the depth it reached, so short taps add no latency.
- *
- * Time mapping: <= STRIKE_TIME_MAX_VELOCITY_MS = fastest, >=
- * STRIKE_TIME_MIN_VELOCITY_MS = slowest, linear in between
- * (VELOCITY_CURVE_EXPONENT 1.0; a steeper 1.8 compressed soft playing).
- * The slow end is 300 ms so ordinary taps don't crowd the top. These
- * constants are guesses; the `[expression]` print logs strike_time_ms and
- * depth for calibration. */
+ * Depth reached in the follow-through (strike_settle.h) separates a light
+ * tap from a hard hit; time to the threshold adds a 0.15 bias. A touch
+ * released early commits at once. Not acceleration: 16-count steps made it
+ * noise. Guesses; the [expression] print logs the inputs. */
 #define STRIKE_TIME_MAX_VELOCITY_MS 10u
 #define STRIKE_TIME_MIN_VELOCITY_MS 300u
 #define VELOCITY_CURVE_EXPONENT 1.0f
@@ -135,13 +82,8 @@ static bool s_harmonics_enabled = true;
 /* Floor, so even the weakest qualifying strike is audible. */
 #define MIN_VELOCITY 8u
 
-/* Depth that maps to full pressure (127). 1450 = unit 2's average strong
- * strike (corner pads 1697, 1488, 1328, 1280). An earlier unit's full press
- * bottomed out around 918 (784-1184); using 900 against unit 2 maxed
- * pressure too early and felt twitchy. One value for all pads (no per-pad
- * curve yet); only 4 pads of one unit were sampled.
- * Runtime: the expression menu's aftertouch row changes it
- * (tiles_expression_set_aftertouch_sensitivity()). */
+/* Depth for full pressure (127): unit 2's average strong strike (4 pads
+ * sampled). Changed at runtime by the Feel menu's aftertouch row. */
 static uint16_t s_depth_to_aftertouch_full_scale = 1450u;
 
 /* Smoothing (EMA) on the depth that feeds pressure, so it reads as
@@ -150,14 +92,8 @@ static uint16_t s_depth_to_aftertouch_full_scale = 1450u;
 #define AFTERTOUCH_SMOOTHING_ALPHA 0.35f
 
 /* ---- Release velocity from lift-off speed -------------------------------
- * MPE treats release velocity as a per-note dimension; TILES used to send
- * 0 ("none"). Release is detected when touch ends, and depth isn't read
- * after that, so a true post-release measurement would delay every
- * Note-Off. Instead depth_fall_rate (depth units/ms, smoothed) is tracked
- * while the finger is still down, and its value at release approximates
- * how fast the finger was lifting: real data, zero added latency. Only
- * end_held_note() sends a non-zero value. The rate range is a first guess
- * from this file's depth scale, not measured lifts. */
+ * The smoothed depth fall rate at release approximates lift speed with no
+ * added latency. The range is a first guess, not measured lifts. */
 #define RELEASE_FALL_RATE_SMOOTHING_ALPHA 0.5f
 #define RELEASE_VELOCITY_MIN_FALL_RATE 2.0f  /* depth units/ms; at or below: minimum release velocity */
 #define RELEASE_VELOCITY_MAX_FALL_RATE 25.0f /* depth units/ms; at or above: maximum release velocity */
@@ -181,124 +117,54 @@ static uint8_t release_velocity_from_fall_rate(float fall_rate) {
 }
 
 /* ---- Pitch bend from tilt ------------------------------------------------
- * Bend is only computed while a note is held (strike detection never uses
- * X/Y). Pitch bend on/off is a global preference (square click).
- *
- * The math: raw X changes with press depth even with no tilt (the field
- * gets stronger closer to the magnet), so pressing harder would bend.
- * Instead use the field's DIRECTION: a direction cosine (component / |B|,
- * |B| = sqrt(x^2+y^2+z^2)) depends on the angle, not the distance, so it
- * cancels depth to first order (the same idea 3-axis Hall joysticks use).
- * In practice that isn't perfect; see PITCH_BEND_SETTLE_MS and the depth
- * compensation below.
- *
- * Both X and Y feed the MAGNITUDE (sqrt(dx^2 + dy^2)): a real tilt moves
- * both, and small vibrato wiggles need the stronger signal. The SIGN comes
- * from X alone, keeping the tuned left/right direction. (Not a true 2D
- * bend.)
- *
- * Bend is per note: with MPE each held note has its own channel
- * (claim_mpe_channel()), so pads bend independently like a Seaboard. A
- * channel is recentered by tiles_midi_send_note_setup() before its next
- * Note-On, not at Note-Off (which snapped release tails). */
+ * Uses the field's direction (component / |B|), which cancels depth to
+ * first order. Magnitude from X and Y, sign from X alone. Per note (each
+ * MPE note has its own channel); recentred at the next note's setup, not at
+ * Note-Off (that snapped release tails). */
 #define PITCH_BEND_CENTER 8192u
 
-/* Cosine delta that maps to full bend (+/-8191). SMALLER = more sensitive.
- * Runtime: the expression menu's pitch bend row
- * (tiles_expression_set_pitch_bend_sensitivity()).
- *
- * 0.065 comes from two captures: a deliberate, comfortable tilt on a held
- * pad gave deltas min 0.0323, median 0.0526, p90 0.0626, max 0.0851. The
- * old 0.15 was beyond anything a real tilt produces ("requires extreme
- * bend"); 0.065 puts most real tilts at half to full swing, above the
- * 0.04 deadzone. (Earlier values 0.15/0.30/0.20 were guesses stacked on
- * compensating logic that has since been simplified.)
- * Note: the other bend constants were tuned before the depth compensation
- * below was added and may need a fresh capture. */
+/* Cosine delta for full bend; smaller = more sensitive (Feel menu). 0.065
+ * from captured comfortable tilts (median 0.053, max 0.085). Predates the
+ * depth compensation: may need a fresh capture. */
 static float s_pitch_bend_max_cosine_deviation = 0.065f;
 
-/* Deltas below this read as centered, applied as a soft knee (subtracted
- * before scaling), so bend ramps from zero instead of jumping.
- *
- * A capture of a straight press with no tilt (1070 samples: median 0.0257,
- * p90 0.0373, p99 0.051, max 0.0945) showed pressing straight down really
- * moves the cosine on this assembly. Compared with the deliberate-tilt
- * capture, 0.04 rejected 94% of rest noise and lost only 0.6% of real
- * tilt (0.045 lost 5.6%). Both captures predate the depth-rate-gated
- * recentering (PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW), which removes most
- * of that pressure noise at the source, so it was lowered to 0.025 (and
- * felt better). Changed alone, so a fresh capture can tell what to revert
- * if plain presses start bending again. */
+/* Deadzone, as a soft knee. Straight presses moved the cosine up to ~0.05;
+ * depth-gated recentring removed most of that, so 0.025. Changed alone:
+ * revert first if plain presses start bending. */
 #define PITCH_BEND_DEADZONE_COSINE_DELTA 0.025f
 
-/* Wait this long after the note starts before capturing the bend
- * baseline, letting the two-stage smoothing settle; bend stays centered
- * meanwhile. A baseline taken from the noisy strike instant is wrong for
- * the whole note, and no downstream filtering can fix a wrong reference.
- * 25 ms was far too short for two filter stages (the settling transient
- * itself read as bend on nearly every note); 250 ms made bends start too
- * late; 120 ms is the middle ground. Unmeasured. */
+/* Settle time before the bend baseline is taken (bend stays centred): 25 ms
+ * read the transient as bend, 250 ms started bends late. Unmeasured. */
 #define PITCH_BEND_SETTLE_MS 120u
 
-/* Slow re-centering of the baseline toward the (smoothed) current X/Y,
- * only while no bend run is active (so a held tilt doesn't fade). Handles
- * a steady one-sided offset over a long straight hold, which a fixed
- * baseline can't tell from a held tilt. The target is the smoothed X/Y,
- * not raw: chasing raw samples erased a real but small (~13-15 unit)
- * lean hidden under hand tremor.
- *
- * The rate adapts to depth movement: pressure only couples into tilt
- * WHILE depth is changing, so the baseline snaps fast (..._FAST) while
- * pressing or releasing and creeps slowly (this rate) while depth is
- * steady, when a real bend must be protected. Like a One Euro Filter, or
- * motion-artifact rejection in biosignals: gate on an independent
- * detector of the confound instead of modeling it. It needs no
- * calibration capture (a static depth-vs-tilt curve was tried and didn't
- * hold up). Tradeoff: a bend held for many seconds could slowly relax.
- * Unmeasured. */
+/* Slow baseline recentring toward the smoothed X/Y while no bend run is
+ * active, snapping fast while depth changes (pressure only couples into
+ * tilt then). A bend held many seconds may relax. Unmeasured. */
 #define PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW 0.002f
 /* Baseline rate while depth is actively changing (depth_activity ~1): a
  * bit faster than one smoothing stage (0.08), so it keeps up with a strike
  * without being as noisy as raw samples. Unmeasured. */
 #define PITCH_BEND_BASELINE_RECENTER_ALPHA_FAST 0.25f
-/* Smoothed SIGNED depth rate that counts as fully "pressing"
- * (depth_activity = 1). Signed and smoothed because depth also wobbles
- * during a real tilt; only consistent movement should count (against the
- * raw per-tick delta, 8.0 saturated during tilting and killed bend).
- * The threshold against the smoothed signal is still a first guess. */
+/* Smoothed signed depth rate that counts as fully pressing (signed: depth
+ * wobbles during a tilt). First guess. */
 #define PITCH_BEND_DEPTH_ACTIVITY_FULL_SCALE 8.0f
 
-/* Confirmation window: a deviation past the deadzone ramps from 0 to full
- * weight over this many ms, so brief wobbles stay tiny while a held tilt
- * reaches full weight quickly. The ramp restarts when the deviation falls
- * back inside the deadzone (a real return to center, not a sign flicker).
- * A capture of a straight hold showed mechanical "give" overlapping real
- * tilt in size (give: median 0.030, p90 0.069, max 0.106), but give
- * flickers within ~100-200 ms while a tilt holds one direction. 120 ms
- * exploited that; with the two-stage smoothing and depth-gated
- * recentering removing most of the noise upstream it went to 60, then 30
- * ms ("less trigger time"). Unmeasured; lower only with a fresh capture. */
+/* A deviation ramps to full weight over this long, so mechanical give
+ * (flickers within 100-200 ms) stays small. Unmeasured; lower only with a
+ * fresh capture. */
 #define PITCH_BEND_ARM_MS 30u
 
-/* EMA smoothing on X/Y/magnitude, applied as a TWO-STAGE cascade. Hand
- * tremor sits at 6-15 Hz; one EMA stage at this alpha (~1.7-2 Hz cutoff,
- * -6 dB/octave) leaves ~20% of it. Two identical stages double the
- * rolloff (-12 dB/octave) for only ~1.4x the settling time. 0.08 per stage
- * (down from 0.35/0.15, to damp jitter on an active bend).
- * Invariant: the live delta and the baseline recenter target must read
- * the SAME, fully cascaded stage. Splitting or dropping the second stage
- * was tried twice and brought back pressure-triggered bend and jitter. */
+/* Two-stage EMA on X/Y/magnitude against 6-15 Hz tremor. Invariant: the
+ * live delta and the recentre target read the same, fully cascaded stage
+ * (splitting it, twice, brought back pressure bend). */
 #define PITCH_BEND_SMOOTHING_ALPHA 0.08f
 
 typedef enum {
     PAD_STATE_IDLE = 0,
     PAD_STATE_AWAITING_STRIKE,
     PAD_STATE_NOTE_ON,
-    /* The pad's channel was stolen by a newer note while the finger stayed
-     * down. Not IDLE: re-awaiting a strike would read the pad's already
-     * pressed depth as an instant max-velocity hit (seen with 8+ keys held).
-     * It stays silent until a real release; stolen voices never come back on
-     * their own (like haptics). */
+    /* Channel stolen while the finger stayed down: silent until a real release
+     * (re-awaiting a strike read the pressed key as a max-velocity hit). */
     PAD_STATE_STOLEN,
 } pad_expr_state_t;
 
@@ -310,12 +176,8 @@ typedef struct {
      * here). */
     uint32_t touch_start_sample_ms;
 
-    /* Highest RAW depth since touch began, including the very first reading.
-     * Raw (hall.c's depth is already baseline-relative): a hard hit can finish
-     * before capacitive touch registers, so the first reading can already be
-     * fully pressed (880-1040 seen), and a per-touch reference would have
-     * thrown that away. The peak (not the current value) also catches a
-     * strike that springs back quickly. */
+    /* Highest raw depth since touch began, first reading included: a hard hit
+     * can be fully pressed before touch registers. */
     float peak_depth;
 
     /* Time from touch start to peak_depth first crossing
@@ -335,10 +197,8 @@ typedef struct {
      * note-on so pressure doesn't ramp up from 0. */
     float smoothed_depth;
 
-    /* Smoothed depth RATE (units/ms) while touched, negative when lifting:
-     * the release velocity source (see "Release velocity"). prev_raw_depth /
-     * last_depth_sample_ms feed it; last_depth_sample_ms == 0 = no sample yet
-     * this hold. */
+    /* Smoothed depth rate while touched (negative = lifting): the release
+     * velocity source. last_depth_sample_ms 0 = no sample yet. */
     float depth_fall_rate;
     float prev_raw_depth;
     uint32_t last_depth_sample_ms;
@@ -372,25 +232,17 @@ typedef struct {
     /* Per-note pitch bend state. pitch_bend_active = whether bend was enabled
      * when THIS note fired (toggling mid-hold doesn't change it). */
     bool pitch_bend_active;
-    /* Bend baseline X/Y, taken after PITCH_BEND_SETTLE_MS and then kept
-     * tracking the smoothed X/Y while no bend run is active, at a rate that
-     * adapts to depth movement (see PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW).
-     * This keeps pressure-related drift from reading as tilt without any
-     * calibration data. (A self-learning two-zone model and a fixed captured
-     * depth-vs-Y curve were tried first and dropped.) */
+    /* Bend baseline: taken after PITCH_BEND_SETTLE_MS, then recentred while no
+     * run is active. */
     float pitch_bend_baseline_x;
     float pitch_bend_baseline_y;
     /* Previous tick's smoothed depth, for pitch_bend_smoothed_depth_rate
      * (which drives depth_activity and the adaptive baseline rate). */
     float pitch_bend_prev_depth;
-    /* EMA of the SIGNED depth delta. Depth also swings a lot during a real
-     * tilt (pressure shifts across the pad), but back and forth; a press or
-     * release keeps one sign. Averaging the signed delta cancels the wobble,
-     * so only real pressing reads as activity (the raw magnitude kept the
-     * baseline snapping and swallowed real tilts). */
+    /* EMA of the signed depth delta: a tilt's wobble cancels, so only real
+     * pressing reads as activity. */
     float pitch_bend_smoothed_depth_rate;
-    /* First smoothing stage of X/Y: used for the initial baseline and as the
-     * medium-speed "where the pad is settling" signal. */
+    /* First smoothing stage: the initial baseline, and where the pad settles. */
     float pitch_bend_smoothed_x;
     float pitch_bend_smoothed_y;
     /* Second cascade stage. Both the live delta (current_cosine_x/y) and the
@@ -426,10 +278,8 @@ typedef struct {
     bool pitch_bend_wiggle_active;
     uint32_t pitch_bend_wiggle_start_ms;
 
-    /* pedal.sustain_style HOLD: this pad's released note, kept ON until the
-     * pedal lifts. At most one per pad (its next strike closes it first; see
-     * release_held_note()). With MPE its channel stays claimed until then.
-     * held_* are captured at release, since the pad moves on to new notes. */
+    /* HOLD sustain style: this pad's released note, kept on until the pedal
+     * lifts (one per pad); held_* captured at release. */
     bool held;
     uint8_t held_channel;
     uint8_t held_note;
@@ -443,10 +293,7 @@ static pad_expr_t s_pads[TILES_NUM_PADS];
 static bool s_pitch_bend_enabled;
 
 
-/* Member Channel table, one slot per shared-pool channel. Which channel a
- * note gets and which note is stolen is services/mpe_alloc.h's job (MPE
- * spec 3.2: same note's old channel, else the one idle longest; steal the
- * oldest). See claim_mpe_channel(). */
+/* Member Channel table, one slot per pool channel; mpe_alloc.h picks. */
 /* Sized for the zone's maximum (8, services/midi_channels.h). */
 static tiles_mpe_slot_t s_mpe_channels[TILES_MIDI_SHARED_POOL_SIZE];
 static uint32_t s_next_mpe_claim_seq = 1u;
@@ -458,10 +305,8 @@ static bool s_mpe_enabled = true;
 /* Stamps each slot's release_seq as it's freed. */
 static uint32_t s_next_mpe_release_seq = 1u;
 
-/* The ONLY place a pool channel's in_use changes, so it's always mirrored
- * into services/midi_channels.h (tiles_midi_channels_note_channel_
- * claimed()/_released()); otherwise Song mode could claim a channel a
- * live note is using. */
+/* The only place in_use changes, so midi_channels.h always mirrors it (Song
+ * must never claim a live note's channel). */
 static void set_channel_in_use(uint8_t index, bool in_use) {
     s_mpe_channels[index].in_use = in_use;
     uint8_t channel = (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + index);
@@ -490,12 +335,8 @@ static bool slot_in_live_zone(uint8_t index) {
 }
 
 /* ---- pedal.sustain_style HOLD: TILES holds released notes itself ---------
- * MIDI sustain holds every note on the channel/zone, harmonic plucks
- * included, so to sustain real notes but not harmonics TILES must hold
- * them itself (services/pedal.h). Rules that make it safe: every
- * end-of-note path holds (retrigger included); a pad that strikes again
- * closes its held note first, like re-striking a piano key; off by
- * default. */
+ * So the pedal sustains real notes but not harmonics. Every end-of-note path
+ * holds; a re-strike closes the pad's held note first. Off by default. */
 
 /* Sends a held note's Note-Off and frees its channel. No-op if none. */
 static void release_held_note(pad_expr_t *s) {
@@ -544,29 +385,10 @@ static bool slot_is_held_note(uint8_t idx) {
 }
 
 /* ============================================================================
- * Melodic harmonics: while ONE note is held with the sustain pedal down,
- * lightly touching other pads plucks that note's harmonics (like a piano's
- * sympathetic resonance with the dampers up). No hardware convention for
- * this exists.
- *   - By TOUCH ORDER, not pad position: the 1st other pad touched plays
- *     the octave, the 2nd the octave + fifth, ... (HARMONIC_SEMITONES).
- *     Position would shift with the scale/key and doesn't land on true
- *     harmonic ratios.
- *   - Harmonics 2-6 only; higher ones detune and crowd in equal
- *     temperament.
- *   - Fixed gentle velocity (HARMONIC_VELOCITY).
- *   - A PLUCK: fires on the touch edge and rings a fixed time
- *     (HARMONIC_PLUCK_DURATION_MS) whether or not the finger stays.
- *     Touching the same pad again re-plucks it.
- *   - Pedal required: a resting palm never plays harmonics, so no palm
- *     rejection is needed.
- *   - A touched pad pressed into a real strike becomes a real note; with
- *     two notes held the session ends and every harmonic stops ("not in
- *     polyphony").
- *   - Melodic mode and chord mode's melody pads (the chord strip never
- *     plucks), not bass guitar (tiles_op_mode_melodic_harmonics_may_play()).
- *   - Channels: harmonics never take a real note's channel; see
- *     harmonic_channel_is_reserved(). */
+ * Melodic harmonics: with the pedal down and one note held, lightly touching
+ * other pads plucks its harmonics 2-6 by touch order (not pad position), at
+ * a fixed velocity, ringing a fixed time. A real strike becomes a note; two
+ * held notes end the session. Melodic and Duet's melody pads only. */
 
 /* Harmonics 2-6 in semitones above the fundamental (rounded to equal
  * temperament): octave, octave + fifth, 2 octaves, 2 octaves + major
@@ -582,31 +404,10 @@ static const uint8_t HARMONIC_SEMITONES[HARMONIC_MAX_VOICES] = {12u, 19u, 24u, 2
  * ringing. Unmeasured. */
 #define HARMONIC_PLUCK_DURATION_MS 300u
 
-/* Chord vs. harmonic separation (chord fingers land a few ms apart, so
- * later fingers' touches used to pluck before they pressed):
- *
- * ARM (features.harmonics.arm_ms): plucking starts only once the
- * fundamental NOTE has been held alone this long (from its note_on_ms);
- * touch edges inside the window are consumed. Measured from the note, so
- * pressing the pedal over an already-held note plucks at once.
- *
- * CONFIRM (features.harmonics.confirm_ms): after arming, a new touch waits
- * this long and is cancelled if the key moves past PRESS DEPTH
- * (features.harmonics.press_depth, raw Hall units) or strikes. A pressing
- * finger moves the key almost at once; a light harmonic touch barely does.
- * A quick tap that ends inside the window still plucks.
- *
- * Defaults from a traced session (334 harmonic touches, 10 chord fingers
- * over a held note):
- *   - Harmonic touches peak at 47-63 depth (p90 96, max 144): press depth
- *     128 plucks 331/334 (40 lost 249).
- *   - Chord fingers strike within ~60 ms, or (2 of 10) press slowly and
- *     look like light touches for 80 ms; those leak at any depth >= 80.
- *     A leaked pluck ends when that finger strikes, and isn't sustained
- *     in HOLD style.
- *   - Confirm 40 ms: 60/80 ms caught nothing more; 20 ms leaked 5/10.
- *   - Arm 150 ms: only 1 of 334 harmonic touches came sooner.
- * Small chord sample; the settings are there to tune by ear. */
+/* Chord vs. harmonic: plucks start once the note has been held alone for
+ * arm_ms; a new touch waits confirm_ms and is dropped if it presses past
+ * press_depth. Defaults from a traced session (harmonic touches peak at
+ * 47-144): arm 150 ms, confirm 40 ms, depth 128. Tune by ear. */
 #define HARMONIC_ARM_MS_DEFAULT 150u
 #define HARMONIC_CONFIRM_MS_DEFAULT 40u
 #define HARMONIC_PRESS_DEPTH_DEFAULT 128u
@@ -638,11 +439,8 @@ static uint32_t s_harmonic_pending_ms[TILES_NUM_PADS];
  * the top of the current zone, never all of it (zone_size - 1), so a real
  * note always finds a channel. claim_mpe_channel() skips them. */
 static bool harmonic_channel_is_reserved(uint8_t channel) {
-    /* Reserve only while a session is active (exactly one real note held).
-     * Reserving whenever the feature was on capped real polyphony at 3 of 8
-     * channels, so a 4th finger stole the oldest note, which then retriggered
-     * (MPE glitch plus a haptic re-kick). A second real note ends the session
-     * the same scan, freeing the whole zone. */
+    /* Reserve only during a session (one note held): always reserving capped
+     * polyphony at 3, and the 4th note stole and retriggered. */
     if (!s_harmonics_enabled || s_harmonic_fundamental_pad == 0u) {
         return false;
     }
@@ -802,15 +600,9 @@ static void try_harmonic_pluck(uint8_t pad, uint8_t fundamental_note, uint32_t n
     fire_harmonic_pluck((uint8_t)slot, pad, (uint8_t)note, channel, now_ms);
 }
 
-/* Once per scan, after the pad loop:
- *   0. Off unless the pedal holds sustain and the mode allows harmonics:
- *      then every voice stops and touch memory is forced false, so
- *      pressing the pedal over pads already touched plucks them at once.
- *   1. Exactly one held pad = the fundamental; otherwise end everything.
- *   2. Voices past HARMONIC_PLUCK_DURATION_MS decay.
- *   3. Other pads whose touch just began pluck (once armed and confirmed
- *      light; see HARMONIC_ARM_MS_DEFAULT): a new pad takes the next
- *      slot, a ringing one re-plucks its own. */
+/* Once per scan: off unless the pedal sustains and the mode allows; one
+ * held pad is the fundamental; expired voices decay; new light touches
+ * pluck once armed and confirmed. */
 static void scan_melodic_harmonics(uint32_t now_ms) {
     if (!tiles_op_mode_melodic_harmonics_may_play() || !tiles_pedal_is_sustained()) {
         if (s_harmonic_fundamental_pad != 0u) {
@@ -934,10 +726,8 @@ uint16_t tiles_expression_get_harmonics_press_depth(void) {
     return s_harmonic_press_depth;
 }
 
-/* With MPE off: which held pad drives channel 1's bend and pressure (0 =
- * none). The newest strike takes over; when it releases, the most recent
- * other held pad takes back over (like a bend wheel that keeps working
- * under a second finger). Unused with MPE on. */
+/* MPE off: the held pad driving channel 1's bend and pressure (0 = none).
+ * The newest strike takes over; on release the previous one takes back. */
 static uint8_t s_non_mpe_owner_pad;
 
 void tiles_expression_init(void) {
@@ -979,8 +769,7 @@ static void hall_xy_and_magnitude(int16_t x, int16_t y, int16_t z, float *x_out,
     *magnitude_out = sqrtf(fx * fx + fy * fy + fz * fz);
 }
 
-/* Direction cosine: component / |B| (depth-invariant to first order; see
- * "Pitch bend from tilt"). A near-zero |B| returns 0. */
+/* component / |B|; a near-zero |B| returns 0. */
 static float direction_cosine_from(float x_component, float magnitude) {
     if (magnitude < 1.0f) {
         return 0.0f;
@@ -1001,26 +790,16 @@ static float pitch_bend_confidence_multiplier(uint32_t hold_ms) {
  * RPN 0. */
 #define PITCH_BEND_MPE_SPEC_DEFAULT_RANGE_SEMITONES 48.0f
 
-/* Scale the wire value so max tilt = 12 semitones even on a receiver stuck
- * at 48: Equator and Serum both ignored the RPN 0 declaration (Equator's
- * range is set by the user; negotiation isn't done in practice), and max
- * tilt swung 4 octaves. So max output is 12/48 = 25% of full scale. The
- * RPNs are still sent. Tradeoff: a receiver that does honor RPN 0 gets
- * only ~3 semitones; none has been found yet. */
+/* Max tilt = 12 semitones even on a receiver stuck at 48 (common synths
+ * ignore RPN 0), so output peaks at 25% of full scale. RPNs still sent. */
 #define PITCH_BEND_WIRE_RANGE_COMPENSATION \
     ((float)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES / PITCH_BEND_MPE_SPEC_DEFAULT_RANGE_SEMITONES)
 
-/* Linear mapping on purpose. An ease-out curve for big tilts was tried and
- * reverted: it was applied after the confidence ramp (amplifying the ramp
- * itself), and any curve from (0,0) to (1,1) that calms the top must be
- * steeper lower down, where most playing and residual noise live. If the
- * top needs smoothing, reshape only a narrow region near the clamp. */
+/* Linear on purpose: an ease-out curve was reverted (it amplified the
+ * confidence ramp and steepened the low end, where playing lives). */
 
-/* Cosine delta (depth-compensated, sign-corrected by the caller) -> 14-bit
- * wire value. The deadzone is a soft knee: centered inside it, a
- * continuous ramp past it, full swing still at
- * s_pitch_bend_max_cosine_deviation; then the confidence ramp applies.
- * Updates this pad's own run tracking. */
+/* Cosine delta -> 14-bit bend: soft-knee deadzone, then the confidence
+ * ramp. Updates the pad's run tracking. */
 static uint16_t pitch_bend_14bit_from_cosine_delta(pad_expr_t *s, float delta, uint32_t now_ms) {
     float magnitude = fabsf(delta);
     bool positive = delta >= 0.0f;
@@ -1030,12 +809,8 @@ static uint16_t pitch_bend_14bit_from_cosine_delta(pad_expr_t *s, float delta, u
         s->pitch_bend_run_active = false;
         magnitude = 0.0f;
     } else {
-        /* A run starts on the first deviation after the deadzone, NOT on every
-         * sign flip: a held tilt's angle wobbles (X's sign flipped almost every
-         * sample during a real sustained tilt), and resetting on each flip kept
-         * confidence at zero and the baseline chasing (run_active gates
-         * recentering), erasing the tilt. Only returning to the deadzone ends a
-         * run. The output sign still comes from this tick. */
+        /* A run starts on the first deviation past the deadzone, not on each sign
+         * flip (a held tilt flips constantly); only the deadzone ends it. */
         if (!s->pitch_bend_run_active) {
             s->pitch_bend_run_active = true;
             s->pitch_bend_run_start_ms = now_ms;
@@ -1071,31 +846,16 @@ static uint16_t pitch_bend_14bit_from_cosine_delta(pad_expr_t *s, float delta, u
     return (uint16_t)bend;
 }
 
-/* Separate fast-wiggle vibrato detector. It only READS the two cascade
- * stages and adds its output on top of the final wire value, so it can't
- * disturb the tilt/pressure path (two attempts that lightened the shared
- * signal both broke pressure stability).
- *
- * Why it's needed: the two-stage smoothing that fights pressure coupling
- * also kills a fast wiggle (a captured tilt reached 94% bend, a fast
- * wiggle of similar raw amplitude never passed 12%). Fine-grained sensors
- * (LinnStrument, Continuum) don't need this; this one does.
- *
- * Signal: the gap between the light first stage and the fully cascaded
- * second stage. Settled signals (steady press, held tilt) keep it small;
- * a real wiggle keeps it large. Capture on one pad (smoothed gap):
- *   - holding still:   mean 7.5, sustained <= ~9
- *   - deliberate tilt: mean 8.5, one single-tick blip to ~12 at release
- *   - fast wiggle:     mean 16.2, above 11 for 93% of the gesture
- * Strike onsets stayed under 7. */
+/* Separate vibrato detector: reads the gap between the two smoothing stages
+ * and adds on top, leaving the tilt path alone. The smoothing kills fast
+ * wiggles (12% of a tilt's bend); captured gap: still ~7.5, tilt ~8.5, fast
+ * wiggle ~16. */
 #define VIBRATO_ENERGY_NOISE_FLOOR 8.0f
 /* Energy for full vibrato depth (a real wiggle sustains ~16). 8..16 is a
  * soft knee, so a borderline gesture fades in rather than clicking on. */
 #define VIBRATO_ENERGY_FULL_SCALE 16.0f
-/* Wiggle energy must stay above the floor this long before vibrato fades
- * in. The only non-wiggle gesture that came close was a single tick when
- * releasing a held tilt, and release tails keep their bend (so it would
- * be heard); a real wiggle stays above the floor 93% of the time. */
+/* Wiggle energy must stay above the floor this long first (a released tilt
+ * blips for one tick). */
 #define VIBRATO_ARM_MS 80u
 /* Fixed rate, not tracked from the gesture (too little signal for a
  * stable estimate). 5.5 Hz is inside natural string/voice vibrato
@@ -1377,35 +1137,12 @@ static uint8_t find_most_recent_held_pad(uint8_t exclude_pad) {
     return best_pad;
 }
 
-/* Ends `pad`'s note: pressure 0, Note-Off, haptic stop, CV/gate off, and
- * frees its MPE channel. The single place this happens (note-off,
- * retrigger, steal). Callers set the next state.
- *
- * Bend is NOT recentered here: control of a note ends at its Note-Off
- * (MPE spec), and recentering snapped every bent release tail and
- * pedal-sustained note. The next note on the channel is set up by
- * tiles_midi_send_note_setup() before its Note-On.
- *
- * The Note-Off goes out now even with the sustain pedal down: sustaining
- * is the synth's job (pedal.c sends CC64 on the Master Channel), as on
- * every keyboard and MPE controller. The spec (RP-053 1.3, 3.3) has the
- * controller send Note-Off while the damper keeps the note sounding.
- * Withholding Note-Offs until pedal release was tried and caused hung
- * notes (a re-strike sent a second Note-On with no Note-Off; with MPE off
- * one Note-Off covered two Note-Ons) and stacked identical notes on two
- * channels. Don't bring it back. (HOLD style below is the one deliberate,
- * safe exception.)
- *
- * player_release: true only when the finger actually let go (touch
- * ended), the only case with a lift speed to report; everything else
- * sends release velocity 0.
- *
- * may_hold: with pedal.sustain_style HOLD and the pedal down, the
- * Note-Off waits (recorded in held_*) until release_held_note(): pedal
- * up, the pad striking again, or the same pitch sounding again. True for
- * both ways a finger lets go (touch ending, and the retrigger path); false
- * for a steal or reset. Haptics and CV/gate stop immediately either way.
- * With the default SYNTH style nothing is held. */
+/* Ends `pad`'s note: pressure 0, Note-Off, haptic and CV/gate off, channel
+ * freed; the single place this happens. Bend isn't recentred (that snapped
+ * release tails). The Note-Off goes out even with the pedal down: sustain
+ * is the synth's job (RP-053); withholding Note-Offs hung notes, don't
+ * bring it back. player_release: the finger let go (release velocity).
+ * may_hold: HOLD style may keep the note until release_held_note(). */
 static void end_held_note(pad_expr_t *s, uint8_t pad, bool player_release, bool may_hold) {
     tiles_cv_gate_note_off(s->active_note);
     tiles_haptics_stop(pad);
@@ -1429,11 +1166,8 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool player_release, bool 
         tiles_midi_note_off(s->midi_channel, s->active_note, release_velocity);
     }
     if (s->midi_channel == TILES_MIDI_MPE_MASTER_CHANNEL) {
-        /* Channel 1 has no pool slot (index math would underflow), hence this
-         * separate branch. If this pad drove channel 1's bend/pressure, hand it
-         * to the most recently struck other held pad and resend its current bend.
-         * With nothing else held the bend stays; the next Note-On's setup centers
-         * it. */
+        /* Channel 1 has no pool slot. Hand its bend and pressure to the latest
+         * other held pad and resend its bend. */
         if (s_non_mpe_owner_pad == pad) {
             uint8_t next_owner = find_most_recent_held_pad(pad);
             s_non_mpe_owner_pad = next_owner;
@@ -1449,10 +1183,8 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool player_release, bool 
     }
 }
 
-/* Called when game mode takes over: ends every sounding note (no release
- * velocity, no holding), resets pads that were only awaiting a strike
- * (they sent nothing, so no Note-Off), and releases pedal-held notes,
- * since nothing would release them during the game. */
+/* Game mode takes over: end every note, reset pads awaiting a strike, and
+ * release pedal-held notes. */
 void tiles_expression_force_release_all(void) {
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         uint8_t pad = (uint8_t)(i + 1u);
@@ -1465,13 +1197,9 @@ void tiles_expression_force_release_all(void) {
     release_all_held_notes();
 }
 
-/* Member Channel allocator: returns the channel for `pad`'s new `note`.
- * The choice (and which note to steal when full) is services/mpe_alloc.h's
- * MPE-spec order; this builds the eligibility masks and claims. A stolen
- * channel goes straight to the new pad.
- * Eligible = in the declared zone, not held by Song
- * (slot_in_live_zone()), not reserved for harmonics. Fixed parts' channels
- * are outside the zone, so a note can never land on one. */
+/* Member Channel for `pad`'s new `note`, in mpe_alloc.h's order; a stolen
+ * channel goes to the new pad. Eligible: in the zone, not Song's, not
+ * reserved for harmonics. */
 static uint8_t claim_mpe_channel(uint8_t pad, uint8_t note) {
     bool eligible[TILES_MIDI_SHARED_POOL_SIZE];
     bool pedal_held[TILES_MIDI_SHARED_POOL_SIZE];
@@ -1492,10 +1220,8 @@ static uint8_t claim_mpe_channel(uint8_t pad, uint8_t note) {
      * s_pads[-1]. */
     idx = tiles_mpe_alloc_pick_steal(s_mpe_channels, eligible, pedal_held, TILES_MIDI_SHARED_POOL_SIZE);
     if (idx < 0) {
-        /* Nothing stealable: every zone channel is reserved for harmonics, or the
-         * zone is empty (Song holds all 8). Falls back to the first member
-         * channel, which may collide with a Song track in that extreme case.
-         * Accepted. */
+        /* Nothing stealable (all reserved, or Song holds the zone): the first member
+         * channel, which may collide with Song. Accepted. */
         return TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL;
     }
     uint8_t stolen_pad = s_mpe_channels[idx].owner_pad;
@@ -1516,10 +1242,8 @@ static uint8_t claim_mpe_channel(uint8_t pad, uint8_t note) {
     return (uint8_t)(TILES_MIDI_MPE_FIRST_MEMBER_CHANNEL + idx);
 }
 
-/* How long TILES's side of the zone must be silent (no played, held or
- * plucked note, pedal up) before a Song-driven zone change is declared
- * (a re-declaration stops every note). The extra time covers release
- * tails TILES can't see. */
+/* Silence needed on TILES's side before a Song-driven zone change is
+ * declared (a re-declaration stops every note); covers release tails. */
 #define MPE_ZONE_REDECLARE_IDLE_MS 2000u
 static uint32_t s_mpe_zone_last_busy_ms;
 
@@ -1550,10 +1274,8 @@ void tiles_expression_scan(void) {
     }
     s_prev_holding_notes = holding;
 
-    /* Declare a zone size changed by Song only once idle (a re-declaration
-     * stops notes); meanwhile the allocator uses the declared size minus
-     * Song's channels. Skipped with MPE off (zone already withdrawn).
-     * mpe_zone_is_idle() runs every scan to keep its timestamp current. */
+    /* Declare Song's zone change only once idle; meanwhile allocate within the
+     * declared size minus Song's channels. */
     bool zone_idle = mpe_zone_is_idle(now_ms);
     if (s_mpe_enabled && zone_idle && tiles_midi_channels_zone_redeclare_pending()) {
         tiles_expression_announce_mpe_zone();
@@ -1586,10 +1308,8 @@ void tiles_expression_scan(void) {
         }
 
         if (s->state == PAD_STATE_IDLE) {
-            /* No NEW strike while something else owns the grid (expression menu,
-             * transpose, op_mode menus/pads, game mode); a pad already past IDLE is
-             * left to finish. op_mode is asked per pad (tiles_op_mode_owns_pad()):
-             * chord mode only claims its strip, the melody pads still play here. */
+            /* No new strike while something else owns the pad; a pad past IDLE
+             * finishes. */
             if (touched && !tiles_expression_control_owns_pad_grid() && !tiles_octave_control_is_transpose_active() &&
                 !tiles_op_mode_owns_pad(pad) && !tiles_game_mode_is_active() && tiles_note_map_pad_has_note(pad)) {
                 begin_awaiting_strike(s, pad, now_ms);
@@ -1639,10 +1359,8 @@ void tiles_expression_scan(void) {
              * the current reading would show it. */
             bool pressed = s->threshold_crossed;
 
-            /* ready = pressed and the follow-through is done (strike_settle.h) while
-             * touched. commit_on_release = touch ended before that: commit now with
-             * the depth reached, rather than dropping a real hit or waiting for
-             * nothing. */
+            /* ready: pressed and follow-through done. commit_on_release: touch ended
+             * first, so commit with the depth reached. */
             bool ready = touched && pressed &&
                          tiles_strike_settle_ready(&s->settle, s->peak_depth, TILES_EXPRESSION_FULL_STRIKE_DEPTH, now_ms);
             bool commit_on_release = !touched && pressed;
@@ -1803,15 +1521,11 @@ void tiles_expression_scan(void) {
                         s->pitch_bend_smoothed_delta = 0.0f;
                     }
                 } else {
-                    /* Baseline recenter toward the smoothed X/Y, only while no run is
-                     * confirmed (previous tick's state, to avoid a circular dependency), so a
-                     * held bend survives pressing harder. Rate blends SLOW..FAST by depth
-                     * activity (see PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW). */
+                    /* Recentre only while no run is confirmed (last tick's state), blending
+                     * SLOW..FAST by depth activity. */
                     if (!s->pitch_bend_run_active) {
-                        /* Activity is CUBED before blending: FAST is ~125x SLOW, so a linear blend
-                         * let everyday sensor noise (activity 0.1-0.3) pull the rate 10-40x above
-                         * SLOW and erase real tilts. Cubing (0.3 -> 0.027) stays slow unless
-                         * activity is clearly high; the endpoints are unchanged. */
+                        /* Activity is cubed: FAST is ~125x SLOW, and a linear blend let sensor
+                         * noise erase real tilts. */
                         float activity_shaped = depth_activity * depth_activity * depth_activity;
                         float recenter_alpha = PITCH_BEND_BASELINE_RECENTER_ALPHA_SLOW +
                                                 (PITCH_BEND_BASELINE_RECENTER_ALPHA_FAST -
@@ -1826,34 +1540,11 @@ void tiles_expression_scan(void) {
                     float baseline_x_at_depth = s->pitch_bend_baseline_x;
                     float baseline_y_at_depth = s->pitch_bend_baseline_y;
 
-                    /* Depth compensation. The direction cosine assumes a perfectly on-axis
-                     * magnet; real assemblies aren't, so comparing against a fixed baseline
-                     * COSINE let the misalignment grow as |B| changed with pressure (bend
-                     * leaning one way regardless of tilt). Instead, predict the baseline
-                     * cosine AT THE CURRENT magnitude: baseline_x / magnitude vs. x2 /
-                     * magnitude. With no real tilt (x2 == baseline_x) they're identical by
-                     * construction, so a pure depth change gives exactly 0.
-                     *
-                     * Invariants (each broke things when violated):
-                     *   - Both terms divide by the SAME magnitude value this tick (an earlier
-                     *     version compared a lagging smoothed cosine against an unsmoothed
-                     *     prediction, and the lag itself read as a downward bend).
-                     *   - Both X terms use the fully cascaded x2/y2, the same stage the
-                     *     baseline recenters from. Using the lighter stage for the live term
-                     *     (to let fast wiggles through) brought pressure-bend back; using it
-                     *     for both made everything jittery (the deadzone and arm time were
-                     *     tuned against x2). Fast wiggles are handled by the separate vibrato
-                     *     detector.
-                     *   - During a confirmed run the magnitude is frozen too
-                     *     (pitch_bend_run_magnitude): with a real tilt, delta = (baseline_x -
-                     *     x2) / magnitude still follows pressure, and a captured "steady"
-                     *     hold swung depth 527-1059 and the bend by ~600 of ~2047. Tradeoff:
-                     *     a deliberately large press change mid-bend reads against the stale
-                     *     magnitude until the run ends.
-                     *
-                     * Sign: predicted - current (the other way bent backwards).
-                     * Two axes: Y gets the same compensation; MAGNITUDE = sqrt(dx^2 + dy^2),
-                     * SIGN from dx alone (the tuned left/right feel), not a true 2D bend. */
+                    /* Depth compensation: compare against the baseline cosine predicted at the
+                     * current magnitude, so a pure depth change gives exactly 0. Invariants
+                     * (each broke things): both terms divide by this tick's same magnitude;
+                     * both use the fully cascaded x2/y2; during a confirmed run the magnitude
+                     * is frozen. Sign: predicted - current. */
                     float predicted_baseline_cosine_x =
                         direction_cosine_from(baseline_x_at_depth, s->pitch_bend_run_magnitude);
                     float current_cosine_x =
@@ -1876,8 +1567,7 @@ void tiles_expression_scan(void) {
                     uint16_t bend = pitch_bend_14bit_from_cosine_delta(s, delta, now_ms);
                     bend = pitch_bend_apply_vibrato(s, bend, now_ms);
                     if (bend != s->pitch_bend_last_sent) {
-                        /* Always this pad's current bend (sent or not): used to resync channel 1
-                         * when ownership returns to this pad (MPE off). */
+                        /* This pad's current bend, for resyncing channel 1 (MPE off). */
                         s->pitch_bend_last_sent = bend;
                         if (s_mpe_enabled || s_non_mpe_owner_pad == pad) {
                             tiles_midi_send_pitch_bend(s->midi_channel, bend);

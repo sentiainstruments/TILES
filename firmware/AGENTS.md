@@ -78,7 +78,8 @@ draining the port, and removed before committing.
 
 ## Comments and history
 
-**Code comments describe the code as it is now**, briefly:
+**Code comments describe the code as it is now**, in one or two lines
+where possible:
 
 - What a function, constant or block does, and **why** when it isn't
   obvious: the hardware constraint, the measured data a constant came
@@ -88,6 +89,8 @@ draining the port, and removed before committing.
 - No change narration ("used to", "now", "this round"), no quoted
   feedback, no references to "the previous version". That belongs in
   the commit message and the module's `HISTORY.md`.
+- A file header is a short summary (a few lines). Gesture maps, byte
+  formats and other long reference material go in the module README.
 - Keep lines under ~80 columns; don't write `*/` or `/*` inside a
   comment.
 
@@ -103,11 +106,11 @@ its files plus the rules that aren't obvious from one file.
   many thresholds exist because of a specific bug fixed on real
   hardware. Append new entries there when a change has a story worth
   keeping.
-- The full, long-form comments from before the 2026-09-30 cleanup are
-  at git tag `archive/full-comments-2026-09-30`:
+- The full comments from before each cleanup are at git tags
+  `archive/full-comments-2026-09-30` and `archive/full-comments-2026-11-02`:
 
   ```bash
-  git show archive/full-comments-2026-09-30:firmware/src/services/expression.c
+  git show archive/full-comments-2026-11-02:firmware/src/services/expression.c
   ```
 - `git log -p` on a file shows every change with its message.
 

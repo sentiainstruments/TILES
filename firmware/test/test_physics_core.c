@@ -1,14 +1,7 @@
-/*
- * services/physics_core.c -- the physics modes: Ripples' rings land on
- * sixteenths, reach as far as the strike was hard, and their stones drop
- * again every bar until lifted out; Sand plays its piles as a melody on
- * triplets (height = pitch, upside down when flipped), pours faster
- * pressed harder, slides and runs down; Orbits keep whole-beat periods,
- * come off with a second strike, follow a moved sun, stop and carry on on
- * the grid, and never fly off under Pull; the cradle knocks on the beat
- * for ever, comes to rest with Real, and is caught by a touch. Run with
- * test/run.sh.
- */
+/* services/physics_core.c: Ripples land on sixteenths and loop by the bar;
+ * Sand plays piles as a triplet melody, pours, slides, runs down, flips;
+ * Orbits keep whole-beat periods and stay on the grid under Pull; the
+ * cradle knocks on the beat and is caught by a touch. Run with test/run.sh. */
 
 #include <assert.h>
 #include <math.h>

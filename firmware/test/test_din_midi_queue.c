@@ -66,11 +66,8 @@ int main(void) {
     uint8_t b; for (int i = 0; i < 10; i++) tiles_din_queue_pop_tx_byte(&b);  /* 20 left <= 24 */
     assert(tiles_din_queue_service());
 
-    /* 6. overflow: whole messages only, drops counted, never a partial
-     * message. Channel cycles 0-15 (never two equal adjacent values, even
-     * across the wrap from 15 back to 0) so running status never once
-     * compresses anything here -- this test is about overflow, not that
-     * feature, so every message stays a clean, independent 3 bytes. */
+    /* 6. overflow: whole messages only, drops counted. Channels cycle so
+     * running status never compresses here. */
     tiles_din_queue_init();
     int accepted = 0;
     for (int i = 0; i < 400; i++) {
@@ -104,12 +101,8 @@ int main(void) {
     uint8_t sc[2] = {0xF1, 0};    assert(!tiles_din_queue_push_message(sc, 2));
     assert(drain(out, 64) == 0);
 
-    /* 9. channel pressure + slide + mod round-trip byte-exact. mod (CC1) and
-     * slide (CC74) are DIFFERENT controllers but the SAME status byte
-     * (0xB5, a Control Change on channel 5) -- running status is per
-     * STATUS BYTE, not per controller, so slide (flushed right after mod)
-     * correctly compresses to just its 2 data bytes; pressure (0xD5) is a
-     * different status and stays full. */
+    /* 9. pressure + slide + mod round-trip byte-exact. Running status is per
+     * status byte, so slide after mod (both 0xB5) sends only data bytes. */
     tiles_din_queue_init();
     push2(0xD5, 77); push(0xB5, 74, 33); push(0xB5, 1, 9);
     assert(tiles_din_queue_service());
@@ -149,14 +142,9 @@ int main(void) {
         n = drain(out, 8);
         assert(n == 3 && out[0] == (0x90 | (round & 15)) && out[1] == (round & 0x7F));
     }
-    /* 13. running status, dedicated: three consecutive same-status
-     * messages compress to just their data bytes after the first; a
-     * genuine status change (even back to one used earlier) always sends
-     * the full byte again; a Real-Time byte injected between two
-     * running-status messages doesn't disturb it (spec: Real-Time bytes
-     * never cancel running status); a fresh init resets it, so the very
-     * next message after a reset is never wrongly compressed against
-     * whatever the previous test left behind. */
+    /* 13. running status: same-status messages compress after the first; any
+     * status change sends it again; Real-Time between them doesn't cancel it;
+     * init resets it. */
     tiles_din_queue_init();
     push(0x93, 10, 100); push(0x93, 11, 100); push(0x93, 12, 100);
     n = drain(out, 64);

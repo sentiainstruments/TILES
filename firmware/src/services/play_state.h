@@ -1,14 +1,8 @@
 #pragma once
 
-/* Where the player left off -- mode, scale, key and octave -- kept in flash
- * so TILES comes back the same after a power cycle. (A crash reboot keeps
- * them in RAM anyway: note_map.c, op_mode.c.)
- *
- * Saved through storage/log_store.h in its own two sectors (flash_map.h):
- * a one-page append ~2 s after the last change, with no pad touched. An
- * erase never happens while the clock runs (a save that needs one waits
- * for the clock to stop), so a save is never heard. Host-tested in
- * test/test_play_state.c. */
+/* Mode, scale, key and octave kept in flash across power cycles, through
+ * log_store: a page append ~2 s after a change, no erase while the clock
+ * runs. Tested in test_play_state.c. */
 
 #include "kv_store.h"
 

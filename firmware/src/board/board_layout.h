@@ -1,12 +1,8 @@
 #pragma once
 
-/* The board as one 5-row x 6-col grid, for modules that use it as a
- * low-res display (standby, boot animation): row 0 = the 6 function
- * buttons, rows 1-4 = the pads (pad_config.c numbering), plus 4 underglow
- * pixels anchored under pads 3, 5, 15 and 17.
- *
- * The underglow anchors come from how the board looks, not a hardware
- * doc; fix them here if the LED order turns out different. */
+/* The board as a 5x6 grid for low-res drawing: row 0 = the 6 keys, rows
+ * 1-4 = the pads, plus 4 underglow pixels under pads 3, 5, 15 and 17
+ * (anchors from how the board looks, not a hardware doc). */
 
 #include <stdint.h>
 

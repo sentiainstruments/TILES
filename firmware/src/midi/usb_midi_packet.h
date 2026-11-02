@@ -1,14 +1,8 @@
 #pragma once
 
-/* USB-MIDI 1.0 event packets (USB MIDI class spec, section 4): byte 0 =
- * cable number (high nibble) + Code Index Number (low nibble), bytes 1-3 =
- * up to three MIDI bytes. Pure functions, tested natively
- * (firmware/test/test_usb_midi_packet.c).
- *
- * Used instead of TinyUSB's byte-stream calls, which aren't safe with two
- * cables: stream_read() merges all cables, and stream_write() keeps one
- * partial-message state for all of them. Packets carry their cable and are
- * written whole. */
+/* USB-MIDI 1.0 event packets (cable + CIN, then up to three bytes); pure,
+ * tested natively. Used instead of TinyUSB's byte stream, which isn't
+ * safe with two cables. */
 
 #include <stddef.h>
 #include <stdint.h>

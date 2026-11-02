@@ -47,8 +47,7 @@
 
 /* Modes, in the order they were added. (An arpeggiator stub was replaced
  * by bass guitar mode; there is no arp.) */
-/* SONG is a separate sequencer-style mode (see "Song mode"); SCENE_LAUNCH
- * is Ableton mode (see "Scene Launch mode"). */
+/* SONG: see "Song mode"; SCENE_LAUNCH: Ableton mode. */
 typedef enum {
     OP_MODE_MELODIC = 0,
     OP_MODE_CHORD,
@@ -83,10 +82,7 @@ static int phys_kind_of(tiles_op_mode_t mode) {
 
 static void mode_underglow(void); /* the active mode's colour on the underglow */
 
-/* Sequencer lanes and Song tracks: their notes go out on the Parts USB
- * port (midi/midi_ports.h) whatever channel they're on (Song tracks borrow
- * 2-9 from the MPE zone, services/midi_channels.h), never on the MIDI
- * port's MPE zone. */
+/* Lanes and Song tracks play on the Parts USB port, never the MPE zone. */
 static void part_note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
     tiles_midi_out_parts_begin();
     tiles_midi_note_on(channel, note, velocity);
@@ -100,22 +96,8 @@ static void part_note_off(uint8_t channel, uint8_t note, uint8_t release_velocit
 }
 
 
-/* The mode menu (MENU_SLOTS below) is laid out by family, one column each,
- * the first of the family on row 1 (nearest the buttons):
- *   column 1  magentas   Melodic (the default, magenta), Duet (pink), Bass
- *                        guitar (lilac): the modes played as an instrument
- *   column 2  reds       Sequencer (scarlet), Drums (orange), Song (amber)
- *   column 3  blue       Prism (harmony.h)
- *   column 4  teal/cyan  Ableton, Volca (gear-specific modes, CV/gate ones to
- *                        come, go here)
- *   columns 5-6          physical modelling and experimental modes, each in
- *                        the colour of what it models: Bouncing notes (lime,
- *                        a bouncing ball), Newton's cradle (steel), Sand
- *                        (sand); Ripples (water), Orbits (night sky)
- * The first four columns share a colour family each, so a column reads as
- * one kind of mode. A mode's underglow is always its menu colour, and so
- * are its resting pads (the sequencer's steps, the drum pads, Song's
- * tracks, the bass frets). A new mode is a row in MENU_SLOTS. */
+/* The mode menu, one column per family (README, "Modes and keys"). A mode's
+ * underglow and resting pads are its menu colour. A new mode is a row here. */
 /* play_state's saved mode numbers past the drum mode: Volca (drum mode with
  * its flag) and Harmony. Fixed: they're in flash. */
 #define OP_PLAY_STATE_VOLCA 7u
@@ -127,12 +109,8 @@ static void part_note_off(uint8_t channel, uint8_t note, uint8_t release_velocit
 #define OP_PLAY_STATE_ORBITS 13u
 #define OP_PLAY_STATE_CRADLE 14u
 
-/* Mode colors, by family (see the menu above): melodic = Sentia magenta,
- * Duet = pink, bass guitar = lilac (its fretboard, lighting.h); the
- * sequencers red to amber (Sequencer scarlet, its steps red; drums orange,
- * drum_seq.h; Song amber, its track pads a random hue in a red-orange-to-
- * amber band); Ableton = teal. The crash indicator's red is a pulse, the
- * Sequencer's steady. */
+/* Mode colours by family (README). The crash indicator's red pulses; the
+ * Sequencer's is steady. */
 #define OP_MENU_MELODIC_R 1.0f
 #define OP_MENU_MELODIC_G 0.0f
 #define OP_MENU_MELODIC_B 1.0f
@@ -166,8 +144,7 @@ static void part_note_off(uint8_t channel, uint8_t note, uint8_t release_velocit
 #define OP_TRANSPORT_ARMED_BLINK_GAP_MS 120u
 #define OP_TRANSPORT_ARMED_PAUSE_MS 500u
 
-/* That double blink's rhythm: true during the two flashes. Also the mode
- * menu's "playing in the background" pad. */
+/* Double-blink rhythm; also the menu's "playing in background" pad. */
 static bool double_blink_on(uint32_t now_ms) {
     uint32_t cycle_ms = OP_TRANSPORT_ARMED_BLINK_ON_MS * 2u + OP_TRANSPORT_ARMED_BLINK_GAP_MS + OP_TRANSPORT_ARMED_PAUSE_MS;
     uint32_t t = now_ms % cycle_ms;
@@ -206,9 +183,7 @@ static float menu_selected_pulse_level(uint32_t now_ms) {
     return OP_MENU_SELECTED_PULSE_MIN + (OP_MENU_SELECTED_PULSE_MAX - OP_MENU_SELECTED_PULSE_MIN) * raw;
 }
 
-/* "Something is running in the background" pulse, one period per beat of
- * the current tempo (tiles_midi_clock_get_ms_per_beat()): calmer than the
- * selection pulse. Also used by the diamond LED. */
+/* Background-activity pulse, one period per beat; also the diamond LED. */
 #define OP_BACKGROUND_PULSE_MIN 0.0f
 #define OP_BACKGROUND_PULSE_MAX 1.0f
 
@@ -221,27 +196,19 @@ static float background_pattern_pulse_level(uint32_t now_ms) {
 /* Menus (mode and scale picker) select on a real press, more than half
  * travel (900 is roughly full scale on this hardware), not on touch. */
 #define OP_MENU_SELECT_DEPTH_THRESHOLD 450.0f
-/* Menu haptics use tiles_haptics_trigger_touch_pulse() (self-ending), not
- * trigger_kick(), whose sustain never got stopped for menu touches and
- * left pads buzzing. Only real notes (expression.c) and sequencer steps
- * (paired with seq_end_current_note()) use kick(). */
+/* Menu haptics use the self-ending touch pulse: trigger_kick()'s sustain
+ * left pads buzzing. Only notes and sequencer steps use kick(). */
 
 /* ---- Tap tempo (circle) + beat flash ------------------------------------
- * In the sequencer, with no external clock, circle presses are tap-tempo
- * taps (handle_circle_tap() decides what counts; services/midi_clock.h
- * does the math). The beat flash follows the shared pulse count, so it
- * shows external clock and tap tempo alike. */
+ * The flash follows the shared pulse count: external clock or tap tempo. */
 #define OP_BEAT_FLASH_DURATION_MS 100u
 #define OP_BEAT_FLASH_LEVEL 1.0f
 /* 24 pulses per quarter note (MIDI spec): one flash per beat. */
 #define OP_CLOCK_PULSES_PER_BEAT 24u
 
-/* Survives a watchdog reset (__uninitialized_ram, like note_map.c), along
- * with s_seq_lane_running[]/s_seq_active_alt[]: mode, which lanes play and
- * which pattern each lane uses come back after a crash. NOT the Ableton
- * transport belief (s_transport_*): Live may have changed meanwhile, so it
- * resets to "stopped" and the next diamond click resyncs. No initializer
- * on purpose; tiles_op_mode_init() sets defaults unless recovering. */
+/* Survives a watchdog reset with the lane state: mode, playing lanes and
+ * patterns. Live's transport isn't kept; the next diamond click resyncs.
+ * No initializer on purpose: tiles_op_mode_init() sets defaults. */
 static tiles_op_mode_t __uninitialized_ram(s_active_mode);
 static bool s_menu_visible;
 /* A mode was picked (press past the threshold) but the pad isn't released
@@ -254,10 +221,8 @@ static tiles_op_mode_t s_menu_pending_mode;
 static bool __uninitialized_ram(s_volca_mode);
 static bool s_menu_pending_volca;
 
-/* Triangle's LED sometimes showed lit right after boot despite being set
- * off at init (cause not found; likely a PCA9685 power-on glitch). So the
- * "off" write repeats every scan for OP_BOOT_RELIGHT_GUARD_MS after boot.
- * A workaround, not a root-cause fix. */
+/* Triangle's LED sometimes lit after boot (likely a PCA9685 power-on
+ * glitch, cause not found): the off write repeats this long. Workaround. */
 #define OP_BOOT_RELIGHT_GUARD_MS 1000u
 static uint32_t s_boot_relight_guard_until_ms;
 
@@ -284,10 +249,8 @@ static bool s_diamond_press_had_conflict; /* same as s_triangle_press_had_confli
 static bool s_scale_menu_prev_pad_touched[TILES_NUM_PADS];
 
 /* ---- Diamond: Ableton transport ---------------------------------------
- * See handle_diamond_transport(). s_diamond_press_start_ms times the 2 s
- * record-arm hold; s_diamond_record_armed fires once per hold.
- * s_transport_playing/_recording are this device's belief about Live's
- * transport (MIDI can't query it); recording implies playing. */
+ * Times the 2 s record hold. s_transport_* is our belief about Live's
+ * transport (MIDI can't query it). */
 static uint32_t s_diamond_press_start_ms;
 static bool s_diamond_record_armed;
 static bool s_transport_playing;
@@ -323,11 +286,8 @@ static uint32_t s_beat_flash_start_ms;
 #define OP_SEQ_CURSOR_ARMED_B 1.0f
 
 /* ---- Pattern bank: 4 lanes x 6 alternatives --------------------------------
- * All 4 LANES play at once, each with its own fixed MIDI channel
- * (s_seq_lane_channel[]). Each lane has 6 alternative patterns (a row of
- * the bank); picking another one swaps only that lane's pattern. All lanes
- * go out over MIDI on their own channels (routing lanes to CV/gate is a
- * companion-app idea, not built). */
+ * All lanes play at once, each on its own channel; picking an alternative
+ * swaps only that lane's pattern. */
 #define OP_SEQ_MIN_LENGTH 1u
 #define OP_SEQ_MAX_LENGTH OP_SEQ_NUM_STEPS
 /* Magenta flash on the pads showing the new length after circle + "-"/"+". */
@@ -340,9 +300,7 @@ _Static_assert(OP_SEQ_NUM_STEPS == TILES_NUM_PADS, "one step per pad");
 
 /* [lane][alternative] */
 static op_seq_pattern_t s_seq_pattern[OP_SEQ_NUM_LANES][OP_SEQ_ALTS_PER_LANE];
-/* True once this slot has been saved to flash (see "Pattern
- * persistence"). Not the same as having content: a slot can hold unsaved
- * notes, or be saved and since cleared. */
+/* Saved to flash; not the same as having content. */
 static bool s_pattern_slot_saved[OP_SEQ_NUM_LANES][OP_SEQ_ALTS_PER_LANE];
 /* Which alternative (0..5) each lane is PLAYING, independent of which lane
  * is being viewed (s_seq_edit_lane). */
@@ -361,16 +319,13 @@ static uint32_t s_seq_length_flash_ms;
 /* ---- Per-lane playback state ---------------------------------------------
  * Indexed by lane. s_seq_edit_lane is only about what is shown; see
  * active_pattern() vs. pattern_for_lane(). */
-/* Each lane starts and stops on its own ("-"/"+" act on the viewed lane);
- * only the tempo is global. This is a per-lane gate inside
- * seq_advance_clock(), on top of midi_clock's single running flag, which
- * turns on when any lane starts and off when every lane has stopped. */
+/* Per-lane run gate inside seq_advance_clock(); midi_clock runs while any
+ * lane does. Only the tempo is global. */
 /* Survives a crash reboot (see s_active_mode). tiles_op_mode_init() also
  * restarts the clock for restored running lanes. */
 static bool __uninitialized_ram(s_seq_lane_running)[OP_SEQ_NUM_LANES];
 static uint8_t s_seq_current_step[OP_SEQ_NUM_LANES]; /* 0..23 */
-/* A lane started a step since the autosave last ran (its moment to save
- * while playing; "Sequencer autosave"). */
+/* A lane started a step since the last autosave (its moment to save). */
 static bool s_seq_step_entered;
 static bool s_seq_note_sounding[OP_SEQ_NUM_LANES];
 static uint8_t s_seq_sounding_pad[OP_SEQ_NUM_LANES]; /* 1..24, valid iff s_seq_note_sounding[lane] */
@@ -378,19 +333,13 @@ static uint8_t s_seq_sounding_channel[OP_SEQ_NUM_LANES];
 /* The step's fired notes, [0..s_seq_sounding_note_count[lane]-1]. */
 static uint8_t s_seq_sounding_notes[OP_SEQ_NUM_LANES][OP_SEQ_MAX_NOTES_PER_STEP];
 static uint8_t s_seq_sounding_note_count[OP_SEQ_NUM_LANES];
-/* Whether this lane's current note kicked a haptic. Only the lane shown on
- * the grid gets haptics (background lanes play silently to the touch).
- * Captured at fire time, like the channel and notes, so ending the note
- * undoes exactly what starting it did even if the view changed meanwhile. */
+/* This lane's note kicked a haptic (only the viewed lane does). Captured at
+ * fire time, so ending the note undoes exactly what starting it did. */
 static bool s_seq_sounding_haptics[OP_SEQ_NUM_LANES];
 static uint32_t s_seq_step_started_at_pulse[OP_SEQ_NUM_LANES];
 static bool s_seq_prev_pad_touched[TILES_NUM_PADS];
-/* Quantized (re)start: a manual start waits for the next beat boundary
- * instead of jumping in mid-phrase. Set by seq_start() and by "+";
- * consumed by seq_advance_clock(). s_seq_pending_restart picks what happens
- * at the boundary: restart from step 0 ("+" while playing, or entering the
- * mode) vs. resume where the playhead stopped ("+" while stopped). Per
- * lane, since seq_advance_clock() handles each lane separately. */
+/* Quantized (re)start: a manual start waits for the next beat.
+ * s_seq_pending_restart: restart from step 0, or resume where it stopped. */
 static bool s_seq_pending_start[OP_SEQ_NUM_LANES];
 static bool s_seq_pending_restart[OP_SEQ_NUM_LANES];
 
@@ -401,16 +350,9 @@ static uint32_t s_seq_ratchet_interval_pulses[OP_SEQ_NUM_LANES];
 static uint32_t s_seq_next_ratchet_pulse[OP_SEQ_NUM_LANES];
 
 /* ---- Per-step editing: pitch, ratchet ------------------------------------
- *   - Hold a step: pitch edit (OP_SEQ_PITCH_ASSIGN_HOLD_MS), however long
- *     it's held (a longer hold no longer turns into a chance dial).
- *   - Circle held first, then touch a step: ratchet edit, immediately.
- * Pitch edit stays open after release until a pad is tapped (that pad's
- * note becomes the step's note). Ratchet is a live dial: the held pad's
- * depth sets the value, committed at release. Chances already in a
- * pattern still play.
- * Triangle + circle cancels any of them.
- * A plain tap toggles the step's armed state on RELEASE, so holding an
- * armed step to edit it doesn't disarm it first. */
+ * Hold a step: pitch edit, open until a pad is tapped. Circle, then a step:
+ * ratchet, a live dial on depth. Triangle + circle cancels. A tap toggles
+ * armed on release, so holding an armed step to edit doesn't disarm it. */
 typedef enum {
     OP_SEQ_EDIT_NONE = 0,
     OP_SEQ_EDIT_PITCH,
@@ -426,35 +368,21 @@ static bool s_pitch_edit_prev_pad_touched[TILES_NUM_PADS]; /* only used in OP_SE
 /* Pitch edit sets ONE note (a tapped pad commits it and closes). Two
  * multi-note versions were tried and rejected on hardware. Steps still
  * hold up to 4 notes, for chords recorded by capture. */
-/* The ratchet dial: lifting a finger passes back
- * through every lower depth, which dragged the value down on release.
- * Depth is written live in both directions, except below
- * OP_SEQ_EDIT_RELEASE_GUARD_DEPTH, the tail of a lift, where writes stop
- * and the last real value stays. (Tracking only the peak made it
- * impossible to dial back down.) So the lowest value reachable while
- * holding is just above 0; disarm the step for "never". The guard value
- * is a first guess. */
+/* Below this depth (the tail of a lift) the ratchet dial stops writing, so
+ * lifting doesn't drag the value down. First guess. */
 #define OP_SEQ_EDIT_RELEASE_GUARD_DEPTH 60u
 
-/* ---- Pattern/channel picker: REMOVED -------------------------------------
- * Triangle + circle opens the scale picker in every mode; the sequencer's
- * old picker is gone. Lanes and alternatives are chosen in the pattern
- * bank now. */
 
 /* ---- Transport + length ("-"/"+", sequencer only) -------------------------
- * Plain press = transport, resolved on release (like octave_control.c).
- * Circle held FIRST, then "-"/"+" = length -1/+1 (only that order).
- * octave_control.c ignores "-"/"+" while the sequencer owns the grid. */
+ * Plain press = transport, on release; circle held first = length -1/+1. */
 static bool s_minus_was_held;
 static bool s_plus_was_held;
 static bool s_minus_used_as_combo;
 static bool s_plus_used_as_combo;
 
 /* ---- Chord mode (columns 1-2) -------------------------------------------
- * Melody columns 3-6 play through expression.c unchanged (remapped by
- * note_map). The 8 chord-strip pads are claimed here
- * (tiles_op_mode_owns_pad()) and play chords directly. State is per pad,
- * since several chord pads can be held at once. */
+ * The 8 chord-strip pads play chords here; columns 3-6 go through
+ * expression.c. State is per pad (several can be held). */
 /* Chord mode's fixed channel (services/midi_channels.h), outside the live
  * MPE range, so a melody note can never take it. */
 #define OP_CHORD_CHANNEL TILES_MIDI_CH_CHORD
@@ -462,21 +390,13 @@ static bool s_chord_pad_touched[TILES_NUM_PADS];
 static bool s_chord_pad_sounding[TILES_NUM_PADS];
 
 /* ---- Chord voicing: one fixed shape, velocity from strike speed --------
- * Each chord pad always plays the same voicing: bass + root + fifth +
- * open third + seventh. Strike speed sets loudness only (the same velocity
- * curve as melodic notes, tiles_expression_velocity_from_strike()), never
- * which notes play. Adaptive voicing (drifted around the range) and
- * pressure tiers (triad -> jazz voicing) were both tried and dropped for
- * this predictable shape. Chord quality comes from the actual intervals
- * tiles_note_map_get_chord_notes() returns, so it follows the scale. */
+ * Bass + root + fifth + open third + seventh, always; strike speed sets
+ * loudness only. Quality follows the scale (note_map). */
 
 /* Bass voice: the root one more octave down, below the chord register. */
 #define OP_CHORD_BASS_EXTRA_OCTAVE_SEMITONES 12
-/* The seventh (already computed by note_map) is the fifth voice: maj7,
- * dom7, m7 or half-diminished by scale degree. A live chord plays all 5;
- * a chord captured into a sequencer or Song step keeps 4 (step storage is
- * OP_SEQ_MAX_NOTES_PER_STEP / OP_SONG_MAX_NOTES_PER_STEP = 4, changing it
- * means migrating the flash format), dropping the seventh. */
+/* The seventh is the fifth voice. Captured steps keep 4 notes (the flash
+ * format's limit), dropping the seventh. */
 #define OP_CHORD_NUM_VOICES 5u /* bass + root + fifth + open third + seventh */
 
 static uint8_t s_chord_pad_notes[TILES_NUM_PADS][OP_CHORD_NUM_VOICES];
@@ -536,10 +456,8 @@ static void chord_pad_note_off(uint8_t pad) {
 }
 
 /* Strikes `pad` at `velocity` once a strike has been measured. */
-/* Aftertouch on the chord strip, as Prism does: channel pressure on the
- * chord channel from the deepest held chord pad, scaled by the Feel menu's
- * pressure (aftertouch sensitivity; 0 = off), and each held pad's buzz
- * follows its own press. A chord struck with no other held starts at 0. */
+/* Chord-strip aftertouch, as in Prism: channel pressure from the deepest
+ * held pad, scaled by Feel's pressure; each pad's buzz follows its press. */
 static uint8_t s_chord_last_pressure;
 
 static uint8_t chord_pressure_for(uint8_t pad) {
@@ -608,12 +526,8 @@ static void chord_end_all_notes(void) {
     }
 }
 
-/* Strike detection as on melodic pads (expression.c): touch start, the
- * peak depth past TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA, then the
- * follow-through (strike_settle.h) so the velocity sees how deep the hit
- * went (velocity read at the crossing itself made nearly every chord soft).
- * A touch that never crosses stays silent; one released before the
- * follow-through ends plays with the depth it reached. */
+/* Strike detection as on melodic pads, waiting for the follow-through so
+ * velocity sees the full depth (at the crossing, chords came out soft). */
 static void chord_pad_commit(uint8_t pad) {
     uint8_t i = (uint8_t)(pad - 1u);
     uint8_t velocity = tiles_expression_velocity_from_strike(s_chord_pad_crossed_ms[i] - s_chord_pad_touch_start_ms[i],
@@ -704,11 +618,8 @@ static op_seq_pattern_t *pattern_for_lane(uint8_t lane) {
     return &s_seq_pattern[lane][s_seq_active_alt[lane]];
 }
 
-/* A 16-step pattern snaps to a 4x4 block on the left; every other length
- * uses the plain linear pad = step + 1 layout (partial last row). These two
- * functions are the only place that decides, so what lights and what a
- * touch arms can't disagree. They take the pattern explicitly: playback
- * needs each lane's own layout. */
+/* A 16-step pattern is a 4x4 block; other lengths run pad = step + 1. The
+ * only place that decides, so lighting and touches agree. */
 static bool seq_uses_4x4_layout(const op_seq_pattern_t *pat) {
     return pat->length == 16u;
 }
@@ -782,10 +693,8 @@ static void seq_fire_note(uint8_t lane, uint8_t step) {
     /* This lane's own layout, for the haptic pad (only felt for the viewed
      * lane) and for the fallback pitch of a step with no stored note. */
     uint8_t pad = seq_pad_for_step(pat, step);
-    /* Stored notes are quantized to the current global scale as they play
-     * (tiles_note_map_quantize_to_scale()); storage never changes, so a scale
-     * change is instant and reversible. A step with no stored note resolves
-     * live from its pad. */
+    /* Quantized to the current scale as it plays; storage never changes. A
+     * step with no stored note resolves from its pad. */
     uint8_t channel = s_seq_lane_channel[lane];
     /* Fire every note stored for the step (count clamped against corrupt
      * flash data); otherwise one live-resolved note. */
@@ -821,9 +730,8 @@ static void seq_fire_note(uint8_t lane, uint8_t step) {
     s_seq_sounding_note_count[lane] = count;
 }
 
-/* Rolls the step's probability once per occurrence (a step fires or not,
- * like "trig probability" on hardware sequencers) and, if it fires, arms
- * its ratchet hits for seq_advance_clock(). */
+/* Rolls the step's probability once per occurrence; if it fires, arms its
+ * ratchet hits. */
 static void seq_enter_step(uint8_t lane, uint8_t step) {
     s_seq_step_entered = true; /* the autosave's moment while playing */
     seq_end_current_note(lane);
@@ -938,10 +846,8 @@ static void seq_handle_step_taps(uint32_t now_ms) {
 /* Phase lock (op_mode.h, setting seq.lock). */
 static bool s_seq_lock;
 
-/* Takes the clock snapshot as a parameter: tiles_midi_clock_get_state()
- * clears start_edge, and scan also needs it for the beat flash. Called
- * once per lane with the same snapshot; all lanes share one tempo and
- * transport, each tracking its own phase. */
+/* Takes a clock snapshot (reading the state clears start_edge), shared by
+ * every lane in a pass. */
 static void seq_advance_clock(uint8_t lane, tiles_midi_clock_state_t clock) {
     /* Stopped lanes first, before start_edge: a stopped lane must not fire
      * step 0 because another lane (or an external Start) started. Starting it
@@ -979,14 +885,8 @@ static void seq_advance_clock(uint8_t lane, tiles_midi_clock_state_t clock) {
     }
 
     if (s_seq_pending_start[lane]) {
-        /* Pending (quantized) start: snap to the NEAREST beat. In the first half
-         * of a beat, start now on the grid of the beat just passed (the steps
-         * already behind it counted, so the lane lands on the beat); past
-         * halfway, wait for the next one. (Waiting for an exact boundary meant
-         * up to a beat of dead air.) A fresh Start/tap-tempo start is already at
-         * phase 0 and took the branch above. s_seq_pending_restart decides
-         * restart (step 0) vs. resume. A scan that skips pulses still lands in
-         * the first half after the boundary. */
+        /* A pending start snaps to the nearest beat: in the first half, start now
+         * on the grid of the beat just passed; past halfway, wait for the next. */
         uint32_t phase_in_beat = clock.pulse_count % OP_CLOCK_PULSES_PER_BEAT;
         if (phase_in_beat * 2u >= OP_CLOCK_PULSES_PER_BEAT) {
             return;
@@ -1088,10 +988,8 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
             /* circle flashes on the beat */
             level = beat_flash_level;
         } else if (col == TILES_MINUS_BUTTON_COL || col == TILES_PLUS_BUTTON_COL) {
-            /* "-"/"+" LEDs for the viewed lane: "+" solid while it plays, pulsing
-             * while the clock runs but this lane doesn't, off otherwise. "-" (only
-             * while stopped): solid when rewound to step 0, pulsing when paused
-             * mid-pattern (a second "-" rewinds). */
+            /* "+": solid while the lane plays, pulsing while only the clock runs. "-"
+             * (stopped): solid at step 0, pulsing when paused mid-pattern. */
             bool lane_running = s_seq_lane_running[s_seq_edit_lane];
             if (col == TILES_MINUS_BUTTON_COL) {
                 if (!lane_running) {
@@ -1118,9 +1016,7 @@ static void render_sequencer(float beat_flash_level, bool transport_running) {
 }
 
 /* ---- Per-step editing ------------------------------------------------------
- * (Design in the state section above.) Opening an edit silences the
- * lane's current note; playback keeps advancing underneath and the view
- * catches up on return. */
+ * Opening an edit silences the lane's note; playback keeps advancing. */
 static void edit_enter(uint8_t step) {
     seq_end_current_note(s_seq_edit_lane);
     s_seq_edit_mode = OP_SEQ_EDIT_PITCH;
@@ -1164,11 +1060,8 @@ static uint8_t ratchet_count_from_depth(uint16_t depth) {
     return count;
 }
 
-/* Pitch: once open it stays open (the held pad can be released); the
- * first pad touched, the step's own included, becomes the step's single
- * note and the edit closes. Triangle + circle backs out unchanged.
- * Ratchet: a live dial on the held pad's depth (ratchet_count_from_depth());
- * release keeps the last value. */
+/* Pitch: the first pad touched becomes the step's note and closes the edit.
+ * Ratchet: the held pad's depth, kept at release. */
 static void handle_edit_mode(uint32_t now_ms) {
     /* The pad the step shows on (seq_pad_for_step(), 4x4-aware), so release
      * is detected on the right sensor. */
@@ -1307,19 +1200,13 @@ static void render_edit_mode(uint32_t now_ms, bool transport_running) {
     }
 }
 
-/* Forward declaration: mode_owns_standby_grid() reads it directly. Defined
- * in "Song mode: capture". */
+/* Defined in "Song mode: capture". */
 static bool s_song_capture_active;
-/* Same, for Song's step-edit pitch pick (defined in "Song mode: step-edit
- * screen"). */
+/* Defined in "Song mode: step-edit screen". */
 static bool s_song_edit_pick_active;
 
-/* Which modes draw the whole grid through the standby setters (which do
- * nothing unless standby is claimed): sequencer, Ableton mode, and Song
- * mode, except while Song captures or picks a step's pitch, when the grid
- * shows live melodic coloring and plays live. The single place that
- * decides this: menu_exit(), scale_menu_exit(), set_active_mode() and
- * tiles_op_mode_owns_pad_grid() all use it. */
+/* Modes that draw the whole grid: sequencer, Ableton, and Song except while
+ * it captures or picks a pitch. The single place that decides. */
 static bool mode_owns_standby_grid(tiles_op_mode_t mode) {
     if (mode == OP_MODE_SONG) {
         return !s_song_capture_active && !s_song_edit_pick_active;
@@ -1516,9 +1403,7 @@ static void render_menu(uint32_t now_ms) {
 }
 
 /* ---- Scale picker ----------------------------------------------------------
- * Push-style: one pad per scale across the grid (note_map.h picker slots).
- * Selected = pulsing white, available = dim magenta, reserved custom slots
- * = off and not selectable. */
+ * One pad per scale: selected pulses white, available dim magenta. */
 /* The selected pad also gets a haptic tick every
  * OP_MENU_SELECTED_PULSE_PERIOD_MS, in time with its light. */
 static uint32_t s_scale_menu_haptic_pulse_ms;
@@ -1557,11 +1442,8 @@ static void render_scale_menu(uint32_t now_ms) {
 
 static void scale_menu_exit(void);
 
-/* A touch only clicks (haptic); selecting needs depth past
- * OP_MENU_SELECT_DEPTH_THRESHOLD. The scale changes at once (no MIDI side
- * effect), but the picker only closes once every pad is released
- * (s_scale_menu_pending_exit): closing while the finger was still down
- * handed it to real play and fired a note. */
+/* Selecting needs depth past half; the picker closes only once every pad
+ * is up, or the finger would play a note. */
 static void handle_scale_menu_taps(void) {
     bool any_touched = false;
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
@@ -1624,35 +1506,16 @@ static void scale_menu_exit(void) {
 }
 
 /* ---- Pattern persistence (flash) -------------------------------------------
- * Saving and deleting happen in the pattern bank (handle_pattern_bank_
- * taps(): circle + pattern = save, hold 3 s = delete); this is the flash
- * layer underneath.
- *
- * Everything (which slots are saved + all 24 patterns) fits one 4 KB
- * sector (~2.9 KB used), the last sector of flash (storage/flash_map.h).
- * A magic number and version reject erased flash (all 0xFF) and old
- * layouts.
- *
- * Code runs from flash (XIP), so erase/program need interrupts off for
- * the whole span (the SDK doesn't do it); pattern_store_write_all() does
- * that (single core). The watchdog is fed before and after, not during
- * (watchdog_update() is in flash); a 4 KB erase + program finishes well
- * inside the timeout. A save pauses everything for tens of ms, which is
- * fine for an occasional deliberate action. */
+ * All 24 patterns fit one 4 KB sector (storage/flash_map.h); a magic number
+ * and version reject erased flash and old layouts. Code runs from flash, so
+ * erase and program run with interrupts off; a save pauses tens of ms. */
 #define TILES_PATTERN_STORE_MAGIC 0x454c4954u /* "TILE" */
-/* Bumped for each layout change (multi-note steps, then the packed 4-note
- * format). A mismatch loads as "nothing saved": old patterns are lost,
- * never misread. */
+/* Bumped per layout change; a mismatch loads as nothing saved. */
 #define TILES_PATTERN_STORE_VERSION 3u
 #define TILES_PATTERN_FLASH_OFFSET TILES_FLASH_PATTERN_OFFSET /* storage/flash_map.h */
 
-/* On-flash layout of ONE pattern, separate from op_seq_pattern_t (which
- * the rest of the file uses unchanged). Packing that makes 4 notes/step
- * fit the sector:
- *   - step_armed[] and step_pitch_override[] become 32-bit masks.
- *   - step_note_count[] is dropped: unused note slots hold 0xFF (never a
- *     MIDI note), so the count is the number of non-0xFF entries.
- * pack_pattern_to_flash()/unpack_pattern_from_flash() convert. */
+/* On-flash layout of one pattern: armed and pitch flags as 32-bit masks,
+ * unused note slots 0xFF (so no count). pack/unpack convert. */
 typedef struct {
     uint32_t step_armed_mask;
     uint32_t step_pitch_override_mask;
@@ -1818,20 +1681,10 @@ static void pattern_store_load_all(void) {
 }
 
 /* ---- Sequencer autosave ----------------------------------------------------
- * Every lane's patterns (steps, pitches and chords, length, chance,
- * repeats), the one each lane plays and the viewed lane save themselves,
- * like drum mode's pattern: seq_pattern.h's sparse blob appended to a
- * two-sector log (storage/log_store.h) in its own region, newest record
- * wins at boot over the pattern bank's store (still written by circle +
- * tap, and loaded first, so banks saved before the autosave carry over).
- *
- * Any change, whatever made it, shows as a new fingerprint
- * (tiles_seq_fingerprint(), checked every SEQ_CHECK_MS). The save waits
- * SEQ_SAVE_QUIET_MS after the last change with no pad touched; while
- * lanes play, it goes right after a step starts and only into erased
- * flash (a page program, under a millisecond); an erase waits for the
- * clock to stop, and the spare sector is erased while idle so it rarely
- * has to. */
+ * Lanes save as seq_pattern.h blobs in a two-sector log; the newest wins at
+ * boot over the pattern bank. A changed fingerprint saves after
+ * SEQ_SAVE_QUIET_MS with no touch; while playing, only right after a step
+ * and only into erased flash (an erase waits for the clock to stop). */
 #define SEQ_CHECK_MS 250u
 #define SEQ_SAVE_QUIET_MS 2000u
 #define SEQ_SAVE_RETRY_MS 30000u
@@ -1931,16 +1784,11 @@ tiles_op_mode_seq_store_info_t tiles_op_mode_get_seq_store_info(void) {
 }
 
 /* ---- Pattern bank (diamond, sequencer only) --------------------------------
- * Row = lane, column = one of that lane's 6 alternatives; all 24 cells are
- * selectable. Pressing a cell makes it that lane's PLAYING pattern
- * (s_seq_active_alt[lane]) and makes that lane the one shown in the step
- * view (s_seq_edit_lane), so one gesture picks both.
- * Cell colors: see render_pattern_bank(). */
+ * Row = lane, column = alternative. A press makes it that lane's playing
+ * pattern and the viewed lane. */
 #define OP_PATTERN_BANK_FLASH_MS 300u
-/* Four lane colors in the sequencer's warm family (the row tells the lane
- * too): red-orange, orange, amber, rose. Steady, so the blinking red
- * selection still stands out; no magenta (capture playhead and length
- * flash). Unmeasured. */
+/* Lane colours in the sequencer's warm family, steady so the red selection
+ * stands out. Unmeasured. */
 #define OP_SEQ_LANE_0_R OP_SCALE_AVAILABLE_LEVEL
 #define OP_SEQ_LANE_0_G (OP_SCALE_AVAILABLE_LEVEL * 0.12f)
 #define OP_SEQ_LANE_0_B 0.0f
@@ -2001,22 +1849,16 @@ static bool pattern_has_content(const op_seq_pattern_t *pat) {
     return false;
 }
 
-/* Cell colors, most specific first:
- *   - the viewed lane's current pick: red flash (even if empty, so you see
- *     where you're about to record);
- *   - another lane's current pick while that lane plays: white flash;
- *   - any cell with content: its lane's dim color;
- *   - otherwise off. */
+/* Cell colours: the viewed lane's pick flashes red, another playing lane's
+ * pick white; content dim; else off. */
 /* Save/delete confirmation: exactly two on/off blinks, then back to
  * normal. */
 #define OP_PATTERN_FLASH_BLINK_MS 150u
 #define OP_PATTERN_FLASH_COUNT 2u
 #define OP_PATTERN_FLASH_TOTAL_MS (OP_PATTERN_FLASH_BLINK_MS * 2u * OP_PATTERN_FLASH_COUNT)
 
-/* Underglow color for the save/delete confirmation, for
- * services/lighting.c, which ranks it above debug mode's pulse (that pulse
- * used to hide it). Read-only: expiry is cleared by
- * render_pattern_bank(), which runs whenever the bank is visible. */
+/* Save/delete confirmation colour for lighting.c (ranked above debug's
+ * pulse). Read-only; render_pattern_bank() clears it. */
 bool tiles_op_mode_pattern_flash_underglow_color(float *out_r, float *out_g, float *out_b) {
     if (!s_pattern_flash_active) {
         return false;
@@ -2098,19 +1940,14 @@ static void render_pattern_bank(uint32_t now_ms) {
         float level = (col == TILES_DIAMOND_BUTTON_COL) ? OP_TRIANGLE_LED_MENU_LEVEL : 0.0f;
         tiles_buttons_set_standby_led(board_button_for_col(col), level);
     }
-    /* Underglow: this only writes the idle state (the mode's colour). The
-     * confirmation colors come from services/lighting.c's priority chain, the
-     * single writer; writing them here too was overwritten every pass by
-     * debug mode's pulse. */
+    /* Idle underglow only; lighting.c draws the confirmation colours. */
     if (!save_flash_showing) {
         mode_underglow();
     }
 }
 
-/* Touch clicks, pressing past half selects (like every picker here),
- * unless circle was already down at touch-down: then a quick touch saves
- * the slot to flash on release, and holding past OP_PATTERN_DELETE_HOLD_MS
- * deletes it (once per hold, s_pattern_bank_delete_fired). */
+/* Past half selects. With circle down first, a quick touch saves and a hold
+ * past OP_PATTERN_DELETE_HOLD_MS deletes. */
 static void handle_pattern_bank_taps(uint32_t now_ms) {
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
@@ -2201,8 +2038,7 @@ static void pattern_bank_exit(void) {
  * with capture mode below. */
 static bool s_seq_capture_mode_active;
 static void seq_capture_mode_exit(void);
-/* Forward declarations (defined in "Song mode: capture"): used by
- * set_active_mode() and handle_diamond_transport(). */
+/* Defined in "Song mode: capture". */
 static void song_capture_enter(void);
 static void song_capture_exit(void);
 /* Forward declarations for the Song step-edit screen. */
@@ -2215,17 +2051,12 @@ static void scene_launch_enter(void); /* used by set_active_mode() */
 static void scene_launch_leave(void); /* used by set_active_mode() */
 static void song_stop_all_running(void); /* used by set_active_mode() */
 
-/* Ableton armed a track and started recording into an empty clip slot
- * (scene_on_sysex() OPEN_MELODIC): switch to melodic once every pad is
- * released, so the finger that clicked the slot doesn't play a note.
- * Cleared by any mode change. */
+/* Live opened an empty clip to record: switch to melodic once every pad is
+ * up, so the clicking finger plays no note. */
 static bool s_scene_pending_melodic;
 
-/* True while recording a new Live clip from melodic mode (set via
- * s_scene_pending_melodic), until circle + diamond ends it
- * (scene_end_capture()) or the player goes to Ableton, sequencer or Song
- * mode. Meanwhile circle + diamond belongs to Ableton, not Song capture:
- * this flow is self-contained. */
+/* Recording a Live clip from melodic mode until circle + diamond ends it;
+ * meanwhile circle + diamond belongs to Ableton, not Song capture. */
 static bool s_ableton_capture_active;
 static void scene_end_capture(void); /* used by handle_diamond_transport() */
 
@@ -2354,15 +2185,9 @@ static void set_active_mode(tiles_op_mode_t mode) {
 }
 
 /* ---- Sequencer capture (circle + diamond, in the sequencer) --------------
- * Records what you play into the viewed lane's steps, quantized to the
- * running tempo (needs tap tempo or external clock). The scale switches to
- * chromatic while capturing and is restored after. The current step's
- * pad lights magenta; diamond glows. Circle + diamond again ends it.
- *
- * Touches are played directly here (fixed OP_SEQ_VELOCITY) rather than
- * through expression.c: the sequencer still owns the grid. Overlap is
- * allowed: a new touch ends the previous note and becomes the note being
- * recorded. */
+ * Records what you play into the viewed lane at the running tempo; the
+ * scale is chromatic meanwhile. Touches play here (the sequencer still
+ * owns the grid); a new touch ends the previous note. */
 /* Capture enabled (it was disabled once over a freeze that turned out to
  * be unrelated printf flooding). */
 #define OP_SEQ_CAPTURE_MODE_ENABLED 1
@@ -2371,11 +2196,8 @@ static bool s_seq_capture_prev_pad_touched[TILES_NUM_PADS];
 /* Chord pads are captured on their strike edge (s_chord_pad_sounding[]
  * turning true), not the touch edge; this tracks last scan's state. */
 static bool s_seq_capture_prev_chord_sounding[TILES_NUM_PADS];
-/* Notes collected for the step being recorded, committed to the pattern
- * at the next step boundary (seq_capture_advance_clock()): a touch's
- * timing only picks WHICH step. Several touches aimed at the same step
- * build a cluster (up to OP_SEQ_MAX_NOTES_PER_STEP); a touch aimed at a
- * different step starts a new one. count == 0 = nothing recorded. */
+/* Notes for the step being recorded, committed at the next step boundary:
+ * touches aimed at one step build a chord (up to 4). count 0 = none. */
 static uint8_t s_seq_capture_armed_notes[OP_SEQ_MAX_NOTES_PER_STEP];
 static uint8_t s_seq_capture_armed_count;
 /* Nearest-step quantization: set at the first touch of a cluster. Past
@@ -2470,11 +2292,8 @@ static void seq_capture_handle_taps(tiles_midi_clock_state_t clock) {
         bool touched = tiles_touch_is_touched(pad);
         bool was_touched = s_seq_capture_prev_pad_touched[pad - 1u];
         bool is_chord_pad = tiles_note_map_is_chord_mode_active() && tiles_note_map_is_chord_region_pad(pad);
-        /* Chord pads are captured when they actually STRIKE (s_chord_pad_sounding[]
-         * turns true), reading the notes and velocity handle_chord_pad_taps()
-         * resolved, so the capture matches what was played (it used to record on
-         * raw touch-down with a flat velocity). Other pads record on touch-down.
-         * note_count takes the smaller of the two note limits. */
+        /* Chord pads are captured on their real strike, with the notes and
+         * velocity handle_chord_pad_taps() resolved; other pads on touch-down. */
         bool chord_strike_edge = is_chord_pad && s_chord_pad_sounding[pad - 1u] && !s_seq_capture_prev_chord_sounding[pad - 1u];
         if ((touched && !was_touched && !is_chord_pad) || chord_strike_edge) {
             /* A new touch sounds alongside held notes (a cluster), not cutting them
@@ -2546,10 +2365,8 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
         s_seq_pending_start[lane] = false;
         return;
     }
-    /* No early return on !clock.running here: with external clock arriving
-     * but the DAW stopped, set_running(true) is ignored and running stays
-     * false, which blocked every commit while touches still sounded.
-     * Quantization only needs pulse_count, which advances regardless. */
+    /* No early return when the clock isn't running: with external clock and
+     * the DAW stopped that blocked every commit. pulse_count still advances. */
     if (s_seq_pending_start[lane]) {
         /* Nearest-beat pending start, as in seq_advance_clock(). */
         uint32_t phase_in_beat = clock.pulse_count % OP_CLOCK_PULSES_PER_BEAT;
@@ -2601,11 +2418,8 @@ static void seq_capture_advance_clock(tiles_midi_clock_state_t clock) {
     seq_enter_step(lane, new_step);
 }
 
-/* Capture view: melodic-style grid (root magenta, naturals white, sharps
- * off; the scale is chromatic here) so it plays like melodic mode.
- * Recorded steps show dim red (as in the step view, without
- * probability/ratchet tints), taking priority over note coloring; the
- * playhead pulses magenta. */
+/* Capture view: melodic colouring (chromatic), recorded steps dim red,
+ * playhead pulsing magenta. */
 static void render_seq_capture(uint32_t now_ms) {
     float pulse = menu_selected_pulse_level(now_ms);
     op_seq_pattern_t *pat = active_pattern();
@@ -2645,11 +2459,8 @@ static void render_seq_capture(uint32_t now_ms) {
     mode_underglow();
 }
 
-/* Mode menu taps: a touch clicks (any pad); pressing a mode slot past
- * OP_MENU_SELECT_DEPTH_THRESHOLD picks it. The pick is recorded at once
- * (s_menu_pending/_mode, which also makes the slot pulse), but the menu
- * closes and the mode switches only once every pad is released; switching
- * while the finger was down let that touch play a note in the new mode. */
+/* Past half picks a mode, but the menu closes only once every pad is up,
+ * or that touch would play a note in the new mode. */
 static void handle_menu_taps(void) {
     bool any_touched = false;
     for (uint8_t row = TILES_GRID_MIN_ROW + 1u; row <= TILES_GRID_MAX_ROW; row++) {
@@ -2685,13 +2496,9 @@ static void handle_menu_taps(void) {
 
 /* ---- Triangle (+ circle), diamond transport, top-level scan ------------- */
 
-/* Triangle click: toggles the mode menu. Triangle + circle: the scale
- * picker (one global scale, every mode), or, if a sub-state owns the grid,
- * cancels it (per-step edit, sequencer capture, Song capture).
- *
- * Circle is latched once seen during the press (they rarely release
- * together). Square joining too makes it a conflict: triangle + circle +
- * square is heading for the game-mode combo. */
+/* Triangle: mode menu. Triangle + circle: scale picker, or cancels an open
+ * edit or capture. Circle is latched during the press; square joining
+ * means the game combo. */
 static void handle_triangle_click(void) {
     bool held = tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID);
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
@@ -2754,42 +2561,20 @@ static void handle_triangle_click(void) {
     s_triangle_was_held = held;
 }
 
-/* Diamond: DAW transport outside the sequencer.
- *   - Click: play/stop toggle. Sends the Play or Stop CC on the DAW port
- *     (plus System Realtime Start/Stop unless TILES is following an
- *     external clock).
- *   - Hold >= OP_TRANSPORT_RECORD_ARM_HOLD_MS: arms (LED double-blinks);
- *     on release sends the Record CC. Live's count-in preference handles
- *     the count-in.
- * Transport uses CCs because Realtime Start/Stop only drive Live when the
- * port is in external sync with a clock behind it; controllers like the
- * Launchkey use plain CCs, which Live's control surface script (or MIDI
- * Map mode in any DAW) binds.
- *
- * In the sequencer diamond does other things: click = pattern bank,
- * circle + diamond = capture. Elsewhere circle + diamond = Song capture
- * (or Ableton's own capture/stop-all, see the release branch). */
+/* Diamond outside the sequencer: click = play/stop, hold = arm record (sent
+ * on release). Sent as CCs: Realtime Start/Stop only drives Live in
+ * external sync. In the sequencer: click = pattern bank. */
 #define OP_TRANSPORT_RECORD_ARM_HOLD_MS 2000u
-/* Momentary Play/Stop/Record triggers (127 then 0) on channel 1, DAW port
- * only. 102-104 are in the MIDI spec's undefined CC range (102-119), the
- * range transport hardware conventionally uses. CCs, not notes, so an
- * unmapped receiver can never sound them. The Ableton script
- * (daw-integration/) listens for these; other DAWs need a one-time MIDI
- * map of all three. */
+/* Momentary Play/Stop/Record CCs (127 then 0), channel 1, DAW port only:
+ * the undefined range transport hardware uses, never a note. The Ableton
+ * script listens; other DAWs need a MIDI map. */
 #define OP_TRANSPORT_PLAY_CC 102u
 #define OP_TRANSPORT_STOP_CC 103u
 #define OP_TRANSPORT_RECORD_CC 104u
 
-/* Performance transport layout (1 = on), outside the sequencer:
- *   - diamond click: play; hold: record; circle + diamond: stop;
- *   - while Live plays, diamond alone does nothing (no restart, no punch-in).
- * The click and hold still send their CCs whatever TILES believes, since
- * another unit or the mouse may have changed Live's transport; the Ableton
- * script ignores them while Live plays (DIAMOND_IGNORED_WHILE_PLAYING in
- * daw-integration/ableton/TILES/TILES.py, set to match). Circle + diamond's
- * usual jobs (Ableton stop-all, Song capture, ending an Ableton capture)
- * are off while this is on. 0 = the layout described above (click toggles
- * play/stop). */
+/* Performance layout (1 = on): diamond click plays, hold records, circle +
+ * diamond stops; while Live plays, diamond alone does nothing (the Ableton
+ * script matches: DIAMOND_IGNORED_WHILE_PLAYING). 0 = click toggles. */
 #define OP_TRANSPORT_SHIFT_STOP 1
 
 static void transport_send_cc(uint8_t cc) {
@@ -2802,10 +2587,8 @@ static void transport_send_cc(uint8_t cc) {
 #define OP_SONG_NUM_SLOTS TILES_NUM_PADS
 static uint8_t s_song_capture_slot; /* 1..24: the slot being recorded into */
 
-/* Diamond's LED level for the transport state. While a mode draws through
- * standby (sequencer, Song, Ableton), override writes are ignored, so
- * those modes' render functions write this level themselves (they used to
- * blank diamond, freezing the transport LED in Ableton mode). */
+/* Diamond's LED level for the transport. Standby-drawing modes write it
+ * themselves (override writes are ignored there). */
 static float transport_led_level(uint32_t now_ms) {
     float led_level;
     if (s_diamond_record_armed) {
@@ -2905,11 +2688,8 @@ static void handle_diamond_transport(uint32_t now_ms) {
                  * used there). Checked before the generic Song-capture branch. */
                 scene_send_stop_all();
             } else if (s_diamond_press_was_shift) {
-                /* Circle + diamond elsewhere (melodic, chord, bass guitar, or Song mode
-                 * itself): toggle Song capture, which records into the next empty Song
-                 * slot. No tempo needed to enter: until one exists the capture just waits
-                 * (live touches still sound), and circle taps a tempo while capturing
-                 * (see handle_circle_tap()). */
+                /* Elsewhere: toggle Song capture into the next empty slot. It waits for a
+                 * tempo if none exists; circle taps one meanwhile. */
                 if (s_song_capture_active) {
                     song_capture_exit();
                 } else {
@@ -2929,10 +2709,8 @@ static void handle_diamond_transport(uint32_t now_ms) {
                 s_transport_playing = true;
                 s_transport_recording = true;
             } else if (s_transport_playing || s_transport_recording) {
-                /* Stop (a stop also ends recording). CC first. The Realtime Stop/Start
-                 * byte is skipped while TILES follows an external clock: Live is then the
-                 * clock master on this port, and echoing Start/Stop back confused its
-                 * sync display. The CC still drives the transport either way. */
+                /* Stop: CC first. No Realtime Stop/Start while following external clock:
+                 * echoing them back confused Live's sync display. */
                 tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_STOP_CC, 127u);
                 tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_STOP_CC, 0u);
                 if (!tiles_midi_clock_external_active(now_ms)) {
@@ -2959,23 +2737,17 @@ static void handle_diamond_transport(uint32_t now_ms) {
         float led_level = s_seq_capture_mode_active ? menu_selected_pulse_level(now_ms) : 0.0f;
         tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, led_level);
     } else {
-        /* Transport LED elsewhere (see transport_led_level()): armed beats
-         * recording beats playing. "Playing" follows the actual clock
-         * (tiles_midi_clock_is_running()); s_transport_playing only decides what
-         * the next click sends. */
+        /* Transport LED: armed beats recording beats playing. Playing follows the
+         * actual clock; s_transport_playing only decides the next click. */
         tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, transport_led_level(now_ms));
     }
 
     s_diamond_was_held = held;
 }
 
-/* Tap tempo on circle. A press counts only if: sequencer or drum mode with
- * no edit open (or a Song capture is running), no external clock, and no
- * other game-combo button (triangle, diamond, square) held.
- * Committed on RELEASE, with the PRESS time as the tap time: circle is
- * also the first half of circle + "-"/"+" (length), circle + step
- * (ratchet) and circle + diamond, and those only reveal themselves after
- * the press. Any of them joining cancels the tap. */
+/* Tap tempo on circle: sequencer or drums with no edit open (or Song
+ * capture), no external clock, no other combo key. Committed on release
+ * with the press time, since circle also starts other combos. */
 static uint32_t s_circle_press_ms;
 static bool s_circle_press_pending_tap;
 
@@ -3048,12 +2820,9 @@ static bool any_song_slot_running(void) {
     return false;
 }
 
-/* One shared clock: MIDI clock when it's coming in, else the internal one.
- * The first pattern to start starts the internal clock (beat 1, at once);
- * any other joins it on its beat (or locked, on its song step: seq.lock)
- * without restarting it, so nothing already playing is retriggered; the
- * clock stops only with the last. True if anything but the starting
- * pattern (sequencer `lane`, or -1; the drums; Bouncing notes) plays. */
+/* One shared clock (MIDI in, else internal). The first pattern to start
+ * starts it; others join on its beat without retriggering; it stops with
+ * the last. True if anything but the starting pattern plays. */
 static bool others_playing(int lane, bool drums, bool bounce) {
     for (uint8_t l = 0u; l < OP_SEQ_NUM_LANES; l++) {
         if ((int)l != lane && s_seq_lane_running[l]) {
@@ -3071,10 +2840,8 @@ static void stop_clock_if_idle(void) {
     }
 }
 
-/* "-"/"+": sequencer transport and length, bass guitar fret shift, and
- * Ableton track panning, in one handler with one set of press tracking
- * (the modes are exclusive). Sequencer rules: see the "Transport +
- * length" state comment. Frets and panning just step once on release. */
+/* "-"/"+": sequencer transport and length, bass frets, Ableton panning,
+ * with one set of press tracking (the modes are exclusive). */
 static void handle_transport_and_length(uint32_t now_ms) {
     bool minus_held = tiles_button_is_pressed(TILES_MINUS_BUTTON_ID);
     bool plus_held = tiles_button_is_pressed(TILES_PLUS_BUTTON_ID);
@@ -3283,22 +3050,10 @@ static void scene_launch_init(void);
 static bool handle_scene_launch_taps(uint32_t now_ms);
 static void render_scene_launch(uint32_t now_ms);
 
-/* ---- Melodic echo: showing an incoming melody on the pads ------------------
- * The TILES DISPLAY Max for Live device (daw-integration/ableton/
- * TILES_DISPLAY/) sends a track's notes to TILES through the control
- * surface's MIDI output (plain track routing can't: after an instrument a
- * track outputs audio). This is midi_in.h's note callback listener.
- *
- * Two layers, by channel: channel 2 = layer 1 (a second TILES DISPLAY,
- * drawn soft red), every other channel = layer 0 (green). Layers are
- * independent, so a Note-Off on one never clears the same pitch held on
- * the other.
- *
- * Notes are tracked in every mode (so a Note-Off always clears its
- * Note-On, even across mode switches), but only shown in melodic mode
- * (tiles_op_mode_incoming_note_is_sounding()), read per pad by
- * services/lighting.c. Not in chord mode's melody grid. A note with no
- * pad in the current layout simply isn't shown. */
+/* ---- Melodic echo: an incoming melody on the pads -------------------------
+ * From the TILES DISPLAY Max for Live device. Channel 2 = layer 1 (soft
+ * red), others = layer 0 (green), independent. Tracked in every mode,
+ * shown only in melodic. */
 static bool s_incoming_note_sounding[TILES_OP_MODE_ECHO_LAYERS][128];
 /* Time of each note's latest Note-On (for lighting's onset flash). Valid
  * while the note is sounding. */
@@ -3444,10 +3199,8 @@ void tiles_op_mode_init(bool crash_recovered) {
     }
 
     if (crash_recovered) {
-        /* Crash recovery: mode, patterns per lane and running lanes survived in
-         * __uninitialized_ram. Re-running set_active_mode() with the same mode
-         * re-syncs note_map's flags and standby ownership (the "leaving" branches
-         * don't fire when old == new). */
+        /* Crash recovery: re-running set_active_mode() with the same mode re-syncs
+         * note_map's flags and standby ownership. */
         set_active_mode(s_active_mode);
         for (uint8_t lane = 0; lane < OP_SEQ_NUM_LANES; lane++) {
             if (s_seq_lane_running[lane]) {
@@ -3467,14 +3220,9 @@ void tiles_op_mode_init(bool crash_recovered) {
 }
 
 /* ---- Playback --------------------------------------------------------------
- * Every clock-driven part steps here: sequencer lanes, Song tracks, the drum
- * sequencer and Bouncing notes. From the scan and from
- * tiles_op_mode_playback_tick(), which main.c runs between its slower
- * services, so a Clock that arrives mid-pass steps them within a fraction
- * of a pass instead of at the next scan. One USB transfer per step for all
- * of them (midi_out.h's batch). Menus, the Feel menu, transpose and the
- * standby animation don't stop it; a game (it owns channel 11 and the
- * haptics) and deep sleep do. */
+ * Every clock-driven part steps here, from the scan and from
+ * tiles_op_mode_playback_tick(), one USB transfer per step for all. Menus
+ * don't stop it; a game and deep sleep do. */
 static bool s_tick_start_edge; /* a Start the tick stepped on, for the scan's other uses */
 /* Another feature had the board last scan (edge: resync when it returns). */
 static bool s_other_feature_was_active;
@@ -3624,10 +3372,7 @@ void tiles_op_mode_scan(void) {
     s_tick_start_edge = false;
     float beat_flash_level = compute_beat_flash_level(now_ms, clock);
 
-    /* Tap tempo starts the viewed lane too: the first tap-tempo start
-     * (start_edge from tap tempo, not an external Start) starts the lane the
-     * same way "+" would, if it's stopped. Sequencer mode only; a Song capture
-     * marks its own slot running. */
+    /* Tap tempo's first start also starts the viewed lane, as "+" would. */
     if (s_active_mode == OP_MODE_SEQUENCER && clock.start_edge && clock.source_is_tap_tempo &&
         !s_seq_lane_running[s_seq_edit_lane]) {
         s_seq_lane_running[s_seq_edit_lane] = true;
@@ -3704,10 +3449,8 @@ void tiles_op_mode_scan(void) {
         render_sequencer(beat_flash_level, clock.running);
     } else if (s_active_mode == OP_MODE_SONG) {
         if (s_song_capture_active) {
-            /* Song capture from within Song mode: the grid shows live melodic
-             * coloring (no overview render, no grid claim; see song_capture_enter()),
-             * and the amber recording underglow comes from services/lighting.c's
-             * priority chain, so it isn't drawn here. */
+            /* Song capture in Song mode: live melodic colouring; lighting.c draws the
+             * amber recording underglow. */
             song_capture_handle_taps(clock);
             song_capture_advance_clock(clock);
         } else if (s_song_edit_active) {
@@ -3764,12 +3507,8 @@ void tiles_op_mode_scan(void) {
 }
 
 bool tiles_op_mode_owns_pad_grid(void) {
-    /* Menus, and modes that draw the whole grid (mode_owns_standby_grid()).
-     * expression.c asks tiles_op_mode_owns_pad(), which defers here for every
-     * mode but chord, so these pads mean steps/slots/clips, not notes. Song
-     * capture and Song's pitch pick are excluded on purpose: there the grid
-     * is a live melodic surface, and expression.c's live sound plays while
-     * the same touch is recorded on the Song slot's channel. */
+    /* Menus and whole-grid modes own every pad. Song capture and pitch pick
+     * don't: there the grid plays live while the touch is recorded. */
     return s_menu_visible || s_scale_menu_visible || mode_owns_standby_grid(s_active_mode);
 }
 
@@ -3783,10 +3522,8 @@ bool tiles_op_mode_owns_pad(uint8_t logical_pad) {
     return tiles_op_mode_owns_pad_grid();
 }
 
-/* Wider than owns_pad_grid(): also bass guitar mode, which takes "-"/"+"
- * from octave_control.c while its notes still play normally. Narrower for
- * Ripples, Sand and the cradle: they draw the grid but leave "-"/"+" as
- * octave (physics.h). */
+/* Wider than owns_pad_grid(): also bass guitar (its notes play, "-"/"+"
+ * are frets). Narrower for Ripples, Sand and the cradle ("-"/"+" octave). */
 bool tiles_op_mode_owns_octave_buttons(void) {
     if (!s_menu_visible && !s_scale_menu_visible && phys_kind_of(s_active_mode) != TILES_PHYS_NONE) {
         return s_active_mode == OP_MODE_ORBITS;
@@ -3808,10 +3545,8 @@ bool tiles_op_mode_get_phase_lock(void) {
 }
 
 bool tiles_op_mode_is_sequencer_active(void) {
-    /* True while a pattern mode is shown or a pattern is actually playing in
-     * the background (a sequencer lane or a Song track), so standby uses its
-     * longer timeouts. (Lane flags, not the shared clock: an external clock
-     * can tick with every lane stopped.) */
+    /* A pattern mode is shown or a lane or Song track plays (not just the
+     * clock), so standby uses its longer timeouts. */
     return s_active_mode == OP_MODE_SEQUENCER || any_lane_running() || s_active_mode == OP_MODE_SONG ||
            any_song_slot_running() || s_active_mode == OP_MODE_DRUM || s_active_mode == OP_MODE_BOUNCE ||
            tiles_bounce_mode_is_running() || phys_kind_of(s_active_mode) != TILES_PHYS_NONE;
@@ -3882,29 +3617,11 @@ bool tiles_op_mode_has_menu_open(void) {
            s_seq_capture_mode_active || (s_active_mode == OP_MODE_BOUNCE && tiles_bounce_mode_is_picking());
 }
 
-/* ---- Song mode (BETA) --------------------------------------------------------
- * BETA: not yet tested on hardware ("song mode will remain not tested and
- * should be considered a beta for now", 2026-09-29), including how it
- * interacts with the MPE zone (a Song claim waits for an idle zone before
- * it is re-declared, and resets the channel's bend/pressure). Treat any
- * change here as untested until someone plays it.
- *
- * A looper-style library, like Live's Session View:
- *   - 24 slots, one per pad on the track overview (render_song_overview()/
- *     handle_song_overview_taps()). Tap = start/stop. Circle + tap = pick
- *     up; tap elsewhere = move there (or swap). Circle + hold 5 s = delete.
- *     Hold 2 s = open the step editor.
- *   - Each pattern: 128 steps (8 pages x 16), up to 4 notes per step. No
- *     probability or ratchet.
- *   - Up to OP_SONG_MAX_CONCURRENT (8) patterns PLAY at once. Channels are
- *     claimed from services/midi_channels.h's shared pool when a pattern
- *     starts and released when it stops, so a pattern's channel doesn't
- *     depend on its slot (it can differ between play sessions). A start
- *     with the pool full is refused with a red flash.
- *   - Recording is Song capture (circle + diamond, from melodic, chord,
- *     bass guitar or Song mode itself) into the next empty slot.
- *   - Color: amber theme; each pattern gets its own hue in a
- *     red-orange-to-amber band (hue_byte, persisted). */
+/* ---- Song mode (BETA, untested on hardware) -------------------------------
+ * A looper library: 24 slots (tap = start/stop, circle + tap = move, circle
+ * + hold 5 s = delete, hold 2 s = step editor), 128 steps each, up to 4
+ * notes per step. Up to 8 play at once on channels from the shared pool
+ * (a full pool flashes red). Recording is Song capture. Amber theme. */
 
 /* Step editor layout: columns 1-4 x 4 rows = the page's 16 steps
  * (row-major); columns 5-6 = the 8 page pads, row 1 = pages 1-2 ... row 4
@@ -3917,12 +3634,8 @@ bool tiles_op_mode_has_menu_open(void) {
  * (see tiles_song_store_t's _Static_assert). */
 #define OP_SONG_MAX_NOTES_PER_STEP 4u
 
-/* One saved pattern. The runtime struct IS the flash layout (513 bytes x
- * 24 fits the 4-sector region with room to spare). step_notes[][] uses
- * 0xFF for an unused slot, which also means "step empty" (Song has no
- * separate armed/override flags). hue_byte: the pattern's color, 0 = warm
- * end of the band, 255 = cool end, assigned at creation (see
- * OP_SONG_HUE_STEP). */
+/* One saved pattern; the runtime struct is the flash layout. 0xFF = unused
+ * note slot (all 0xFF = empty step). hue_byte: its colour in the band. */
 typedef struct {
     uint8_t step_notes[OP_SONG_NUM_STEPS][OP_SONG_MAX_NOTES_PER_STEP];
     uint8_t hue_byte;
@@ -3948,13 +3661,10 @@ static uint8_t s_song_sounding_note_count[OP_SONG_NUM_SLOTS];
  * (tiles_midi_channels_song_claim()/_release()), claimed at play start. */
 
 #define TILES_SONG_STORE_MAGIC 0x474e4f53u /* "SONG" */
-/* v2 added next_hue_byte (a different layout, so v1 images load as
- * "nothing saved"). */
+/* v2 added next_hue_byte; v1 images load as nothing saved. */
 #define TILES_SONG_STORE_VERSION 2u
-/* 4 sectors just below the sequencer's sector (storage/flash_map.h).
- * Written as 4 separate single-sector erase+program steps, each as safe
- * as the sequencer's save: longer overall (four short pauses), never a
- * watchdog risk. */
+/* 4 sectors below the sequencer's, written one sector at a time (four
+ * short pauses, never a watchdog risk). */
 #define TILES_SONG_NUM_FLASH_SECTORS TILES_FLASH_SONG_SECTORS
 #define TILES_SONG_FLASH_OFFSET TILES_FLASH_SONG_OFFSET
 
@@ -4029,11 +3739,8 @@ static void song_store_load_all(void) {
 
 
 /* ---- Song mode: track overview ----------------------------------------------
- * 24 pads, one per slot. Tap a stopped slot to start it (from step 1), tap
- * a playing one to stop it. Circle + tap picks a slot up (pulses green); a
- * plain tap elsewhere moves it (or swaps) with a double green flash;
- * tapping it again cancels. Circle + hold 5 s deletes (double red flash).
- * Hold 2 s opens the step editor. */
+ * One pad per slot; gestures in the Song mode comment above. Moves flash
+ * green twice, deletes red twice. */
 
 /* Start/stop is a plain touch toggle (resolved on release), no press
  * needed. */
@@ -4071,8 +3778,7 @@ static void song_hue_to_rgb(uint8_t hue_byte, float sat, float val, float *out_r
     *out_b = bp + m;
 }
 
-/* Single short red flash: "that didn't work" (start with every channel
- * busy, or capture with no empty slot). */
+/* One short red flash: that didn't work. */
 #define OP_SONG_ERROR_FLASH_MS 300u
 static bool s_song_error_flash_active;
 static uint32_t s_song_error_flash_start_ms;
@@ -4191,10 +3897,8 @@ static void song_toggle_start_stop(uint8_t pad) {
         song_flash_error(pad);
         return;
     }
-    /* The channel may have just carried a live MPE note, which keeps its bend
-     * and pressure after Note-Off (MPE order; see
-     * tiles_midi_send_note_setup()). Song notes send neither, so reset them
-     * as the channel changes hands. */
+    /* A live MPE note may have left bend and pressure on this channel; Song
+     * notes send neither, so reset them as it changes hands. */
     tiles_midi_send_note_setup(channel);
     s_song_slot_running[slot] = true;
     s_song_slot_channel[slot] = channel;
@@ -4341,27 +4045,16 @@ static void render_song_overview(uint32_t now_ms) {
     render_song_underglow();
 }
 
-/* Song mode's underglow: steady amber. (While capturing, lighting.c's
- * amber capture pulse takes over through its priority chain, so this
- * isn't called then.) Also drawn during the step editor's pitch pick,
- * where the pads show the live melodic surface. */
+/* Song mode's underglow: steady amber (lighting.c's pulse takes over while
+ * capturing). */
 static void render_song_underglow(void) {
     mode_underglow();
 }
 
 /* ---- Song mode: step editor -------------------------------------------------
- * Opened by holding a slot 2 s on the track overview; one pattern at a
- * time.
- *   - Layout: columns 1-4 = the page's 16 steps (row-major); columns 5-6 =
- *     the 8 page pads (see OP_SONG_STEPS_PER_PAGE). Pages with notes are
- *     lit, empty ones dim.
- *   - Tap a step to pick its notes: the whole grid becomes a live
- *     chromatic note surface (standby released, like Song capture).
- *     Tapping the same step again commits, REPLACING its notes (or
- *     clearing it if nothing was picked). A diamond click cancels.
- *   - Chords: pads touched within OP_SONG_EDIT_PICK_WINDOW_MS of the first
- *     form one chord (up to 4 notes); a later touch starts a new chord
- *     rather than adding to it. 200 ms is a first guess. */
+ * Columns 1-4 = the page's 16 steps, 5-6 = 8 page pads. Tap a step, play
+ * its notes, tap it again to commit (replacing them); diamond cancels.
+ * Touches within OP_SONG_EDIT_PICK_WINDOW_MS form one chord (first guess). */
 #define OP_SONG_EDIT_PICK_WINDOW_MS 200u
 
 static uint8_t s_song_edit_slot; /* 0-based, valid iff s_song_edit_active */
@@ -4571,9 +4264,8 @@ static void render_song_edit(uint32_t now_ms) {
 }
 
 /* ---- Song mode: playback --------------------------------------------------
- * A separate copy of the sequencer's engine rather than a shared one: Song
- * patterns (128 fixed steps, no probability/ratchet/length) differ
- * enough. Same OP_SEQ_CLOCKS_PER_STEP, so both follow one tempo. */
+ * A separate copy of the sequencer's engine (the patterns differ enough),
+ * on the same tempo. */
 #define OP_SONG_VELOCITY 100u
 static bool s_song_pending_start[OP_SONG_NUM_SLOTS];
 
@@ -4637,11 +4329,7 @@ static void song_advance_clock(uint8_t slot, tiles_midi_clock_state_t clock) {
 }
 
 /* ---- Song mode: capture ------------------------------------------------------
- * Circle + diamond from melodic, chord, bass guitar or Song mode records
- * into the next empty Song slot. Works like sequencer capture:
- * nearest-step quantization, a cluster committed at the next step
- * boundary, live notes that sound independently, and chord pads captured
- * on their real strike (velocity and voicing from handle_chord_pad_taps()). */
+ * Into the next empty slot, as sequencer capture works. */
 static tiles_scale_mode_t s_song_capture_prev_scale;
 static bool s_song_capture_prev_pad_touched[TILES_NUM_PADS];
 static uint8_t s_song_capture_armed_notes[OP_SONG_MAX_NOTES_PER_STEP];
@@ -4809,11 +4497,8 @@ static bool song_find_next_empty_slot(uint8_t *out_slot_index) {
 
 /* No empty slot, or no free channel: silently do nothing (there's no
  * single pad to flash the error on). */
-/* Each new pattern's hue is the previous one + 97 (wrapping), not random:
- * random picks could land nearly the same color back to back. 97 is odd,
- * so it visits all 256 values before repeating, and it's close to the
- * golden-angle fraction (~97.8), which keeps successive colors clearly
- * apart. The counter is persisted. */
+/* Each new hue = previous + 97: odd, so all 256 come round, and near the
+ * golden angle, so neighbours differ. Persisted. */
 #define OP_SONG_HUE_STEP 97u
 
 static void song_capture_enter(void) {
@@ -4877,22 +4562,9 @@ static void song_capture_exit(void) {
 }
 
 /* ---- Scene Launch (Ableton) mode --------------------------------------------
- * A Session View grid: rows 1-4 = Live's first 4 scenes; columns 1-5 = 5
- * tracks' clip slots ("-"/"+" pan the tracks; scenes don't page);
- * column 6 = launch that whole scene.
- *
- * Clip and scene state (color, has clip, playing, triggered) comes from
- * the TILES control surface script over SysEx (daw-integration/ableton/
- * TILES/scene_launch.py; shared/protocol/README.md "Scene Launch"), with
- * Live's real RGB colors:
- *   - empty slot: off
- *   - clip, not playing: its color at the dim "available" level
- *   - playing: its color, strong pulse
- *   - triggered (queued): fast blink
- * Column 6 is Sentia magenta while any track has a clip in that scene
- * (blinks while queued).
- * Underglow: teal at rest; flashes Sentia magenta on a scene launch, or the
- * clip's color on a clip action. */
+ * Rows 1-4 = Live's first scenes, columns 1-5 = clip slots ("-"/"+" pan),
+ * column 6 = launch the scene. State and colours come from the control
+ * surface script over SysEx (shared/protocol/README.md). */
 
 /* Manufacturer ID from midi/product_identity.h (0x7D until SENTIA has its
  * own). The sub-ID scopes these messages under it. */
@@ -4939,22 +4611,14 @@ typedef struct {
 
 static op_scene_row_state_t s_scene_row[OP_SCENE_NUM_ROWS];
 
-/* Two inputs per pad:
- *   - capacitive TOUCH: haptics only, never sends anything to Live
- *     (scene_update_haptics()).
- *   - PRESSURE CLICK (depth past OP_SCENE_CLICK_DEPTH_THRESHOLD, the menus'
- *     "more than half" press): the only thing that acts in Live
- *     (scene_handle_click()).
- * The re-arm depth sits well below the click so jitter can't double-fire. */
+/* Touch gives haptics only; a press past half acts in Live. The re-arm
+ * depth sits well below it so jitter can't double-fire. */
 #define OP_SCENE_CLICK_DEPTH_THRESHOLD OP_MENU_SELECT_DEPTH_THRESHOLD
 #define OP_SCENE_CLICK_REARM_DEPTH 250.0f
 static bool s_scene_prev_pad_touched[TILES_NUM_PADS];
 static bool s_scene_click_latched[TILES_NUM_PADS];
 
-/* Circle held while touching a pad with a clip for
- * OP_SCENE_DELETE_HOLD_MS deletes the clip in Live (the same 3 s as the
- * pattern bank). Releasing either cancels. The pad blinks red and the
- * underglow goes red during the hold, and stays red briefly after. */
+/* Circle + hold on a clip deletes it in Live (3 s, as the pattern bank). */
 #define OP_SCENE_DELETE_HOLD_MS 3000u
 #define OP_SCENE_DELETE_CONFIRM_MS 500u
 static bool s_scene_delete_holding[TILES_NUM_PADS];
@@ -4963,10 +4627,8 @@ static uint32_t s_scene_delete_hold_start_ms[TILES_NUM_PADS];
 static bool s_scene_delete_confirm_active;
 static uint32_t s_scene_delete_confirm_until_ms;
 
-/* Per-pad haptic state: NONE; CLICK = the one-shot "ready" kick, cut at
- * s_scene_haptic_click_end_ms (a kick would roll into a sustain buzz);
- * SUSTAINING = the clip is playing and the buzz lasts while the finger
- * rests. */
+/* Per-pad haptics: CLICK = the one-shot kick, cut short; SUSTAINING = the
+ * clip plays and the buzz lasts while the finger rests. */
 typedef enum {
     OP_SCENE_HAPTIC_NONE = 0,
     OP_SCENE_HAPTIC_CLICK,
@@ -4996,9 +4658,7 @@ static float s_scene_flash_r;
 static float s_scene_flash_g;
 static float s_scene_flash_b;
 
-/* Queued clips blink fast and plain, distinct from the playing pulse
- * ("about to change" vs "active"), as Launchpad-style scripts do. First
- * guess at pacing. */
+/* Queued clips blink fast and plain. First guess at pacing. */
 #define OP_SCENE_TRIGGERED_BLINK_PERIOD_MS 250u
 
 static float scene_triggered_blink_level(uint32_t now_ms) {
@@ -5019,18 +4679,10 @@ static float scene_playing_pulse_level(uint32_t now_ms) {
     return OP_SCENE_PLAYING_PULSE_MIN + (OP_SCENE_PLAYING_PULSE_MAX - OP_SCENE_PLAYING_PULSE_MIN) * raw;
 }
 
-/* TILES -> Live is CCs on channel 1, DAW port, handled by the control
- * surface script (TILES.py), like the transport CCs. Not SysEx (never
- * delivered reliably) and not notes (the same USB port also carries
- * playable notes, so a note would also reach the instrument track).
- *
- * Pad actions are ONE CC whose value is the pad (1-24), then 0:
- * grid (fire a clip / launch a scene), stop (column 1-5), delete, record
- * (circle + an empty slot). All Scene Launch CCs are 105-111, in the MIDI
- * spec's undefined range. Never
- * use performance CCs: per-pad CCs once used 11-94, so CC 64 (pad 24's
- * stop) was claimed by the script and the sustain pedal never reached
- * the instrument. */
+/* TILES -> Live: CCs 105-111 on channel 1, DAW port, read by TILES.py.
+ * Not SysEx (unreliable) or notes (they'd reach the instrument). A pad
+ * action is one CC whose value is the pad (1-24), then 0. Never use
+ * performance CCs: CC 64 once stole the sustain pedal. */
 #define OP_SCENE_CC_MASTER_STOP 105u
 #define OP_SCENE_CC_TRACK_OFFSET 106u
 #define OP_SCENE_CC_END_CAPTURE 107u
@@ -5098,10 +4750,8 @@ static void scene_end_capture(void) {
     set_active_mode(OP_MODE_SCENE_LAUNCH);
 }
 
-/* midi_in's SysEx callback. Every SysEx arrives here, so the manufacturer
- * and sub-ID checks matter. Payload lengths must match exactly (malformed
- * or newer messages are ignored). DAW port only: that's where the script
- * is. */
+/* midi_in's SysEx callback (every SysEx lands here): check manufacturer
+ * and sub-ID; lengths must match exactly. DAW port only. */
 static void scene_on_sysex(tiles_midi_port_t port, const uint8_t *data, size_t len) {
     if (port != TILES_MIDI_PORT_DAW) {
         return;
@@ -5179,10 +4829,8 @@ static void scene_launch_init(void) {
     tiles_midi_in_register_sysex_callback(scene_on_sysex);
 }
 
-/* Called on entering Ableton mode. Seed each pad's click latch from what's
- * pressed now: the finger that picked the mode is still on the menu's
- * column-6 pad, which here is scene 1's launch pad. Also sends the current
- * track window so Live shows the outline right away. */
+/* On entering: seed each pad's click latch from what's pressed now (the
+ * picking finger rests on scene 1's launch pad); send the track window. */
 static void scene_launch_enter(void) {
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
         bool touched = tiles_touch_is_touched(pad);
@@ -5215,10 +4863,8 @@ static void scene_start_flash(float r, float g, float b, uint32_t now_ms) {
     s_scene_trigger_flash_start_ms = now_ms;
 }
 
-/* Touch -> haptics only, never Live. `has_content`: something launchable
- * under the pad (a clip, or a scene with clips); empty slots get no
- * haptics. `playing`: a track column whose clip is playing. The click is a
- * kick cut on a timer; a playing clip keeps that voice as a steady buzz. */
+/* Touch gives haptics only: a cut kick on launchable pads, a steady buzz on
+ * a playing clip. */
 static void scene_update_haptics(uint8_t pad, bool touched, bool was_touched, bool has_content, bool playing,
                                  uint32_t now_ms) {
     uint8_t idx = (uint8_t)(pad - 1u);
@@ -5265,12 +4911,8 @@ static void scene_update_haptics(uint8_t pad, bool touched, bool was_touched, bo
     }
 }
 
-/* The pressure click, the only thing that acts in Live:
- *   - column 6: launch the scene (magenta flash);
- *   - a playing clip: stop it (the clip's color);
- *   - a stopped clip: fire it (the clip's color);
- *   - an empty slot: nothing (circle + click records there; see
- *     scene_handle_shift_click()). */
+/* The pressure click: column 6 launches the scene, a clip toggles, an
+ * empty slot does nothing (circle + click records there). */
 static void scene_handle_click(uint8_t pad, uint8_t col, const op_scene_cell_state_t *cell, uint32_t now_ms) {
     if (col == OP_SCENE_LAUNCH_COL) {
         scene_send_grid_touch(pad);
@@ -5292,11 +4934,8 @@ static void scene_handle_click(uint8_t pad, uint8_t col, const op_scene_cell_sta
     scene_start_flash((float)cell->r / 255.0f, (float)cell->g / 255.0f, (float)cell->b / 255.0f, now_ms);
 }
 
-/* Circle + a pressure click on an EMPTY track slot: record a new clip
- * there. The script arms the track and fires the slot (and opens melodic
- * mode for a MIDI track; see OP_SCENE_MSG_OPEN_MELODIC). Red flash (no
- * clip color yet). On a clip, circle is the delete hold instead, and a
- * click does nothing. */
+/* Circle + click on an empty slot: record a new clip there (the script arms
+ * the track; red flash). On a clip, circle is the delete hold instead. */
 static void scene_handle_shift_click(uint8_t pad, uint8_t col, const op_scene_cell_state_t *cell, uint32_t now_ms) {
     if (col == OP_SCENE_LAUNCH_COL || cell == NULL || cell->has_clip) {
         return;

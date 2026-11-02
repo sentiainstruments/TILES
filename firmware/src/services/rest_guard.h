@@ -1,27 +1,10 @@
 #pragma once
 
-/* A pad's rest position (its Hall baseline), kept true. Keys spring back,
- * so an untouched key is at rest: services/hall.c feeds every untouched
- * read here, and depth is measured from the result. Pure, no hardware;
- * host-tested in test/test_rest_guard.c.
- * (docs/architecture/defaults-and-safeguards.md "Pad baseline
- * calibration and drift compensation".)
- *
- * A read counts as steady when it is within TILES_REST_NOISE of the one
- * before; a steady streak ends at any bigger step or any touched read.
- *   - Drift: steady TILES_REST_DWELL_MS near the baseline, the baseline
- *     creeps toward the reading (1/128 of the gap a read), following
- *     thermal and mechanical drift. Never a jump.
- *   - Re-zero: steady TILES_REST_REZERO_MS at least TILES_REST_REZERO_DEPTH
- *     (a strike's depth) from the baseline: an untouched key can't be
- *     held down, so the baseline was taken pressed (a finger on the key
- *     at start-up, a knock, an object since lifted). It jumps to the
- *     reading.
- *   - Unconfirmed: a baseline taken while the pad was touched isn't
- *     trusted. The pad reports no depth (it can't play or press anything)
- *     until a steady TILES_REST_DWELL_MS untouched sets it.
- * The first two rules repair what slips past the third: a finger the
- * touch sensor missed at start-up reads as untouched. */
+/* Keeps a pad's Hall rest baseline true, from untouched reads (pure; tested
+ * in test_rest_guard.c). A steady streak near the baseline creeps it toward
+ * the reading (drift); a steady streak a strike's depth away re-zeroes it
+ * (an untouched key can't be held down); a baseline taken while touched
+ * gives no depth until confirmed at rest. */
 
 #include <stdbool.h>
 #include <stdint.h>

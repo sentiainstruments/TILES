@@ -38,17 +38,9 @@ static uint8_t s_note_callback_count;
 /* See tiles_midi_in_activity_count() in midi_in.h. */
 static uint32_t s_activity_count;
 
-/* One parser per source: the two USB cables (MAIN, DAW) and the DIN jack.
- * Each needs its own SysEx and running-status state, or interleaved cables
- * would splice one message onto another. (Real-Time bytes are handled
- * before any of this state; see feed_byte().) All parsers fire the same
- * callbacks; SysEx listeners also get the port (Scene Launch accepts only
- * the DAW port; Identity replies go back where the request came from).
- *
- * Running status: cv_status is the current status byte (0 = none, e.g.
- * after boot or a System Common byte); cv_data_needed is 1 for Program
- * Change/Channel Pressure, else 2; cv_data_count counts this message's data
- * bytes and resets on dispatch, so the next bytes repeat the same status. */
+/* One parser per source (MAIN, DAW, DIN): each needs its own SysEx and
+ * running-status state, or cables would splice messages. Real-Time is
+ * handled first (feed_byte()). cv_status 0 = none; cv_data_needed 1 or 2. */
 typedef struct {
     bool in_sysex;
     uint8_t sysex_buf[MIDI_IN_SYSEX_MAX];

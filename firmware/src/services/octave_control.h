@@ -1,39 +1,11 @@
 #pragma once
 
-/* Default function of SW1 ("-") and SW2 ("+"): octave shift down/up, in
- * +/-TILES_NOTE_MAP_MAX_OCTAVE_SHIFT (3) steps. In chord mode, circle +
- * "-"/"+" moves the chord strip's own octave instead (the LEDs show it
- * while circle is held) and plain "-"/"+" only the melody. services/note_map.c owns
- * the value; this is the button controller. Steps fire on RELEASE, so the
- * first button of the "-"+"+" combo (humans never press both in the same
- * tick) doesn't also step the octave.
- *
- * The active direction's LED shows the magnitude, all built from one
- * smooth pulse shape (the other LED, and both at 0, stay dark):
- *   1: the pulse repeating evenly
- *   2: two pulses, a dim rest, repeat
- *   3: three pulses, a dim rest, repeat
- *
- * ---- Transpose mode ----------------------------------------------------
- * Clicking "-"+"+" together toggles transpose mode:
- *   - Both LEDs pulse together.
- *   - "-"/"+" step the key (tiles_note_map_set_key_offset(), wraps C..B).
- *   - The pad grid shows the key's letter (services/pixel_font.h); a sharp
- *     key alternates the letter with a 4x4 "+" (no room for "#"). The
- *     letter always shows first after a change. Underglow is dark.
- * The grid is claimed through tiles_lighting_set_standby_active(), and
- * main.c skips standby while this is active.
- *
- * ---- Yielding the buttons ----------------------------------------------
- * Game mode, the manual screensaver (which uses "-"/"+" to scroll),
- * the expression menu (services/expression_control.h) and some op_mode
- * views use SW1/SW2 themselves. While any of them owns the buttons
- * (checked at the top of tiles_octave_control_scan()), this module only
- * keeps its edge tracking current, so a held button doesn't read as a new
- * press when control returns.
- *
- * SW1/SW2's LEDs are claimed permanently through the buttons.h override
- * mechanism; the other four buttons are untouched. */
+/* "-" / "+": octave down / up (+/-3), stepping on release so the "-"+"+"
+ * combo doesn't also step. The active key's LED pulses 1, 2 or 3 times.
+ * Chord mode: circle + "-"/"+" moves the strip's octave.
+ * "-" + "+" together: transpose mode, where "-"/"+" step the key and the
+ * pads show its letter. Yields the keys to games, the manual screensaver,
+ * the Feel menu and some op_mode views. */
 
 #include <stdbool.h>
 #include <stdint.h>

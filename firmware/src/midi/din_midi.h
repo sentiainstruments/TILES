@@ -1,27 +1,11 @@
 #pragma once
 
-/* DIN MIDI (the TRS MIDI jacks), hardware layer:
- *
- *   midi/din_midi_queue.c   hardware-free logic (rings, coalescing,
- *                           Real-Time priority), tested natively
- *   midi/din_midi_tx.pio    31,250-baud PIO UART transmitter
- *   midi/din_midi.c         this layer: PIO + UART0 + interrupts
- *
- * IN (GP1, optoisolated): UART0 RX at 31,250 8N1, interrupt-fed ring,
- * parsed by midi/midi_in.c with its own parser state. Everything that
- * reacts to USB MIDI (clock, transport, echo notes, SysEx) reacts to DIN
- * the same way.
- *
- * OUT (GP0 = line A, GP2 = line B): a PIO UART on one line while the other
- * is held high; the current loop only conducts when they differ, and which
- * line carries data is the TRS polarity. Default Type A (the MIDI
- * Association standard), changed only by the `midi.din_trs_type` setting,
- * never auto-detected (the jack can't sense polarity;
- * docs/architecture/defaults-and-safeguards.md). Type A = line A = GP0 is
- * inferred from the handoff's naming, so check it first if a Type A
- * receiver hears nothing. Works without a USB host (external power only).
- *
- * A failed init disables DIN and nothing else. */
+/* DIN MIDI (the TRS jacks), hardware layer over din_midi_queue.c.
+ * IN (GP1): UART0 RX at 31,250, parsed by midi_in.c like USB.
+ * OUT (GP0 = line A, GP2 = line B): a PIO UART on one line, the other held
+ * high; the line is the TRS type (setting midi.din_trs_type, default A,
+ * never auto-detected; A = GP0 is inferred, check first if silent).
+ * Works without a USB host. A failed init disables DIN only. */
 
 #include <stdbool.h>
 #include <stdint.h>

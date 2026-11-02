@@ -17,10 +17,8 @@
  * 30 ms when the kick felt too soft. Unmeasured. */
 #define KICK_DURATION_MS 45u
 
-/* Overdrive: full duty at the start of every kick, whatever the velocity,
- * to beat the motor's static friction so even soft strikes start fast.
- * Then the velocity-mapped duty for the rest of KICK_DURATION_MS. About
- * starting fast, not stopping (braking is impossible; see haptics.h). */
+/* Overdrive: full duty at the start of every kick, to beat static friction
+ * so soft strikes start fast too. */
 #define KICK_OVERDRIVE_MS 10u
 
 /* The hard-zero "brake" after KICK (see haptics.h). */
@@ -39,10 +37,7 @@
  * sustain_target_duty()). Set to 0 for a single click per strike. */
 #define TILES_HAPTICS_SUSTAIN_ENABLED 1
 
-/* Share of the sustain level from strike velocity vs. live pressure.
- * Pressure dominates; velocity gives a harder strike a fuller baseline.
- * Both terms are scaled to [0, MAX_SUSTAIN_DUTY] first, so this is a true
- * mix. Starting guess. */
+/* Sustain mix of velocity vs. pressure (both pre-scaled). Starting guess. */
 #define SUSTAIN_VELOCITY_WEIGHT 0.3f
 
 /* Slew on the applied sustain duty, every scan: fast attack (full swing
@@ -51,10 +46,8 @@
 #define SUSTAIN_ATTACK_PER_MS 0.020f
 #define SUSTAIN_RELEASE_PER_MS 0.003f
 
-/* Minimum spacing between kick STARTS (handoff: "stagger motor starts >=
- * 15 ms"): the voice ceiling limits concurrent motors, not simultaneous
- * inrush. Only a second near-simultaneous strike's haptic is delayed;
- * single notes and all MIDI are unaffected. */
+/* Minimum spacing between kick starts (handoff: >= 15 ms) against
+ * simultaneous inrush; only a near-simultaneous second kick waits. */
 #define KICK_STAGGER_MIN_GAP_MS 15u
 
 /* TOUCH_PULSE (see haptics.h). 0.6 duty and 25 ms: at the 0.35 first
@@ -93,11 +86,8 @@ static uint32_t s_next_voice_seq = 1u;
  * KICK_STAGGER_MIN_GAP_MS apart. Global: staggering is about total inrush. */
 static uint32_t s_next_kick_slot_ms;
 
-/* Global intensity, applied in set_motor_level() (every effect goes
- * through it). The floor is 0: column 1 of the expression menu is "haptics
- * off". Only set via tiles_haptics_set_intensity() with the menu's column
- * mapping, so column and value never drift. Not a saved setting: boots at
- * 1.0. */
+/* Global intensity, applied in set_motor_level(); 0 = off. Not saved:
+ * boots at 1.0. */
 static float s_haptic_intensity = 1.0f;
 #define HAPTIC_INTENSITY_MIN 0.0f
 #define HAPTIC_INTENSITY_MAX 1.0f
@@ -116,10 +106,8 @@ float tiles_haptics_get_intensity(void) {
     return s_haptic_intensity;
 }
 
-/* Deep sleep's hard "off" (tiles_haptics_set_sleep_silenced()), separate
- * from intensity ("how strong" vs "on at all"). Checked at every entry
- * point, so a decaying sustain stops at once instead of slewing toward a
- * level that never reaches the motor. */
+/* Deep sleep's hard off, separate from intensity; checked at every entry
+ * point so a decaying sustain stops at once. */
 static bool s_haptic_sleep_silenced;
 
 static bool haptics_should_be_silent(void) {
@@ -254,10 +242,8 @@ static uint8_t active_voice_count(void) {
     return count;
 }
 
-/* Stops the motor of the active pad that became active longest ago
- * (PENDING and SUSTAIN included) to free a voice. Its MIDI note is
- * untouched. False if nothing to steal (only when max_haptic_voices is 0,
- * e.g. power FAULT). */
+/* Frees a voice by stopping the oldest active pad's motor (not its MIDI).
+ * False only when there are no voices (power FAULT). */
 static bool steal_oldest_voice(void) {
     int8_t oldest_idx = -1;
     uint32_t oldest_seq = 0;
@@ -316,10 +302,8 @@ void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
     }
     uint8_t idx = (uint8_t)(logical_pad - 1u);
 
-    /* The ceiling applies only to a new voice (PENDING counts as active). At
-     * the ceiling, steal the oldest voice. If haptics ever drop out
-     * unexpectedly, check for power FAULT first (0 voices, nothing to steal):
-     * compare with main.c's "[power] mode=" print. */
+    /* The ceiling applies to new voices; at it, steal the oldest. Haptics gone
+     * missing? Check for power FAULT first. */
     if (s_pads[idx].phase == HAPTIC_PHASE_IDLE &&
         active_voice_count() >= tiles_power_get_state().max_haptic_voices) {
         if (!steal_oldest_voice()) {
@@ -350,9 +334,8 @@ void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
     }
 }
 
-/* Soft tick on touch alone. No ceiling, stagger or voice_seq. A pad
- * already doing something (sustain, a kick) is left alone: a real strike's
- * feedback wins. */
+/* Soft tick on touch alone, no ceiling; a pad already giving strike
+ * feedback is left alone. */
 void tiles_haptics_trigger_touch_pulse(uint8_t logical_pad) {
     if (haptics_should_be_silent()) {
         return;

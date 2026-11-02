@@ -1,60 +1,17 @@
 #pragma once
 
-/* The single source of truth for how TILES divides the 16 MIDI channels:
- * which are a fixed part's own channel, which are shared between Song mode
- * and live MPE, and how big the live MPE zone is. Pure arithmetic, tested
- * natively (firmware/test/test_midi_channels.c).
- *
- * Fixed parts sit OUTSIDE the range live MPE may ever use, so a collision
- * (a harmonic taking a sequencer lane's channel, a live note taking chord
- * mode's) is impossible by construction rather than prevented by checks
- * each caller must remember. Both of those bugs happened before this file.
- *
- * ==== Layout ("channel N" = nibble N-1, as everywhere in this codebase) ====
- *
- *   Channel  1      MPE Zone Master: RPNs and pedals, never an MPE note
- *                   (with MPE off, every live note goes here).
- *   Channels 2-9    SHARED POOL, 8 channels (below).
- *   Channel  10     The drum sequencer (TILES_MIDI_CH_DRUMS): General MIDI's
- *                   percussion channel, so a GM kit or a Drum Rack plays it
- *                   as drums. Nothing else ever sends there.
- *   Channel  11     Game mode (TILES_MIDI_CH_GAME), and bouncing notes
- *                   and the physics modes (TILES_MIDI_CH_BOUNCE; physics.h;
- *                   a game never runs with them).
- *   Channel  12     Chord mode (TILES_MIDI_CH_CHORD).
- *   Channels 13-16  The 4 sequencer lanes (lane 0 = channel 16).
- *
- * Channels 10-16 are PERMANENT, whether or not the part is sounding, so an
- * external synth patched to "sequencer lane 2" can rely on it. That gives
- * 7 independently addressable parts.
- *
- * ==== Shared pool (channels 2-9) ====
- *
- * Split at any moment between Song mode's tracks and the live MPE Lower
- * Zone. Every channel Song holds is one fewer for live notes, the honest
- * picture of one 16-channel port. Song claims from the TOP down (channel 9
- * first) and the zone counts up from channel 2, so the two never overlap
- * and no collision check is needed. Song can hold all 8
- * (TILES_MIDI_SONG_MAX_CONCURRENT).
- *
- * ==== Zone size and telling the receiver ====
- *
- * RPN 6 declares the zone as the Master Channel plus a COUNT of member
- * channels, so the receiver is told the real size (0 withdraws the zone,
- * used when MPE is switched off). tiles_midi_channels_lower_zone_size() is
- * that size.
- *
- * WHEN it is re-declared matters: a zone change makes the receiver stop
- * every note (spec 2.1.4), and JUCE synths (e.g. Equator) reset the bend
- * range to 48 on every RPN 6. So a new size is only declared when nothing
- * is sounding (services/expression.c mpe_zone_is_idle()), always as RPN 6
- * + RPN 0. Until then live MPE uses the LAST declared size
- * (tiles_midi_channels_declared_zone_size()), skipping channels Song holds
- * inside it (tiles_midi_channels_song_holds()).
- *
- * The zone must be one contiguous run from channel 2 and can't include
- * channel 10, so its maximum is 8. An Upper Zone (Master 16) could add a
- * few more channels but is more fragile in practice; not built. */
+/* How TILES divides the 16 MIDI channels (tested in test_midi_channels.c).
+ * Fixed parts sit outside anything live MPE may use, so they can't collide.
+ *   1      MPE Master: RPNs and pedals (MPE off: every live note)
+ *   2-9    shared pool: Song tracks claim from 9 down, the live MPE zone
+ *          counts up from 2, so they never overlap
+ *   10     drum sequencer (GM percussion)
+ *   11     game mode, Bouncing notes and the physics modes
+ *   12     chord mode
+ *   13-16  sequencer lanes (lane 0 = 16)
+ * Channels 10-16 are permanent. A zone change (RPN 6 + RPN 0) stops every
+ * note on the receiver, so a new size is declared only when nothing sounds;
+ * until then live MPE uses the last declared size minus Song's channels. */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -115,10 +72,7 @@ uint8_t tiles_midi_channels_declared_zone_size(void);
  * freed a channel). services/expression.c re-declares once idle. */
 bool tiles_midi_channels_zone_redeclare_pending(void);
 
-/* Marks one pool channel as carrying (or no longer carrying) a live MPE
- * note. services/expression.c calls these wherever it claims, releases or
- * steals. Song's claim skips such channels, so a Song track starting
- * can't take a sounding note's channel. Doesn't change the zone size: a
- * note coming and going inside the declared zone is normal MPE. */
+/* Marks a pool channel as carrying a live MPE note, so Song's claim skips
+ * it. Doesn't change the zone size. */
 void tiles_midi_channels_note_channel_claimed(uint8_t channel);
 void tiles_midi_channels_note_channel_released(uint8_t channel);

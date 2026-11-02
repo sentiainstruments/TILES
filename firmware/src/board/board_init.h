@@ -2,13 +2,9 @@
 
 #include "hardware/i2c.h"
 
-/* Board bring-up: GPIO safe levels and I2C bus setup (step 1 and the bus
- * half of step 3 of the boot order in
- * docs/hardware/SENTIA_FIRMWARE_CODEX_START.md).
- *
- * Never addresses an I2C device; that is drivers/. board_i2c_recover_bus()
- * bit-bangs the raw pins without addressing anything, so it lives here
- * too (its only caller is drivers/i2c_bus.c). */
+/* Board bring-up: GPIO safe levels and I2C bus setup (boot steps 1 and 3,
+ * docs/hardware/SENTIA_FIRMWARE_CODEX_START.md). Never addresses a device;
+ * bus recovery bit-bangs the raw pins, so it lives here too. */
 
 /* Configures every GPIO to its documented safe boot direction/level.
  * Must run before anything else touches a pin. Idempotent. */
@@ -27,13 +23,9 @@ void board_i2c_set_run_speed(void);
  * haptics): the register contents go live on the pins immediately. */
 void board_pca9685_enable_outputs(void);
 
-/* Standard I2C bus recovery (NXP UM10204 3.1.16) for a device stuck
- * holding SDA mid-byte. Takes the bus pins as open-drain GPIO (only
- * driven low or released, so it can't fight a device), clocks SCL up to 9
- * times until SDA releases, sends a manual STOP either way, then hands the
- * pins back and re-runs i2c_init() at TILES_I2C_RUN_HZ, which also resets
- * the peripheral's internal state. Assumes board_i2c_set_run_speed() has
- * run (true for every caller, all scan-time). See drivers/i2c_bus.h. */
+/* I2C bus recovery (UM10204 3.1.16) for a device holding SDA: clocks SCL
+ * up to 9 times as open-drain GPIO, sends a STOP, then re-inits the bus at
+ * TILES_I2C_RUN_HZ. Called from drivers/i2c_bus.c. */
 void board_i2c_recover_bus(i2c_inst_t *bus);
 
 /* Runs board_gpio_init() then board_i2c_init(). Convenience wrapper for

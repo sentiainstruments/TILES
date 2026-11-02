@@ -1,20 +1,10 @@
 #pragma once
 
-/* The physics modes' simulations, no hardware (services/physics.c is the
- * glue): Ripples, Sand, Orbits and Newton's cradle. Host-tested in
- * test/test_physics_core.c.
- *
- * The grid is 4 rows x 6 columns of cells, cell = row * 6 + col, row 0 the
- * top row (by the buttons) and row 3 the bottom; a cell's centre is
- * (col + 0.5, row + 0.5) in pads, y growing downward.
- *
- * Time is in beats (double, so hours of play keep sub-millisecond steps),
- * so every rhythm follows the tempo; things that move in real time (a
- * falling grain) also get the seconds per beat. Each mode loops like a
- * sequencer until told otherwise. A step reports what the hardware should
- * do in a tiles_phys_out_t: notes (a cell's own note, or a degree of the
- * scale from the key note; a velocity; a length in beats) and taps to feel
- * under cells. A render fills one RGB frame (0..1). */
+/* The physics modes' simulations, no hardware (physics.c is the glue);
+ * tested in test_physics_core.c. Cells: row * 6 + col, row 0 at the top;
+ * a cell's centre is (col + 0.5, row + 0.5), y down. Time is in beats
+ * (double). A step fills a tiles_phys_out_t (notes, taps); a render fills
+ * one RGB frame (0..1). */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -58,17 +48,9 @@ void tiles_phys_out_clear(tiles_phys_out_t *out);
 #define TILES_CRADLE_COLOR_B 0.8f
 
 /* ---- Ripples ----------------------------------------------------------------
- * A pond. A strike drops a stone: its cell plays at once and a ring
- * spreads one pad a sixteenth; every cell it crosses plays on its
- * sixteenth, softer further out. A harder strike is a bigger stone:
- * louder, and its ring reaches further (a light one wakes the neighbours,
- * a hard one crosses the grid); pressing on while it's held makes it
- * bigger still. The stone stays and drops again every bar, at the same
- * sixteenth of the bar, so stones build a looping pattern; a strike on a
- * stone lifts it out. Two fronts reaching a cell on the same sixteenth
- * add up. Splash (square): every drop also throws two drops that land a
- * pad or two away on later eighths and ripple there, softer, now and
- * then splashing again. */
+ * A strike drops a stone: its cell plays and a ring spreads a pad per
+ * sixteenth, playing softer further out; harder = bigger ring. Stones drop
+ * again every bar; a strike on one lifts it. Splash (square): extra drops. */
 #define TILES_RIPPLES_MAX_STONES 8u
 #define TILES_RIPPLES_MAX_RINGS 16u
 #define TILES_RIPPLES_MAX_HITS 48u
@@ -131,20 +113,10 @@ void tiles_ripples_render(const tiles_ripples_t *r, double now, tiles_phys_frame
 bool tiles_ripples_active(const tiles_ripples_t *r);
 
 /* ---- Sand -------------------------------------------------------------------
- * A melody poured in sand. Each column is a step: a playhead runs across
- * the six columns on eighth-note triplets (a loop of two beats, column 1
- * on the beat) and plays each pile at its height: the higher the sand's
- * surface, the higher the note (one scale degree a grain, twelve grains
- * up, from the key note), an empty column a rest. Holding a cell pours
- * into its column, a grain on every beat division (the harder the press,
- * the faster: quarters to thirty-seconds), each landing sounding its new
- * note softly; the strike drops the first grain. A pile three grains
- * taller than the one beside it slides a grain over, so steep jumps in
- * the melody smooth out. Every two bars each pile loses a grain: the
- * hourglass running down, the melody sinking unless fed. Flip (square)
- * turns the hourglass over: the sand falls to the top and hangs there,
- * and since pitch is still how high the surface is, the melody turns
- * upside down. Circle + tap empties a column. */
+ * Columns are steps: a triplet-eighth playhead plays each pile at its
+ * height (a scale degree per grain). Holding pours, faster when harder;
+ * steep piles slide; every two bars each pile loses a grain. Flip (square)
+ * turns it upside down. Circle + tap empties a column. */
 #define TILES_SAND_PER_CELL 3u
 #define TILES_SAND_MAX_HEIGHT 12u
 #define TILES_SAND_MAX_GRAINS 80u /* a flip lets every grain go at once */
@@ -196,20 +168,10 @@ void tiles_sand_render(const tiles_sand_t *s, double now, tiles_phys_frame_t fra
 bool tiles_sand_active(const tiles_sand_t *s);
 
 /* ---- Orbits -----------------------------------------------------------------
- * A solar system that keeps time. A sun sits in the middle from the start.
- * A strike launches a planet from that cell around the sun, on the circle
- * through the cell, all the same way round; its cell stays lit in its
- * colour, and it plays that cell's note each time it comes back round.
- * How long that takes follows Kepler (period ~ distance^1.5) rounded to
- * whole and half beats: next to the sun every beat, a pad further every
- * 3, the far corners every 6 or 8, so planets make polyrhythms. A strike
- * on a planet's lit cell takes that planet away. Holding a cell moves the
- * sun there, and every planet's orbit takes its new distance (and speed).
- * Pull (square): the planets pull on each other too, so they bunch up,
- * drift and swap places, and two passing close play together; off again,
- * each one glides back onto its own orbit and into time. Stop/play: "-"
- * freezes them, "+" carries on from the next beat, so they stay on the
- * beat grid. */
+ * A strike launches a planet round the sun, playing its cell's note each
+ * time round; periods follow Kepler, rounded to half beats (polyrhythms).
+ * A strike on a planet removes it; holding moves the sun. Pull (square):
+ * planets attract each other. "-" freezes, "+" resumes on the beat. */
 #define TILES_ORBITS_MAX_SUNS 2u
 #define TILES_ORBITS_MAX_PLANETS 8u
 #define TILES_ORBITS_HOME_SUN 14u /* row 2, column 3: near the middle */
@@ -280,25 +242,11 @@ bool tiles_orbits_active(const tiles_orbits_t *o);
 void tiles_orbits_planet_xy(const tiles_orbits_t *o, uint8_t i, double now, float *x, float *y);
 
 /* ---- Newton's cradle --------------------------------------------------------
- * Six balls hang along the bottom row. Holding a cell above it lifts balls
- * from that end: column 1 (or 6) one ball, 2 (5) two, 3 (4) three, higher
- * rows higher and louder. Letting go, they swing in and knock on the next
- * eighth at least a fifth of a beat away, then once a beat, the same
- * number flying out the other side and playing their notes (the first
- * loudest), forever, like a sequencer. Both ends at once (two hands): two
- * swings, knocking in between each other. A strike on a swinging ball
- * catches its swing; on a resting ball, taps it.
- *
- * Pendulum wave (square): every ball hangs on its own string, column 1
- * the longest. A ball swings on its own, playing its note every time it
- * comes down to the bottom: column 1 eight times in two bars, column 2
- * nine, ... column 6 thirteen, so balls drift apart into rolling patterns
- * and all meet again on the first beat of every second bar. Turning it
- * on, the balls that were swinging carry on as pendulums; the rest hang
- * still until set going: a strike on a still ball starts it (in step with
- * the others), on a swinging one stops it; holding a cell above a ball
- * lifts it that high (higher, louder) and lets it go on release. Off
- * again, every ball stops. */
+ * Holding above the bottom row lifts 1-3 balls from that end (higher =
+ * louder); released, they knock on the next eighth, then once a beat,
+ * forever. Pendulum wave (square): each ball on its own string (column 1
+ * eight swings per two bars ... column 6 thirteen), meeting every second
+ * bar; a strike starts or stops a ball. */
 #define TILES_CRADLE_MAX_SWINGS 4u
 #define TILES_CRADLE_WAVE_BEATS 8.0 /* two bars: the wave lines up again */
 #define TILES_CRADLE_WAVE_FIRST 8u  /* column 1's passes in that time */

@@ -1,10 +1,6 @@
-/* Composite USB device: CDC (diagnostics console) + MIDI (three cables) +
- * vendor (settings, usb_vendor/) + picotool reset interface.
- *
- * Built with TinyUSB's per-class descriptor macros (patterns from its
- * cdc_msc and midi_test examples) rather than hand-counted bytes.
- * Replaces pico_stdio_usb's default descriptors because CMakeLists.txt
- * links tinyusb_device explicitly (see tusb_config.h). */
+/* Composite USB device: CDC console + MIDI (three cables) + vendor
+ * (settings) + picotool reset, built with TinyUSB's descriptor macros.
+ * Replaces pico_stdio_usb's descriptors (tinyusb_device is linked). */
 
 #include <stdio.h>
 #include <string.h>
@@ -142,14 +138,8 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
 
 /* ---- BOS + Microsoft OS 2.0 descriptors (Windows driverless access) ---- */
 
-/* Windows has class drivers for CDC and MIDI but not for vendor
- * interfaces, so without this the settings and reset interfaces show up as
- * "unknown device" and need Zadig. The MS OS 2.0 descriptor set asks
- * Windows to load WinUSB for those two interfaces automatically: the
- * standard approach, and the one pico-sdk uses for its reset interface
- * (pico_usb_reset/usb_reset.c, mirrored and extended here; its own copy is
- * off because we provide the descriptors). macOS and Linux ignore it.
- * Not yet tested on Windows hardware. */
+/* MS OS 2.0 descriptors so Windows loads WinUSB for the vendor and reset
+ * interfaces (no Zadig), as pico-sdk does. Untested on Windows. */
 
 #define MS_OS_20_VENDOR_CODE 0x01u
 
@@ -208,15 +198,9 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
 
 /* ---- String descriptors ---- */
 
-/* The PRODUCT name carries the unit number ("SENTIA TILES 2"). Hosts show
- * it as the device and DAWs build the port names from it ("SENTIA TILES 2
- * MIDI" / "SENTIA TILES 2 DAW" on macOS, "SENTIA TILES 2 (MIDI)" in Live),
- * so two units played at once can't be mixed up. With one name for every
- * unit, Live numbers the second one "#2" in plug-in order, and the two
- * could swap tracks after a replug. The cost: a Live set made with one
- * unit doesn't find another by itself (pick its ports again). The unit
- * label also rides on the CDC interface name and the settings INFO reply;
- * the serial number is the chip ID. */
+/* The product name carries the unit number ("SENTIA TILES 2"), which DAWs
+ * build port names from, so two units can't swap tracks after a replug.
+ * Cost: a Live set doesn't find another unit by itself. */
 static char const *string_desc_arr[] = {
     NULL, /* 0: language ID, handled below */
     "SENTIA Instruments",

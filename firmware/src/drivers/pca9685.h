@@ -1,14 +1,9 @@
 #pragma once
 
-/* NXP PCA9685 16-channel, 12-bit PWM controller (datasheet Rev 4, 2015).
- * The same two chips drive the 24 active-high haptic motors and the 6
- * active-low button LEDs, so the power-on output state matters.
- *
- * IMPORTANT: the POR default is "full off" on every channel (pin LOW).
- * That turns motors off but LIGHTS the active-low button LEDs.
- * tiles_pca9685_init() sets the same state explicitly; callers with
- * active-low channels must then call tiles_pca9685_set_channel_full(...,
- * true) on them to make them dark (see services/buttons.c). */
+/* PCA9685 16-channel 12-bit PWM: the two chips drive the 24 motors (active
+ * high) and the 6 key LEDs (active low). The power-on state (all pins low)
+ * LIGHTS the key LEDs: callers turn active-low channels full on to darken
+ * them (services/buttons.c). */
 
 #include <stdbool.h>
 #include <stdint.h>

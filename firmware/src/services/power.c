@@ -25,17 +25,9 @@ static tiles_power_mode_t raw_mode_from_pins(void) {
     return usb_mounted ? TILES_POWER_MODE_USB_ONLY : TILES_POWER_MODE_FAULT;
 }
 
-/* Budgets from the handoff's profile table and
- * docs/architecture/defaults-and-safeguards.md. USB-only mirrors
- * USB_DEMO_SAFE (500 mA); external mirrors FULL_DEMO_EXTERNAL (2.5 A,
- * CV/gate allowed). USB_DEMO_VALIDATED_1P5A is a manual override, not
- * derived here.
- *
- * Ceilings from measured current (docs/hardware/current-measurements.md,
- * breakdown in services/lighting.c): USB-only 50% puts the worst case
- * (every LED white at the ceiling, underglow at its fixed level, 4 motors)
- * at ~0.42 A, inside 500 mA with margin. External 90%: ~0.6 A of 2.5 A.
- * FAULT keeps the old 37%: the source is unknown. */
+/* Budgets from the handoff's profiles: USB-only 500 mA, external 2.5 A
+ * (CV/gate allowed). Ceilings from measured current: USB 50% (~0.42 A worst
+ * case), external 90% (~0.6 A). FAULT keeps 37%. */
 static tiles_power_state_t state_for_mode(tiles_power_mode_t mode) {
     tiles_power_state_t s = {0};
     s.mode = mode;

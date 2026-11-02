@@ -55,17 +55,9 @@ static bool region_read(uint32_t base, uint8_t slot, uint32_t offset, uint8_t *b
     return true;
 }
 
-/* Erase/program stall everything: code runs from flash (XIP), so no
- * interrupt (USB, DIN RX) may run during the write. The SDK's
- * flash_range_*() don't disable them, so we do. The watchdog is fed before
- * and after, not during (watchdog_update() lives in flash); same pattern
- * as the pattern bank in services/op_mode.c. A sector erase takes tens of
- * ms, a page program well under 1 ms. settings_persist.c saves with the
- * pads idle and the clock stopped; the content store when the app pushes;
- * drum mode with the pads idle, just after a step starts, erasing only with
- * the clock stopped (drum_seq.c); the sequencer's autosave (op_mode.c) and
- * the play state (play_state.c) the same; the pattern bank and Song
- * (op_mode.c) once the clock stops. */
+/* Code runs from flash, so interrupts are off during erase and program
+ * (the SDK doesn't do it); the watchdog is fed before and after. An erase
+ * takes tens of ms: callers save with the pads idle or the clock stopped. */
 static bool region_erase(uint32_t base, uint8_t slot) {
     if (slot >= TILES_KV_NUM_SLOTS) {
         return false;

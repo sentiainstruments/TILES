@@ -1,13 +1,8 @@
 #pragma once
 
-/* SK6805-EC15 addressable RGB driver (PIO). Timing only; the caller decides
- * which pixel a write reaches:
- *   - underglow: a fixed 4-pixel chain on GP8.
- *   - pad LEDs: one pixel at a time on GP3, with the TCA9554/CD74HCT4051
- *     mux set by the caller around each write (board map
- *     led_systems.pad_leds.rules).
- * Pixels latch their color, so muxed pads don't dim and only need writing
- * when their color changes. */
+/* SK6805-EC15 RGB driver (PIO), timing only: the underglow is a 4-pixel
+ * chain on GP8; pads are one pixel at a time on GP3 through the caller's
+ * mux. Pixels latch, so pads only need writing when they change. */
 
 #include <stdbool.h>
 #include <stddef.h>

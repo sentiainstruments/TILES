@@ -1,17 +1,8 @@
 #pragma once
 
-/* DAC80502 dual 16-bit SPI DAC for the pitch and pressure CV outputs
- * (services/cv_gate.c). Signal chain: DAC 0-2.5 V -> 10k -> OPA2990 x4 ->
- * 1k -> jack, nominally 0-10 V (docs/hardware/SENTIA_TILES_FIRMWARE_HANDOFF.md).
- *
- * Written from the DAC8050x family's documented 24-bit SPI protocol; not
- * yet brought up on hardware. A wrong detail can only mean no output or a
- * wrong voltage inside the 0-2.5 V rail. Confirm with a meter (ideally a
- * logic analyzer on SCLK/MOSI/SYNC) before relying on it.
- *
- * SPI1 on GP10 (SCLK) / GP11 (MOSI), write-only (no MISO wired, so no
- * readback). Chip select (GP13, SYNC-N) is plain GPIO, set up deselected
- * by board_init.c. */
+/* DAC80502 dual 16-bit SPI DAC for pitch and pressure CV: 0-2.5 V, amplified
+ * to 0-10 V. Written from the datasheet, not yet brought up on hardware:
+ * check with a meter first. SPI1 GP10/GP11, write-only; SYNC on GP13. */
 
 #include <stdint.h>
 

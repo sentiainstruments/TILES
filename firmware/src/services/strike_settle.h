@@ -1,19 +1,9 @@
 #pragma once
 
-/* When a strike past the strike depth can send its note (expression.c's
- * "Velocity"; Prism's chord pads too). The velocity reads how deep the hit
- * goes during a follow-through after the crossing, but waiting out the
- * whole window put every note that much behind the finger, which shows
- * when recording. So the note goes as soon as its velocity is known:
- *   - the peak is at or past `full_depth` (the depth score is full):
- *     nothing left to measure;
- *   - the key has stopped going down: TILES_STRIKE_SETTLE_SAMPLES fresh
- *     Hall samples, over at least TILES_STRIKE_SETTLE_MS, with no rise of
- *     TILES_STRIKE_SETTLE_RISE since the last one;
- *   - or the follow-through (TILES_STRIKE_FOLLOWTHROUGH_MS) is over: a slow
- *     press still going down.
- * A noisy reading can only delay a note (it looks like a rise), never send
- * it early. Host-tested in test/test_strike_settle.c. */
+/* When a strike can send its note: once the peak fills the depth score, or
+ * the key stops going down (TILES_STRIKE_SETTLE_SAMPLES fresh samples
+ * without a rise), or the follow-through ends. Noise can only delay a note.
+ * Tested in test_strike_settle.c. */
 
 #include <stdbool.h>
 #include <stdint.h>

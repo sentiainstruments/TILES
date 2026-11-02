@@ -1,24 +1,10 @@
 #pragma once
 
-/* CV/gate output, working like a standard monophonic MIDI-to-CV converter:
- *   - VOUTA: 1 V/octave pitch CV.
- *   - VOUTB: pressure CV (as the board map labels it).
- *   - Gate (GP12, active high): high while ANY note is held.
- * Last-note priority: a new note jumps the pitch CV (legato, no glide, no
- * retrigger) and the gate stays high until the last note ends. It listens
- * to every note TILES plays (live, sequencer, Song, chord, game), like an
- * external converter would.
- *
- * Scaling is runtime-settable calibration (settings `cv_gate.*`), defaulting
- * to the standard unscaled convention until measured trims exist.
- *
- * Safety (docs/architecture/defaults-and-safeguards.md "CV and gate"):
- *   - Hard-disabled unless services/power.h reports cv_gate_permitted
- *     (external 12 V present). Checked on every note event, and the
- *     power-change callback drops everything the instant power goes.
- *   - OFF by default even with external power; tiles_cv_gate_set_enabled()
- *     is a separate switch that is never saved (boots off every time).
- *     Both must hold before anything is driven. */
+/* CV/gate as a mono MIDI-to-CV converter: VOUTA 1 V/oct pitch, VOUTB
+ * pressure, gate (GP12) high while any note is held. Last-note priority,
+ * no glide or retrigger; hears every note TILES plays. Scaling: cv_gate.*.
+ * Safety: off unless power.h permits (external 12 V; dropped instantly when
+ * it goes) AND enabled, which is never saved (boots off). */
 
 #include <stdbool.h>
 #include <stdint.h>

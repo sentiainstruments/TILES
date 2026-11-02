@@ -1,41 +1,21 @@
 #pragma once
 
-/* MIDI clock: the timing source for the sequencer (services/op_mode.h).
- * Two sources feed ONE pulse counter, so the sequencer never cares which
- * is driving it:
- *
- *   1. EXTERNAL: Real-Time bytes (0xF8 Clock, 0xFA Start, 0xFB Continue,
- *      0xFC Stop) from USB or DIN, delivered by midi/midi_in.h's callback
- *      (midi_in forwards only one source at a time, so two clocks can't
- *      double the tempo). Always wins the moment it is present.
- *   2. TAP TEMPO: op_mode.c feeds circle (shift) presses here while the
- *      sequencer is active and no external clock is present. After 4 taps
- *      the averaged interval (up to the last 8 taps) becomes the internal
- *      tempo, and scan synthesizes 24 PPQN pulses into the same counter.
- *      The first tempo of a tap session fires `start_edge` like a real
- *      Start. Each later tap re-syncs the phase to the tap. A pause longer
- *      than the session timeout starts a new tap session without stopping
- *      the running tempo. A tap far off the session's average also starts
- *      a new session (like Live's tap tempo).
- *
- * op_mode.c flashes circle's LED on every beat (pulse_count % 24 == 0)
- * whichever source is driving.
- *
- * `pulse_count` advances regardless of `running`, like real MIDI clock
- * (the master keeps clocking; Start/Continue/Stop set the slave's running
- * flag). Consumers diff the counter against their last value each scan,
- * which handles several pulses between scans. */
+/* MIDI clock, the sequencers' timing: two sources feed one pulse counter.
+ *   EXTERNAL  Real-Time bytes from USB or DIN (one source at a time);
+ *             always wins when present.
+ *   TAP TEMPO circle taps while no external clock: 4 taps set the tempo
+ *             (average of up to 8), 24 PPQN generated; later taps re-sync
+ *             the phase; a pause or an off-tempo tap starts a new session.
+ * pulse_count advances regardless of `running`, like real MIDI clock;
+ * consumers diff it each scan. */
 
 #include <stdbool.h>
 #include <stdint.h>
 
 typedef struct {
-    /* Pulses since the song's position 0: from a Start's downbeat, or the
-     * position a Song Position Pointer gave before a Continue (a DAW playing
-     * from mid-song), or wherever an internal start or a clock picked up
-     * mid-stream began. On start_edge, a sequencer's step is
-     * song_pulse / clocks-per-step (mod its length), so it lands where it
-     * would have from the top. */
+    /* Pulses since song position 0 (a Start, a Song Position Pointer, or an
+     * internal start). On start_edge a sequencer's step comes from it, so it
+     * lands where it would have from the top. */
     uint32_t song_pulse;
     /* Total pulses seen, regardless of `running`; diff against your last read.
      * Advanced by real 0xF8 bytes or, with no external clock, the tap-tempo
@@ -83,23 +63,15 @@ bool tiles_midi_clock_tap_tempo_established(void);
  * does NOT set start_edge (resume, Continue-style). */
 void tiles_midi_clock_set_running(bool running);
 
-/* The sequencers' play button with no external clock: restarts the
- * internal clock now, as beat 1 (a Start: start_edge set, running, the
- * generator's phase reset). With no tapped tempo yet it runs at 120 BPM.
- * False (nothing done) while external clock is active: it rules then. */
+/* Play with no external clock: restart the internal clock now as beat 1
+ * (120 BPM until tapped). False while external clock rules. */
 bool tiles_midi_clock_restart(void);
 
-/* Running state from either source. Doesn't consume start_edge, so it's
- * safe to call anytime. op_mode uses it to tell stop-while-stopped
- * (rewind) from stop-while-playing, and play-while-playing (restart) from
- * play-while-stopped. */
+/* Running state from either source; doesn't consume start_edge. */
 bool tiles_midi_clock_is_running(void);
 
-/* Clock lead, in ms (setting midi.clock_lead_ms): following an external
- * clock, pulses come through this long before they're due, so notes land
- * on the DAW's grid (midi_clock.c has the details). 15 = the offset
- * measured recording Bouncing notes into Live 12 (64-sample buffer,
- * 48 kHz); 0 = off. */
+/* Clock lead in ms (midi.clock_lead_ms): 15 = measured recording into Live
+ * 12 (64-sample buffer, 48 kHz); 0 = off. */
 #define TILES_MIDI_CLOCK_LEAD_MS_DEFAULT 15u
 void tiles_midi_clock_set_lead_ms(uint16_t lead_ms);
 uint16_t tiles_midi_clock_get_lead_ms(void);

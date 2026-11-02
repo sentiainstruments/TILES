@@ -1,15 +1,8 @@
 #pragma once
 
-/* TinyUSB configuration for the composite CDC + MIDI + vendor device.
- *
- * Modeled on pico-sdk's pico_stdio_usb/include/tusb_config.h, not
- * TinyUSB's example config, which redefines things (CFG_TUSB_MCU,
- * CFG_TUSB_OS, EP0 size, section macros) the SDK already provides.
- *
- * Must win over pico_stdio_usb's bundled config (CDC only): linking
- * tinyusb_device explicitly (src/CMakeLists.txt) makes pico_stdio_usb
- * leave TinyUSB init and descriptors to us, and its config directory is a
- * SYSTEM include, searched after ours. */
+/* TinyUSB config for the composite CDC + MIDI + vendor device, modeled on
+ * pico-sdk's (not TinyUSB's example). It wins over pico_stdio_usb's bundled
+ * config because that one is a SYSTEM include, searched after ours. */
 
 #define CFG_TUSB_RHPORT0_MODE (OPT_MODE_DEVICE)
 
@@ -40,13 +33,9 @@
 #define CFG_TUD_VENDOR_RX_BUFSIZE 64
 #define CFG_TUD_VENDOR_TX_BUFSIZE 64
 
-/* pico-sdk's USB reset interface (pico_usb_reset): control transfers only,
- * lets `picotool load -f` / `reboot -u` reboot the board into BOOTSEL
- * without the button (class 0xFF/0x00/0x01, added in usb_descriptors.c).
- * The options below match the SDK defaults for this build
- * (pico/usb_reset_config.h) and are spelled out so nothing relies on an
- * unstated default. The CDC "magic baud rate" reset stays off; one reset
- * path is enough. */
+/* pico-sdk's USB reset interface, so picotool can reboot into BOOTSEL
+ * without the button. Options spelled out as the SDK defaults; the CDC
+ * magic-baud reset stays off. */
 #define PICO_ENABLE_USB_RESET_VIA_VENDOR_INTERFACE 1
 #define PICO_USB_RESET_SUPPORT_RESET_TO_BOOTSEL 1
 #define PICO_USB_RESET_SUPPORT_RESET_TO_FLASH_BOOT 1

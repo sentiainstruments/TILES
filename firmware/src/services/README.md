@@ -38,7 +38,7 @@ before re-tuning a constant or reviving an approach that was dropped.
 
 | Module | Role |
 |---|---|
-| `op_mode` | The mode menu (one column per family, each with its own colours; each mode's underglow its colour) and the modes: melodic, Duet (chord + melody), sequencer, Song (beta), bass guitar, Ableton, plus the switch into drums / Volca (`drum_seq`), Prism (`harmony`), Bouncing notes (`bounce`) and the physics modes (`physics`). Scale picker, pattern bank, captures, Live transport. The button map is in `op_mode.h`. |
+| `op_mode` | The mode menu (one column per family, each with its own colours; each mode's underglow its colour) and the modes: melodic, Duet (chord + melody), sequencer, Song (beta), bass guitar, Ableton, plus the switch into drums / Volca (`drum_seq`), Prism (`harmony`), Bouncing notes (`bounce`) and the physics modes (`physics`). Scale picker, pattern bank, captures, Live transport. Modes and keys: below. |
 | `physics`, `physics_core` | The physics modes: Ripples (stones that drop every bar, rings playing on the sixteenths), Sand (a melody poured in sand: pile height = pitch, a triplet playhead), Orbits (planets round a sun in whole-beat periods), Newton's cradle (knocks on the beat for ever). One set of moves (what you place loops and stays lit, strike it again to remove it; circle + hold clears; square = the mode's other physics), the shared tempo pulled onto the clock's grid, MIDI channel 11. The simulations are `physics_core` (no hardware; tested). |
 | `bounce`, `bounce_core` | Bouncing notes: 12 lanes (6 shown, circle + "-"/"+" scroll), a ball bouncing in each from a height of 1-4 pads, playing the lane's scale note when it lands; on the shared clock, MIDI channel 11. The physics is `bounce_core` (no hardware; tested). |
 | `harmony`, `harmony_core` | Prism mode: a chord machine; a chord type and extensions on the right shape the root played on the left. Chromatic roots (columns 1-3); voicing (column 4), quality (column 5) and extensions (column 6), pressed by depth and latched onto the sounding chord; root bass; pedal strum; key lock from the scale picker (roots outside it dark and silent, chords unchanged). The chord maths is `harmony_core` (no hardware; tested). |
@@ -55,6 +55,48 @@ before re-tuning a constant or reviving an approach that was dropped.
 | `game_mode` | Snake, Tile Breaker, Tile Drop, Paddle, Echo. |
 | `pixel_font` | 4x4 font for the marquee and the transpose display. |
 | `debug_mode`, `crash_indicator` | Crash recorder and watchdog; red underglow after a crash reboot. |
+
+## Modes and keys
+
+Triangle opens the mode menu: one column per family, the first of each on
+row 1, each mode in its menu colour (`MENU_SLOTS` in `op_mode.c`).
+
+| Column | Modes |
+|---|---|
+| 1 | Melodic (magenta, default), Duet (pink: chords on columns 1-2, melody on 3-6), Bass guitar (lilac: rows = strings, columns = frets, "-"/"+" shift the frets) |
+| 2 | Sequencer (scarlet), Drums (orange: 16/32 steps on channel 10, Drum Rack order), Song (amber, beta: 24-slot looper, 128 steps per pattern) |
+| 3 | Prism (blue: chord machine, `harmony`) |
+| 4 | Ableton (teal: Session View clip grid), Volca (cyan: a drum per channel) |
+| 5 | Bouncing notes (lime, `bounce`), Newton's cradle (steel), Sand (sand) |
+| 6 | Ripples (water), Orbits (night sky) |
+
+Every mode but melodic can be taken off the menu (settings `modes.*`);
+removing the one in use returns to melodic. The current mode pulses white.
+A pick takes effect when the finger lifts, so it can't play a note in the
+new mode. Melodic, bass guitar and chord play through `expression`; the
+sequencer, Song, Ableton and drums draw the whole grid themselves.
+
+| Keys | Does |
+|---|---|
+| triangle | mode menu (toggle) |
+| circle + triangle | scale picker (drums: the other step page); cancels a step edit or capture |
+| diamond | Live transport: click = play/stop, hold 2 s = record. Sequencer: pattern bank. Song step editor: back |
+| circle + diamond | capture (sequencer; Song from melodic/chord/bass/Song); stop all clips in Ableton; end a Live recording |
+| "-" / "+" | sequencer and drums: stop/start the viewed lane ("-" twice rewinds; "+" restarts the clock when none comes in); circle first = length (drums: previous/next 8 drums). Bass guitar: frets. Ableton: pan the 5-track window |
+| circle | tap tempo when no external clock; flashes the beat |
+
+**Sequencer.** 4 lanes at once, each on its own channel (`midi_channels.h`),
+each playing one of 6 patterns from the pattern bank (row = lane, column =
+pattern; circle + tap saves to flash, circle + hold 3 s deletes). Step view:
+tap = arm, hold = pitch, keep holding = probability, circle + step =
+ratchet. Up to 4 notes per step; a step is a sixteenth (6 clocks) from
+`midi_clock`; starts land on the beat. Lanes keep playing in every mode.
+Notes are fitted to the current scale as they play; storage never changes.
+Capture records into the viewed lane at the running tempo, additively.
+
+**Persistence.** Patterns and the Song library are in flash
+(`storage/flash_map.h`); mode, lane patterns and running lanes survive a
+crash reboot (`__uninitialized_ram`, `tiles_op_mode_init()`).
 
 ## Rules the modules share
 

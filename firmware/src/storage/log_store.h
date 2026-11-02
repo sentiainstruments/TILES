@@ -1,32 +1,11 @@
 #pragma once
 
-/* Append-only record log over two flash sectors: saves that never erase
- * while it matters. Used under drum mode's pattern (services/drum_seq.c),
- * which changes while it plays, where kv_store's erase-per-save (tens of
- * ms with interrupts off) is audible.
- *
- * Each save appends a record (page-aligned) after the last one in the
- * current sector: only page programs, well under a millisecond per page.
- * When the sector is full the next save starts the other sector, which
- * must be blank (erased). Erasing is separate (tiles_log_prepare()): the
- * caller runs it when a stall doesn't matter, and it only ever erases the
- * sector NOT holding the newest record. If a save needs the other sector
- * and it isn't blank yet, the save waits (TILES_LOG_ERR_NEEDS_ERASE)
- * unless the caller allows erasing.
- *
- * Record (little-endian, starts on a page boundary):
- *   0  u32 magic        TILES_LOG_MAGIC
- *   4  u32 seq          increasing; the newest valid record wins
- *   8  u16 payload_len
- *  10  u16 payload_version (the caller's)
- *  12  u32 crc32        over bytes 0..11 and the payload
- * then the payload. Pages after the first are programmed before the first
- * (the one with the magic), so a power cut leaves either the whole record
- * or no valid record; the previous one stays the newest.
- *
- * Flash access goes through tiles_kv_ops_t (kv_store.h: same sectors, same
- * rules), so firmware/test/test_log_store.c runs it natively with a power
- * cut after every step. */
+/* Append-only log over two sectors: saves are page programs only (under a
+ * millisecond), so they're never heard. Erasing the other sector is
+ * separate (tiles_log_prepare()), done when a stall doesn't matter.
+ * Record, page-aligned, little-endian: 0 u32 magic, 4 u32 seq, 8 u16
+ * payload_len, 10 u16 payload_version, 12 u32 crc32, then the payload;
+ * the first page is programmed last. Tested natively with power cuts. */
 
 #include "kv_store.h"
 

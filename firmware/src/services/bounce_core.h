@@ -1,12 +1,8 @@
 #pragma once
 
-/* Bouncing notes' ball physics, no hardware (services/bounce.c is the
- * glue). Each of 12 lanes holds a ball dropped from a height of 1-4 pads (0
- * = off). It moves one pad per step, falls to the floor, plays its note
- * there, and climbs back to its height: a ball from height h lands every
- * 2(h-1) steps (h = 1: every step), so lanes at different heights make
- * polyrhythms (heights 4 and 3 land 6 and 4 steps apart: 3 against 2).
- * Host-tested in test/test_bounce_core.c. */
+/* Bouncing notes' physics, no hardware (bounce.c is the glue); tested in
+ * test_bounce_core.c. A ball from height h lands every 2(h-1) steps, so
+ * lanes at different heights make polyrhythms. */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -37,14 +33,10 @@ uint8_t tiles_bounce_ball_height(const tiles_bounce_t *b, uint8_t lane);
 /* One step: every ball moves; returns the lanes that land (bit n = lane n). */
 uint16_t tiles_bounce_step(tiles_bounce_t *b);
 
-/* ---- Real gravity (the expressive mode, square) ----------------------------
- * A ball is thrown to an apex (pads above the floor, any height, the top of
- * the grid is 3) and keeps RESTITUTION of its height every landing, so it
- * bounces lower, faster and softer each time until it rests: the
- * accelerating rhythm of a dropped ball. Time is in eighth notes, so the
- * tempo scales it; a bounce takes PERIOD_K * sqrt(apex) of them (an apex of
- * 3 bounces every 6 eighths, like height 4 of the plain mode). Not on the
- * clock's grid: free time, landing when the physics says. */
+/* ---- Real gravity (square) --------------------------------------------------
+ * A ball thrown to an apex keeps RESTITUTION of its height each landing:
+ * lower, faster, softer until it rests. Time in eighths (the tempo scales
+ * it), off the clock's grid; a bounce takes PERIOD_K * sqrt(apex). */
 #define TILES_GRAVITY_RESTITUTION 0.7f
 #define TILES_GRAVITY_REST_APEX 0.06f
 #define TILES_GRAVITY_PERIOD_K 3.4641016f /* 6 / sqrt(3) */

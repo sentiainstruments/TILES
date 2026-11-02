@@ -1,16 +1,8 @@
 #pragma once
 
-/* Light effects while playing: each note a pad plays lights it and the pads
- * around it, the way a backlit mechanical keyboard answers each keystroke.
- * Picked in the Light effects menu (expression_control.h: Feel menu, then
- * circle + square), setting look.play_effect. Pure, no hardware:
- * services/lighting.c draws it over the pads' normal look, dimmed to
- * TILES_LIGHTING_FX_REST_LEVEL (the modes it lights itself), and over the
- * step grids in a quieter sequencer version (tiles_fx_set_sequencer());
- * expression.c, op_mode.c and drum_seq.c report the notes. Host-tested in
- * test/test_light_effects.c.
- *
- * Pads are logical 1-24 (1 = top-left, row-major), as everywhere. */
+/* Light effects while playing: a played pad lights its neighbours, like a
+ * backlit keyboard (setting look.play_effect). Pure; lighting.c draws it,
+ * quieter over step grids. Tested in test_light_effects.c. */
 
 #include <stdbool.h>
 #include <stdint.h>

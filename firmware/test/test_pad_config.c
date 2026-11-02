@@ -1,11 +1,5 @@
-/*
- * Host-buildable integrity test for the canonical pad table.
- *
- * Asserts all 24 touch, Hall, LED, haptic and FPC routes are unique
- * (required by SENTIA_FIRMWARE_CODEX_START.md), plus row/col/FPC order
- * and the LED mux index -> enable port relationship. Run with
- * test/run.sh.
- */
+/* The pad table: all 24 touch, Hall, LED, haptic and FPC routes unique,
+ * row/col/FPC order, LED mux index -> enable port. Run with test/run.sh. */
 
 #include <stdio.h>
 

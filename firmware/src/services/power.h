@@ -1,20 +1,8 @@
 #pragma once
 
-/* Power source state from GP22 (TPS2121 ST) plus USB mounted, per the truth
- * table in SENTIA_TILES_FIRMWARE_HANDOFF.md "Power/connection states". The
- * TPS2121 switches sources in hardware (external wins); this module only
- * reports the result, so every other module has ONE place to ask what is
- * allowed right now.
- *
- * tiles_power_get_state() is a live snapshot (budgets, haptic voice
- * ceiling, LED ceiling, CV/gate permission) read by lighting, haptics and
- * CV/gate. tiles_power_register_callback() is for modules that must react
- * immediately to a change (CV/gate drops its gate the moment external
- * power goes; main.c re-initializes haptics and button LEDs).
- *
- * FAULT (GP22 high while USB isn't mounted, "invalid/transient" per the
- * handoff) always reports the safest limits, so a consumer that respects
- * the fields is safe without fault handling of its own. */
+/* Power source from GP22 (TPS2121 status) and USB mounted: the one place to
+ * ask what's allowed now (budgets, haptic voices, LED ceiling, CV/gate).
+ * Callbacks react to changes at once. FAULT reports the safest limits. */
 
 #include <stdbool.h>
 #include <stdint.h>

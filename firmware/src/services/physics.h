@@ -1,35 +1,11 @@
 #pragma once
 
-/* The physics modes on the hardware: Ripples, Sand, Orbits and Newton's
- * cradle (their physics: services/physics_core.h). services/op_mode.c owns
- * the mode switch, the shared buttons and the clock. The modes play the
- * pads' own notes (the scale, lowest bottom-left), Sand the scale counted
- * up from the key note; they share one set of moves:
- *
- *   pads          make something: a strike's velocity is how big, the press
- *                 how much (a stone's size, Sand's pour). What you place
- *                 stays lit, and loops like a sequencer: a Ripples stone,
- *                 a planet, a swing. Strike it again to take it away (a
- *                 swing: touch one of its balls).
- *   circle + tap  removes that one thing too (a stone, a column of sand, a
- *                 planet, a swing). While circle is held the scene dims and
- *                 what a tap would remove glows red.
- *   circle + hold a pad 1 s: clears everything.
- *   circle        tap tempo, as in the sequencer.
- *   square        click: the mode's other physics (Splash, Flip, Pull,
- *                 Pendulum wave; its LED lit while on). Held: the Feel menu.
- *   "-" / "+"     octave down / up (Ripples, Sand, the cradle), as in
- *                 melodic mode; Orbits: stop / play.
- *
- * Each mode shows something at rest: the pond's surface, the floor the
- * sand lands on and the playhead crossing it, the sun, the six balls.
- *
- * Time is the shared tempo (tap tempo or a DAW's clock), and while the
- * clock runs the modes keep its beat grid: their own beat count is pulled
- * onto the clock's phase. They keep moving in the background when another
- * mode is up, like Bouncing notes; only the shown one is felt, and a
- * finger held in one is let go when it leaves. Notes on MIDI channel 11,
- * with Bouncing notes (the same note from both at once can cut short). */
+/* The physics modes on hardware (simulations: physics_core.h), channel 11.
+ * Shared moves: a strike makes something (velocity = how big) that loops
+ * and stays lit; strike it again, or circle + tap, to remove it; circle +
+ * hold 1 s clears all. Circle: tap tempo. Square: the mode's other physics
+ * (Splash, Flip, Pull, Pendulum wave). "-"/"+": octave (Orbits: stop/play).
+ * They follow the shared tempo and keep moving in other modes. */
 
 #include "midi_clock.h"
 #include "physics_core.h"
