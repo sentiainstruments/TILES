@@ -9,17 +9,10 @@
 
 #include <stdio.h>
 
-/* USB writes wait for FIFO room up to MIDI_SEND_RETRY_TIMEOUT_MS, pumping
- * tud_task() (the only thing that drains the FIFO to the host). Without
- * the retry, a burst (e.g. a 16-channel CC broadcast right after a
- * Note-Off) overflowed the 64-byte FIFO and dropped messages, which showed
- * up as stuck sustain. The bound keeps a stalled or absent host from
- * hanging the main loop; a message that still doesn't fit is logged.
- *
- * Whole USB-MIDI packets (midi/usb_midi_packet.h), not TinyUSB's byte
- * stream: a packet is queued complete or not at all, so a message can be
- * dropped but never split. The stream API also shares one partial-message
- * state across ports, which would mix the two cables. */
+/* USB writes wait for FIFO room (pumping tud_task()) up to
+ * MIDI_SEND_RETRY_TIMEOUT_MS: bursts overflowed the 64-byte FIFO and stuck
+ * the sustain. Whole USB-MIDI packets, so a message can drop but never
+ * split or mix cables. */
 #define MIDI_SEND_RETRY_TIMEOUT_MS 5u
 
 /* Headroom over the largest SysEx this firmware sends (receive side:
@@ -27,20 +20,10 @@
  * bug in the caller. */
 #define SYSEX_SEND_BUF_MAX 32u
 
-/* Batches (tiles_midi_out_batch_begin()/end()): messages that belong
- * together (a chord, the drums on one step, a note's setup and its
- * Note-On) are held and handed to TinyUSB in one write, so they leave in
- * one USB transfer. Written one by one, the first packet starts a transfer
- * on its own and the rest wait until it's done and the next tud_task()
- * notices: about a main-loop pass (~2 ms) behind the first.
- *
- * Channel messages only: TinyUSB's stream write packs those exactly as
- * tiles_usb_midi_pack() does, and it flushes once at the end. Anything
- * else (SysEx, Real-Time) or another cable sends the batch first and goes
- * on its own, so the order never changes. If the host stalls and a stream
- * write stops inside a message, TinyUSB keeps the half message; the stream
- * path is then avoided until USB remounts (which clears it). DIN is
- * unaffected (it queues anyway). */
+/* Batches: held and written to TinyUSB at once, so they leave in one USB
+ * transfer (one by one, the rest trailed a pass behind). Channel messages
+ * only; anything else flushes the batch first, so order holds. A stream
+ * write cut by a stalled host disables the path until USB remounts. */
 #define MIDI_BATCH_MAX_MESSAGES 16u /* one 64-byte transfer */
 static uint8_t s_batch_depth;
 static uint8_t s_batch_cable;
@@ -98,10 +81,8 @@ static bool is_channel_message(const uint8_t *msg, uint32_t len) {
     return len == ((kind == 0xC0u || kind == 0xD0u) ? 2u : 3u);
 }
 
-/* The PARTS port (midi/midi_ports.h): channels 10-16 go there by
- * themselves; Song tracks and Volca, which use 1-9 as well, wrap their
- * sends in tiles_midi_out_parts_begin()/end(). Only channel messages:
- * pedals, clock and the rest stay on MAIN. */
+/* The PARTS port: channels 10-16, plus sends wrapped in parts_begin/end.
+ * Channel messages only. */
 static bool s_parts_separate = true;
 static uint8_t s_parts_depth;
 
@@ -174,11 +155,8 @@ static void usb_write(uint8_t cable, const char *what, const uint8_t *msg, uint3
     }
 }
 
-/* Everything goes to two sinks: USB MAIN (while mounted) and DIN (whenever
- * initialized, host or not; external-power-only setups have no USB host).
- * DIN goes FIRST because it only queues (midi/din_midi_queue.c), while the
- * USB write may wait up to MIDI_SEND_RETRY_TIMEOUT_MS.
- * tiles_midi_send_daw_cc() is the exception: DAW port only. */
+/* Two sinks: USB MAIN while mounted, and DIN whenever initialized. DIN
+ * first: it only queues, while USB may wait. daw_cc is the exception. */
 static void send1(uint8_t status) {
     uint8_t msg[1] = {status};
     tiles_din_midi_send(msg, sizeof(msg));
@@ -205,11 +183,8 @@ void tiles_midi_note_off(uint8_t channel, uint8_t note, uint8_t release_velocity
     send3((uint8_t)(0x80u | channel), note, release_velocity);
 }
 
-/* Last Pitch Bend / Channel Pressure sent per channel, so
- * tiles_midi_send_note_setup() skips what's already at its default (each
- * skipped message is ~1 ms sooner on DIN). UNKNOWN until first sent, and
- * after every zone declaration (receivers reset controllers on zone
- * changes). */
+/* Last bend and pressure sent per channel, so note setup skips defaults.
+ * UNKNOWN until sent and after every zone declaration. */
 #define LAST_BEND_UNKNOWN 0xFFFFu
 #define LAST_PRESSURE_UNKNOWN 0xFFu
 #define PITCH_BEND_CENTER_14BIT 8192u
@@ -259,15 +234,11 @@ void tiles_midi_send_cc_broadcast(uint8_t controller, uint8_t value) {
     tiles_midi_out_batch_end();
 }
 
-/* Standard hardware panic: CC 123 (All Notes Off) is the usual cure,
- * CC 120 (All Sound Off) the backup for receivers that don't fully honor
- * it. On every channel, since a stuck note can be on any part. Independent
- * of internal note tracking on purpose: a panic must work even when that
- * tracking is wrong (unlike tiles_expression_force_release_all()). */
+/* Panic: CC 123, then CC 120 as backup, on every channel, independent of
+ * internal note tracking (it must work when that's wrong). */
 void tiles_midi_send_panic(void) {
-    /* Sustain off first: a receiver that still thinks the pedal is down can
-     * keep notes through 123/120 (seen on real hardware: the plugin's own
-     * panic worked, ours didn't until this was added). */
+    /* Sustain off first: a receiver that thinks the pedal is down keeps notes
+     * through 123/120 (seen on real hardware). */
     tiles_midi_send_cc_broadcast(64u, 0u); /* Damper Pedal (Sustain) off */
     tiles_midi_send_cc_broadcast(123u, 0u); /* All Notes Off */
     tiles_midi_send_cc_broadcast(120u, 0u); /* All Sound Off */

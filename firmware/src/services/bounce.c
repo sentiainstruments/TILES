@@ -63,12 +63,9 @@ static uint32_t s_last_pulse_count;
 static uint32_t s_last_pulse_ms;
 static bool s_clock_running;
 
-/* Smooth drawing: the frame wanted, and what each pad was last sent. A pad
- * write is ~0.3 ms (services/lighting.c), so at most
- * BOUNCE_PAD_WRITES_PER_SCAN go out per scan, the biggest changes first:
- * a whole repaint at once would hold the main loop (and the clock's
- * playback ticks) for ~17 ms. Not drawn for BOUNCE_REPAINT_AFTER_MS (a menu
- * was up, another mode drew): every pad is sent again. */
+/* Smooth drawing: at most BOUNCE_PAD_WRITES_PER_SCAN pad writes a scan,
+ * biggest change first (a full repaint held the loop ~17 ms). After a
+ * pause in drawing, every pad is sent again. */
 #define BOUNCE_PAD_WRITES_PER_SCAN 2u
 #define BOUNCE_PAD_CHANGE_MIN 0.02f
 #define BOUNCE_REPAINT_AFTER_MS 20u
@@ -83,13 +80,9 @@ static uint8_t s_picked_note[TILES_BOUNCE_LANES];
 static uint8_t s_pick_lane = BOUNCE_NOT_PICKING;
 
 /* ---- Real gravity (bounce.h; the physics is bounce_core.h) ---- */
-/* Throw: the pad's row sets the base apex (0 on the floor row .. 3 on the
- * top), the strike adds up to BOUNCE_THROW_FORCE_PADS (a hard tap on the
- * top row flies off the grid and comes back). Landing velocity follows the
- * height it fell from, full at BOUNCE_IMPACT_FULL pads. A note lasts until
- * the lane lands again, an eighth at most. A square click toggles it
- * (expression_control.c sees the click, op_mode.c passes it here). First
- * guesses. */
+/* Throw (Real gravity, square toggles): the row sets the base apex, the
+ * strike adds up to BOUNCE_THROW_FORCE_PADS; landing velocity follows the
+ * fall height. A note lasts until the lane lands again. First guesses. */
 #define BOUNCE_THROW_FORCE_PADS 2.0f
 #define BOUNCE_THROW_MIN_APEX 0.5f
 #define BOUNCE_IMPACT_FULL 5.0f
@@ -250,15 +243,9 @@ bool tiles_bounce_mode_is_gravity(void) {
 
 static float step_fraction(uint32_t now);
 
-/* Switching keeps every ball where it is in its bounce, and the notes
- * sounding:
- *   - to gravity: a plain ball of height h becomes one with an apex of h-1
- *     pads (a height-1 dribble: the smallest throw), at the same point of
- *     its bounce; from there it loses height as gravity does;
- *   - back: each ball takes the plain height nearest its apex (a resting
- *     one is off), at the step of its bounce it was on, and the plain
- *     balls carry on, the next step on the eighth grid (they move while
- *     the clock runs, as always). */
+/* Switching keeps every ball in place and the notes sounding: to gravity, a
+ * ball of height h gets an apex of h-1; back, each takes the plain height
+ * nearest its apex and carries on, on the eighth grid. */
 static void gravity_from_plain(float frac) {
     tiles_gravity_clear(&s_grav);
     for (uint8_t lane = 0; lane < TILES_BOUNCE_LANES; lane++) {
@@ -696,10 +683,8 @@ static float ball_y(uint8_t lane, float frac) {
     return (float)(h - 1u) * 4.0f * u * (1.0f - u);
 }
 
-/* Each lane: its drop height dim, the ball drawn across the two pads it's
- * between (a constant-power crossfade, so it doesn't dim halfway), a
- * landing flashing the floor white and fading back, an empty lane a faint
- * floor; all pads pink at the end of the lanes. */
+/* Each lane: drop height dim, the ball cross-faded across two pads at
+ * constant power, landings flashing white, the lane ends pink. */
 static void render_lanes(uint32_t now) {
     bool end_flash = s_end_flash_ms != 0u && now - s_end_flash_ms < BOUNCE_END_FLASH_MS;
     float frac = step_fraction(now);
