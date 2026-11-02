@@ -143,3 +143,8 @@ crash reboot (`__uninitialized_ram`, `tiles_op_mode_init()`).
 - CV/gate and the DAC80502 driver are not yet verified on hardware.
 - Per-pad Hall calibration curves, and Hall-depth wake from standby,
   are not built (see `../diagnostics/README.md`).
+- **Next for expression:** first make pitch bend solid (bend logic in its
+  own host-tested module, replaying recorded sensor captures). Only then
+  add MPE slide (CC74) on the forward/back tilt axis: it follows the tilt
+  while held and springs back to centre (64) when eased off; a setting,
+  off by default; bend becomes left/right only.
