@@ -31,7 +31,7 @@ organization owner he can merge his own.
 
 To bring the latest `main` into your branch: `git fetch` then
 `git merge origin/main`. Don't rebase pushed work — it needs a
-force-push, which GitHub refuses.
+force-push, which GitHub refuses (except on `sam/...` branches).
 
 `firmware/board-bringup` is the one long-lived branch: Mats2000 pushes
 firmware there and flashes from it, and merges it into `main` with
@@ -109,8 +109,9 @@ What keeps them in step:
 - `main`: changes only through a pull request with a code owner's
   approval, resolved conversations and passing checks; no force-push; no
   deletion.
-- `firmware/board-bringup`: no force-push, no deletion.
-- Every branch: no force-push.
+- `firmware/...` branches: only Mats2000 can create or push to them;
+  `firmware/board-bringup` also can't be force-pushed or deleted.
+- Every other branch: no force-push, except `sam/...` branches.
 - Tags: no moving or deleting.
 
 Mats2000, as organization owner, can step past these when something
