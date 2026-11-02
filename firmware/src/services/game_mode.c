@@ -44,13 +44,8 @@ static uint32_t s_gm_round_end_ms;
 static bool s_gm_round_end_red_only;
 
 /* ---- Win/lose melodies + menu-select haptic ----------------------------
- * Pads play no notes and no haptics in game mode (expression.c ignores
- * the grid while a game is active). The only sounds are these short
- * melodies, and the only haptics are the menu-select kick and Echo's
- * pattern.
- *
- * Game mode's own fixed channel (services/midi_channels.h), outside the
- * MPE allocator's range. */
+ * Pads play no notes in game mode; these melodies, the menu kick and Echo's
+ * pattern are the only sound and touch feedback. Own fixed channel. */
 #define GM_MELODY_CHANNEL TILES_MIDI_CH_GAME
 #define GM_MELODY_STEP_MS 130u
 #define GM_MELODY_VELOCITY 100u
@@ -116,10 +111,8 @@ static bool s_gm_combo_was_held;
 static bool s_gm_combo_fired;
 static uint32_t s_gm_hold_start_ms;
 
-/* The 4-button hold forgives brief drops: once all four have been down
- * together, a release shorter than this doesn't restart the 700 ms hold
- * (four fingers wobble; resetting on every blip made it very hard to
- * trigger). It doesn't help the four land together in the first place. */
+/* Once all four keys were down together, a release shorter than this
+ * doesn't restart the 700 ms hold (four fingers wobble). */
 #define GM_COMBO_DROPOUT_GRACE_MS 250u
 static uint32_t s_gm_combo_last_true_ms;
 static bool s_gm_combo_last_true_valid;
@@ -394,11 +387,8 @@ static void gb_handle_input(void) {
     s_gb_prev_right = right;
 }
 
-/* Moving row and column by exactly 1 each step keeps (row + col) mod 2
- * fixed for the whole flight, so from the fixed start (3, 3) half the
- * blocks were unreachable. Fix (as in standby.c tb_step()): each bounce
- * off the top wall or paddle gets a coin-flip chance to reverse the
- * column direction, which breaks the parity lock. */
+/* Steps of exactly 1 keep (row + col) mod 2 fixed: a coin flip at each top
+ * or paddle bounce may reverse the column (as standby.c). */
 static void gb_step(uint32_t now_ms) {
     int8_t new_col = (int8_t)(s_gb_ball_col + s_gb_ball_dcol);
     if (new_col < (int8_t)TILES_GRID_MIN_COL || new_col > (int8_t)TILES_GRID_MAX_COL) {
@@ -495,15 +485,9 @@ static void render_tile_breaker(uint32_t now_ms) {
 }
 
 /* ---- Tile Drop -----------------------------------------------------------
- * A 4x6 well (the pad grid; buttons off) with a custom small-piece set
- * (GT_PIECES), since full tetrominoes are too big for 4 rows: dot, domino,
- * straight tromino, corner tromino, 2x2 square. Pieces have 1-4 cells
- * (`num_cells`).
- *
- * 2 rotation states per piece and no wall kicks (a rotation that doesn't
- * fit is rejected). "-"/"+" move, triangle rotates, diamond hard-drops;
- * gravity every GT_STEP_MS. Full rows collapse (several at once is fine).
- * Topping out ends the round. */
+ * A 4x6 well with small pieces (1-4 cells; tetrominoes don't fit 4 rows).
+ * 2 rotations, no wall kicks. "-"/"+" move, triangle rotates, diamond
+ * drops. Topping out ends the round. */
 
 #define GT_MIN_ROW 1u /* row 0 is buttons, not part of the well */
 #define GT_MAX_ROW TILES_GRID_MAX_ROW
@@ -753,17 +737,9 @@ static void render_tile_drop(uint32_t now_ms) {
 }
 
 /* ---- Paddle --------------------------------------------------------------
- * Two players on one board: left paddle column 1 ("-" up, "+" down), right
- * paddle column 6 (square up, circle down; the rightmost pair mirrors the
- * leftmost). Paddles are 2 pads, white; the ball is blue.
- *
- * A miss scores for the other side, flashes the underglow white and
- * re-serves at once (a point is too short to go back to the menu each
- * time). First to GP_WIN_SCORE (2) wins. Scores glow on each side's
- * control buttons: 1 point = the "up" button, 2 = both; triangle and
- * diamond stay dark. A win freezes the board for GP_MATCH_END_DISPLAY_MS,
- * then returns to the menu. Handled locally (s_gp_match_over), not via
- * GM_STATE_ROUND_END, since the "flash" is on the buttons. */
+ * Two players: left paddle on "-"/"+", right on square/circle. A miss
+ * scores and re-serves; first to 2 wins. Scores glow on each side's keys;
+ * the win shows there, then the menu returns. */
 
 #define GP_MIN_ROW 1u /* row 0 is buttons, not part of the court */
 #define GP_MAX_ROW TILES_GRID_MAX_ROW
@@ -962,12 +938,8 @@ static void render_paddle(uint32_t now_ms) {
 }
 
 /* ---- Echo ----------------------------------------------------------------
- * A pattern of pads flashes, each with a haptic kick and its own color
- * from a small palette; the player repeats it by PRESSING the pads (Hall
- * depth, GE_PRESS_DEPTH; touch is ignored). Like the real game it grows
- * by one step each round. A correct press re-flashes that pad's color with
- * a haptic; a wrong pad ends the round (red flash, back to the menu).
- * Pads may repeat across steps. */
+ * Repeat a growing pattern of flashed pads by pressing them (Hall depth,
+ * not touch). A wrong pad ends the round. */
 
 #define GE_MAX_LENGTH 32u
 #define GE_NUM_COLORS 6u
@@ -1269,13 +1241,9 @@ static void gm_handle_menu_selection(void) {
 
 static bool gm_combo_held(void) {
     if (tiles_expression_control_owns_pad_grid() || tiles_op_mode_has_menu_open()) {
-        /* Don't enter while the expression menu or an op_mode sub-view (mode menu,
-         * scale menu, pattern bank, step edit, capture) owns the grid: square and
-         * circle are part of this combo and a player might be resting on them.
-         * Uses tiles_op_mode_has_menu_open(), not owns_pad_grid(), which is true
-         * for the whole time the sequencer is showing and made game mode
-         * unreachable from it. Only blocks entry, never the off toggle (a game
-         * excludes those features anyway). */
+        /* Not while the expression menu or an op_mode sub-view owns the grid (the
+         * combo uses square and circle). has_menu_open(), not owns_pad_grid(): the
+         * latter made games unreachable from the sequencer. Blocks entry only. */
         return false;
     }
     return tiles_button_is_pressed(3u) && tiles_button_is_pressed(4u) && tiles_button_is_pressed(5u) &&
@@ -1320,10 +1288,8 @@ static void gm_check_toggle_gesture(uint32_t now_ms) {
     s_gm_combo_was_held = held;
 }
 
-/* No single-button exit: in a game or the game menu, the only way out is
- * the same 4-button hold, which turns game mode off and returns to the
- * previous mode. Losing a round returns to the game menu. A shape button
- * that isn't a control in the current game does nothing. */
+/* The only way out is the same 4-key hold; losing returns to the game
+ * menu. Keys that aren't controls in a game do nothing. */
 
 void tiles_game_mode_init(void) {
     s_gm_state = GM_STATE_OFF;
