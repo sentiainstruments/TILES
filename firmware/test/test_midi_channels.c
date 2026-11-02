@@ -1,12 +1,6 @@
-/* services/midi_channels.c -- the shared pool (Song mode <-> live MPE Lower Zone),
- * its "claim the highest free first" invariant, the contiguous zone-size math, and
- * the declared-vs-honest zone size tracking.
- *
- * Convention (matches the rest of the firmware -- see midi/midi_out.h's own header):
- * every channel value here is a raw 0-15 NIBBLE, not a 1-indexed MIDI channel number
- * -- nibble 0 = MIDI channel 1. The shared pool is nibbles 1-8 (MIDI channels 2-9);
- * this test's own comments say "channel N" for a human reading the wire, but every
- * numeric literal is the nibble. */
+/* services/midi_channels.c: the shared pool (Song vs. live MPE), claiming
+ * highest-free first, the contiguous zone size, declared vs. real size.
+ * Channel values are 0-15 nibbles (nibble 0 = MIDI channel 1). */
 #include "midi_channels.h"
 
 #include <assert.h>
@@ -63,12 +57,8 @@ int main(void) {
     tiles_midi_channels_song_release(1); /* nibble 1 = channel 2 */
     assert(tiles_midi_channels_lower_zone_size() == 1 && tiles_midi_channels_song_in_use_count() == 7);
 
-    /* 4b. releasing a channel ABOVE still-held lower channels does NOT grow the
-     * zone yet -- a hole at nibble 8 (channel 9) isn't reachable as part of a
-     * contiguous run from channel 2 while nibbles 7..1 are all still held. The
-     * gap self-heals on the NEXT claim instead (test 5 below covers that), not
-     * on the release itself -- a release only ever grows the zone if it happens
-     * to be exactly the current bottom boundary. */
+    /* 4b. Freeing a channel above held lower ones doesn't grow the zone (it
+     * isn't contiguous from channel 2); the next claim heals the gap. */
     reset();
     for (int i = 0; i < 8; i++) { tiles_midi_channels_song_claim(&ch); }
     tiles_midi_channels_song_release(8); /* nibble 8 = channel 9, the very first one claimed */
@@ -94,13 +84,8 @@ int main(void) {
     assert(tiles_midi_channels_song_claim(&ch) && ch == 6);         /* refilled exactly the hole, not nibble 3 */
     assert(tiles_midi_channels_lower_zone_size() == 3);             /* nibbles 3,2,1 (channels 4,3,2) still contiguous-free */
 
-    /* 6. a genuinely free channel ABOVE a still-held lower one must not count toward
-     * the zone: hold every nibble, then free only nibble 4 (channel 5) -- 1,2,3
-     * (channels 2,3,4) stay held underneath it. Zone must read 0, not "1 free
-     * channel exists somewhere" -- proves the "stop at the first in-use slot
-     * counting from the bottom" logic, not a naive total-free-count (which would
-     * wrongly report 1 here and tell expression.c channel 5 is safe to hand a live
-     * touch when channels 2-4, right below it, are still someone else's). */
+    /* 6. A free channel above held ones doesn't count: free only nibble 4 with
+     * 1-3 held, and the zone reads 0, not 1. */
     reset();
     for (int i = 0; i < 8; i++) tiles_midi_channels_song_claim(&ch); /* holds every nibble, 8 down to 1 */
     tiles_midi_channels_song_release(4);                            /* channel 5 frees up; 1,2,3 stay held */
@@ -140,12 +125,8 @@ int main(void) {
     /* and the pool is fully reusable afterwards, same top-down order as a fresh boot */
     assert(tiles_midi_channels_song_claim(&ch) && ch == 8); /* nibble 8 = channel 9 again */
 
-    /* 9. THE cross-module invariant: a channel a live MPE note is using
-     * right now can never be handed to Song, even though nothing about a
-     * live claim touches Song's own bookkeeping directly. Claim every
-     * channel as a "live note" (mirroring what expression.c would do),
-     * then confirm Song gets nothing at all -- not a collision, a clean
-     * "pool full." */
+    /* 9. A channel a live MPE note uses is never handed to Song: with every
+     * channel claimed live, Song gets nothing (pool full, no collision). */
     reset();
     for (uint8_t nibble = 1u; nibble <= 8u; nibble++) tiles_midi_channels_note_channel_claimed(nibble);
     ch = 0xAA;
