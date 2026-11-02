@@ -17,6 +17,7 @@
 #include "light_effects.h"
 #include "pedal.h"
 #include "bend_core.h"
+#include "diagnostics/capture.h"
 #include "strike_settle.h"
 
 #include "pico/time.h"
@@ -849,8 +850,6 @@ static uint8_t aftertouch_from_depth(uint16_t depth) {
     return (uint8_t)(scaled > 127u ? 127u : scaled);
 }
 
-/* Starts pitch bend tracking for `pad`'s new note, latching whether bend
- * is enabled now. The baseline is captured later (PITCH_BEND_SETTLE_MS). */
 /* Quarter tones (note_map.h): the pad's note sits `cents` up, so its bend
  * is centred there, in the wire's 48-semitone scale. MPE only: with MPE
  * off the bend is channel 1's, every note's. */
@@ -863,6 +862,8 @@ static uint16_t bend_center_for(uint8_t pad) {
     return (uint16_t)((int32_t)PITCH_BEND_CENTER + (int32_t)(wire + 0.5f));
 }
 
+/* Starts pitch bend tracking for `pad`'s new note, latching whether bend
+ * is enabled now. The baseline is taken later (bend_core.c). */
 static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
     s->pitch_bend_active = s_pitch_bend_enabled;
     if (!s->pitch_bend_active) {
@@ -872,6 +873,7 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
     /* A fresh depth read: s->smoothed_depth is still the previous note's. */
     tiles_bend_start(&s->bend, hs.x, hs.y, hs.z, (float)tiles_hall_get_depth(pad), s->bend_center, now_ms);
     s->pitch_bend_last_sent = s->bend_center;
+    tiles_capture_bend_started(pad, s->bend_center);
 }
 
 /* The most recently struck held pad other than `exclude_pad` (0 if none).
@@ -1053,6 +1055,11 @@ void tiles_expression_scan(void) {
         if (depth_now < (float)TILES_HALL_KEY_UP_DEPTH) {
             s->last_key_up_ms = now_ms;
         }
+        if (tiles_capture_running() && pad == tiles_capture_pad()) {
+            tiles_hall_sample_t cs = tiles_hall_get_sample(pad);
+            tiles_capture_pass_begin(pad, now_ms, cs.x, cs.y, cs.z, cs.valid, raw_touched, (uint16_t)depth_now,
+                                     (uint8_t)s->state);
+        }
 
         if (s->state == PAD_STATE_STOLEN) {
             /* Stolen pad: silent until a real release, then IDLE. */
@@ -1230,18 +1237,22 @@ void tiles_expression_scan(void) {
             tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
             const tiles_bend_config_t bend_cfg = {s_pitch_bend_max_cosine_deviation,
                                                   (float)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES};
-            uint16_t bend;
-            if (hs.valid &&
-                tiles_bend_step(&s->bend, &bend_cfg, hs.x, hs.y, hs.z, s->smoothed_depth, now_ms, &bend) &&
-                bend != s->pitch_bend_last_sent) {
-                /* This pad's current bend, for resyncing channel 1 (MPE off). */
-                s->pitch_bend_last_sent = bend;
-                if (s_mpe_enabled || s_non_mpe_owner_pad == pad) {
-                    tiles_midi_send_pitch_bend(s->midi_channel, bend);
+            uint16_t bend = 0u;
+            if (hs.valid) {
+                bool produced =
+                    tiles_bend_step(&s->bend, &bend_cfg, hs.x, hs.y, hs.z, s->smoothed_depth, now_ms, &bend);
+                tiles_capture_bend_stepped(pad, s->smoothed_depth, produced, bend);
+                if (produced && bend != s->pitch_bend_last_sent) {
+                    /* This pad's current bend, for resyncing channel 1 (MPE off). */
+                    s->pitch_bend_last_sent = bend;
+                    if (s_mpe_enabled || s_non_mpe_owner_pad == pad) {
+                        tiles_midi_send_pitch_bend(s->midi_channel, bend);
+                    }
                 }
             }
         }
     }
+    tiles_capture_pass_end();
     if (s_harmonics_enabled) {
         scan_melodic_harmonics(now_ms);
     }

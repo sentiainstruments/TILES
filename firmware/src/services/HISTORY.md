@@ -10424,3 +10424,19 @@ change. Search it by file or feature name.
   column). Colour 0.8/0.55/0.25 (a dark ochre); piles 0.35 -> 0.25, the
   surface grain 0.75 -> 0.55, the floor 0.06 -> 0.05; falling grains in the
   same ochre, brighter. The playhead stays white at 0.12.
+
+- **Alpha 6.6 (2026-11-02): pitch bend moves to `bend_core`, and a sensor
+  capture for tuning it.** The owner: pressing straight down still bends,
+  so polish pitch bend before adding MPE slide (CC74, pinned: forward/back
+  tilt, springing back to centre). Step one is tooling, no behaviour change:
+  - `bend_core.{h,c}`: the bend pipeline out of `expression.c`, unchanged
+    (the old inline code and the module gave identical output on 12 million
+    randomized samples), with host tests.
+  - `diagnostics/capture`: `CAPTURE START <pad>` records one pad's raw X/Y/Z,
+    depth and what bend_core was fed, per pass, ~8 s in RAM;
+    `tiles_control.py capture` saves it as CSV; `test/bend_replay.c` replays
+    it, checks it matches the device, and reports each note's bend.
+  - Observation while extracting: once a press pushes the delta past the
+    deadzone, a "run" starts and baseline recentring stops, so a
+    pressure-driven X shift then reads as bend for as long as the press is
+    held. Fixes wait for real captures.

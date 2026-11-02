@@ -50,6 +50,12 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_strike_settle.c sr
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_bend_core.c src/services/bend_core.c -lm -o /tmp/sentia_tiles_test_bend_core
 /tmp/sentia_tiles_test_bend_core
 
+# The capture replay tool (test/captures/README.md), and every capture saved there.
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/bend_replay.c src/services/bend_core.c -lm -o /tmp/sentia_tiles_bend_replay
+for capture in test/captures/*.csv; do
+    if [ -e "$capture" ]; then /tmp/sentia_tiles_bend_replay "$capture" > /dev/null; fi
+done
+
 # Sequencer autosave blob: round trip, empty patterns, truncation, damage.
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_seq_pattern.c src/services/seq_pattern.c -o /tmp/sentia_tiles_test_seq_pattern
 /tmp/sentia_tiles_test_seq_pattern

@@ -2,6 +2,7 @@
 
 #include "board/unit_id.h"
 #include "content.h"
+#include "diagnostics/capture.h"
 #include "diagnostics/loop_stats.h"
 #include "drum_seq.h"
 #include "hall.h"
@@ -63,7 +64,14 @@ static size_t s_out_len;  /* bytes queued */
 static size_t s_out_sent; /* of those, bytes already handed to TinyUSB */
 
 /* The listing being streamed, and the next row/slot to produce. */
-typedef enum { LISTING_NONE = 0, LISTING_SETTINGS, LISTING_SCHEMA, LISTING_SCALES, LISTING_CONTENT } listing_t;
+typedef enum {
+    LISTING_NONE = 0,
+    LISTING_SETTINGS,
+    LISTING_SCHEMA,
+    LISTING_SCALES,
+    LISTING_CONTENT,
+    LISTING_CAPTURE,
+} listing_t;
 static listing_t s_listing;
 static size_t s_listing_next;
 
@@ -224,6 +232,18 @@ static bool listing_row(char *text, size_t cap) {
         } else {
             snprintf(text, cap, "type%u %u bytes=%u", (unsigned)r.type, (unsigned)r.slot, (unsigned)r.bytes);
         }
+        return true;
+    }
+    case LISTING_CAPTURE: {
+        /* t,x,y,z,depth,smoothed_depth,bend,flags,state; %.9g round-trips a
+         * float, so a replay gets bend_core's exact input. */
+        const tiles_capture_record_t *r = tiles_capture_get((uint16_t)s_listing_next++);
+        if (r == NULL) {
+            return false;
+        }
+        snprintf(text, cap, "%lu,%d,%d,%d,%u,%.9g,%u,%u,%u", (unsigned long)r->t_ms, r->x, r->y, r->z,
+                 (unsigned)r->depth, (double)r->smoothed_depth, (unsigned)r->bend, (unsigned)r->flags,
+                 (unsigned)r->state);
         return true;
     }
     case LISTING_NONE:
@@ -423,6 +443,34 @@ static void handle_line(char *line) {
      * SCALE PUT-shaped line each; SCALE GET/PUT/DELETE edit one slot. */
     if (strcmp(cmd, "SCALES") == 0) {
         start_listing(LISTING_SCALES);
+        return;
+    }
+    /* Sensor capture (diagnostics/capture.h): START <pad> records one pad,
+     * STOP ends it, STATUS reports, READ streams the records. */
+    if (strcmp(cmd, "CAPTURE") == 0) {
+        char *what = strtok(NULL, " ");
+        char *arg = strtok(NULL, " ");
+        if (what != NULL && strcmp(what, "START") == 0 && arg != NULL) {
+            int pad = atoi(arg);
+            if (pad < 1 || pad > 24) {
+                reply_err("pad-1-24");
+                return;
+            }
+            tiles_capture_start((uint8_t)pad);
+            reply_ok();
+        } else if (what != NULL && strcmp(what, "STOP") == 0) {
+            tiles_capture_stop();
+            reply_ok();
+        } else if (what != NULL && strcmp(what, "STATUS") == 0) {
+            snprintf(text, sizeof(text), "pad=%u running=%u count=%u max=%u", (unsigned)tiles_capture_pad(),
+                     tiles_capture_running() ? 1u : 0u, (unsigned)tiles_capture_count(), (unsigned)TILES_CAPTURE_MAX);
+            reply(text);
+            reply_ok();
+        } else if (what != NULL && strcmp(what, "READ") == 0) {
+            start_listing(LISTING_CAPTURE);
+        } else {
+            reply_err("capture-start|stop|status|read");
+        }
         return;
     }
     if (strcmp(cmd, "SCALE") == 0) {

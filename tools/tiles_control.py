@@ -40,6 +40,7 @@ Usage:
     python3 tools/tiles_control.py scale delete 1
     python3 tools/tiles_control.py content list          # everything in the content store
     python3 tools/tiles_control.py content clear         # wipe it (all custom scales)
+    python3 tools/tiles_control.py capture 7 6 press.csv # record pad 7's raw Hall data for 6 s
 
 Changes apply immediately and are saved to flash automatically a couple of
 seconds after the last one (only while no pad is being touched); `save` just
@@ -49,6 +50,7 @@ changes are saved before the device answers OK.
 
 import os
 import sys
+import time
 
 try:
     import usb.core
@@ -179,6 +181,27 @@ class Session:
                 return lines
 
 
+CAPTURE_COLUMNS = "t_ms,x,y,z,depth,smoothed_depth,bend,flags,state"
+
+
+def capture(session, pad, seconds, path):
+    """Records one pad's raw Hall readings (and what the pitch bend code got) for `seconds`, then
+    saves them as CSV for firmware/test/bend_replay.c. Play the pad meanwhile; the device keeps
+    about 8 s."""
+    for line in session.command(f"CAPTURE START {pad}"):
+        if line != "OK":
+            sys.exit(f"capture: {line}")
+    print(f"Recording pad {pad} for {seconds:g} s: play it now.")
+    time.sleep(seconds)
+    session.command("CAPTURE STOP")
+    status = session.command("CAPTURE STATUS", multi_line=True)
+    rows = session.command("CAPTURE READ", multi_line=True)
+    with open(path, "w") as f:
+        f.write(CAPTURE_COLUMNS + "\n")
+        f.writelines(row + "\n" for row in rows)
+    print(f"{len(rows)} samples saved to {path} ({status[0] if status else ''})")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -212,6 +235,9 @@ def main():
         multi = sys.argv[2].lower() == "get"
     elif command == "content" and argc == 3 and sys.argv[2].lower() in ("list", "clear"):
         request, multi = f"CONTENT {sys.argv[2].upper()}", sys.argv[2].lower() == "list"
+    elif command == "capture" and argc == 5:
+        capture(session, int(sys.argv[2]), float(sys.argv[3]), sys.argv[4])
+        return
     else:
         print(__doc__)
         sys.exit(1)

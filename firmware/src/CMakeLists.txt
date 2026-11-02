@@ -3,6 +3,7 @@ add_executable(sentia_tiles_firmware
     board/board_init.c
     board/pad_config.c
     diagnostics/i2c_scan.c
+    diagnostics/capture.c
     diagnostics/calibration.c
     diagnostics/loop_stats.c
     drivers/sk6805.c

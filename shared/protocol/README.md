@@ -58,6 +58,12 @@ TEST LEDS <0-100>\n       bench only: every LED white at that % (current measure
 TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
 TEST MODE <name>\n        bench only: switch mode (melodic duet sequencer bass song ableton drums volca prism bounce ripples sand orbits cradle)
 TEST OFF\n                bench only: back to normal
+CAPTURE START <pad>\n     record pad 1-24's raw Hall readings, one per pass (~8 s max): OK
+CAPTURE STOP\n            stop recording: OK
+CAPTURE STATUS\n          pad=<p> running=<0|1> count=<n> max=<m>, then OK
+CAPTURE READ\n            every record, one line each, then OK:
+                          t_ms,x,y,z,depth,smoothed_depth,bend,flags,state
+                          (firmware/test/captures/README.md)
 ```
 
 `SET`/`RESET` apply **immediately** and are saved to flash **automatically** ~2 s
