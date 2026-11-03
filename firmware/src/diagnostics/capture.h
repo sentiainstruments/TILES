@@ -20,6 +20,7 @@
 #define TILES_CAPTURE_STROKE_BEGIN 0x40u /* a new stroke began (touch, or retrigger) */
 #define TILES_CAPTURE_NOTE_ON 0x80u      /* the note fired (stroke learned or refused); `velocity` */
 #define TILES_CAPTURE_PRESSURE 0x100u    /* a held note's pass: `smoothed_depth`, `aftertouch` */
+#define TILES_CAPTURE_NOTE_OFF 0x200u    /* the note ended; `velocity` = release velocity (0: no lift) */
 
 typedef struct {
     uint32_t t_ms;
@@ -31,6 +32,8 @@ typedef struct {
     uint8_t state; /* expression's pad state at the start of the pass */
     uint8_t velocity;
     uint8_t aftertouch;
+    uint16_t strike_ms;  /* NOTE_ON: touch to the strike threshold */
+    uint16_t peak_depth; /* NOTE_ON: deepest point of the strike */
 } tiles_capture_record_t;
 
 /* Clears and starts recording pad 1-24. START stops by itself when full;
@@ -53,7 +56,8 @@ void tiles_capture_pass_begin(uint8_t pad, uint32_t now_ms, int16_t x, int16_t y
                               bool touched, uint16_t depth, uint8_t state);
 void tiles_capture_stroke_begun(uint8_t pad);
 void tiles_capture_stroke_sampled(uint8_t pad);
-void tiles_capture_note_on(uint8_t pad, uint8_t velocity);
+void tiles_capture_note_on(uint8_t pad, uint8_t velocity, uint32_t strike_ms, float peak_depth);
+void tiles_capture_note_off(uint8_t pad, uint8_t release_velocity);
 void tiles_capture_bend_started(uint8_t pad, uint16_t center);
 void tiles_capture_pressure(uint8_t pad, float smoothed_depth, uint8_t aftertouch);
 void tiles_capture_bend_stepped(uint8_t pad, bool produced, uint16_t bend);

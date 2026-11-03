@@ -19,6 +19,7 @@
 #include "settings.h"
 #include "settings_persist.h"
 #include "touch.h"
+#include "tune.h"
 
 #include "tusb.h"
 
@@ -76,6 +77,7 @@ typedef enum {
     LISTING_CAPTURE,
     LISTING_HALL,
     LISTING_PATHS,
+    LISTING_TUNE,
 } listing_t;
 static listing_t s_listing;
 static size_t s_listing_next;
@@ -262,29 +264,35 @@ static bool listing_row(char *text, size_t cap) {
             snprintf(text, cap, "seq=%lu", (unsigned long)s_listing_next);
             return true;
         }
-        /* t,x,y,z,depth,smoothed_depth,bend,flags,state,velocity,aftertouch;
-         * %.9g round-trips a float, so a replay gets bend_core's exact input.
-         * Live rows round it to fit the USB pipe. */
+        /* t,x,y,z,depth,smoothed_depth,bend,flags,state,velocity,aftertouch,
+         * strike_ms,peak_depth; %.9g round-trips a float, so a replay gets
+         * bend_core's exact input. Live rows round it to fit the USB pipe. */
         const tiles_capture_record_t *r =
             s_listing_next < s_listing_end ? tiles_capture_get((uint32_t)s_listing_next++) : NULL;
         if (r == NULL) {
             return false;
         }
-        snprintf(text, cap, s_listing_live ? "%lu,%d,%d,%d,%u,%.1f,%u,%u,%u,%u,%u" : "%lu,%d,%d,%d,%u,%.9g,%u,%u,%u,%u,%u",
+        snprintf(text, cap,
+                 s_listing_live ? "%lu,%d,%d,%d,%u,%.1f,%u,%u,%u,%u,%u,%u,%u" : "%lu,%d,%d,%d,%u,%.9g,%u,%u,%u,%u,%u,%u,%u",
                  (unsigned long)r->t_ms, r->x, r->y, r->z, (unsigned)r->depth, (double)r->smoothed_depth,
                  (unsigned)r->bend, (unsigned)r->flags, (unsigned)r->state, (unsigned)r->velocity,
-                 (unsigned)r->aftertouch);
+                 (unsigned)r->aftertouch, (unsigned)r->strike_ms, (unsigned)r->peak_depth);
         return true;
     }
     case LISTING_HALL: {
-        /* pad,x,y,z,depth,valid,touched: every pad now. */
+        /* pad,x,y,z,depth,valid,touched,rest_z,rest_confirmed,sensor_ok: every
+         * pad now. */
         if (s_listing_next >= TILES_NUM_PADS) {
             return false;
         }
         uint8_t pad = (uint8_t)(++s_listing_next);
         tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
-        snprintf(text, cap, "%u,%d,%d,%d,%u,%u,%u", (unsigned)pad, hs.x, hs.y, hs.z,
-                 (unsigned)tiles_hall_get_depth(pad), hs.valid ? 1u : 0u, tiles_touch_is_touched(pad) ? 1u : 0u);
+        int16_t rest_z = 0;
+        bool rest_ok = false;
+        bool sensor_ok = tiles_hall_get_rest(pad, &rest_z, &rest_ok);
+        snprintf(text, cap, "%u,%d,%d,%d,%u,%u,%u,%d,%u,%u", (unsigned)pad, hs.x, hs.y, hs.z,
+                 (unsigned)tiles_hall_get_depth(pad), hs.valid ? 1u : 0u, tiles_touch_is_touched(pad) ? 1u : 0u,
+                 rest_z, rest_ok ? 1u : 0u, sensor_ok ? 1u : 0u);
         return true;
     }
     case LISTING_PATHS: {
@@ -300,6 +308,8 @@ static bool listing_row(char *text, size_t cap) {
                  (unsigned)strokes);
         return true;
     }
+    case LISTING_TUNE:
+        return tiles_tune_describe((uint16_t)s_listing_next++, text, cap);
     case LISTING_NONE:
     default:
         return false;
@@ -565,6 +575,43 @@ static void handle_line(char *line) {
         start_listing(LISTING_HALL);
         return;
     }
+    /* Live tuning (services/tune.h), lost at power-off: TUNE lists every
+     * key, TUNE SET <key> <value>, TUNE RESET [<key>]. */
+    if (strcmp(cmd, "TUNE") == 0) {
+        char *what = strtok(NULL, " ");
+        char *key = strtok(NULL, " ");
+        if (what == NULL || strcmp(what, "LIST") == 0) {
+            start_listing(LISTING_TUNE);
+        } else if (strcmp(what, "SET") == 0) {
+            switch (tiles_tune_set(key, strtok(NULL, " "))) {
+            case TILES_TUNE_OK:
+                reply_ok();
+                break;
+            case TILES_TUNE_UNKNOWN_KEY:
+                reply_err("unknown-key");
+                break;
+            case TILES_TUNE_OUT_OF_RANGE:
+                reply_err("out-of-range");
+                break;
+            case TILES_TUNE_CONFLICT:
+                reply_err("conflict");
+                break;
+            case TILES_TUNE_BAD_VALUE:
+            default:
+                reply_err("bad-value");
+                break;
+            }
+        } else if (strcmp(what, "RESET") == 0) {
+            if (tiles_tune_reset(key)) {
+                reply_ok();
+            } else {
+                reply_err("unknown-key");
+            }
+        } else {
+            reply_err("tune-list|set|reset");
+        }
+        return;
+    }
     /* Learned press paths (services/bend_core.h): PATHS lists them, RESET
      * forgets them all. */
     if (strcmp(cmd, "BEND") == 0) {
@@ -674,6 +721,8 @@ static void handle_line(char *line) {
         reply(text);
         tiles_touch_info_t touch = tiles_touch_get_info();
         snprintf(text, sizeof(text), "touch.recoveries=%lu", (unsigned long)touch.recoveries);
+        reply(text);
+        snprintf(text, sizeof(text), "tune.changed=%u", (unsigned)tiles_tune_changed());
         reply(text);
         snprintf(text, sizeof(text), "boot.ms=%lu", (unsigned long)loop.boot_ms);
         reply(text);

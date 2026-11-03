@@ -15,7 +15,7 @@
 
 #include "bend_core.h"
 
-static const tiles_bend_config_t CFG = {0.065f, 12.0f};
+static const tiles_bend_config_t CFG = {0.065f, 12.0f, NULL};
 #define RANGE 2047 /* 12 of the receiver's 48 semitones: 8191 / 4 */
 
 /* Runs `ms` of 2 ms samples at a fixed reading; returns the last bend (or
@@ -124,7 +124,7 @@ static bool stroke(tiles_press_path_t *p, float z_end, int samples, float wobble
         tiles_press_path_stroke_sample(p, (int16_t)(path_x(z) + noise(40.0f) + rock),
                                        (int16_t)(path_y(z) + noise(40.0f)), (int16_t)(z + noise(20.0f)));
     }
-    return tiles_press_path_stroke_end(p);
+    return tiles_press_path_stroke_end(p, NULL);
 }
 
 /* Holds a note on the path at depth `z`, with `tilt` (sin of the lean)
@@ -158,7 +158,7 @@ static void test_path(void) {
         float z = 1000.0f + 150.0f * (float)i;
         tiles_press_path_stroke_sample(&tilted, (int16_t)(path_x(z) + 0.3f * (z - 1000.0f)), path_y(z), (int16_t)z);
     }
-    assert(tiles_press_path_stroke_end(&tilted));
+    assert(tiles_press_path_stroke_end(&tilted, NULL));
     assert(fabsf(tilted.bx - PATH_BX) < 0.03f);
 
     /* 9. straight presses on the misaligned magnet. A slow swell to 2.5x the
@@ -223,8 +223,8 @@ static void test_path(void) {
     tiles_press_path_reset(&fresh);
     t = 0u;
     tiles_bend_start(&b, TILES_BEND_MODE_PATH, &fresh, 120, -60, 1000, 300.0f, TILES_BEND_CENTER, t);
-    assert(!b.path_learned);
     hold(&b, 120, -60, 1000, 300.0f, &t, 200u);
+    assert(!b.path_learned);
     for (int z = 1000; z < 2500; z += 10) {
         assert(hold(&b, (int16_t)(z * 12 / 100), (int16_t)(-z * 6 / 100), (int16_t)z, (float)(z - 1000), &t, 2u) ==
                TILES_BEND_CENTER);
@@ -252,7 +252,39 @@ static void test_wiggle_scale(void) {
     }
 }
 
+/* 13. live tuning reaches the bend: a wider deadzone swallows a tilt the
+ * default bends on, and vibrato depth 0 turns the vibrato off */
+static void test_tuning(void) {
+    tiles_bend_tuning_t wide = TILES_BEND_TUNING_DEFAULT;
+    wide.deadzone = 0.06f;
+    const tiles_bend_config_t cfg = {0.1f, 12.0f, &wide};
+    tiles_bend_t b;
+    uint16_t out = 0u;
+    uint32_t t = 0u;
+    tiles_bend_start(&b, TILES_BEND_MODE_PATH, NULL, 0, 0, 1000, 300.0f, TILES_BEND_CENTER, t);
+    for (; t < 700u; t += 2u) {
+        int16_t x = t < 300u ? 0 : 45;
+        tiles_bend_step(&b, &cfg, x, 0, 1000, 300.0f, t, &out);
+    }
+    assert(out == TILES_BEND_CENTER);
+    assert(hold(&b, 45, 0, 1000, 300.0f, &t, 10u) != TILES_BEND_CENTER); /* default deadzone */
+
+    tiles_bend_tuning_t still = TILES_BEND_TUNING_DEFAULT;
+    still.vibrato_depth = 0.0f;
+    const tiles_bend_config_t quiet = {0.065f, 12.0f, &still};
+    t = 0u;
+    tiles_bend_start(&b, TILES_BEND_MODE_PATH, NULL, 0, 0, 4000, 300.0f, TILES_BEND_CENTER, t);
+    for (int i = 0; i < 1000; i++, t += 2u) {
+        int16_t x = (int16_t)lrintf(60.0f * sinf(2.0f * 3.14159f * 6.0f * (float)t / 1000.0f));
+        if (tiles_bend_step(&b, &quiet, x, 0, 4000, 300.0f, t, &out)) {
+            assert(out == TILES_BEND_CENTER); /* within the deadzone, no vibrato added */
+        }
+    }
+    assert(b.wiggle_energy > 8.0f);
+}
+
 int main(void) {
+    test_tuning();
     for (int mode = 0; mode < TILES_BEND_MODE_COUNT; mode++) {
         s_mode = (tiles_bend_mode_t)mode;
         test_basics();

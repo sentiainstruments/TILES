@@ -39,10 +39,17 @@ learner made of the strokes. Pass another sensitivity as a second argument,
 and `--trace trace.csv` for every sample's result per mode.
 
 A first line `# bend mode=... sensitivity=... bx=... by=... strokes=...` is
-the device's setup when recording started (Alpha 6.7). Columns:
-`t_ms,x,y,z,depth,smoothed_depth,bend,flags,state,velocity,aftertouch`
-(Alpha 6.6 files stop at `state`). Flags: 1 valid sample, 2 touched, 4 bend
-started (`bend` = its centre), 8 bend stepped, 16 bend produced (`bend` =
-the value sent), 32 a stroke sample for the press path, 64 a stroke began,
-128 the note fired (`velocity`), 256 a held note's pass (`smoothed_depth`,
-`aftertouch`).
+the device's setup when recording started (Alpha 6.7), and `# tune
+key=value ...` the live tuning that differed from the defaults (Alpha 6.8);
+the replay starts from both. Columns:
+`t_ms,x,y,z,depth,smoothed_depth,bend,flags,state,velocity,aftertouch,strike_ms,peak_depth`
+(Alpha 6.6 files stop at `state`, 6.7 at `aftertouch`). Flags: 1 valid
+sample, 2 touched, 4 bend started (`bend` = its centre), 8 bend stepped, 16
+bend produced (`bend` = the value sent), 32 a stroke sample for the press
+path, 64 a stroke began, 128 the note fired (`velocity`, `strike_ms` touch
+to the strike depth, `peak_depth`), 256 a held note's pass
+(`smoothed_depth`, `aftertouch`), 512 the note ended (`velocity` = release
+velocity).
+
+The studio's guided calibration saves one capture per step here,
+`unit<N>-pad<P>-<step>-<time>.csv` (strikes, straight, lean, vibrato).

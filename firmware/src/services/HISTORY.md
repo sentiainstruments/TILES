@@ -10483,3 +10483,31 @@ change. Search it by file or feature name.
     the report). A held tilt under extra pressure still moves ~15% in
     `path`: the learned slope's error, which TMAG5273 averaging (rank 4)
     would shrink.
+- **Alpha 6.8 (2026-11-03): live tuning, and the studio calibrates.** The
+  owner: the studio "should help understand and calibrate and give us info
+  you can access and i can access as well"; first, "we need to be able to
+  tune behavior and read all important parameters". Of ~50 feel constants
+  only 3 could change without a rebuild.
+  - `tune.{h,c}`: 36 constants in one live table (strike and velocity,
+    pressure and release, key and touch timing, bend, vibrato, press path
+    learner), `TUNE` / `TUNE SET` / `TUNE RESET` over USB, never saved. The
+    old names (`TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA`,
+    `TILES_HALL_KEY_UP_DEPTH`, `TILES_STRIKE_FOLLOWTHROUGH_MS`, ...) read it,
+    so the 8 modes that share the strike threshold and velocity curve follow
+    a change together. A set that breaks an order the code needs (key-up at
+    or above the strike depth, fast at or above slow) is refused.
+  - `bend_core` takes its constants through `tiles_bend_config_t.tuning`
+    (NULL = defaults), so the host replay runs with the board's tuning.
+    LEGACY still matches Alpha 6.6 bit for bit (16 million random steps).
+  - `bend_core.c` compiles with `-ffp-contract=off` on the board and the
+    computer: GCC (board) and clang (arm64 Mac) fuse multiply-adds
+    differently, which could break the replay's exact match by one ulp.
+  - Capture records gain strike timing and peak at note-on, and a note-off
+    with release velocity; `HALL` adds each pad's rest baseline, whether it
+    was confirmed, and whether the sensor answers; INFO adds `tune.changed`.
+  - The studio: a guided calibration (hands off, strikes, straight presses,
+    leans, vibrato) that records a capture per step and suggests changes
+    with reasons; a tuning tab; a pad table; board health; one state for the
+    page, `/api/state` and saved reports (`firmware/test/calibration/`).
+    On the sim (magnet 0.8 mm off-axis), straight presses bent 12.87
+    semitones in `legacy`, 0.14 in `cosine`, 0.15 in `path`.

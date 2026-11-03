@@ -30,18 +30,18 @@
     font: 300 var(--text)/1.5 Sora, sans-serif;
     font-variant-numeric: tabular-nums;
   }
-  .page { max-width: 1320px; margin: 0 auto; padding: 32px 24px 64px; }
+  .page { max-width: 1400px; margin: 0 auto; padding: 32px 24px 64px; }
   h1 { font: 600 var(--title)/1.15 "Exo 2", sans-serif; margin: 0; letter-spacing: .01em; }
-  .lede { font-size: var(--lede); color: var(--ink-2); margin: 6px 0 0; max-width: 62ch; }
-  .label, h2, dt, label span, .seg button, button, select {
+  .lede { font-size: var(--lede); color: var(--ink-2); margin: 6px 0 0; max-width: 64ch; }
+  .label, h2, h3, dt, label span, button, select, th {
     font: 400 var(--label)/1.4 Sora, sans-serif; text-transform: uppercase; letter-spacing: .12em;
   }
   h2 { margin: 0 0 10px; color: var(--ink-2); }
+  h3 { margin: 18px 0 8px; color: var(--ink-2); }
   header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 32px; }
   .status { font-size: var(--small); color: var(--ink-2); min-height: 1.5em; }
   .status b { font-weight: 400; color: var(--ink-light); }
   .notice { font-size: var(--small); color: var(--periwinkle); min-height: 1.5em; margin-top: 4px; }
-
   .controls {
     display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px;
     border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
@@ -54,55 +54,79 @@
     background: transparent; color: var(--ink-light); border: 1px solid var(--line);
     border-radius: 999px; padding: 8px 14px; cursor: pointer;
   }
-  select { padding-right: 10px; }
   select option { background: var(--ink); }
-  input[type=number] {
-    font: 300 var(--small)/1.2 Sora, sans-serif; width: 6.5em; border-radius: 8px; padding: 6px 8px;
-  }
+  input[type=number] { font: 300 var(--small)/1.2 Sora, sans-serif; width: 6.5em; border-radius: 8px; padding: 5px 8px; }
   button:hover, select:hover { border-color: var(--ink-2); }
-  button[aria-pressed=true] { background: var(--ink-light); color: var(--ink); }
+  button[aria-pressed=true], button.primary { background: var(--ink-light); color: var(--ink); }
   button:disabled, select:disabled, input:disabled { opacity: .35; cursor: default; }
   label { display: inline-flex; align-items: center; gap: 8px; }
   label span { color: var(--ink-2); }
   .spacer { flex: 1; }
-  .controls .row { display: flex; gap: 10px; }
-
+  .row { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+  .hint { font-size: var(--small); color: var(--ink-2); }
   .panel { border-bottom: 1px solid var(--line); padding: 16px 0 12px; display: none; }
   .panel.on { display: block; }
-  .panel .row { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; }
   .sliders { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px 28px; margin-top: 14px; }
   .sliders label { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
-  .sliders label span { grid-column: 1; }
-  .sliders label output { grid-column: 2; font-size: var(--small); }
+  .sliders label output { font-size: var(--small); }
   .sliders input[type=range] { grid-column: 1 / 3; width: 100%; accent-color: var(--periwinkle); }
-  .hint { font-size: var(--small); color: var(--ink-2); }
 
-  main { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 0 40px; }
+  main { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 0 40px; }
   section { border-bottom: 1px solid var(--line); padding: 18px 0 16px; }
   .duo { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 24px; }
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
   canvas { display: block; width: 100%; }
   #key { height: 250px; touch-action: none; }
   #key.playable { cursor: grab; }
   #pressure { height: 250px; }
-  #meters { height: 150px; }
+  #meters { height: 200px; }
   #timeline { height: 240px; }
-  #path { height: 300px; }
+  #path { height: 280px; }
   .axis { display: inline-flex; margin-left: 10px; vertical-align: middle; }
   .axis button { padding: 3px 10px; }
-  h2 .axis { text-transform: none; }
-  #pads { width: 100%; height: auto; display: block; }
-  #pads rect { cursor: pointer; }
-  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 18px; align-items: baseline; }
+
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); margin-top: 18px; }
+  .tabs button { border: 0; border-radius: 0; padding: 10px 14px; border-bottom: 2px solid transparent; }
+  .tabs button[aria-selected=true] { border-bottom-color: var(--periwinkle); color: var(--ink-light); background: none; }
+  .tab { display: none; padding: 14px 0; }
+  .tab.on { display: block; }
+
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 7px 18px; align-items: baseline; }
   dt { color: var(--ink-2); }
   dd { margin: 0; font-size: var(--small); }
   .big { font: 300 var(--title)/1 Sora, sans-serif; }
-  @media (max-width: 960px) {
-    main { grid-template-columns: minmax(0, 1fr); }
-  }
-  @media (max-width: 560px) {
-    .page { padding: 24px 16px 48px; }
-    .duo { grid-template-columns: minmax(0, 1fr) 110px; gap: 12px; }
-  }
+  .accent { color: var(--periwinkle); }
+  .muted { color: var(--ink-2); }
+  table { width: 100%; border-collapse: collapse; font-size: var(--small); }
+  th { text-align: left; color: var(--ink-2); font-weight: 400; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
+  td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr.focus td { color: var(--periwinkle); }
+  tr.click { cursor: pointer; }
+
+  .steps { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .steps button { padding: 5px 12px; }
+  .steps button.done::before { content: "✓ "; color: var(--periwinkle); }
+  .steps button.current { border-color: var(--periwinkle); }
+  .bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin: 12px 0; }
+  .bar i { display: block; height: 100%; background: var(--periwinkle); width: 0; }
+  .card { padding: 4px 0 8px; }
+  .card p { margin: 6px 0 12px; }
+  ul.flags { margin: 8px 0; padding-left: 18px; font-size: var(--small); color: var(--periwinkle); }
+
+  .tune-group { margin-bottom: 8px; }
+  .tune-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 5.6em auto; gap: 4px 10px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--line); }
+  .tune-row .name { font-size: var(--small); }
+  .tune-row .name small { display: block; color: var(--ink-2); font-size: var(--label); letter-spacing: .04em; }
+  .tune-row.changed .name { color: var(--periwinkle); }
+  .tune-row input[type=range] { width: 100%; accent-color: var(--periwinkle); }
+  .tune-row button { padding: 3px 9px; }
+  textarea { width: 100%; min-height: 120px; background: transparent; color: var(--ink-light); border: 1px solid var(--line); border-radius: 8px; font: 300 var(--small)/1.5 Sora, sans-serif; padding: 8px; }
+  #pads { width: 100%; height: auto; display: block; margin-bottom: 12px; }
+  #pads rect { cursor: pointer; }
+  code { font-family: Sora, sans-serif; color: var(--periwinkle); }
+  .unit { text-transform: none; letter-spacing: .02em; }
+
+  @media (max-width: 1080px) { main { grid-template-columns: minmax(0, 1fr); } }
 </style>
 </head>
 <body>
@@ -110,7 +134,7 @@
   <header>
     <div>
       <h1>Calibration studio</h1>
-      <p class="lede">What one key's Hall sensor reads, and what velocity, pressure and pitch bend make of it, in all three bend modes at once.</p>
+      <p class="lede">What each key's Hall sensor reads, what velocity, pressure and pitch bend make of it, and the numbers to change.</p>
     </div>
     <div>
       <div class="status" id="status">Starting…</div>
@@ -125,12 +149,12 @@
       <button data-source="file">Capture file</button>
     </div>
     <label><span>Pad</span><select id="pad"></select></label>
-    <label title="How the board itself bends (expression.pitch_bend_mode)"><span>Board plays</span>
-      <select id="mode"><option>legacy</option><option>cosine</option><option>path</option></select></label>
-    <label title="Cosine delta for full bend (expression.pitch_bend_sensitivity)"><span>Full bend at</span>
-      <input id="sensitivity" type="number" step="0.005" min="0.03" max="0.2"></label>
     <div class="spacer"></div>
-    <div class="row"><button id="reset">Forget learned paths</button><button id="save">Save last 8 s</button></div>
+    <div class="row">
+      <button id="reset-paths">Forget learned paths</button>
+      <button id="save">Save last 8 s</button>
+      <button id="report">Save report</button>
+    </div>
   </div>
 
   <div class="panel" id="sim-panel">
@@ -150,7 +174,7 @@
       <label><span>Capture</span><select id="file"></select></label>
       <button id="play">Pause</button>
       <label><span>Speed</span><select id="speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option></select></label>
-      <span class="hint">From firmware/test/captures/. Loops.</span>
+      <span class="hint">From firmware/test/captures/, looped. Tuning changes replay it as a what-if.</span>
     </div>
   </div>
 
@@ -158,14 +182,8 @@
     <div>
       <section>
         <div class="duo">
-          <div>
-            <h2>The key, as the sensor reads it</h2>
-            <canvas id="key"></canvas>
-          </div>
-          <div>
-            <h2>Pressure</h2>
-            <canvas id="pressure"></canvas>
-          </div>
+          <div><h2>The key, as the sensor reads it</h2><canvas id="key"></canvas></div>
+          <div><h2>Pressure</h2><canvas id="pressure"></canvas></div>
         </div>
       </section>
       <section>
@@ -176,94 +194,85 @@
         <h2>Last 5 seconds</h2>
         <canvas id="timeline"></canvas>
       </section>
+      <section>
+        <div class="pair">
+          <div>
+            <h2>Press path <span class="axis seg"><button data-axis="x" aria-pressed="true">X</button><button data-axis="y">Y</button></span></h2>
+            <canvas id="path"></canvas>
+          </div>
+          <div><h2>Last note</h2><div id="last-note" class="hint">Play a note.</div></div>
+        </div>
+      </section>
     </div>
+
     <div>
-      <section>
-        <h2>Press path <span class="axis seg"><button data-axis="x" aria-pressed="true">X</button><button data-axis="y">Y</button></span></h2>
-        <canvas id="path"></canvas>
-      </section>
-      <section>
-        <h2>Pads</h2>
+      <div class="tabs" role="tablist">
+        <button role="tab" data-tab="calibrate" aria-selected="true">Calibrate</button>
+        <button role="tab" data-tab="tune">Tune</button>
+        <button role="tab" data-tab="pads-tab">Pads</button>
+        <button role="tab" data-tab="board">Board</button>
+      </div>
+      <div class="tab on" id="calibrate"></div>
+      <div class="tab" id="tune">
+        <div class="row">
+          <span class="hint" id="tune-summary"></span>
+          <div class="spacer"></div>
+          <button id="tune-reset-all">Reset all</button>
+          <button id="tune-copy">Copy as code</button>
+        </div>
+        <p class="hint">Tuning reaches the board at once and the replay of all three modes with it. It lasts until the board powers off: copy as code, or save a report, to keep it.</p>
+        <textarea id="tune-code" hidden readonly></textarea>
+        <div id="tune-groups"></div>
+      </div>
+      <div class="tab" id="pads-tab">
         <svg id="pads" viewBox="0 100 792 515" aria-label="The 24 pads"></svg>
-      </section>
-      <section>
-        <h2>Readings</h2>
-        <dl id="readings"></dl>
-      </section>
+        <div id="pad-table"></div>
+      </div>
+      <div class="tab" id="board"></div>
     </div>
   </main>
 </div>
 
 <script>
 const C = { ink: '#171d3a', light: '#e6e9f6', ink2: '#9ca3c6', line: 'rgba(201,207,238,.16)', peri: '#94abf9', mag: '#ff00ff' };
-// One sample: the capture row, then each mode's delta and semitones, the learned path, the sim's truth.
-const T = 0, X = 1, Y = 2, Z = 3, DEPTH = 4, SD = 5, BEND = 6, FLAGS = 7, STATE = 8, VEL = 9, AT = 10;
-const BX = 17, BY = 18, STROKES = 19, TRUE_PRESS = 20, TRUE_TILT = 21;
+// One sample (analysis.py): the capture row, then delta/semitones/vibrato per mode, the learned path, the sim's truth.
+const T = 0, X = 1, Y = 2, Z = 3, DEPTH = 4, SD = 5, BEND = 6, FLAGS = 7, STATE = 8, VEL = 9, AT = 10, STRIKE_MS = 11, PEAK = 12;
+const BX = 22, BY = 23, STROKES = 24, TRUE_PRESS = 25, TRUE_TILT = 26;
 const MODES = [
-  { name: 'legacy', d: 11, s: 12, color: C.ink2, dash: [5, 4], width: 1.5 },
-  { name: 'cosine', d: 13, s: 14, color: 'rgba(230,233,246,.6)', dash: [], width: 1 },
-  { name: 'path', d: 15, s: 16, color: C.peri, dash: [], width: 2 },
+  { name: 'legacy', d: 13, s: 14, v: 15, color: C.ink2, dash: [5, 4], width: 1.5 },
+  { name: 'cosine', d: 16, s: 17, v: 18, color: 'rgba(230,233,246,.6)', dash: [], width: 1 },
+  { name: 'path', d: 19, s: 20, v: 21, color: C.peri, dash: [], width: 2 },
 ];
-const F = { VALID: 1, TOUCHED: 2, STARTED: 4, STEPPED: 8, BENT: 16, STROKE: 32, STROKE_BEGIN: 64, NOTE_ON: 128, PRESSURE: 256 };
-const LSB_PER_MT = 409.6, DEADZONE = 0.025, SEMI_PER_UNIT = 12 / (8191 * 12 / 48);
-const THRESHOLDS = [[150, 'strike'], [700, 'full strike'], [1450, 'full pressure']];
+const F = { VALID: 1, TOUCHED: 2, STARTED: 4, STEPPED: 8, BENT: 16, STROKE: 32, STROKE_BEGIN: 64, NOTE_ON: 128, PRESSURE: 256, NOTE_OFF: 512 };
+const LSB_PER_MT = 409.6;
 
 const buf = [];
 const MAX_SAMPLES = 6000;
-let status = { source: 'sim' }, grid = [], paths = [];
-let notes = [], rest = [], restB = 0, maxB = 0, match = { n: 0, same: 0 };
-let axis = 'x', dirty = true;
+let status = { source: 'sim' }, state = null, grid = [], axis = 'x', dirty = true, tab = 'calibrate';
 
 const $ = id => document.getElementById(id);
 const post = msg => fetch('/api/control', { method: 'POST', body: JSON.stringify(msg) });
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const latest = () => buf[buf.length - 1];
 const fmt = (v, d = 2) => (v == null || isNaN(v)) ? '–' : (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(d);
+const num = (v, d = 0) => (v == null || isNaN(v)) ? '–' : (+v).toFixed(d);
+const tv = (key, fallback) => {
+  const row = state && state.tune.find(r => r.key === key);
+  return row ? row.value : (state && state.settings[key] != null ? +state.settings[key] : fallback);
+};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // ---- data in ----
-function addSamples(list) {
-  for (const s of list) {
-    buf.push(s);
-    const f = s[FLAGS];
-    if (f & (F.NOTE_ON | F.STARTED)) { // Alpha 6.6 captures only mark STARTED
-      notes.push({ t: s[T], vel: s[VEL], x: s[X], y: s[Y], z: s[Z], peak: [0, 0, 0] });
-      if (notes.length > 40) notes.shift();
-    }
-    const note = notes[notes.length - 1];
-    if (note && (f & F.PRESSURE || f & F.STEPPED)) {
-      MODES.forEach((m, i) => { if (s[m.s] != null && Math.abs(s[m.s]) > Math.abs(note.peak[i])) note.peak[i] = s[m.s]; });
-      const b = Math.hypot(s[X], s[Y], s[Z]);
-      if (restB && b > maxB) maxB = b;
-    }
-    if (!(f & F.TOUCHED) && s[STATE] === 0 && f & F.VALID) {
-      const last = rest[rest.length - 1];
-      if (!last || last[0] !== s[X] || last[1] !== s[Y] || last[2] !== s[Z]) {
-        rest.push([s[X], s[Y], s[Z]]);
-        if (rest.length > 200) rest.shift();
-      }
-    }
-    if (f & F.BENT && status.mode) {
-      const lane = MODES.find(m => m.name === status.mode);
-      if (lane && s[lane.s] != null) {
-        match.n++;
-        if (Math.abs((s[BEND] - 8192) * SEMI_PER_UNIT - s[lane.s]) < 0.02) match.same++;
-      }
-    }
-  }
+const events = new EventSource('/api/events');
+events.addEventListener('samples', e => {
+  for (const s of JSON.parse(e.data)) buf.push(s);
   if (buf.length > MAX_SAMPLES) buf.splice(0, buf.length - MAX_SAMPLES);
   dirty = true;
-}
-
-function resetData() {
-  buf.length = 0; notes = []; rest = []; restB = 0; maxB = 0; match = { n: 0, same: 0 }; grid = []; dirty = true;
-}
-
-const events = new EventSource('/api/events');
-events.addEventListener('samples', e => addSamples(JSON.parse(e.data)));
+});
 events.addEventListener('status', e => { status = JSON.parse(e.data); showStatus(); dirty = true; });
 events.addEventListener('grid', e => { grid = JSON.parse(e.data); dirty = true; });
-events.addEventListener('paths', e => { paths = JSON.parse(e.data); dirty = true; });
-events.addEventListener('reset', () => resetData());
+events.addEventListener('state', e => { state = JSON.parse(e.data); renderState(); dirty = true; });
+events.addEventListener('reset', () => { buf.length = 0; grid = []; tuneBuilt = false; dirty = true; });
 events.addEventListener('notice', e => notice(JSON.parse(e.data)));
 events.onerror = () => { $('status').textContent = 'Lost the studio server. Is studio.py still running?'; };
 
@@ -271,7 +280,7 @@ let noticeTimer;
 function notice(text) {
   $('notice').textContent = text;
   clearTimeout(noticeTimer);
-  noticeTimer = setTimeout(() => { $('notice').textContent = ''; }, 5000);
+  noticeTimer = setTimeout(() => { $('notice').textContent = ''; }, 7000);
 }
 
 // ---- controls ----
@@ -280,16 +289,15 @@ document.querySelectorAll('[data-source]').forEach(b => b.onclick = async () => 
   const msg = { source: b.dataset.source, pad: +$('pad').value };
   if (msg.source === 'file') {
     await loadFiles();
-    if (!$('file').value) { notice('No captures in firmware/test/captures/ yet.'); }
+    if (!$('file').value) notice('No captures in firmware/test/captures/ yet.');
     msg.file = $('file').value;
   }
   post(msg);
 });
 $('pad').onchange = () => post({ pad: +$('pad').value });
-$('mode').onchange = () => post({ mode: $('mode').value });
-$('sensitivity').onchange = () => post({ sensitivity: +$('sensitivity').value });
-$('reset').onclick = () => post({ reset_paths: true });
+$('reset-paths').onclick = () => post({ reset_paths: true });
 $('save').onclick = () => post({ save: true });
+$('report').onclick = () => post({ report: true });
 $('file').onchange = () => post({ source: 'file', file: $('file').value, pad: +$('pad').value });
 $('play').onclick = () => post({ playing: !status.playing });
 $('speed').onchange = () => post({ speed: +$('speed').value });
@@ -299,6 +307,14 @@ document.querySelectorAll('[data-axis]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-axis]').forEach(o => o.setAttribute('aria-pressed', o === b));
   dirty = true;
 });
+document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll('[data-tab]').forEach(o => o.setAttribute('aria-selected', o === b));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.id === tab));
+  try { localStorage.setItem('studio.tab', tab); } catch (e) {}
+  renderState();
+});
+try { const saved = localStorage.getItem('studio.tab'); if (saved && $(saved)) document.querySelector(`[data-tab="${saved}"]`).click(); } catch (e) {}
 
 async function loadFiles() {
   const files = await (await fetch('/api/captures')).json();
@@ -322,7 +338,7 @@ const SLIDERS = [
 const AVERAGING = [1, 8, 16];
 function buildSliders(params) {
   const box = $('sliders');
-  if (box.childElementCount) { // already built: follow the sim's values
+  if (box.childElementCount) {
     box.querySelectorAll('input').forEach(input => {
       if (input === document.activeElement) return;
       const key = input.dataset.key;
@@ -351,20 +367,16 @@ function showStatus() {
   $('sim-panel').classList.toggle('on', s.source === 'sim');
   $('file-panel').classList.toggle('on', s.source === 'file');
   if (s.pad) $('pad').value = s.pad;
-  const live = s.source === 'device' && s.connected;
-  $('mode').disabled = $('sensitivity').disabled = !live;
-  $('save').disabled = s.source === 'file';
-  $('reset').disabled = s.source === 'file' || (s.source === 'device' && !s.connected);
+  $('save').disabled = s.source === 'file' || !s.connected;
+  $('reset-paths').disabled = s.source === 'file' || !s.connected;
   $('key').classList.toggle('playable', s.source === 'sim');
-  if (s.mode) $('mode').value = s.mode;
-  if (s.sensitivity && document.activeElement !== $('sensitivity')) $('sensitivity').value = (+s.sensitivity).toFixed(3);
   if (s.params) buildSliders(s.params);
   if (s.source === 'file') $('play').textContent = s.playing ? 'Pause' : 'Play';
   let text;
-  if (s.message) text = s.message;
-  else if (s.source === 'device') text = `Live from <b>TILES</b>, pad ${s.pad}${s.firmware ? ' · firmware ' + s.firmware : ''}`;
+  if (s.message) text = esc(s.message);
+  else if (s.source === 'device') text = `Live from <b>TILES ${esc(s.unit || '')}</b>, pad ${s.pad}${s.firmware ? ' · firmware ' + esc(s.firmware) : ''}${s.can_tune ? '' : ' · this firmware can\'t tune: flash Alpha 6.8'}`;
   else if (s.source === 'sim') text = `<b>Simulated key</b>: a dipole magnet model, sizes guessed until a capture measures them`;
-  else text = `<b>${s.file}</b> · ${s.rows} samples`;
+  else text = `<b>${esc(s.file)}</b> · ${s.rows} samples`;
   $('status').innerHTML = text;
 }
 
@@ -416,10 +428,9 @@ function line(g, x1, y1, x2, y2, color = C.line, width = 1, dash = []) {
   g.strokeStyle = color; g.lineWidth = width; g.setLineDash(dash);
   g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); g.setLineDash([]);
 }
-function lastWith(index) {
-  for (let i = buf.length - 1; i >= 0 && i > buf.length - 400; i--) if (buf[i][index] != null) return buf[i];
-  return null;
-}
+const boardMode = () => (state && state.settings['expression.pitch_bend_mode']) || 'path';
+const sensitivity = () => +tv('expression.pitch_bend_sensitivity', 0.065);
+const lastNote = () => state && state.notes.length ? state.notes[state.notes.length - 1] : null;
 
 function drawKey() {
   const [g, w, h] = surface($('key'));
@@ -430,6 +441,7 @@ function drawKey() {
   g.fillRect(cx - 14, base - 7, 28, 7);
   label(g, 'Hall sensor · field lean ×4', cx, base + 20, C.ink2, 'center');
   const keyW = Math.min(w * 0.6, 300), keyH = 22, restBottom = base - 64, travelPx = 34;
+  const full = tv('expression.aftertouch_sensitivity', 1450);
   const pose = (press, angle, fill, stroke, dash) => {
     g.save();
     g.translate(cx, restBottom + press * travelPx - keyH / 2);
@@ -442,101 +454,105 @@ function drawKey() {
     g.restore();
   };
   if (!s) { pose(0, 0, null, C.light); label(g, 'Waiting for samples', 16, 18); return; }
-  // What the sensor and the bend code think: depth for the press, path's bend for the lean
-  // (a lean toward +X bends down, so the angle flips the bend's sign).
+  // Depth for the press, the board mode's bend for the lean (a lean toward +X bends down).
+  const lane = MODES.find(m => m.name === boardMode()) || MODES[2];
   const held = s[STATE] === 2 || (s[FLAGS] & F.PRESSURE);
-  const touched = s[FLAGS] & F.TOUCHED;
-  const semis = s[16] ?? 0;
-  pose(clamp(s[DEPTH] / 1450, 0, 1.15), -clamp(semis / 12, -1.3, 1.3) * 9 * Math.PI / 180,
-       held ? C.mag : null, held || touched ? C.mag : C.light);
-  // The sim's true pose, dashed on top: what the key really did.
+  const semis = s[lane.s] ?? 0;
+  pose(clamp(s[DEPTH] / full, 0, 1.15), -clamp(semis / 12, -1.3, 1.3) * 9 * Math.PI / 180,
+       held ? C.mag : null, held || s[FLAGS] & F.TOUCHED ? C.mag : C.light);
   if (s[TRUE_PRESS] != null) pose(s[TRUE_PRESS], s[TRUE_TILT] * 3 * Math.PI / 180, null, C.light, [4, 4]);
-  // The field at the sensor, its lean drawn 4x.
   const lean = Math.atan2(s[X] * 4, Math.abs(s[Z]) || 1);
   const len = 22, ax = cx + Math.sin(lean) * len, ay = base - 7 - Math.cos(lean) * len;
   line(g, cx, base - 7, ax, ay, C.peri, 2);
   g.fillStyle = C.peri; g.beginPath(); g.arc(ax, ay, 3, 0, Math.PI * 2); g.fill();
-
   label(g, 'Depth', 16, 18); value(g, `${s[DEPTH]}`, 16, 38);
-  label(g, 'Bend (path)', w - 16, 18, C.ink2, 'right');
-  value(g, s[16] == null ? '–' : `${fmt(s[16])} st`, w - 16, 38, C.light, 'right');
+  label(g, `Bend (${lane.name})`, w - 16, 18, C.ink2, 'right');
+  value(g, s[lane.s] == null ? '–' : `${fmt(s[lane.s])} st`, w - 16, 38, C.light, 'right');
   if (s[TRUE_PRESS] != null) label(g, 'Dashed: what the key really did', 16, h - 6);
 }
 
 function drawPressure() {
   const [g, w, h] = surface($('pressure'));
   const s = latest();
-  const top = 12, bottom = h - 40, x = 8, bw = 18, full = 1600;
-  const y = v => bottom - (bottom - top) * clamp(v / full, 0, 1);
+  const top = 12, bottom = h - 40, x = 8, bw = 18, fullScale = 1600;
+  const y = v => bottom - (bottom - top) * clamp(v / fullScale, 0, 1);
   g.strokeStyle = C.line; g.lineWidth = 1; g.strokeRect(x + 0.5, top + 0.5, bw, bottom - top);
   if (s) {
     g.fillStyle = C.peri; g.fillRect(x + 1, y(s[DEPTH]), bw - 1, bottom - y(s[DEPTH]));
     if (s[SD] > 0) line(g, x - 3, y(s[SD]), x + bw + 3, y(s[SD]), C.light, 1.5);
   }
-  for (const [v, name] of THRESHOLDS) {
+  const strike = tv('strike.depth', 150);
+  for (const [v, name] of [[strike, 'strike'], [strike + tv('strike.overshoot_full', 550), 'full velocity'], [tv('expression.aftertouch_sensitivity', 1450), 'full pressure']]) {
     line(g, x + bw + 2, y(v), x + bw + 8, y(v), C.ink2, 1);
     label(g, name, x + bw + 12, y(v) + 4);
   }
-  const note = notes[notes.length - 1];
-  label(g, 'Pressure', x, h - 24); value(g, s ? `${s[AT]}` : '–', x + 78, h - 24, C.light, 'left', 14);
-  label(g, 'Velocity', x, h - 6); value(g, note ? `${note.vel}` : '–', x + 78, h - 6, C.light, 'left', 14);
-}
-
-function sensitivity() {
-  return +(status.sensitivity || 0.065) || 0.065;
+  const note = lastNote();
+  label(g, 'Pressure', x, h - 24); value(g, s ? `${s[AT]}` : '–', x + 78, h - 24);
+  label(g, 'Velocity', x, h - 6); value(g, note ? `${note.velocity}` : '–', x + 78, h - 6);
 }
 
 function drawMeters() {
   const [g, w, h] = surface($('meters'));
-  const sens = sensitivity(), left = 104, right = w - 96, rowH = h / 3;
+  const sens = sensitivity(), dead = tv('bend.deadzone', 0.025), left = 104, right = w - 96, rowH = (h - 18) / 4;
   const xOf = d => left + (right - left) * (clamp(d / sens, -1.25, 1.25) + 1.25) / 2.5;
   const recent = buf.slice(-120);
-  const note = notes[notes.length - 1];
+  const s = latest();
+  const note = lastNote();
   MODES.forEach((m, i) => {
     const cy = rowH * i + rowH / 2;
     g.fillStyle = 'rgba(201,207,238,.08)';
-    g.fillRect(xOf(-DEADZONE), cy - 9, xOf(DEADZONE) - xOf(-DEADZONE), 18);
+    g.fillRect(xOf(-dead), cy - 9, xOf(dead) - xOf(-dead), 18);
     line(g, left, cy, right, cy, C.line);
     for (const d of [-sens, 0, sens]) line(g, xOf(d), cy - 9, xOf(d), cy + 9, C.ink2, 1);
     label(g, m.name, 0, cy - 2, m.name === 'path' ? C.peri : C.light);
-    if (status.mode === m.name) label(g, 'on the board', 0, cy + 13);
+    if (boardMode() === m.name && status.source === 'device') label(g, 'on the board', 0, cy + 13);
     g.fillStyle = m.name === 'path' ? C.peri : m.name === 'cosine' ? C.light : C.ink2;
-    recent.forEach((s, k) => {
-      if (s[m.d] == null) return;
+    recent.forEach((r, k) => {
+      if (r[m.d] == null) return;
       g.globalAlpha = 0.08 + 0.3 * k / recent.length;
-      g.beginPath(); g.arc(xOf(s[m.d]), cy, 2, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.arc(xOf(r[m.d]), cy, 2, 0, Math.PI * 2); g.fill();
     });
     g.globalAlpha = 1;
-    const s = lastWith(m.d);
-    if (s && s === latest()) { g.beginPath(); g.arc(xOf(s[m.d]), cy, 5.5, 0, Math.PI * 2); g.fill(); }
-    value(g, s && s === latest() ? `${fmt(s[m.s])} st` : '–', w, cy + 1, C.light, 'right');
-    if (note) label(g, `peak ${Math.abs(note.peak[i]).toFixed(2)}`, w, cy + 15, C.ink2, 'right');
+    if (s && s[m.d] != null) { g.beginPath(); g.arc(xOf(s[m.d]), cy, 5.5, 0, Math.PI * 2); g.fill(); }
+    value(g, s && s[m.s] != null ? `${fmt(s[m.s])} st` : '–', w, cy + 1, C.light, 'right');
+    if (note) label(g, `peak ${Math.abs(note.bend_peak[m.name]).toFixed(2)}`, w, cy + 15, C.ink2, 'right');
   });
-  label(g, 'deadzone', (xOf(-DEADZONE) + xOf(DEADZONE)) / 2, h - 2, C.ink2, 'center');
-  label(g, 'full bend', xOf(sens), h - 2, C.ink2, 'center');
+  // Vibrato energy of the board's mode against its floor and full.
+  const lane = MODES.find(m => m.name === boardMode()) || MODES[2];
+  const floor = tv('vibrato.floor', 8), fullV = tv('vibrato.full', 16), top = Math.max(fullV * 1.6, 30);
+  const cy = rowH * 3 + rowH / 2, vx = v => left + (right - left) * clamp(v / top, 0, 1);
+  label(g, 'vibrato', 0, cy - 2, C.light);
+  label(g, 'energy', 0, cy + 13);
+  line(g, left, cy, right, cy, C.line);
+  g.fillStyle = 'rgba(201,207,238,.08)'; g.fillRect(left, cy - 9, vx(floor) - left, 18);
+  line(g, vx(fullV), cy - 9, vx(fullV), cy + 9, C.ink2);
+  const e = s && s[lane.v];
+  if (e != null) { g.fillStyle = e > floor ? C.peri : C.ink2; g.beginPath(); g.arc(vx(e), cy, 5.5, 0, 7); g.fill(); }
+  value(g, e != null ? num(e, 1) : '–', w, cy + 1, C.light, 'right');
+  const rows = h - 4;
+  label(g, 'deadzone · floor', (xOf(-dead) + xOf(dead)) / 2, rows, C.ink2, 'center');
+  label(g, 'full', xOf(sens), rows, C.ink2, 'center');
 }
 
 function drawTimeline() {
   const [g, w, h] = surface($('timeline'));
   const s = latest();
   if (!s) return;
-  const span = 5000, t1 = s[T], t0 = t1 - span, left = 0, right = w;
-  const xOf = t => left + (right - left) * (t - t0) / span;
+  const span = 5000, t1 = s[T], t0 = t1 - span;
+  const xOf = t => w * (t - t0) / span;
   const dTop = 14, dBot = h * 0.36, bTop = h * 0.46, bBot = h - 14;
   const view = buf.filter(v => v[T] >= t0);
-  // depth
   const dy = v => dBot - (dBot - dTop) * clamp(v / 1600, 0, 1);
-  line(g, left, dy(150), right, dy(150), C.line, 1, [3, 4]);
+  line(g, 0, dy(tv('strike.depth', 150)), w, dy(tv('strike.depth', 150)), C.line, 1, [3, 4]);
   label(g, 'Depth', 0, dTop - 2);
   g.strokeStyle = C.light; g.lineWidth = 1.5; g.beginPath();
   view.forEach((v, i) => i ? g.lineTo(xOf(v[T]), dy(v[DEPTH])) : g.moveTo(xOf(v[T]), dy(v[DEPTH])));
   g.stroke();
-  // bend per mode
   let range = 1;
   for (const v of view) for (const m of MODES) if (v[m.s] != null) range = Math.max(range, Math.abs(v[m.s]));
   range = Math.min(13, range * 1.15);
   const by = v => (bTop + bBot) / 2 - (bBot - bTop) / 2 * clamp(v / range, -1, 1);
-  line(g, left, by(0), right, by(0), C.line);
+  line(g, 0, by(0), w, by(0), C.line);
   label(g, `Bend, ±${range.toFixed(range < 3 ? 1 : 0)} semitones`, 0, bTop - 4);
   for (const m of MODES) {
     g.strokeStyle = m.color; g.lineWidth = m.width; g.setLineDash(m.dash); g.beginPath();
@@ -557,10 +573,10 @@ function drawTimeline() {
     line(g, lx - 22, bTop - 8, lx - 6, bTop - 8, m.color, m.width, m.dash);
     lx -= 34;
   }
-  for (const n of notes) {
-    if (n.t < t0) continue;
-    line(g, xOf(n.t), dTop, xOf(n.t), bBot, C.line);
-    label(g, `vel ${n.vel}`, xOf(n.t) + 4, dTop + 10);
+  for (const v of view) {
+    if (!(v[FLAGS] & F.NOTE_ON)) continue;
+    line(g, xOf(v[T]), dTop, xOf(v[T]), bBot, C.line);
+    label(g, `vel ${v[VEL]}`, xOf(v[T]) + 4, dTop + 10);
   }
 }
 
@@ -583,20 +599,19 @@ function drawPath() {
     else { g.fillStyle = f & F.PRESSURE ? C.light : C.ink2; g.globalAlpha = f & F.PRESSURE ? 0.35 : 0.5; g.fillRect(xOf(v[Z]) - 1, yOf(v[comp]) - 1, 2, 2); }
   }
   g.globalAlpha = 1;
-  const note = notes[notes.length - 1];
-  if (note) {
-    const c0 = axis === 'x' ? note.x : note.y;
-    // What COSINE assumes: the field keeps its direction, a line through zero.
-    const k = c0 / (note.z || 1);
+  const start = [...view].reverse().find(v => v[FLAGS] & F.NOTE_ON);
+  if (start) {
+    const c0 = start[comp], z0 = start[Z];
+    const k = c0 / (z0 || 1); // what cosine assumes: the field keeps its direction
     line(g, xOf(zl), yOf(k * zl), xOf(zh), yOf(k * zh), C.ink2, 1, [4, 4]);
     const b = s[slopeIdx];
-    if (b != null && s[STROKES] > 0) line(g, xOf(zl), yOf(c0 + b * (zl - note.z)), xOf(zh), yOf(c0 + b * (zh - note.z)), C.peri, 1.5);
-    g.fillStyle = C.mag; g.beginPath(); g.arc(xOf(note.z), yOf(c0), 3.5, 0, 7); g.fill();
+    if (b != null && s[STROKES] > 0) line(g, xOf(zl), yOf(c0 + b * (zl - z0)), xOf(zh), yOf(c0 + b * (zh - z0)), C.peri, 1.5);
+    g.fillStyle = C.mag; g.beginPath(); g.arc(xOf(z0), yOf(c0), 3.5, 0, 7); g.fill();
   }
   label(g, `Z (raw) →   ${axis.toUpperCase()} (raw) ↑`, L, h - 12);
   const learned = s[STROKES] ?? 0;
-  const text = learned ? `learned slope ${(s[slopeIdx] ?? 0).toFixed(3)} from ${learned} strokes` : 'no strokes learned yet';
-  label(g, text, L + 10, Tp + 18, C.peri);
+  label(g, learned ? `learned slope ${(s[slopeIdx] ?? 0).toFixed(3)} from ${learned} strokes` : 'no strokes learned yet', L + 10, Tp + 18, C.peri);
+  label(g, 'dashed: the cosine assumption', R - 10, B - 8, C.ink2, 'right');
 }
 
 const PAD = { x: 6.32, y: 106.78, sx: 135.09, sy: 133.14, w: 103.91, h: 102.42, r: 15.5 };
@@ -608,56 +623,284 @@ function buildPads() {
     svg.insertAdjacentHTML('beforeend',
       `<g data-pad="${p}"><rect x="${x}" y="${y}" width="${PAD.w}" height="${PAD.h}" rx="${PAD.r}" fill="${C.mag}" fill-opacity="0" stroke="${C.light}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` +
       `<text x="${x + 14}" y="${y + 30}" fill="${C.ink2}" font-family="Sora" font-size="20">${p}</text>` +
-      `<text class="strokes" x="${x + PAD.w - 12}" y="${y + PAD.h - 14}" fill="${C.ink2}" font-family="Sora" font-size="16" text-anchor="end"></text></g>`);
+      `<text class="info" x="${x + PAD.w - 12}" y="${y + PAD.h - 14}" fill="${C.ink2}" font-family="Sora" font-size="16" text-anchor="end"></text></g>`);
   }
-  svg.querySelectorAll('g').forEach(el => el.onclick = () => { $('pad').value = el.dataset.pad; post({ pad: +el.dataset.pad }); });
+  svg.querySelectorAll('g').forEach(el => el.onclick = () => focusPad(+el.dataset.pad));
 }
+function focusPad(p) { $('pad').value = p; post({ pad: p }); }
 function drawPads() {
-  const svg = $('pads');
-  svg.querySelectorAll('g').forEach(el => {
+  const full = tv('expression.aftertouch_sensitivity', 1450);
+  $('pads').querySelectorAll('g').forEach(el => {
     const p = +el.dataset.pad, cell = grid.find(r => r[0] === p), rect = el.firstChild;
-    const lit = cell && cell[6] ? 0.25 + 0.75 * clamp(cell[4] / 1450, 0, 1) : 0;
+    const lit = cell && cell[6] ? 0.25 + 0.75 * clamp(cell[4] / full, 0, 1) : 0;
     rect.setAttribute('fill-opacity', lit.toFixed(2));
     rect.setAttribute('stroke', p === +status.pad ? C.peri : C.light);
     rect.setAttribute('stroke-width', p === +status.pad ? 3 : 1.5);
-    const path = paths.find(r => r[0] === p);
-    el.querySelector('.strokes').textContent = path && path[3] ? `${path[3]}×` : '';
+    const info = state && state.pads[p - 1];
+    el.querySelector('.info').textContent = info && info.rest_field_mt != null ? `${info.rest_field_mt} mT` : '';
   });
 }
 
-function drawReadings() {
-  const rows = [];
-  if (rest.length > 10) {
-    const n = rest.length, mean = [0, 1, 2].map(i => rest.reduce((a, r) => a + r[i], 0) / n);
-    const sd = [0, 1, 2].map(i => Math.sqrt(rest.reduce((a, r) => a + (r[i] - mean[i]) ** 2, 0) / (n - 1)));
-    restB = Math.hypot(...mean);
-    rows.push(['Rest field', `${(restB / LSB_PER_MT).toFixed(2)} mT`]);
-    rows.push(['Rest noise X · Y · Z', sd.map(v => (v / LSB_PER_MT * 1000).toFixed(0)).join(' · ') + ' µT']);
-  } else rows.push(['Rest field', 'hands off the key for a second']);
-  if (maxB && restB) rows.push(['Hardest press', `×${(maxB / restB).toFixed(2)} the rest field`]);
-  const s = latest();
-  if (s) {
-    rows.push([`Press path, pad ${status.pad ?? ''}`, s[STROKES] >= 3 ? `slope ${s[BX].toFixed(3)} · ${s[BY].toFixed(3)}, ${s[STROKES]} strokes`
-      : `learning: ${s[STROKES] ?? 0} of 3 strokes (until then, the note's own direction)`]);
-  }
-  const note = notes[notes.length - 1];
-  if (note) {
-    rows.push(['Last strike', `velocity ${note.vel}`]);
-    rows.push(['Last note, peak bend', MODES.map((m, i) => `${m.name} ${Math.abs(note.peak[i]).toFixed(2)}`).join(' · ') + ' st']);
-  }
-  if (status.source === 'device' && status.mode) {
-    rows.push(['Board plays', `${status.mode}, full bend at ${(+status.sensitivity).toFixed(3)}`]);
-    if (match.n) rows.push(['Replay vs board', `${(100 * match.same / match.n).toFixed(1)}% of ${match.n} bends agree`]);
-  }
-  $('readings').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+// ---- server state: tabs and the last note ----
+function renderState() {
+  if (!state) return;
+  renderLastNote();
+  if (tab === 'calibrate') renderCalibrate();
+  if (tab === 'tune') renderTune();
+  if (tab === 'pads-tab') renderPadTable();
+  if (tab === 'board') renderBoard();
 }
 
-let lastReadings = 0;
-function frame(now) {
+function renderLastNote() {
+  const n = lastNote();
+  if (!n) { $('last-note').innerHTML = 'Play a note.'; return; }
+  const low = tv('velocity.min', 8), w = tv('velocity.depth_weight', 0.85);
+  const combined = (n.depth_share ?? 0) + (n.time_share ?? 0);
+  const rows = [
+    ['Velocity', `<span class="big">${n.velocity}</span>`],
+    ['Depth part', n.depth_score != null ? `peak ${n.peak_depth} → ${n.depth_score.toFixed(2)} × ${w.toFixed(2)} = ${n.depth_share.toFixed(2)}` : '–'],
+    ['Speed part', n.time_score != null ? `${n.strike_ms} ms to the strike depth → ${n.time_score.toFixed(2)} × ${(1 - w).toFixed(2)} = ${n.time_share.toFixed(2)}` : '–'],
+    ['Adds up to', n.depth_score != null ? `${low} + ${127 - low} × ${combined.toFixed(2)} ≈ ${Math.round(low + (127 - low) * combined)}` : '–'],
+    ['Pressure', `up to ${n.max_pressure} (depth ${n.max_depth})`],
+    ['Release', n.release_velocity != null ? `velocity ${n.release_velocity}` : 'held'],
+    ['Bend peak', MODES.map(m => `${m.name} ${Math.abs(n.bend_peak[m.name]).toFixed(2)}`).join(' · ') + ' st'],
+    ['Vibrato peak', `${num(n.vibrato_peak[boardMode()], 1)} (floor ${num(tv('vibrato.floor', 8), 1)})`],
+  ];
+  $('last-note').innerHTML = `<dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+}
+
+function stepResult(id, r) {
+  if (!r) return '';
+  const parts = [];
+  const mmm = d => d ? `${d.min} / ${d.median} / ${d.max}` : '–';
+  if (id === 'rest') parts.push(`<dl><dt>Pads measured</dt><dd>${r.pads_measured}</dd><dt>Rest field</dt><dd>median ${r.rest_field_median_mt} mT, range ${r.rest_field_range_mt ? r.rest_field_range_mt.join('–') : '–'}</dd><dt>X/Y noise</dt><dd>median ${r.noise_xy_median_ut} µT</dd></dl>`);
+  if (id === 'strikes') parts.push(`<dl><dt>Notes</dt><dd>${r.notes}</dd><dt>Velocity</dt><dd>${mmm(r.velocity)} (min / median / max)</dd><dt>Speed</dt><dd>${mmm(r.strike_ms)} ms to the strike depth</dd><dt>Peak depth</dt><dd>${mmm(r.peak_depth)}</dd></dl>`);
+  if ((id === 'straight' || id === 'lean') && r.bend) {
+    if (id === 'lean' && r.lean_median != null) parts.push(`<p class="hint">Lean peaks (${r.mode}): median ${r.lean_median}${r.left_right_ratio ? `, one side ${r.left_right_ratio}× the other` : ''}.</p>`);
+    if (id === 'straight') parts.push(`<p class="hint">Hardest pressure depth ${r.max_pressure_depth ?? '–'}. Any bend below is pressure leaking into pitch.</p>`);
+    parts.push(`<table><tr><th>Mode</th><th>Peak bend</th><th>99th pct delta</th><th>Time bent</th></tr>${MODES.map(m => {
+      const b = r.bend[m.name];
+      return `<tr><td>${m.name}</td><td>${b.peak_semitones ?? '–'} st</td><td>${b.delta_p99 ?? '–'}</td><td>${b.time_bent != null ? Math.round(b.time_bent * 100) + '%' : '–'}</td></tr>`;
+    }).join('')}</table>`);
+  }
+  if (id === 'vibrato' && r.wiggle_energy_p75 != null) parts.push(`<dl><dt>Wiggle</dt><dd>${r.wiggle_energy_p75} (75th pct)</dd><dt>Holding still</dt><dd>${r.still_energy_p95} (95th pct)</dd></dl>`);
+  if (r.flags && r.flags.length) parts.push(`<ul class="flags">${r.flags.map(f => `<li>${esc(f)}</li>`).join('')}</ul>`);
+  if (r.capture) parts.push(`<p class="hint">Capture: <code>${esc(r.capture)}</code></p>`);
+  return parts.join('');
+}
+
+function renderCalibrate() {
+  const cal = state.calibration, el = $('calibrate');
+  if (!cal.active && !Object.keys(cal.results).length) {
+    el.innerHTML = `<div class="card"><p>Five steps, about a minute on pad ${state.pad}: hands off, strikes, straight presses, leans, vibrato. Each step records a capture and says what it found; the studio then suggests the numbers to change, and saves a report to <code>firmware/test/calibration/</code>.</p>
+      <button class="primary" data-cal="start">Start calibration</button></div>`;
+  } else {
+    const step = cal.steps[cal.index];
+    const res = step && cal.results[step.id];
+    let body = `<ol class="steps">${cal.steps.map((s, i) => `<li><button data-goto="${i}" class="${s.done ? 'done' : ''} ${i === cal.index && cal.active ? 'current' : ''}">${i + 1}. ${s.title}</button></li>`).join('')}</ol>`;
+    if (cal.active && step) {
+      const left = cal.seconds_left;
+      body += `<div class="card"><h3>${step.title}</h3><p>${esc(step.text)}</p>`;
+      if (cal.recording) {
+        body += `<div class="bar"><i style="width:${100 * (1 - left / step.seconds)}%"></i></div><p class="hint">Recording… ${num(left, 1)} s</p>`;
+      } else if (res) {
+        body += stepResult(step.id, res) + `<div class="row"><button class="primary" data-cal="next">${cal.index === cal.steps.length - 1 ? 'Finish and save report' : 'Next step'}</button><button data-cal="redo">Redo</button></div>`;
+      } else {
+        body += `<div class="row"><button class="primary" data-cal="record">Record ${step.seconds} s</button>${status.source === 'sim' && step.id !== 'rest' ? '<span class="hint">The sim plays it for you.</span>' : ''}</div>`;
+      }
+      body += `</div>`;
+    } else {
+      body += `<div class="card"><p>Done. ${Object.keys(cal.results).length} steps measured.</p><button data-cal="start">Calibrate again</button></div>`;
+      for (const s of cal.steps) if (cal.results[s.id]) body += `<h3>${s.title}</h3>` + stepResult(s.id, cal.results[s.id]);
+    }
+    if (cal.suggestions.length) {
+      body += `<h3>Suggested changes</h3><table><tr><th>Setting</th><th>Now → suggested</th><th></th></tr>${cal.suggestions.map(x => `<tr><td><code>${esc(x.key)}</code><div class="hint">${esc(x.why)}${x.kind === 'setting' ? ' · saved on the board' : ''}</div></td><td>${x.current} → <span class="accent">${x.suggested}</span></td><td>${x.applied ? '✓' : `<button data-apply="${esc(x.key)}">Apply</button>`}</td></tr>`).join('')}</table>
+        <div class="row" style="margin-top:10px"><button data-apply-all>Apply all</button><button data-report>Save report</button></div>`;
+    }
+    el.innerHTML = body;
+  }
+  el.querySelectorAll('[data-cal]').forEach(b => b.onclick = () => post({ calibrate: b.dataset.cal }));
+  el.querySelectorAll('[data-goto]').forEach(b => b.onclick = () => post({ calibrate: 'goto', index: +b.dataset.goto }));
+  el.querySelectorAll('[data-apply]').forEach(b => b.onclick = () => post({ apply: [b.dataset.apply] }));
+  el.querySelectorAll('[data-apply-all]').forEach(b => b.onclick = () => post({ apply: 'all' }));
+  el.querySelectorAll('[data-report]').forEach(b => b.onclick = () => post({ report: true }));
+}
+
+const TUNE_NAMES = {
+  'strike.depth': ['Strike depth', 'travel that makes a note'],
+  'strike.overshoot_full': ['Full velocity at', 'depth past the strike'],
+  'strike.followthrough_ms': ['Follow-through', 'ms, longest wait for the peak'],
+  'strike.settle_rise': ['Still going down', 'depth rise that keeps waiting'],
+  'velocity.time_fast_ms': ['Fastest strike', 'ms, full speed score'],
+  'velocity.time_slow_ms': ['Slowest strike', 'ms, zero speed score'],
+  'velocity.depth_weight': ['Depth share', 'the rest is speed'],
+  'velocity.curve': ['Speed curve', '1 = linear'],
+  'velocity.min': ['Lowest velocity', ''],
+  'pressure.smoothing': ['Pressure smoothing', 'higher = faster, noisier'],
+  'release.smoothing': ['Lift smoothing', ''],
+  'release.rate_min': ['Slowest lift', 'depth/ms, release velocity 1'],
+  'release.rate_max': ['Fastest lift', 'depth/ms, release velocity 127'],
+  'key.up_depth': ['Key up below', 'depth'],
+  'key.retrigger_depth': ['Retrigger below', 'depth, without lifting'],
+  'key.retrigger_grace_ms': ['Retrigger grace', 'ms after a note'],
+  'key.touch_dropout_ms': ['Touch dropout', 'ms bridged'],
+  'key.pressed_dropout_ms': ['Pressed dropout', 'ms a pressed key outlives touch'],
+  'key.strike_from_rest_ms': ['Strike from rest', 'ms since the key was up'],
+  'bend.deadzone': ['Deadzone', 'cosine delta'],
+  'bend.settle_ms': ['Settle', 'ms before the baseline'],
+  'bend.smoothing': ['Smoothing', 'per stage, higher = faster'],
+  'bend.recenter_slow': ['Drift pull', 'with no bend held'],
+  'bend.recenter_fast': ['Depth recentre', 'legacy, cosine'],
+  'bend.depth_activity_full': ['Depth activity', 'legacy, cosine'],
+  'bend.arm_ms': ['Ramp in', 'ms'],
+  'vibrato.floor': ['Floor', 'energy before vibrato'],
+  'vibrato.full': ['Full', 'energy for full depth'],
+  'vibrato.arm_ms': ['Arm', 'ms above the floor first'],
+  'vibrato.rate_hz': ['Rate', 'Hz'],
+  'vibrato.depth': ['Depth', 'wire units, 0 = off'],
+  'path.min_z_range': ['Shortest stroke', 'raw Z'],
+  'path.max_residual': ['Straightness', 'RMS off the line'],
+  'path.max_slope': ['Steepest slope', ''],
+  'path.min_strokes': ['Strokes before use', ''],
+  'path.average_strokes': ['Strokes averaged', ''],
+};
+const GROUPS = [['velocity', 'Strike and velocity'], ['pressure', 'Pressure and release'], ['key', 'Key and touch'], ['bend', 'Bend'], ['vibrato', 'Vibrato'], ['path', 'Press path learner']];
+const SETTINGS = [
+  ['expression.pitch_bend_mode', 'Bend mode', 'what the board plays', ['legacy', 'cosine', 'path']],
+  ['expression.pitch_bend_sensitivity', 'Full bend at', 'cosine delta', [0.03, 0.3, 0.001]],
+  ['expression.aftertouch_sensitivity', 'Full pressure at', 'depth', [200, 4000, 10]],
+];
+const MACROS = {
+  'strike.depth': ['tune.h', 'TILES_TUNE_DEFAULT_STRIKE_DEPTH', 'f'], 'strike.overshoot_full': ['tune.h', 'TILES_TUNE_DEFAULT_OVERSHOOT_FULL', 'f'],
+  'strike.followthrough_ms': ['tune.h', 'TILES_TUNE_DEFAULT_FOLLOWTHROUGH_MS', 'u'], 'strike.settle_rise': ['tune.h', 'TILES_TUNE_DEFAULT_SETTLE_RISE', 'f'],
+  'velocity.time_fast_ms': ['tune.h', 'TILES_TUNE_DEFAULT_TIME_FAST_MS', 'u'], 'velocity.time_slow_ms': ['tune.h', 'TILES_TUNE_DEFAULT_TIME_SLOW_MS', 'u'],
+  'velocity.depth_weight': ['tune.h', 'TILES_TUNE_DEFAULT_DEPTH_WEIGHT', 'f'], 'velocity.curve': ['tune.h', 'TILES_TUNE_DEFAULT_VELOCITY_CURVE', 'f'],
+  'velocity.min': ['tune.h', 'TILES_TUNE_DEFAULT_MIN_VELOCITY', 'u'], 'pressure.smoothing': ['tune.h', 'TILES_TUNE_DEFAULT_PRESSURE_SMOOTHING', 'f'],
+  'release.smoothing': ['tune.h', 'TILES_TUNE_DEFAULT_RELEASE_SMOOTHING', 'f'], 'release.rate_min': ['tune.h', 'TILES_TUNE_DEFAULT_RELEASE_RATE_MIN', 'f'],
+  'release.rate_max': ['tune.h', 'TILES_TUNE_DEFAULT_RELEASE_RATE_MAX', 'f'], 'key.up_depth': ['tune.h', 'TILES_TUNE_DEFAULT_KEY_UP_DEPTH', 'u'],
+  'key.retrigger_depth': ['tune.h', 'TILES_TUNE_DEFAULT_RETRIGGER_DEPTH', 'f'], 'key.retrigger_grace_ms': ['tune.h', 'TILES_TUNE_DEFAULT_RETRIGGER_GRACE_MS', 'u'],
+  'key.touch_dropout_ms': ['tune.h', 'TILES_TUNE_DEFAULT_TOUCH_DROPOUT_MS', 'u'], 'key.pressed_dropout_ms': ['tune.h', 'TILES_TUNE_DEFAULT_PRESSED_DROPOUT_MS', 'u'],
+  'key.strike_from_rest_ms': ['tune.h', 'TILES_TUNE_DEFAULT_STRIKE_FROM_REST_MS', 'u'],
+  'bend.deadzone': ['bend_core.c', 'BEND_DEADZONE_COSINE_DELTA', 'f'], 'bend.settle_ms': ['bend_core.c', 'BEND_SETTLE_MS', 'u'],
+  'bend.smoothing': ['bend_core.c', 'BEND_SMOOTHING_ALPHA', 'f'], 'bend.recenter_slow': ['bend_core.c', 'BEND_BASELINE_RECENTER_ALPHA_SLOW', 'f'],
+  'bend.recenter_fast': ['bend_core.c', 'BEND_BASELINE_RECENTER_ALPHA_FAST', 'f'], 'bend.depth_activity_full': ['bend_core.c', 'BEND_DEPTH_ACTIVITY_FULL_SCALE', 'f'],
+  'bend.arm_ms': ['bend_core.c', 'BEND_ARM_MS', 'u'], 'vibrato.floor': ['bend_core.c', 'VIBRATO_ENERGY_NOISE_FLOOR', 'f'],
+  'vibrato.full': ['bend_core.c', 'VIBRATO_ENERGY_FULL_SCALE', 'f'], 'vibrato.arm_ms': ['bend_core.c', 'VIBRATO_ARM_MS', 'u'],
+  'vibrato.rate_hz': ['bend_core.c', 'VIBRATO_RATE_HZ', 'f'], 'vibrato.depth': ['bend_core.c', 'VIBRATO_MAX_WIRE_DEPTH', 'f'],
+  'path.min_z_range': ['bend_core.c', 'PATH_STROKE_MIN_Z_RANGE', 'f'], 'path.max_residual': ['bend_core.c', 'PATH_STROKE_MAX_RESIDUAL', 'f'],
+  'path.max_slope': ['bend_core.c', 'PATH_MAX_SLOPE', 'f'], 'path.min_strokes': ['bend_core.c', 'PATH_MIN_STROKES', 'u'],
+  'path.average_strokes': ['bend_core.c', 'PATH_AVERAGE_STROKES', 'u'],
+};
+
+let tuneBuilt = false;
+function stepFor(r) {
+  const span = r.max - r.min;
+  return r.key.endsWith('_ms') || ['velocity.min', 'key.up_depth', 'path.min_strokes', 'path.average_strokes'].includes(r.key) ? 1
+    : span <= 0.25 ? 0.001 : span <= 2 ? 0.01 : span <= 20 ? 0.1 : 1;
+}
+function buildTune() {
+  const box = $('tune-groups');
+  let html = '';
+  for (const [group, title] of GROUPS) {
+    const rows = state.tune.filter(r => r.group === group);
+    html += `<div class="tune-group"><h3>${title}</h3>${rows.map(r => {
+      const [name, sub] = TUNE_NAMES[r.key] || [r.key, ''];
+      const step = stepFor(r);
+      return `<div class="tune-row" data-key="${r.key}"><div class="name">${name}<small>${sub}${sub ? ' · ' : ''}default ${r.default}</small></div>
+        <input type="range" min="${r.min}" max="${r.max}" step="${step}" value="${r.value}">
+        <input type="number" min="${r.min}" max="${r.max}" step="${step}" value="${r.value}">
+        <button data-reset title="Back to ${r.default}">Reset</button></div>`;
+    }).join('')}</div>`;
+  }
+  html += `<div class="tune-group"><h3>Saved on the board</h3>${SETTINGS.map(([key, name, sub, range]) => {
+    const v = state.settings[key];
+    const input = Array.isArray(range) && typeof range[0] === 'string'
+      ? `<select data-setting="${key}">${range.map(o => `<option ${o === v ? 'selected' : ''}>${o}</option>`).join('')}</select>`
+      : `<input type="number" data-setting="${key}" min="${range[0]}" max="${range[1]}" step="${range[2]}" value="${v}">`;
+    return `<div class="tune-row"><div class="name">${name}<small>${sub} · kept after power-off</small></div><span></span>${input}<span></span></div>`;
+  }).join('')}</div>`;
+  box.innerHTML = html;
+  box.querySelectorAll('.tune-row[data-key]').forEach(rowEl => {
+    const key = rowEl.dataset.key, [range, number] = rowEl.querySelectorAll('input');
+    range.oninput = () => { number.value = range.value; };
+    range.onchange = () => post({ tune: { key, value: +range.value } });
+    number.onchange = () => { range.value = number.value; post({ tune: { key, value: +number.value } }); };
+    rowEl.querySelector('[data-reset]').onclick = () => post({ tune_reset: key });
+  });
+  box.querySelectorAll('[data-setting]').forEach(el => el.onchange = () => {
+    const v = el.tagName === 'SELECT' ? el.value : +el.value;
+    post({ setting: { key: el.dataset.setting, value: v } });
+  });
+  tuneBuilt = true;
+}
+function renderTune() {
+  if (!state.tune.length) return;
+  if (!tuneBuilt) buildTune();
+  const changed = Object.keys(state.tune_changed).length;
+  const canTune = status.source !== 'device' || status.can_tune;
+  $('tune-summary').textContent = !canTune ? 'This board can\'t tune: flash Alpha 6.8.' : changed ? `${changed} changed from the defaults` : 'All at their defaults';
+  $('tune-groups').querySelectorAll('.tune-row[data-key]').forEach(rowEl => {
+    const r = state.tune.find(t => t.key === rowEl.dataset.key);
+    if (!r) return;
+    rowEl.classList.toggle('changed', r.value !== r.default);
+    rowEl.querySelectorAll('input').forEach(i => { if (i !== document.activeElement) i.value = r.value; i.disabled = !canTune; });
+  });
+  $('tune-groups').querySelectorAll('[data-setting]').forEach(el => {
+    if (el !== document.activeElement && state.settings[el.dataset.setting] != null) el.value = state.settings[el.dataset.setting];
+  });
+}
+$('tune-reset-all').onclick = () => post({ tune_reset: null });
+$('tune-copy').onclick = async () => {
+  if (!state) return;
+  const files = {};
+  for (const r of state.tune) {
+    if (r.value === r.default || !MACROS[r.key]) continue;
+    const [file, macro, kind] = MACROS[r.key];
+    const text = String(+r.value);
+    const v = kind === 'u' ? `${Math.round(r.value)}u` : `${text}${/[.e]/.test(text) ? '' : '.0'}f`;
+    (files[file] = files[file] || []).push(`#define ${macro} ${v}`);
+  }
+  const text = Object.keys(files).length ? Object.entries(files).map(([f, lines]) => `/* firmware/src/services/${f} */\n${lines.join('\n')}`).join('\n\n') : 'Nothing changed from the defaults.';
+  const area = $('tune-code');
+  area.hidden = false; area.value = text;
+  try { await navigator.clipboard.writeText(text); notice('Copied the changed defaults as code.'); } catch (e) { area.select(); }
+};
+
+function renderPadTable() {
+  const rows = state.pads.map(p => {
+    const flags = [];
+    if (p.sensor_ok === false) flags.push('sensor not answering');
+    if (p.rest_confirmed === false) flags.push('rest unconfirmed');
+    const path = p.path || {};
+    return `<tr class="click ${p.pad === state.pad ? 'focus' : ''}" data-pad="${p.pad}"><td>${p.pad}</td><td>${p.rest_field_mt ?? '–'}</td><td>${p.noise_ut ? p.noise_ut.slice(0, 2).join(' / ') : '–'}</td><td>${p.rest_lean ?? '–'}</td><td>${path.strokes ? `${path.bx}, ${path.by}` : '–'}</td><td>${path.strokes ?? '–'}</td><td class="hint">${flags.join(', ')}</td></tr>`;
+  }).join('');
+  $('pad-table').innerHTML = `<p class="hint">Rest numbers come from untouched reads; keep hands off for a moment to fill them in. Click a pad to watch it.</p>
+    <table><tr><th>Pad</th><th>Rest <span class="unit">mT</span></th><th>Noise X/Y <span class="unit">µT</span></th><th>Rest lean</th><th>Press path b</th><th>Strokes</th><th></th></tr>${rows}</table>`;
+  $('pad-table').querySelectorAll('tr[data-pad]').forEach(tr => tr.onclick = () => focusPad(+tr.dataset.pad));
+}
+
+function renderBoard() {
+  const b = state.board || {}, s = state.source;
+  const rows = [];
+  if (s.source === 'device') {
+    rows.push(['Board', s.connected ? `TILES ${esc(b.unit || '')} · firmware ${esc(b.firmware || '?')}` : esc(s.message || 'not connected')]);
+    if (b['loop.avg_us']) rows.push(['Main loop', `average ${(b['loop.avg_us'] / 1000).toFixed(2)} ms, slowest lately ${(b['loop.max_us'] / 1000).toFixed(2)} ms, ever ${(b['loop.max_ever_us'] / 1000).toFixed(2)} ms`]);
+    if (b['hall.rezeros'] != null) rows.push(['Hall sensors', `${b['hall.dead']} not answering, ${b['hall.unconfirmed']} rests unconfirmed, ${b['hall.rezeros']} re-zeros, ${b['hall.reinits']} set up again`]);
+    if (b['touch.recoveries'] != null) rows.push(['Touch', `${b['touch.recoveries']} controller recoveries`]);
+    if (b.power) rows.push(['Power', `${esc(b.power)}, ${b['power.budget_ma']} mA budget, LEDs ≤ ${b['power.led_ceiling_percent']}%`]);
+    if (b['tune.changed'] != null) rows.push(['Live tuning', `${b['tune.changed']} values changed on the board`]);
+  } else {
+    rows.push(['Source', s.source === 'sim' ? 'Simulated key: no board' : `Capture ${esc(s.file || '')}`]);
+  }
+  rows.push(['As JSON', 'everything on this page, for scripts and agents: <code>http://localhost:8770/api/state</code>. Reports and captures are saved in the repo.']);
+  if (state.files.length) rows.push(['Saved', state.files.map(f => `<code>${esc(f)}</code>`).join('<br>')]);
+  $('board').innerHTML = `<dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+}
+
+function frame() {
   if (dirty) {
     dirty = false;
     drawKey(); drawPressure(); drawMeters(); drawTimeline(); drawPath(); drawPads();
-    if (now - lastReadings > 250) { lastReadings = now; drawReadings(); }
   }
   requestAnimationFrame(frame);
 }

@@ -29,76 +29,42 @@
  * harmonics (setting features.melodic_harmonics, default on). */
 static bool s_harmonics_enabled = true;
 
-/* ============================================================================
- * Strike detection: a note needs real depth travel, not just touch. From
- * ~140 captured touches (16-count steps): contact and settling read 32-96,
- * deliberate presses 192-736, a full press ~900-1450.
- * ========================================================================== */
-
-/* Touch counts as down this long after the last touched reading: a hard hit
- * can bounce the finger off and cancel the strike. Unmeasured. */
-#define TOUCH_DROPOUT_GRACE_MS 12u
-
-/* A resting finger's touch can drop out longer, which replayed the note. A
- * sounding note whose key still reads pressed outlives a dropout for up to
- * PRESSED_DROPOUT_GRACE_MS; a touch that starts on a pressed key strikes
- * only if the key was up within STRIKE_FROM_REST_MS, else it waits for the
- * key to come up. Relies on hall.c's fresh depth after release. Guesses. */
-#define PRESSED_DROPOUT_GRACE_MS 300u
-#define STRIKE_FROM_REST_MS 150u
-
+/* Strike, velocity, key and touch timing: live values (defaults and why:
+ * tune.h). */
+#define TOUCH_DROPOUT_GRACE_MS (tiles_tune()->touch_dropout_ms)
+#define PRESSED_DROPOUT_GRACE_MS (tiles_tune()->pressed_dropout_ms)
+#define STRIKE_FROM_REST_MS (tiles_tune()->strike_from_rest_ms)
 /* A touch that comes back within this gap gets no new touch tick (the
  * haptic pulse on touch-down): it's the same finger flickering. First
  * guess, under the lift of a fast repeated tap. */
 #define TOUCH_PULSE_MIN_GAP_MS 60u
-
-/* Depth travel that makes a press (and starts velocity). 150 sits in the
- * captured gap (contact <= ~96, presses >= ~192); 300 made light playing
- * impossible. */
 #define MIN_STRIKE_DEPTH_DELTA TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA
-
-/* While held, depth easing back near rest re-arms a strike (retrigger
- * without lifting). Unmeasured. */
-#define RETRIGGER_ARM_DEPTH_DELTA 40.0f
-
-/* Ignore retrigger for this long after a note fires, so the post-impact
- * rebound of a fast hit doesn't cause an instant note-off + retrigger.
- * Unmeasured. */
-#define RETRIGGER_GRACE_MS 50u
+#define RETRIGGER_ARM_DEPTH_DELTA (tiles_tune()->retrigger_depth)
+#define RETRIGGER_GRACE_MS (tiles_tune()->retrigger_grace_ms)
 
 /* ---- Velocity: depth over a short follow-through, plus a little speed ----
  * Depth reached in the follow-through (strike_settle.h) separates a light
- * tap from a hard hit; time to the threshold adds a 0.15 bias. A touch
- * released early commits at once. Not acceleration: 16-count steps made it
- * noise. Guesses; the [expression] print logs the inputs. */
-#define STRIKE_TIME_MAX_VELOCITY_MS 10u
-#define STRIKE_TIME_MIN_VELOCITY_MS 300u
-#define VELOCITY_CURVE_EXPONENT 1.0f
-
-/* Overshoot at which the depth signal maxes out (expression.h). */
+ * tap from a hard hit; time to the threshold adds a bias. A touch released
+ * early commits at once. */
+#define STRIKE_TIME_MAX_VELOCITY_MS (tiles_tune()->time_fast_ms)
+#define STRIKE_TIME_MIN_VELOCITY_MS (tiles_tune()->time_slow_ms)
+#define VELOCITY_CURVE_EXPONENT (tiles_tune()->velocity_curve)
 #define STRIKE_DEPTH_OVERSHOOT_FULL_SCALE TILES_EXPRESSION_STRIKE_OVERSHOOT_FULL_SCALE
-
-/* Depth's share of the velocity blend (see "Velocity"). */
-#define STRIKE_DEPTH_WEIGHT 0.85f
-
-/* Floor, so even the weakest qualifying strike is audible. */
-#define MIN_VELOCITY 8u
+#define STRIKE_DEPTH_WEIGHT (tiles_tune()->depth_weight)
+#define MIN_VELOCITY (tiles_tune()->min_velocity)
 
 /* Depth for full pressure (127): unit 2's average strong strike (4 pads
  * sampled). Changed at runtime by the Feel menu's aftertouch row. */
 static uint16_t s_depth_to_aftertouch_full_scale = 1450u;
 
-/* Smoothing (EMA) on the depth that feeds pressure, so it reads as
- * continuous pressure, not sensor noise, without noticeable lag. Not
- * applied to velocity, which needs the raw transient. First guess. */
-#define AFTERTOUCH_SMOOTHING_ALPHA 0.35f
+#define AFTERTOUCH_SMOOTHING_ALPHA (tiles_tune()->pressure_smoothing)
 
 /* ---- Release velocity from lift-off speed -------------------------------
  * The smoothed depth fall rate at release approximates lift speed with no
- * added latency. The range is a first guess, not measured lifts. */
-#define RELEASE_FALL_RATE_SMOOTHING_ALPHA 0.5f
-#define RELEASE_VELOCITY_MIN_FALL_RATE 2.0f  /* depth units/ms; at or below: minimum release velocity */
-#define RELEASE_VELOCITY_MAX_FALL_RATE 25.0f /* depth units/ms; at or above: maximum release velocity */
+ * added latency (live: tune.h). */
+#define RELEASE_FALL_RATE_SMOOTHING_ALPHA (tiles_tune()->release_smoothing)
+#define RELEASE_VELOCITY_MIN_FALL_RATE (tiles_tune()->release_rate_min)
+#define RELEASE_VELOCITY_MAX_FALL_RATE (tiles_tune()->release_rate_max)
 #define RELEASE_VELOCITY_MIN 1u
 #define RELEASE_VELOCITY_MAX 127u
 
@@ -947,6 +913,7 @@ static void end_held_note(pad_expr_t *s, uint8_t pad, bool player_release, bool 
         s->last_sent_aftertouch = 0u;
     }
     uint8_t release_velocity = player_release ? release_velocity_from_fall_rate(s->depth_fall_rate) : 0u;
+    tiles_capture_note_off(pad, release_velocity);
     bool hold = may_hold && tiles_pedal_is_holding_notes();
     if (hold) {
         s->held = true;
@@ -1167,8 +1134,8 @@ void tiles_expression_scan(void) {
                 s->active_note = tiles_note_map_get_note(pad);
                 uint8_t velocity = velocity_from_strike(s->strike_time_ms, s->peak_depth);
                 /* The down-stroke is over: learn it before this note's bend starts. */
-                tiles_press_path_stroke_end(&s->path);
-                tiles_capture_note_on(pad, velocity);
+                tiles_press_path_stroke_end(&s->path, &tiles_tune()->bend);
+                tiles_capture_note_on(pad, velocity, s->strike_time_ms, s->peak_depth);
                 /* Claim the note's channel, then send its per-note setup (bend center,
                  * pressure 0), so a Note-On never inherits the previous note's bend on
                  * that channel. */
@@ -1276,7 +1243,8 @@ void tiles_expression_scan(void) {
         if (s->pitch_bend_active) {
             tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
             const tiles_bend_config_t bend_cfg = {s_pitch_bend_max_cosine_deviation,
-                                                  (float)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES};
+                                                  (float)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES,
+                                                  &tiles_tune()->bend};
             uint16_t bend = 0u;
             if (hs.valid) {
                 bool produced =

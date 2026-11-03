@@ -96,10 +96,19 @@ void tiles_capture_stroke_sampled(uint8_t pad) {
     }
 }
 
-void tiles_capture_note_on(uint8_t pad, uint8_t velocity) {
+void tiles_capture_note_on(uint8_t pad, uint8_t velocity, uint32_t strike_ms, float peak_depth) {
     if (recording(pad)) {
         s_current.flags |= TILES_CAPTURE_NOTE_ON;
         s_current.velocity = velocity;
+        s_current.strike_ms = (uint16_t)(strike_ms < 65535u ? strike_ms : 65535u);
+        s_current.peak_depth = (uint16_t)(peak_depth < 65535.0f ? peak_depth : 65535.0f);
+    }
+}
+
+void tiles_capture_note_off(uint8_t pad, uint8_t release_velocity) {
+    if (recording(pad)) {
+        s_current.flags |= TILES_CAPTURE_NOTE_OFF;
+        s_current.velocity = release_velocity;
     }
 }
 
@@ -137,7 +146,7 @@ static bool repeats_last(const tiles_capture_record_t *r) {
     }
     const tiles_capture_record_t *last = &s_records[(s_total - 1u) % TILES_CAPTURE_MAX];
     const uint16_t events = TILES_CAPTURE_STROKE | TILES_CAPTURE_STROKE_BEGIN | TILES_CAPTURE_NOTE_ON |
-                            TILES_CAPTURE_STARTED;
+                            TILES_CAPTURE_STARTED | TILES_CAPTURE_NOTE_OFF;
     return (r->flags & events) == 0u && r->x == last->x && r->y == last->y && r->z == last->z &&
            r->depth == last->depth && r->state == last->state &&
            (r->flags & (TILES_CAPTURE_VALID | TILES_CAPTURE_TOUCHED)) ==

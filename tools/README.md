@@ -160,10 +160,13 @@ actually work before investing in that.
 
 ## studio/
 
-The calibration studio: one key's Hall reading and what velocity, pressure
+The calibration studio: each key's Hall reading and what velocity, pressure
 and pitch bend make of it, live in a browser, with all three bend modes side
-by side. Sources: a board (Alpha 6.7 or later), a simulated key (no
-hardware), or a capture file. See `studio/README.md`.
+by side; a guided calibration that suggests changes; live tuning of every
+feel constant (`TUNE`). Sources: a board (Alpha 6.8 or later to tune), a
+simulated key (no hardware), or a capture file. Its state is also JSON at
+`/api/state`, and reports and captures are saved in the repo. See
+`studio/README.md`.
 
 ```
 ~/.venvs/tiles-tools/bin/python tools/studio/studio.py

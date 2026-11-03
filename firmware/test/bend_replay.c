@@ -3,10 +3,12 @@
  * services/bend_core.c in all three bend modes side by side, on the computer:
  *   bend_replay <capture.csv> [max_cosine_deviation] [--trace trace.csv]
  *   bend_replay --pipe [max_cosine_deviation]      (rows on stdin, trace rows out)
+ *   bend_replay --tune-list                         (the TUNE table, as the board lists it)
  * Checks the replay of the device's own mode matches what it sent, then
  * reports each note's peak bend, time bent and 95th-percentile |delta| per
  * mode. --trace writes every row's result per mode; --pipe does the same
- * live, for tools/studio/.
+ * live, for tools/studio/. "# tune key=value ..." lines set live tuning
+ * (services/tune.h) from there on; "# tune reset" restores the defaults.
  */
 
 #include <math.h>
@@ -15,6 +17,7 @@
 #include <string.h>
 
 #include "bend_core.h"
+#include "tune.h"
 
 #define FLAG_VALID 0x01u
 #define FLAG_STARTED 0x04u
@@ -24,6 +27,7 @@
 #define FLAG_STROKE_BEGIN 0x40u
 #define FLAG_NOTE_ON 0x80u
 #define FLAG_PRESSURE 0x100u
+#define FLAG_NOTE_OFF 0x200u
 
 #define MODES TILES_BEND_MODE_COUNT
 #define NOTE_MAX_STEPS 20000
@@ -36,7 +40,7 @@ typedef struct {
     int x, y, z;
     unsigned depth;
     float sdepth;
-    unsigned bend, flags, state, velocity, aftertouch;
+    unsigned bend, flags, state, velocity, aftertouch, strike_ms, peak_depth;
 } row_t;
 
 /* One mode's replay of the current note. */
@@ -54,6 +58,7 @@ static tiles_press_path_t s_path;
 static int s_device_mode = -1; /* from the "# bend" line; -1 = unknown (Alpha 6.6: legacy) */
 static float s_sensitivity = 0.065f;
 static bool s_note;
+static bool s_quiet; /* --pipe: stdout carries only trace rows */
 static int s_notes, s_strokes_learned, s_strokes_refused;
 static unsigned long s_note_t0, s_last_t;
 static unsigned s_peak_depth, s_velocity;
@@ -73,7 +78,7 @@ static double p95(lane_t *l) {
 }
 
 static void print_note(void) {
-    if (!s_note) {
+    if (!s_note || s_quiet) {
         return;
     }
     printf("%4d  %8lu  %6lu  %5u  %3u", s_notes, s_note_t0, s_last_t - s_note_t0, s_peak_depth, s_velocity);
@@ -111,6 +116,21 @@ static void read_setup(const char *line, bool sensitivity_given) {
     }
 }
 
+/* "# tune bend.deadzone=0.03 vibrato.depth=0", or "# tune reset". */
+static void read_tune(char *line) {
+    for (char *word = strtok(line + 6, " \r\n"); word != NULL; word = strtok(NULL, " \r\n")) {
+        char *eq = strchr(word, '=');
+        if (strcmp(word, "reset") == 0) {
+            tiles_tune_reset(NULL);
+        } else if (eq != NULL) {
+            *eq = '\0';
+            if (tiles_tune_set(word, eq + 1) != TILES_TUNE_OK) {
+                fprintf(stderr, "bend_replay: tune %s=%s refused\n", word, eq + 1);
+            }
+        }
+    }
+}
+
 /* One captured pass, in expression.c's order. */
 static void replay_row(const row_t *r, long row_number) {
     if (r->flags & FLAG_STROKE_BEGIN) {
@@ -120,7 +140,7 @@ static void replay_row(const row_t *r, long row_number) {
         tiles_press_path_stroke_sample(&s_path, (int16_t)r->x, (int16_t)r->y, (int16_t)r->z);
     }
     if (r->flags & FLAG_NOTE_ON) {
-        if (tiles_press_path_stroke_end(&s_path)) {
+        if (tiles_press_path_stroke_end(&s_path, &tiles_tune()->bend)) {
             s_strokes_learned++;
         } else {
             s_strokes_refused++;
@@ -153,7 +173,8 @@ static void replay_row(const row_t *r, long row_number) {
         double dt = s_last_t ? (double)(r->t - s_last_t) : 0.0;
         for (int m = 0; m < MODES; m++) {
             lane_t *l = &s_lanes[m];
-            l->produced = tiles_bend_step(&l->b, &(tiles_bend_config_t){s_sensitivity, 12.0f}, (int16_t)r->x,
+            l->produced = tiles_bend_step(&l->b, &(tiles_bend_config_t){s_sensitivity, 12.0f, &tiles_tune()->bend},
+                                          (int16_t)r->x,
                                           (int16_t)r->y, (int16_t)r->z, r->sdepth, (uint32_t)r->t, &l->bend);
             if (!l->produced) {
                 continue;
@@ -186,17 +207,18 @@ static void replay_row(const row_t *r, long row_number) {
     s_last_t = r->t;
 }
 
-/* t,depth,smoothed_depth,state,flags, then delta and semitones per mode
- * (empty when that mode gave nothing), then the learned path. */
+/* t,depth,smoothed_depth,state,flags, then delta, semitones and vibrato
+ * energy per mode (empty when that mode gave nothing), then the learned
+ * path. */
 static void trace_row(FILE *out, const row_t *r) {
     fprintf(out, "%lu,%u,%.1f,%u,%u", r->t, r->depth, (double)r->sdepth, r->state, r->flags);
     for (int m = 0; m < MODES; m++) {
         const lane_t *l = &s_lanes[m];
         if (l->produced) {
-            fprintf(out, ",%.5f,%.3f", (double)l->b.delta,
-                    ((double)l->bend - (double)l->b.center) * SEMITONES_PER_UNIT);
+            fprintf(out, ",%.5f,%.3f,%.2f", (double)l->b.delta,
+                    ((double)l->bend - (double)l->b.center) * SEMITONES_PER_UNIT, (double)l->b.wiggle_energy);
         } else {
-            fprintf(out, ",,");
+            fprintf(out, ",,,");
         }
     }
     fprintf(out, ",%.9g,%.9g,%u\n", (double)s_path.bx, (double)s_path.by, (unsigned)s_path.strokes);
@@ -205,16 +227,19 @@ static void trace_row(FILE *out, const row_t *r) {
 static void trace_header(FILE *out) {
     fprintf(out, "t_ms,depth,smoothed_depth,state,flags");
     for (int m = 0; m < MODES; m++) {
-        fprintf(out, ",%s_delta,%s_semitones", TILES_BEND_MODE_NAMES[m], TILES_BEND_MODE_NAMES[m]);
+        fprintf(out, ",%s_delta,%s_semitones,%s_vibrato", TILES_BEND_MODE_NAMES[m], TILES_BEND_MODE_NAMES[m],
+                TILES_BEND_MODE_NAMES[m]);
     }
     fprintf(out, ",path_bx,path_by,path_strokes\n");
 }
 
+/* 9 columns (Alpha 6.6), 11 (6.7) or 13. */
 static bool parse_row(const char *line, row_t *r) {
-    r->velocity = r->aftertouch = 0;
-    int n = sscanf(line, "%lu,%d,%d,%d,%u,%f,%u,%u,%u,%u,%u", &r->t, &r->x, &r->y, &r->z, &r->depth, &r->sdepth,
-                   &r->bend, &r->flags, &r->state, &r->velocity, &r->aftertouch);
-    return n == 9 || n == 11;
+    r->velocity = r->aftertouch = r->strike_ms = r->peak_depth = 0;
+    int n = sscanf(line, "%lu,%d,%d,%d,%u,%f,%u,%u,%u,%u,%u,%u,%u", &r->t, &r->x, &r->y, &r->z, &r->depth,
+                   &r->sdepth, &r->bend, &r->flags, &r->state, &r->velocity, &r->aftertouch, &r->strike_ms,
+                   &r->peak_depth);
+    return n == 9 || n == 11 || n == 13;
 }
 
 int main(int argc, char **argv) {
@@ -225,6 +250,13 @@ int main(int argc, char **argv) {
             trace_path = argv[++i];
         } else if (strcmp(argv[i], "--pipe") == 0) {
             pipe = true;
+            s_quiet = true;
+        } else if (strcmp(argv[i], "--tune-list") == 0) {
+            char line[160];
+            for (uint16_t k = 0; tiles_tune_describe(k, line, sizeof(line)); k++) {
+                printf("%s\n", line);
+            }
+            return 0;
         } else if (in_path == NULL && !pipe) {
             in_path = argv[i];
         } else {
@@ -265,6 +297,10 @@ int main(int argc, char **argv) {
     while (fgets(line, sizeof(line), in)) {
         if (strncmp(line, "# bend", 6) == 0) {
             read_setup(line, sensitivity_given);
+            continue;
+        }
+        if (strncmp(line, "# tune", 6) == 0) {
+            read_tune(line);
             continue;
         }
         row_t r;

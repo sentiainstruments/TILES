@@ -25,9 +25,34 @@ typedef enum {
 /* "legacy", "cosine", "path": the setting's values. */
 extern const char *const TILES_BEND_MODE_NAMES[TILES_BEND_MODE_COUNT];
 
+/* The constants bend reads, live-tunable (services/tune.h); defaults and
+ * why: bend_core.c. */
+typedef struct {
+    float deadzone;            /* cosine delta, soft knee */
+    uint32_t settle_ms;        /* before the baseline is taken */
+    float smoothing;           /* EMA alpha of each stage */
+    float recenter_slow;       /* baseline pull with no bend held */
+    float recenter_fast;       /* LEGACY/COSINE, while depth changes */
+    float depth_activity_full; /* depth rate counted as fully pressing */
+    uint32_t arm_ms;           /* a bend ramps to full weight */
+    float vibrato_floor;       /* wiggle energy, raw units */
+    float vibrato_full;
+    uint32_t vibrato_arm_ms;
+    float vibrato_rate_hz;
+    float vibrato_depth;       /* wire units; 0 = no vibrato */
+    float path_min_z_range;    /* press path stroke checks, raw units */
+    float path_max_residual;
+    float path_max_slope;
+    uint32_t path_min_strokes;
+    uint32_t path_average_strokes;
+} tiles_bend_tuning_t;
+
+extern const tiles_bend_tuning_t TILES_BEND_TUNING_DEFAULT;
+
 typedef struct {
     float max_cosine_deviation; /* full bend; smaller = more sensitive */
     float wire_range_semitones; /* the range declared with RPN 0 */
+    const tiles_bend_tuning_t *tuning; /* NULL: TILES_BEND_TUNING_DEFAULT */
 } tiles_bend_config_t;
 
 /* One pad's press path: how X and Y move with Z on a straight press,
@@ -54,7 +79,8 @@ typedef struct {
     float run_magnitude; /* LEGACY: |B| for both cosine terms, frozen during a run */
     float baseline_x, baseline_y;
     float path_bx, path_by;   /* PATH: this note's slope */
-    bool path_learned;        /* PATH: false = the note's own direction at settle */
+    uint16_t path_strokes;    /* PATH: strokes behind it at note-on */
+    bool path_learned;        /* PATH, from settle: false = the note's own direction */
     float anchor_x, anchor_y; /* PATH: a, set at settle */
     float prev_depth;
     float depth_rate;   /* EMA of the signed depth delta */
@@ -84,4 +110,4 @@ bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x,
 void tiles_press_path_reset(tiles_press_path_t *p);
 void tiles_press_path_stroke_begin(tiles_press_path_t *p);
 void tiles_press_path_stroke_sample(tiles_press_path_t *p, int16_t x, int16_t y, int16_t z);
-bool tiles_press_path_stroke_end(tiles_press_path_t *p);
+bool tiles_press_path_stroke_end(tiles_press_path_t *p, const tiles_bend_tuning_t *tuning);

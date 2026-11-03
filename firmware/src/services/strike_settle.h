@@ -8,12 +8,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* The longest wait after the crossing. Long enough for a light touch to
- * plateau, short of perceptible latency (~10-20 ms). First guess. */
-#define TILES_STRIKE_FOLLOWTHROUGH_MS 20u
-/* "Stopped going down": depth units (full scale ~1450), ms and samples.
- * A touched pad's Hall is read every pass (~2.5 ms). First guesses. */
-#define TILES_STRIKE_SETTLE_RISE 8.0f
+#include "tune.h"
+
+/* The longest wait after the crossing, and the rise that counts as still
+ * going down (live: tune.h). */
+#define TILES_STRIKE_FOLLOWTHROUGH_MS (tiles_tune()->followthrough_ms)
+#define TILES_STRIKE_SETTLE_RISE (tiles_tune()->settle_rise)
+/* "Stopped going down" also needs this long and this many fresh samples;
+ * a touched pad's Hall is read every pass (~2.5 ms). First guesses. */
 #define TILES_STRIKE_SETTLE_MS 4u
 #define TILES_STRIKE_SETTLE_SAMPLES 2u
 

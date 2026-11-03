@@ -66,14 +66,26 @@ CAPTURE STATUS\n          pad=<p> running=<0|1> count=<n> max=<m> watching=<0|1>
                           bend mode=<m> sensitivity=<s> bx=<b> by=<b> strokes=<n>
                           (the pad's bend setup when recording started), then OK
 CAPTURE READ\n            every record held, one line each, then OK:
-                          t_ms,x,y,z,depth,smoothed_depth,bend,flags,state,velocity,aftertouch
-                          (firmware/test/captures/README.md)
+                          t_ms,x,y,z,depth,smoothed_depth,bend,flags,state,velocity,aftertouch,
+                          strike_ms,peak_depth (firmware/test/captures/README.md)
 CAPTURE READ <from>\n     seq=<first>, then up to 300 records from sequence number <from>
                           on (smoothed_depth to 0.1), then OK; ask again from first + rows
-HALL\n                    every pad now, one line each, then OK: pad,x,y,z,depth,valid,touched
+HALL\n                    every pad now, one line each, then OK:
+                          pad,x,y,z,depth,valid,touched,rest_z,rest_confirmed,sensor_ok
 BEND PATHS\n              every pad's learned press path, then OK: pad=<p> bx=<b> by=<b> strokes=<n>
 BEND RESET\n              forget every learned press path: OK
+TUNE\n                    live tuning (firmware/src/services/tune.h), one line per key, then OK:
+                          key=<k> value=<v> default=<d> min=<m> max=<M> group=<g>
+TUNE SET <key> <value>\n  OK | ERR unknown-key | bad-value | out-of-range | conflict (breaks an
+                          order the code needs, e.g. key.up_depth >= strike.depth)
+TUNE RESET [<key>]\n      one key, or every key, back to its default: OK
 ```
+
+`TUNE` values are the feel constants (strike, velocity, pressure, key, bend,
+vibrato, press path learner). They apply at once and are **never saved**: a
+board boots with the defaults compiled in. The calibration studio
+(`tools/studio/`) is the tool for them; values that work become the defaults
+in the code.
 
 `SET`/`RESET` apply **immediately** and are saved to flash **automatically** ~2 s
 after the last change, only while no pad is being touched (a flash write stalls
@@ -370,7 +382,8 @@ last_result, pending, failures); the content store's
 `content.records`, `content.bytes=<used>/<capacity>`, `content.writes`,
 `content.last_result`; main-loop timing `loop.avg_us`, `loop.max_us` (last
 second) and `loop.max_ever_us`; sensor health `hall.rezeros`,
-`hall.unconfirmed`, `hall.reinits`, `hall.dead`, `touch.recoveries`; the
+`hall.unconfirmed`, `hall.reinits`, `hall.dead`, `touch.recoveries`;
+`tune.changed` (live tuning values away from their defaults); the
 sequencer's autosave `seq.storage`, `seq.saved_bytes`, `seq.saves`,
 `seq.pending`, `seq.truncated`; boot timing `boot.ms` (power-on to the main loop) and
 `boot.sensors_ms`; drum mode's store `drums.storage`,

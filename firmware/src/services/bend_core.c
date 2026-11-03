@@ -80,6 +80,30 @@ const char *const TILES_BEND_MODE_NAMES[TILES_BEND_MODE_COUNT] = {"legacy", "cos
  * by 1/this, so a few tilted strikes can't retrain it. */
 #define PATH_AVERAGE_STROKES 16u
 
+const tiles_bend_tuning_t TILES_BEND_TUNING_DEFAULT = {
+    .deadzone = BEND_DEADZONE_COSINE_DELTA,
+    .settle_ms = BEND_SETTLE_MS,
+    .smoothing = BEND_SMOOTHING_ALPHA,
+    .recenter_slow = BEND_BASELINE_RECENTER_ALPHA_SLOW,
+    .recenter_fast = BEND_BASELINE_RECENTER_ALPHA_FAST,
+    .depth_activity_full = BEND_DEPTH_ACTIVITY_FULL_SCALE,
+    .arm_ms = BEND_ARM_MS,
+    .vibrato_floor = VIBRATO_ENERGY_NOISE_FLOOR,
+    .vibrato_full = VIBRATO_ENERGY_FULL_SCALE,
+    .vibrato_arm_ms = VIBRATO_ARM_MS,
+    .vibrato_rate_hz = VIBRATO_RATE_HZ,
+    .vibrato_depth = VIBRATO_MAX_WIRE_DEPTH,
+    .path_min_z_range = PATH_STROKE_MIN_Z_RANGE,
+    .path_max_residual = PATH_STROKE_MAX_RESIDUAL,
+    .path_max_slope = PATH_MAX_SLOPE,
+    .path_min_strokes = PATH_MIN_STROKES,
+    .path_average_strokes = PATH_AVERAGE_STROKES,
+};
+
+static const tiles_bend_tuning_t *tuning_of(const tiles_bend_config_t *cfg) {
+    return cfg->tuning != NULL ? cfg->tuning : &TILES_BEND_TUNING_DEFAULT;
+}
+
 /* component / |B|; a near-zero |B| returns 0. */
 static float direction_cosine_from(float x_component, float magnitude) {
     if (magnitude < 1.0f) {
@@ -88,13 +112,13 @@ static float direction_cosine_from(float x_component, float magnitude) {
     return x_component / magnitude;
 }
 
-/* 0..1 over BEND_ARM_MS of a run, then 1. `hold_ms` = how long the current
- * run has lasted (0 = none). */
-static float confidence_multiplier(uint32_t hold_ms) {
-    if (hold_ms >= BEND_ARM_MS) {
+/* 0..1 over arm_ms of a run, then 1. `hold_ms` = how long the current run
+ * has lasted (0 = none). */
+static float confidence_multiplier(uint32_t hold_ms, uint32_t arm_ms) {
+    if (hold_ms >= arm_ms) {
         return 1.0f;
     }
-    return (float)hold_ms / (float)BEND_ARM_MS;
+    return (float)hold_ms / (float)arm_ms;
 }
 
 /* Cosine delta -> 14-bit bend: soft-knee deadzone, then the confidence
@@ -103,10 +127,11 @@ static float confidence_multiplier(uint32_t hold_ms) {
  * stuck at 48 (common synths ignore RPN 0). Updates the run tracking. */
 static uint16_t bend_14bit_from_cosine_delta(tiles_bend_t *b, const tiles_bend_config_t *cfg, float delta,
                                              uint32_t now_ms) {
+    const tiles_bend_tuning_t *t = tuning_of(cfg);
     float magnitude = fabsf(delta);
     bool positive = delta >= 0.0f;
     float sign = positive ? 1.0f : -1.0f;
-    if (magnitude <= BEND_DEADZONE_COSINE_DELTA) {
+    if (magnitude <= t->deadzone) {
         b->run_active = false;
         magnitude = 0.0f;
     } else {
@@ -117,10 +142,10 @@ static uint16_t bend_14bit_from_cosine_delta(tiles_bend_t *b, const tiles_bend_c
             b->run_start_ms = now_ms;
         }
         b->run_positive = positive;
-        magnitude -= BEND_DEADZONE_COSINE_DELTA;
+        magnitude -= t->deadzone;
     }
 
-    float usable_range = cfg->max_cosine_deviation - BEND_DEADZONE_COSINE_DELTA;
+    float usable_range = cfg->max_cosine_deviation - t->deadzone;
     if (usable_range < 0.01f) {
         /* Sensitivity at or below the deadzone: keep a small range. */
         usable_range = 0.01f;
@@ -128,7 +153,7 @@ static uint16_t bend_14bit_from_cosine_delta(tiles_bend_t *b, const tiles_bend_c
     float normalized = sign * (magnitude / usable_range);
 
     uint32_t hold_ms = b->run_active ? (now_ms - b->run_start_ms) : 0u;
-    normalized *= confidence_multiplier(hold_ms);
+    normalized *= confidence_multiplier(hold_ms, t->arm_ms);
 
     if (normalized > 1.0f) {
         normalized = 1.0f;
@@ -148,8 +173,8 @@ static uint16_t bend_14bit_from_cosine_delta(tiles_bend_t *b, const tiles_bend_c
 }
 
 /* Adds the vibrato on top of an already computed bend. */
-static uint16_t apply_vibrato(tiles_bend_t *b, uint16_t bend, uint32_t now_ms) {
-    bool above_floor = b->wiggle_energy > VIBRATO_ENERGY_NOISE_FLOOR;
+static uint16_t apply_vibrato(tiles_bend_t *b, const tiles_bend_tuning_t *t, uint16_t bend, uint32_t now_ms) {
+    bool above_floor = b->wiggle_energy > t->vibrato_floor;
     if (above_floor) {
         if (!b->wiggle_active) {
             b->wiggle_active = true;
@@ -160,27 +185,31 @@ static uint16_t apply_vibrato(tiles_bend_t *b, uint16_t bend, uint32_t now_ms) {
     }
 
     uint32_t hold_ms = b->wiggle_active ? (now_ms - b->wiggle_start_ms) : 0u;
-    float confirm = (hold_ms >= VIBRATO_ARM_MS) ? 1.0f : (float)hold_ms / (float)VIBRATO_ARM_MS;
+    float confirm = (hold_ms >= t->vibrato_arm_ms) ? 1.0f : (float)hold_ms / (float)t->vibrato_arm_ms;
 
-    float energy_above_floor = b->wiggle_energy - VIBRATO_ENERGY_NOISE_FLOOR;
+    float energy_above_floor = b->wiggle_energy - t->vibrato_floor;
     if (energy_above_floor < 0.0f) {
         energy_above_floor = 0.0f;
     }
-    float depth = energy_above_floor / (VIBRATO_ENERGY_FULL_SCALE - VIBRATO_ENERGY_NOISE_FLOOR);
+    float span = t->vibrato_full > t->vibrato_floor ? t->vibrato_full - t->vibrato_floor : 1.0f;
+    float depth = energy_above_floor / span;
     if (depth > 1.0f) {
         depth = 1.0f;
     }
     depth *= confirm;
-    if (depth <= 0.0f) {
+    if (depth <= 0.0f || t->vibrato_depth <= 0.0f) {
         return bend;
     }
 
     /* Integer phase first: uptime in ms as a float drifts the LFO. */
-    uint32_t period_ms = (uint32_t)(1000.0f / VIBRATO_RATE_HZ);
+    uint32_t period_ms = t->vibrato_rate_hz > 0.0f ? (uint32_t)(1000.0f / t->vibrato_rate_hz) : 0u;
+    if (period_ms == 0u) {
+        return bend;
+    }
     uint32_t phase_ms = now_ms % period_ms;
     float lfo = sinf(2.0f * BEND_PI * (float)phase_ms / (float)period_ms);
 
-    int32_t with_vibrato = (int32_t)bend + (int32_t)(depth * VIBRATO_MAX_WIRE_DEPTH * lfo);
+    int32_t with_vibrato = (int32_t)bend + (int32_t)(depth * t->vibrato_depth * lfo);
     if (with_vibrato < 0) {
         with_vibrato = 0;
     }
@@ -210,9 +239,10 @@ void tiles_bend_start(tiles_bend_t *b, tiles_bend_mode_t mode, const tiles_press
     b->z2 = fz;
     b->magnitude = magnitude;
     b->run_magnitude = magnitude;
-    b->path_learned = path != NULL && path->strokes >= PATH_MIN_STROKES;
-    b->path_bx = b->path_learned ? path->bx : 0.0f;
-    b->path_by = b->path_learned ? path->by : 0.0f;
+    b->path_strokes = path != NULL ? path->strokes : 0u;
+    b->path_bx = path != NULL ? path->bx : 0.0f;
+    b->path_by = path != NULL ? path->by : 0.0f;
+    b->path_learned = false;
     b->anchor_x = 0.0f;
     b->anchor_y = 0.0f;
     b->prev_depth = depth;
@@ -228,7 +258,8 @@ void tiles_bend_start(tiles_bend_t *b, tiles_bend_mode_t mode, const tiles_press
 /* PATH at settle: the slope (learned, or this note's own direction) and
  * the anchor a = x - b*z, then the stages move to the residual, which is 0
  * here by construction. */
-static void anchor_path(tiles_bend_t *b) {
+static void anchor_path(tiles_bend_t *b, const tiles_bend_tuning_t *t) {
+    b->path_learned = b->path_strokes >= t->path_min_strokes;
     if (!b->path_learned) {
         float z = fabsf(b->z2) >= 1.0f ? b->z2 : 1.0f;
         b->path_bx = b->x2 / z;
@@ -242,6 +273,8 @@ static void anchor_path(tiles_bend_t *b) {
 
 bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x, int16_t y, int16_t z,
                      float smoothed_depth, uint32_t now_ms, uint16_t *out_bend) {
+    const tiles_bend_tuning_t *t = tuning_of(cfg);
+    const float alpha = t->smoothing;
     float fx = (float)x;
     float fy = (float)y;
     float fz = (float)z;
@@ -260,28 +293,28 @@ bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x,
             fy = direction_cosine_from(fy - b->anchor_y - b->path_by * fz, magnitude);
             wiggle_scale = b->magnitude;
         } else {
-            b->z1 += BEND_SMOOTHING_ALPHA * (fz - b->z1);
-            b->z2 += BEND_SMOOTHING_ALPHA * (b->z1 - b->z2);
+            b->z1 += alpha * (fz - b->z1);
+            b->z2 += alpha * (b->z1 - b->z2);
         }
     }
 
-    b->x1 += BEND_SMOOTHING_ALPHA * (fx - b->x1);
-    b->x2 += BEND_SMOOTHING_ALPHA * (b->x1 - b->x2);
-    b->y1 += BEND_SMOOTHING_ALPHA * (fy - b->y1);
-    b->y2 += BEND_SMOOTHING_ALPHA * (b->y1 - b->y2);
-    b->magnitude += BEND_SMOOTHING_ALPHA * (magnitude - b->magnitude);
+    b->x1 += alpha * (fx - b->x1);
+    b->x2 += alpha * (b->x1 - b->x2);
+    b->y1 += alpha * (fy - b->y1);
+    b->y2 += alpha * (b->y1 - b->y2);
+    b->magnitude += alpha * (magnitude - b->magnitude);
 
     /* Vibrato energy from the gap between the two stages, every pass. */
     {
         float wiggle_x = b->x1 - b->x2;
         float wiggle_y = b->y1 - b->y2;
         float wiggle = sqrtf(wiggle_x * wiggle_x + wiggle_y * wiggle_y) * wiggle_scale;
-        b->wiggle_energy += BEND_SMOOTHING_ALPHA * (wiggle - b->wiggle_energy);
+        b->wiggle_energy += alpha * (wiggle - b->wiggle_energy);
     }
 
-    b->depth_rate += BEND_SMOOTHING_ALPHA * ((smoothed_depth - b->prev_depth) - b->depth_rate);
+    b->depth_rate += alpha * ((smoothed_depth - b->prev_depth) - b->depth_rate);
     /* 0 (depth steady) .. 1 (changing fast). */
-    float depth_activity = fabsf(b->depth_rate) / BEND_DEPTH_ACTIVITY_FULL_SCALE;
+    float depth_activity = fabsf(b->depth_rate) / t->depth_activity_full;
     if (depth_activity > 1.0f) {
         depth_activity = 1.0f;
     }
@@ -289,9 +322,9 @@ bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x,
 
     if (!b->settled) {
         /* Centred until the settle time, then the baseline from the cascade. */
-        if ((now_ms - b->start_ms) >= BEND_SETTLE_MS) {
+        if ((now_ms - b->start_ms) >= t->settle_ms) {
             if (b->mode == TILES_BEND_MODE_PATH) {
-                anchor_path(b);
+                anchor_path(b, t);
             }
             b->baseline_x = b->x2;
             b->baseline_y = b->y2;
@@ -307,8 +340,8 @@ bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x,
         /* Depth is predicted by the path, so nothing chases it: only slow
          * creep is pulled out, and only while no bend is held. */
         if (!b->run_active) {
-            b->baseline_x += BEND_BASELINE_RECENTER_ALPHA_SLOW * (b->x2 - b->baseline_x);
-            b->baseline_y += BEND_BASELINE_RECENTER_ALPHA_SLOW * (b->y2 - b->baseline_y);
+            b->baseline_x += t->recenter_slow * (b->x2 - b->baseline_x);
+            b->baseline_y += t->recenter_slow * (b->y2 - b->baseline_y);
         }
         delta_x = b->baseline_x - b->x2;
         delta_y = b->baseline_y - b->y2;
@@ -318,9 +351,7 @@ bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x,
          * blend let sensor noise erase real tilts. */
         if (!b->run_active) {
             float activity_shaped = depth_activity * depth_activity * depth_activity;
-            float recenter_alpha = BEND_BASELINE_RECENTER_ALPHA_SLOW +
-                                   (BEND_BASELINE_RECENTER_ALPHA_FAST - BEND_BASELINE_RECENTER_ALPHA_SLOW) *
-                                       activity_shaped;
+            float recenter_alpha = t->recenter_slow + (t->recenter_fast - t->recenter_slow) * activity_shaped;
             b->baseline_x += recenter_alpha * (b->x2 - b->baseline_x);
             b->baseline_y += recenter_alpha * (b->y2 - b->baseline_y);
             b->run_magnitude = b->magnitude;
@@ -345,7 +376,7 @@ bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x,
     b->delta = (delta_x >= 0.0f) ? combined : -combined;
 
     uint16_t bend = bend_14bit_from_cosine_delta(b, cfg, b->delta, now_ms);
-    *out_bend = apply_vibrato(b, bend, now_ms);
+    *out_bend = apply_vibrato(b, t, bend, now_ms);
     return true;
 }
 
@@ -392,8 +423,8 @@ void tiles_press_path_stroke_sample(tiles_press_path_t *p, int16_t x, int16_t y,
 
 /* Least-squares X and Y against Z over the stroke; false if it is too
  * short, too shallow, or not a straight line. */
-static bool fit_stroke(const tiles_press_path_t *p, float *bx, float *by) {
-    if (p->n < PATH_STROKE_MIN_SAMPLES || p->zmax - p->zmin < PATH_STROKE_MIN_Z_RANGE) {
+static bool fit_stroke(const tiles_press_path_t *p, const tiles_bend_tuning_t *t, float *bx, float *by) {
+    if (p->n < PATH_STROKE_MIN_SAMPLES || p->zmax - p->zmin < t->path_min_z_range) {
         return false;
     }
     float n = (float)p->n;
@@ -409,19 +440,20 @@ static bool fit_stroke(const tiles_press_path_t *p, float *bx, float *by) {
     /* Variance left once the line is taken out. */
     float rest_x = (p->sxx / n - mx * mx) - cov_zx * cov_zx / var_z;
     float rest_y = (p->syy / n - my * my) - cov_zy * cov_zy / var_z;
-    float limit = PATH_STROKE_MAX_RESIDUAL * PATH_STROKE_MAX_RESIDUAL;
+    float limit = t->path_max_residual * t->path_max_residual;
     if (rest_x > limit || rest_y > limit) {
         return false;
     }
     *bx = cov_zx / var_z;
     *by = cov_zy / var_z;
-    return fabsf(*bx) <= PATH_MAX_SLOPE && fabsf(*by) <= PATH_MAX_SLOPE;
+    return fabsf(*bx) <= t->path_max_slope && fabsf(*by) <= t->path_max_slope;
 }
 
-bool tiles_press_path_stroke_end(tiles_press_path_t *p) {
+bool tiles_press_path_stroke_end(tiles_press_path_t *p, const tiles_bend_tuning_t *tuning) {
+    const tiles_bend_tuning_t *t = tuning != NULL ? tuning : &TILES_BEND_TUNING_DEFAULT;
     float bx;
     float by;
-    bool ok = fit_stroke(p, &bx, &by);
+    bool ok = fit_stroke(p, t, &bx, &by);
     p->n = 0u;
     if (!ok) {
         return false;
@@ -429,7 +461,8 @@ bool tiles_press_path_stroke_end(tiles_press_path_t *p) {
     if (p->strokes < UINT16_MAX) {
         p->strokes++;
     }
-    float weight = 1.0f / (float)(p->strokes < PATH_AVERAGE_STROKES ? p->strokes : PATH_AVERAGE_STROKES);
+    uint32_t average = t->path_average_strokes > 0u ? t->path_average_strokes : 1u;
+    float weight = 1.0f / (float)(p->strokes < average ? p->strokes : average);
     p->bx += weight * (bx - p->bx);
     p->by += weight * (by - p->by);
     return true;

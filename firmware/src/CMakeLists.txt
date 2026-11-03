@@ -42,6 +42,7 @@ add_executable(sentia_tiles_firmware
     services/physics.c
     services/physics_core.c
     services/bend_core.c
+    services/tune.c
     services/strike_settle.c
     services/rest_guard.c
     services/seq_pattern.c
@@ -115,6 +116,10 @@ pico_enable_stdio_uart(sentia_tiles_firmware 0)
 # reading costs at most 5 ms once, then prints are dropped. Paired with the
 # 1 KB CDC TX buffer in midi/tusb_config.h.
 target_compile_definitions(sentia_tiles_firmware PRIVATE PICO_STDIO_USB_STDOUT_TIMEOUT_US=5000)
+
+# No fused multiply-adds in the bend math, so the computer's replay
+# (test/bend_replay.c, built the same way) matches the board bit for bit.
+set_source_files_properties(services/bend_core.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 
 # cmake -DTILES_UNIT=N: a build for unit N (board/unit_id.h's default
 # otherwise; tools/make_update_kit.sh).

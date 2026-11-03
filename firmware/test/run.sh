@@ -43,15 +43,19 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_physics_core.c src
 /tmp/sentia_tiles_test_physics_core
 
 # Strike settle: when a struck pad's note can go before the follow-through ends.
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_strike_settle.c src/services/strike_settle.c -o /tmp/sentia_tiles_test_strike_settle
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_strike_settle.c src/services/strike_settle.c src/services/tune.c src/services/bend_core.c -lm -o /tmp/sentia_tiles_test_strike_settle
 /tmp/sentia_tiles_test_strike_settle
 
+# The live tuning table (TUNE): defaults, ranges, conflicts, reset.
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_tune.c src/services/tune.c src/services/bend_core.c -lm -o /tmp/sentia_tiles_test_tune
+/tmp/sentia_tiles_test_tune
+
 # Pitch bend from tilt: settling, straight presses, tilt direction, range, deadzone.
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_bend_core.c src/services/bend_core.c -lm -o /tmp/sentia_tiles_test_bend_core
+cc -std=c11 -Wall -Wextra -Wpedantic -ffp-contract=off -Isrc/services test/test_bend_core.c src/services/bend_core.c -lm -o /tmp/sentia_tiles_test_bend_core
 /tmp/sentia_tiles_test_bend_core
 
 # The capture replay tool (test/captures/README.md), and every capture saved there.
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/bend_replay.c src/services/bend_core.c -lm -o /tmp/sentia_tiles_bend_replay
+cc -std=c11 -Wall -Wextra -Wpedantic -ffp-contract=off -Isrc/services test/bend_replay.c src/services/bend_core.c src/services/tune.c -lm -o /tmp/sentia_tiles_bend_replay
 for capture in test/captures/*.csv; do
     if [ -e "$capture" ]; then /tmp/sentia_tiles_bend_replay "$capture" > /dev/null; fi
 done

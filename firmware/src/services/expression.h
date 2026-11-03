@@ -10,6 +10,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "tune.h"
+
 void tiles_expression_init(void);
 
 /* Runs every pad's state machine. Call every main-loop pass, after
@@ -89,13 +91,10 @@ void tiles_expression_force_release_all(void);
  * then. Both measured against TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA. */
 uint8_t tiles_expression_velocity_from_strike(uint32_t strike_time_ms, float peak_depth);
 
-/* The strike threshold the velocity curve is calibrated against. The
- * single source of truth: expression.c's MIN_STRIKE_DEPTH_DELTA is defined
- * from it. */
-#define TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA 150.0f
-/* Overshoot past it (by the end of the follow-through) at which the depth
- * signal maxes out; a strike this deep has nothing left to measure
- * (strike_settle.h). Unmeasured. */
-#define TILES_EXPRESSION_STRIKE_OVERSHOOT_FULL_SCALE 550.0f
+/* The strike threshold the velocity curve is calibrated against, and the
+ * overshoot past it where the depth score maxes out: live values, every
+ * mode reads them here (defaults and why: tune.h). */
+#define TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA (tiles_tune()->strike_depth)
+#define TILES_EXPRESSION_STRIKE_OVERSHOOT_FULL_SCALE (tiles_tune()->overshoot_full)
 #define TILES_EXPRESSION_FULL_STRIKE_DEPTH \
     (TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA + TILES_EXPRESSION_STRIKE_OVERSHOOT_FULL_SCALE)

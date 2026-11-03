@@ -41,6 +41,9 @@ Usage:
     python3 tools/tiles_control.py content list          # everything in the content store
     python3 tools/tiles_control.py content clear         # wipe it (all custom scales)
     python3 tools/tiles_control.py capture 7 6 press.csv # record pad 7's raw Hall data for 6 s
+    python3 tools/tiles_control.py tune                  # live tuning: every key, value, default, range
+    python3 tools/tiles_control.py tune set bend.deadzone 0.03   # until power-off (the studio does this)
+    python3 tools/tiles_control.py tune reset            # all keys back to their defaults (or: tune reset <key>)
 
 Changes apply immediately and are saved to flash automatically a couple of
 seconds after the last one (only while no pad is being touched); `save` just
@@ -181,7 +184,7 @@ class Session:
                 return lines
 
 
-CAPTURE_COLUMNS = "t_ms,x,y,z,depth,smoothed_depth,bend,flags,state,velocity,aftertouch"
+CAPTURE_COLUMNS = "t_ms,x,y,z,depth,smoothed_depth,bend,flags,state,velocity,aftertouch,strike_ms,peak_depth"
 
 
 def capture(session, pad, seconds, path):
@@ -195,10 +198,16 @@ def capture(session, pad, seconds, path):
     time.sleep(seconds)
     session.command("CAPTURE STOP")
     status = session.command("CAPTURE STATUS", multi_line=True)
+    # Alpha 6.8: live tuning away from the defaults, so the replay uses it too.
+    tune = [dict(w.split("=", 1) for w in row.split()) for row in session.command("TUNE", multi_line=True)
+            if row.startswith("key=")]
+    changed = " ".join(f"{t['key']}={t['value']}" for t in tune if float(t["value"]) != float(t["default"]))
     rows = session.command("CAPTURE READ", multi_line=True)
     with open(path, "w") as f:
         # Alpha 6.7: the bend mode and pad's learned path at the start, so a replay starts there too.
         f.writelines("# " + line + "\n" for line in status if line.startswith("bend "))
+        if changed:
+            f.write(f"# tune {changed}\n")
         f.write(CAPTURE_COLUMNS + "\n")
         f.writelines(row + "\n" for row in rows)
     print(f"{len(rows)} samples saved to {path} ({status[0] if status else ''})")
@@ -237,6 +246,12 @@ def main():
         multi = sys.argv[2].lower() == "get"
     elif command == "content" and argc == 3 and sys.argv[2].lower() in ("list", "clear"):
         request, multi = f"CONTENT {sys.argv[2].upper()}", sys.argv[2].lower() == "list"
+    elif command == "tune" and argc == 2:
+        request, multi = "TUNE", True
+    elif command == "tune" and argc == 5 and sys.argv[2].lower() == "set":
+        request, multi = f"TUNE SET {sys.argv[3]} {sys.argv[4]}", False
+    elif command == "tune" and argc in (3, 4) and sys.argv[2].lower() == "reset":
+        request, multi = " ".join(["TUNE RESET"] + sys.argv[3:]), False
     elif command == "capture" and argc == 5:
         capture(session, int(sys.argv[2]), float(sys.argv[3]), sys.argv[4])
         return

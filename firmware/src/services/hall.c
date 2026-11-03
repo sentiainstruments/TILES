@@ -333,6 +333,15 @@ uint16_t tiles_hall_get_depth(uint8_t logical_pad) {
     return tiles_rest_guard_depth(&s_rest[i], s_pad_sample[i].z);
 }
 
+bool tiles_hall_get_rest(uint8_t logical_pad, int16_t *baseline_z, bool *confirmed) {
+    if (logical_pad < 1u || logical_pad > TILES_NUM_PADS || !s_pad_init_ok[logical_pad - 1u]) {
+        return false;
+    }
+    *baseline_z = s_rest[logical_pad - 1u].baseline;
+    *confirmed = s_rest[logical_pad - 1u].confirmed;
+    return true;
+}
+
 tiles_hall_rest_info_t tiles_hall_get_rest_info(void) {
     tiles_hall_rest_info_t info = {0u, 0u, s_reinits, 0u, s_boot_us / 1000u};
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
