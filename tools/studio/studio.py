@@ -681,10 +681,11 @@ class Pipeline(threading.Thread):
         cal.suggestions[step["id"]] = sugg
 
     def _apply(self, keys):
+        A.reconcile(self.cal.suggestions, self.tune_values(), self.settings)
         errors = []
         for sid, suggestions in self.cal.suggestions.items():
             for s in suggestions:
-                if keys != "all" and s["key"] not in keys:
+                if (keys != "all" and s["key"] not in keys) or s.get("blocked"):
                     continue
                 if s["kind"] == "tune":
                     error = self._tune_set(s["key"], s["suggested"])
@@ -817,7 +818,7 @@ class Pipeline(threading.Thread):
             "pads": [p.summary() for p in self.pads.values()],
             "pad": status.get("pad"),
             "notes": self.notes.public(12),
-            "calibration": self.cal.public(status.get("pad")),
+            "calibration": self.cal.public(status.get("pad"), self.tune_values(), self.settings),
             "files": self.files[-20:],
         }
 
@@ -911,7 +912,8 @@ def report_markdown(s):
     if cal["suggestions"]:
         lines += ["## Suggestions", "", "| Key | Now | Suggested | Why | Applied |", "|---|---|---|---|---|"]
         for x in cal["suggestions"]:
-            lines.append(f"| `{x['key']}` | {x['current']} | {x['suggested']} | {x['why']} | "
+            why = x["why"] + (f" (held back: {x['blocked']})" if x.get("blocked") else "")
+            lines.append(f"| `{x['key']}` | {x['current']} | {x['suggested']} | {why} | "
                          f"{'yes' if x.get('applied') else 'no'} |")
         lines.append("")
     if s["tune_changed"]:

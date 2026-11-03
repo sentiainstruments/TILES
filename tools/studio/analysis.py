@@ -323,6 +323,24 @@ def analyse_vibrato(samples, tune, board_mode):
     return res, sugg
 
 
+def reconcile(suggestions, tune, settings):
+    """Suggestions from different steps can contradict: a deadzone at or past the full-bend point turns bend
+    into a switch. Holds both back with the reason instead."""
+    flat = [x for sid in (s["id"] for s in STEPS) for x in suggestions.get(sid, [])]
+    find = lambda key: next((x for x in flat if x["key"] == key), None)
+    dz_s, sens_s = find("bend.deadzone"), find("expression.pitch_bend_sensitivity")
+    dead = dz_s["suggested"] if dz_s else tune.get("bend.deadzone", 0.025)
+    sens = sens_s["suggested"] if sens_s else settings.get("expression.pitch_bend_sensitivity", 0.065)
+    for x in flat:
+        x.pop("blocked", None)
+    if (dz_s or sens_s) and sens < dead + 0.015:
+        for x in (dz_s, sens_s):
+            if x:
+                x["blocked"] = (f"a straight press reads about as much as a lean (deadzone {dead:g}, full bend "
+                                f"{sens:g}): no threshold separates them yet")
+    return flat
+
+
 class Calibration:
     def __init__(self):
         self.reset()
@@ -340,7 +358,7 @@ class Calibration:
     def step(self):
         return STEPS[self.index] if self.active and self.index < len(STEPS) else None
 
-    def public(self, pad):
+    def public(self, pad, tune=None, settings=None):
         step = self.step()
         left = max(0.0, step["seconds"] - (time.monotonic() - self.started)) if step and self.recording else None
         return {"active": self.active, "index": self.index, "recording": self.recording,
@@ -348,5 +366,5 @@ class Calibration:
                 "steps": [{"id": s["id"], "title": s["title"], "seconds": s["seconds"],
                            "text": s["text"].format(pad=pad), "done": s["id"] in self.results} for s in STEPS],
                 "results": self.results,
-                "suggestions": [x for sid in (s["id"] for s in STEPS) for x in self.suggestions.get(sid, [])],
+                "suggestions": reconcile(self.suggestions, tune or {}, settings or {}),
                 "files": self.files}

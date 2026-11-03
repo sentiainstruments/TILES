@@ -716,7 +716,7 @@ function renderCalibrate() {
       for (const s of cal.steps) if (cal.results[s.id]) body += `<h3>${s.title}</h3>` + stepResult(s.id, cal.results[s.id]);
     }
     if (cal.suggestions.length) {
-      body += `<h3>Suggested changes</h3><table><tr><th>Setting</th><th>Now → suggested</th><th></th></tr>${cal.suggestions.map(x => `<tr><td><code>${esc(x.key)}</code><div class="hint">${esc(x.why)}${x.kind === 'setting' ? ' · saved on the board' : ''}</div></td><td>${x.current} → <span class="accent">${x.suggested}</span></td><td>${x.applied ? '✓' : `<button data-apply="${esc(x.key)}">Apply</button>`}</td></tr>`).join('')}</table>
+      body += `<h3>Suggested changes</h3><table><tr><th>Setting</th><th>Now → suggested</th><th></th></tr>${cal.suggestions.map(x => `<tr><td><code>${esc(x.key)}</code><div class="hint">${esc(x.why)}${x.kind === 'setting' ? ' · saved on the board' : ''}</div></td><td>${x.current} → <span class="accent">${x.suggested}</span>${x.blocked ? `<div class="hint">held back: ${esc(x.blocked)}</div>` : ''}</td><td>${x.applied ? '✓' : x.blocked ? '' : `<button data-apply="${esc(x.key)}">Apply</button>`}</td></tr>`).join('')}</table>
         <div class="row" style="margin-top:10px"><button data-apply-all>Apply all</button><button data-report>Save report</button></div>`;
     }
     el.innerHTML = body;
