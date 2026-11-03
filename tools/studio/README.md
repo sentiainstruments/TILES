@@ -57,7 +57,9 @@ Right, four tabs:
   code" gives the changed values as the `#define` lines to paste into
   `tune.h` and `bend_core.c`.
 - **Pads**: the 24 pads lit by depth (click one to watch it) and a table of
-  each pad's rest field, noise, rest lean and learned press path.
+  each pad's resting field and noise (Z: the board reads X/Y only while a
+  key is touched), its hardest press as a multiple of rest, and its learned
+  press path.
 - **Board**: firmware, main-loop timing, Hall and touch health, power, how
   many tuning values are changed, and the files saved this session.
 

@@ -70,6 +70,15 @@ def host_tune_table():
     return [tune_row(l) for l in out.splitlines() if l.startswith("key=")]
 
 
+def board_present():
+    """A TILES on USB right now (the studio then starts on it)."""
+    try:
+        import usb.core
+        return any(usb.core.find(idVendor=v, idProduct=p) for v, p in ((0x1209, 0x0001), (0x2E8A, 0x100A)))
+    except Exception:
+        return False
+
+
 def number(text):
     if text == "":
         return None
@@ -505,7 +514,7 @@ class Pipeline(threading.Thread):
         self.controls = queue.Queue()
         self.host_tune = host_tune_table()
         self.state_json = "{}"
-        self.source = SimSource(1)
+        self.source = DeviceSource(1) if board_present() else SimSource(1)
         self._fresh()
 
     def _fresh(self):
@@ -843,8 +852,9 @@ def step_markdown(sid, r):
 
     out = []
     if sid == "rest":
-        out.append(f"{r['pads_measured']} pads measured. Rest field median {r['rest_field_median_mt']} mT "
-                   f"(range {r['rest_field_range_mt']}); X/Y noise median {r['noise_xy_median_ut']} uT.")
+        out.append(f"{r['pads_measured']} pads measured. Rest field (Bz) median {r['rest_field_median_mt']} mT "
+                   f"(range {r['rest_field_range_mt']}); Z noise median {r['z_noise_median_ut']} uT. X/Y are "
+                   "read only while a key is touched.")
     elif sid == "strikes":
         out.append(f"{r['notes']} notes. Velocity {mmm(r.get('velocity'))}, touch to threshold "
                    f"{mmm(r.get('strike_ms'), ' ms')}, peak depth {mmm(r.get('peak_depth'))} (min / median / max).")
@@ -884,12 +894,12 @@ def report_markdown(s):
         lines.append("")
     pads = [p for p in s["pads"] if p.get("rest_field_mt") is not None]
     if pads:
-        lines += ["## Pads at rest", "", "| Pad | Rest field (mT) | Noise X/Y/Z (uT) | Rest lean | Press path b (x, y) | Strokes |",
+        lines += ["## Pads at rest", "", "| Pad | Rest Bz (mT) | Z noise (uT) | Hardest press (x rest) | Press path b (x, y) | Strokes |",
                   "|---|---|---|---|---|---|"]
         for p in pads:
             path = p.get("path") or {}
-            lines.append(f"| {p['pad']} | {p['rest_field_mt']} | {'/'.join(map(str, p['noise_ut']))} | "
-                         f"{p.get('rest_lean')} | {path.get('bx', '')}, {path.get('by', '')} | {path.get('strokes', '')} |")
+            lines.append(f"| {p['pad']} | {p['rest_field_mt']} | {p['z_noise_ut']} | {p.get('hardest_press_ratio', '')} | "
+                         f"{path.get('bx', '')}, {path.get('by', '')} | {path.get('strokes', '')} |")
         lines.append("")
     cal = s["calibration"]
     if cal["results"]:

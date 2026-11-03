@@ -461,10 +461,12 @@ function drawKey() {
   pose(clamp(s[DEPTH] / full, 0, 1.15), -clamp(semis / 12, -1.3, 1.3) * 9 * Math.PI / 180,
        held ? C.mag : null, held || s[FLAGS] & F.TOUCHED ? C.mag : C.light);
   if (s[TRUE_PRESS] != null) pose(s[TRUE_PRESS], s[TRUE_TILT] * 3 * Math.PI / 180, null, C.light, [4, 4]);
-  const lean = Math.atan2(s[X] * 4, Math.abs(s[Z]) || 1);
-  const len = 22, ax = cx + Math.sin(lean) * len, ay = base - 7 - Math.cos(lean) * len;
-  line(g, cx, base - 7, ax, ay, C.peri, 2);
-  g.fillStyle = C.peri; g.beginPath(); g.arc(ax, ay, 3, 0, Math.PI * 2); g.fill();
+  if (s[FLAGS] & F.TOUCHED) { // X/Y are only read while touched
+    const lean = Math.atan2(s[X] * 4, Math.abs(s[Z]) || 1);
+    const len = 22, ax = cx + Math.sin(lean) * len, ay = base - 7 - Math.cos(lean) * len;
+    line(g, cx, base - 7, ax, ay, C.peri, 2);
+    g.fillStyle = C.peri; g.beginPath(); g.arc(ax, ay, 3, 0, Math.PI * 2); g.fill();
+  }
   label(g, 'Depth', 16, 18); value(g, `${s[DEPTH]}`, 16, 38);
   label(g, `Bend (${lane.name})`, w - 16, 18, C.ink2, 'right');
   value(g, s[lane.s] == null ? '–' : `${fmt(s[lane.s])} st`, w - 16, 38, C.light, 'right');
@@ -585,7 +587,7 @@ function drawPath() {
   const s = latest();
   const comp = axis === 'x' ? X : Y, slopeIdx = axis === 'x' ? BX : BY;
   if (!s) { label(g, 'Waiting for samples', 0, 16); return; }
-  const view = buf.filter(v => v[T] >= s[T] - 4000 && v[FLAGS] & F.VALID);
+  const view = buf.filter(v => v[T] >= s[T] - 4000 && v[FLAGS] & F.VALID && v[FLAGS] & F.TOUCHED); // X/Y are stale at rest
   let zl = Infinity, zh = -Infinity, cl = Infinity, ch = -Infinity;
   for (const v of view) { zl = Math.min(zl, v[Z]); zh = Math.max(zh, v[Z]); cl = Math.min(cl, v[comp]); ch = Math.max(ch, v[comp]); }
   const zPad = Math.max(60, (zh - zl) * 0.08), cPad = Math.max(40, (ch - cl) * 0.12);
@@ -673,7 +675,7 @@ function stepResult(id, r) {
   if (!r) return '';
   const parts = [];
   const mmm = d => d ? `${d.min} / ${d.median} / ${d.max}` : '–';
-  if (id === 'rest') parts.push(`<dl><dt>Pads measured</dt><dd>${r.pads_measured}</dd><dt>Rest field</dt><dd>median ${r.rest_field_median_mt} mT, range ${r.rest_field_range_mt ? r.rest_field_range_mt.join('–') : '–'}</dd><dt>X/Y noise</dt><dd>median ${r.noise_xy_median_ut} µT</dd></dl>`);
+  if (id === 'rest') parts.push(`<dl><dt>Pads measured</dt><dd>${r.pads_measured}</dd><dt>Rest field</dt><dd>Bz median ${r.rest_field_median_mt} mT, range ${r.rest_field_range_mt ? r.rest_field_range_mt.join('–') : '–'}</dd><dt>Z noise</dt><dd>median ${r.z_noise_median_ut} µT (X/Y are read only while a key is touched)</dd></dl>`);
   if (id === 'strikes') parts.push(`<dl><dt>Notes</dt><dd>${r.notes}</dd><dt>Velocity</dt><dd>${mmm(r.velocity)} (min / median / max)</dd><dt>Speed</dt><dd>${mmm(r.strike_ms)} ms to the strike depth</dd><dt>Peak depth</dt><dd>${mmm(r.peak_depth)}</dd></dl>`);
   if ((id === 'straight' || id === 'lean') && r.bend) {
     if (id === 'lean' && r.lean_median != null) parts.push(`<p class="hint">Lean peaks (${r.mode}): median ${r.lean_median}${r.left_right_ratio ? `, one side ${r.left_right_ratio}× the other` : ''}.</p>`);
@@ -872,10 +874,10 @@ function renderPadTable() {
     if (p.sensor_ok === false) flags.push('sensor not answering');
     if (p.rest_confirmed === false) flags.push('rest unconfirmed');
     const path = p.path || {};
-    return `<tr class="click ${p.pad === state.pad ? 'focus' : ''}" data-pad="${p.pad}"><td>${p.pad}</td><td>${p.rest_field_mt ?? '–'}</td><td>${p.noise_ut ? p.noise_ut.slice(0, 2).join(' / ') : '–'}</td><td>${p.rest_lean ?? '–'}</td><td>${path.strokes ? `${path.bx}, ${path.by}` : '–'}</td><td>${path.strokes ?? '–'}</td><td class="hint">${flags.join(', ')}</td></tr>`;
+    return `<tr class="click ${p.pad === state.pad ? 'focus' : ''}" data-pad="${p.pad}"><td>${p.pad}</td><td>${p.rest_field_mt ?? '–'}</td><td>${p.z_noise_ut ?? '–'}</td><td>${p.hardest_press_ratio != null ? '×' + p.hardest_press_ratio : '–'}</td><td>${path.strokes ? `${path.bx}, ${path.by}` : '–'}</td><td>${path.strokes ?? '–'}</td><td class="hint">${flags.join(', ')}</td></tr>`;
   }).join('');
-  $('pad-table').innerHTML = `<p class="hint">Rest numbers come from untouched reads; keep hands off for a moment to fill them in. Click a pad to watch it.</p>
-    <table><tr><th>Pad</th><th>Rest <span class="unit">mT</span></th><th>Noise X/Y <span class="unit">µT</span></th><th>Rest lean</th><th>Press path b</th><th>Strokes</th><th></th></tr>${rows}</table>`;
+  $('pad-table').innerHTML = `<p class="hint">Rest numbers come from untouched reads, Z only (X/Y are read while a key is touched); keep hands off for a moment to fill them in. Hardest press is the strongest field seen, as a multiple of rest. Click a pad to watch it.</p>
+    <table><tr><th>Pad</th><th>Rest B<span class="unit">z</span> <span class="unit">mT</span></th><th>Z noise <span class="unit">µT</span></th><th>Hardest press</th><th>Press path b</th><th>Strokes</th><th></th></tr>${rows}</table>`;
   $('pad-table').querySelectorAll('tr[data-pad]').forEach(tr => tr.onclick = () => focusPad(+tr.dataset.pad));
 }
 

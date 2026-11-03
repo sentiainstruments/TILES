@@ -50,11 +50,12 @@ def velocity_parts(tune, strike_ms, peak):
 
 
 class PadStats:
-    """One pad's resting field and noise (untouched reads), and what pressing it has shown."""
+    """One pad's resting field and noise (untouched reads), and what pressing it has shown. At rest the
+    firmware reads Z only (hall.c), so X/Y there are stale: rest numbers are Z's."""
 
     def __init__(self, pad):
         self.pad = pad
-        self.rest = []  # distinct (x, y, z) while untouched and up
+        self.rest = []  # distinct Z while untouched and up
         self.max_b = 0.0
         self.rest_z = None
         self.rest_confirmed = None
@@ -63,8 +64,8 @@ class PadStats:
 
     def add(self, x, y, z, depth, touched, key_up):
         if not touched and depth < key_up:
-            if not self.rest or self.rest[-1] != (x, y, z):
-                self.rest.append((x, y, z))
+            if not self.rest or self.rest[-1] != z:
+                self.rest.append(z)
                 if len(self.rest) > 120:
                     self.rest.pop(0)
         elif touched:
@@ -74,14 +75,9 @@ class PadStats:
         out = {"pad": self.pad, "samples": len(self.rest), "rest_z": self.rest_z,
                "rest_confirmed": self.rest_confirmed, "sensor_ok": self.sensor_ok}
         if len(self.rest) >= 8:
-            cols = list(zip(*self.rest))
-            mean = [statistics.fmean(c) for c in cols]
-            sd = [statistics.stdev(c) for c in cols]
-            rest_b = math.sqrt(sum(m * m for m in mean))
+            rest_b = abs(statistics.fmean(self.rest))
             out.update({"rest_field_mt": rnd(rest_b / LSB_PER_MT, 2),
-                        "rest_xyz": [round(m) for m in mean],
-                        "noise_ut": [round(s / LSB_PER_MT * 1000) for s in sd],
-                        "rest_lean": rnd(math.hypot(mean[0], mean[1]) / rest_b if rest_b else None, 3)})
+                        "z_noise_ut": round(statistics.stdev(self.rest) / LSB_PER_MT * 1000)})
             if self.max_b and rest_b:
                 out["hardest_press_ratio"] = rnd(self.max_b / rest_b, 2)
         if self.path:
@@ -163,7 +159,7 @@ def analyse_rest(pads):
     rows = [p.summary() for p in pads.values()]
     measured = [r for r in rows if r.get("rest_field_mt") is not None]
     fields = [r["rest_field_mt"] for r in measured]
-    noise = [max(r["noise_ut"][:2]) for r in measured]
+    noise = [r["z_noise_ut"] for r in measured]
     med_field = statistics.median(fields) if fields else None
     med_noise = statistics.median(noise) if noise else None
     flags = []
@@ -176,11 +172,14 @@ def analyse_rest(pads):
             if not 0.6 <= r["rest_field_mt"] / med_field <= 1.6:
                 flags.append(f"pad {r['pad']}: rest field {r['rest_field_mt']} mT vs median {med_field:.2f} "
                              "(magnet height or placement?)")
-            if med_noise and max(r["noise_ut"][:2]) > 2 * med_noise:
-                flags.append(f"pad {r['pad']}: X/Y noise {max(r['noise_ut'][:2])} uT, twice the median")
+            if med_noise and r["z_noise_ut"] > 2 * med_noise:
+                flags.append(f"pad {r['pad']}: Z noise {r['z_noise_ut']} uT, twice the median")
+    if fields and max(fields) > 1.5 * min(fields):
+        flags.append(f"rest fields span {min(fields)}-{max(fields)} mT: the same travel gives a weak pad far less "
+                     "depth, so less velocity and pressure")
     return {"pads_measured": len(measured), "rest_field_median_mt": rnd(med_field, 2),
             "rest_field_range_mt": [min(fields), max(fields)] if fields else None,
-            "noise_xy_median_ut": med_noise, "flags": flags}, []
+            "z_noise_median_ut": med_noise, "flags": flags}, []
 
 
 def analyse_strikes(notes, tune):

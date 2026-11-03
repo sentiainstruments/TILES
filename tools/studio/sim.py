@@ -260,7 +260,10 @@ class Sim:
         self.tilt_x += wobble
         fresh = finger or self.state != IDLE or self.t - self.last_read_ms >= ROUND_ROBIN_MS
         if fresh:
-            self.sample = self._read()
+            x, y, z = self._read()
+            if not finger and self.state == IDLE:
+                x, y = self.sample[0], self.sample[1]  # at rest the board reads Z only
+            self.sample = (x, y, z)
             self.last_read_ms = self.t
         self.tilt_x = saved
         if not fresh:
