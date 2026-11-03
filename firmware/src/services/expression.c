@@ -126,6 +126,9 @@ static uint8_t release_velocity_from_fall_rate(float fall_rate) {
  * depth compensation: may need a fresh capture. */
 static float s_pitch_bend_max_cosine_deviation = 0.065f;
 
+/* tiles_bend_mode_t (bend_core.h), default PATH. */
+static uint8_t s_pitch_bend_mode = TILES_BEND_MODE_PATH;
+
 typedef enum {
     PAD_STATE_IDLE = 0,
     PAD_STATE_AWAITING_STRIKE,
@@ -204,6 +207,9 @@ typedef struct {
     /* The bend's centre for this note: 8192, or above it for a quarter tone
      * (bend_center_for()). */
     uint16_t bend_center;
+    /* This pad's press path, learned from every strike's down-stroke and
+     * kept across notes (PATH mode). */
+    tiles_press_path_t path;
 
     /* HOLD sustain style: this pad's released note, kept on until the pedal
      * lifts (one per pad); held_* captured at release. */
@@ -740,6 +746,31 @@ float tiles_expression_get_pitch_bend_sensitivity(void) {
     return s_pitch_bend_max_cosine_deviation;
 }
 
+void tiles_expression_set_pitch_bend_mode(uint8_t mode) {
+    s_pitch_bend_mode = mode < TILES_BEND_MODE_COUNT ? mode : (uint8_t)TILES_BEND_MODE_PATH;
+}
+
+uint8_t tiles_expression_get_pitch_bend_mode(void) {
+    return s_pitch_bend_mode;
+}
+
+bool tiles_expression_get_press_path(uint8_t logical_pad, float *bx, float *by, uint16_t *strokes) {
+    if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
+        return false;
+    }
+    const tiles_press_path_t *p = &s_pads[logical_pad - 1u].path;
+    *bx = p->bx;
+    *by = p->by;
+    *strokes = p->strokes;
+    return true;
+}
+
+void tiles_expression_reset_press_paths(void) {
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        tiles_press_path_reset(&s_pads[i].path);
+    }
+}
+
 void tiles_expression_set_aftertouch_sensitivity(uint16_t depth_full_scale) {
     /* Never 0 (aftertouch_from_depth() divides by it). */
     s_depth_to_aftertouch_full_scale = depth_full_scale > 0u ? depth_full_scale : 1u;
@@ -786,6 +817,8 @@ static void begin_awaiting_strike(pad_expr_t *s, uint8_t pad, uint32_t now_ms) {
      * before touch registers, and that's an instant, maximum-speed strike --
      * unless the key hasn't been at rest lately (STRIKE_FROM_REST_MS). */
     float initial_depth = (float)tiles_hall_get_depth(pad);
+    tiles_press_path_stroke_begin(&s->path);
+    tiles_capture_stroke_begun(pad);
     s->peak_depth = initial_depth;
     s->awaiting_rest = initial_depth >= MIN_STRIKE_DEPTH_DELTA && (now_ms - s->last_key_up_ms) > STRIKE_FROM_REST_MS;
     s->threshold_crossed = !s->awaiting_rest && initial_depth >= MIN_STRIKE_DEPTH_DELTA;
@@ -871,7 +904,8 @@ static void init_pitch_bend_for_pad(pad_expr_t *s, uint8_t pad, uint32_t now_ms)
     }
     tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
     /* A fresh depth read: s->smoothed_depth is still the previous note's. */
-    tiles_bend_start(&s->bend, hs.x, hs.y, hs.z, (float)tiles_hall_get_depth(pad), s->bend_center, now_ms);
+    tiles_bend_start(&s->bend, (tiles_bend_mode_t)s_pitch_bend_mode, &s->path, hs.x, hs.y, hs.z,
+                     (float)tiles_hall_get_depth(pad), s->bend_center, now_ms);
     s->pitch_bend_last_sent = s->bend_center;
     tiles_capture_bend_started(pad, s->bend_center);
 }
@@ -1102,6 +1136,8 @@ void tiles_expression_scan(void) {
                 tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
                 if (hs.valid && hs.sample_time_ms != s->last_seen_sample_time_ms) {
                     s->last_seen_sample_time_ms = hs.sample_time_ms;
+                    tiles_press_path_stroke_sample(&s->path, hs.x, hs.y, hs.z);
+                    tiles_capture_stroke_sampled(pad);
                     float depth = (float)tiles_hall_get_depth(pad);
                     if (depth > s->peak_depth) {
                         s->peak_depth = depth;
@@ -1130,6 +1166,9 @@ void tiles_expression_scan(void) {
             if (ready || commit_on_release) {
                 s->active_note = tiles_note_map_get_note(pad);
                 uint8_t velocity = velocity_from_strike(s->strike_time_ms, s->peak_depth);
+                /* The down-stroke is over: learn it before this note's bend starts. */
+                tiles_press_path_stroke_end(&s->path);
+                tiles_capture_note_on(pad, velocity);
                 /* Claim the note's channel, then send its per-note setup (bend center,
                  * pressure 0), so a Note-On never inherits the previous note's bend on
                  * that channel. */
@@ -1219,6 +1258,7 @@ void tiles_expression_scan(void) {
         s->last_depth_sample_ms = now_ms;
 
         uint8_t at = aftertouch_from_depth((uint16_t)s->smoothed_depth);
+        tiles_capture_pressure(pad, s->smoothed_depth, at);
         if (at != s->last_sent_aftertouch) {
             s->last_sent_aftertouch = at;
             /* MPE off: only the owner pad sends pressure on the shared channel (else
@@ -1241,7 +1281,7 @@ void tiles_expression_scan(void) {
             if (hs.valid) {
                 bool produced =
                     tiles_bend_step(&s->bend, &bend_cfg, hs.x, hs.y, hs.z, s->smoothed_depth, now_ms, &bend);
-                tiles_capture_bend_stepped(pad, s->smoothed_depth, produced, bend);
+                tiles_capture_bend_stepped(pad, produced, bend);
                 if (produced && bend != s->pitch_bend_last_sent) {
                     /* This pad's current bend, for resyncing channel 1 (MPE off). */
                     s->pitch_bend_last_sent = bend;

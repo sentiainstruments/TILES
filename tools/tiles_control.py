@@ -181,7 +181,7 @@ class Session:
                 return lines
 
 
-CAPTURE_COLUMNS = "t_ms,x,y,z,depth,smoothed_depth,bend,flags,state"
+CAPTURE_COLUMNS = "t_ms,x,y,z,depth,smoothed_depth,bend,flags,state,velocity,aftertouch"
 
 
 def capture(session, pad, seconds, path):
@@ -197,6 +197,8 @@ def capture(session, pad, seconds, path):
     status = session.command("CAPTURE STATUS", multi_line=True)
     rows = session.command("CAPTURE READ", multi_line=True)
     with open(path, "w") as f:
+        # Alpha 6.7: the bend mode and pad's learned path at the start, so a replay starts there too.
+        f.writelines("# " + line + "\n" for line in status if line.startswith("bend "))
         f.write(CAPTURE_COLUMNS + "\n")
         f.writelines(row + "\n" for row in rows)
     print(f"{len(rows)} samples saved to {path} ({status[0] if status else ''})")

@@ -59,11 +59,20 @@ TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
 TEST MODE <name>\n        bench only: switch mode (melodic duet sequencer bass song ableton drums volca prism bounce ripples sand orbits cradle)
 TEST OFF\n                bench only: back to normal
 CAPTURE START <pad>\n     record pad 1-24's raw Hall readings, one per pass (~8 s max): OK
+CAPTURE WATCH <pad>\n     the same, never stopping: keeps the newest 4000, skips passes that
+                          only repeat the last (the studio): OK
 CAPTURE STOP\n            stop recording: OK
-CAPTURE STATUS\n          pad=<p> running=<0|1> count=<n> max=<m>, then OK
-CAPTURE READ\n            every record, one line each, then OK:
-                          t_ms,x,y,z,depth,smoothed_depth,bend,flags,state
+CAPTURE STATUS\n          pad=<p> running=<0|1> count=<n> max=<m> watching=<0|1> total=<seq>
+                          bend mode=<m> sensitivity=<s> bx=<b> by=<b> strokes=<n>
+                          (the pad's bend setup when recording started), then OK
+CAPTURE READ\n            every record held, one line each, then OK:
+                          t_ms,x,y,z,depth,smoothed_depth,bend,flags,state,velocity,aftertouch
                           (firmware/test/captures/README.md)
+CAPTURE READ <from>\n     seq=<first>, then up to 300 records from sequence number <from>
+                          on (smoothed_depth to 0.1), then OK; ask again from first + rows
+HALL\n                    every pad now, one line each, then OK: pad,x,y,z,depth,valid,touched
+BEND PATHS\n              every pad's learned press path, then OK: pad=<p> bx=<b> by=<b> strokes=<n>
+BEND RESET\n              forget every learned press path: OK
 ```
 
 `SET`/`RESET` apply **immediately** and are saved to flash **automatically** ~2 s
@@ -161,6 +170,7 @@ refused, not clamped); the default is whatever the owning module boots with --
 | 0x0200 | `expression.mpe_enabled` | bool | | `1` | yes |
 | 0x0201 | `expression.pitch_bend_sensitivity` | float | 0.001 - 1.0 (max cosine deviation) | `0.065` | yes |
 | 0x0202 | `expression.aftertouch_sensitivity` | uint | 1 - 65535 (full-scale depth) | `900` | yes |
+| 0x0203 | `expression.pitch_bend_mode` | enum | `legacy` (Alpha 6.6), `cosine` (direction cosine per sample), `path` (each pad's learned press path subtracted first); new notes use it | `path` | yes |
 | 0x0300 | `cv_gate.enabled` | bool | | `0` | **no** -- boots off, every time |
 | 0x0301 | `cv_gate.pitch.volts_per_semitone` | float | 0.001 - 1.0 | `0.0833333` (1V/oct) | yes |
 | 0x0302 | `cv_gate.pitch.reference_note` | int | 0 - 127 (MIDI note at 0V) | `0` | yes |

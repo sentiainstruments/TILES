@@ -2,7 +2,9 @@
 
 Raw Hall readings from one pad, recorded on a real TILES, for tuning pitch
 bend on the computer instead of by feel. `test/run.sh` replays every
-capture here.
+capture here. The studio (`tools/studio/`) plays them back, and its "Save
+last 8 s" writes here too (`studio-*.csv`; live rows round
+`smoothed_depth`, so use this tool for exact LEGACY replays).
 
 ## Recording
 
@@ -29,10 +31,18 @@ cc -std=c11 -Isrc/services test/bend_replay.c src/services/bend_core.c -lm -o /t
 /tmp/bend_replay test/captures/unit2-pad8-straight-press.csv
 ```
 
-It first checks the replay gives exactly what the device sent, then prints
-each note's peak depth and bend. Pass another sensitivity as a second
-argument, and `--out replay.csv` for the bend per sample.
+It replays every capture in all three bend modes (`legacy`, `cosine`,
+`path`) side by side. It first checks its replay of the device's own mode
+gives exactly what the device sent, then prints each note's peak bend,
+time bent and 95th-percentile |delta| per mode, and what the press path
+learner made of the strokes. Pass another sensitivity as a second argument,
+and `--trace trace.csv` for every sample's result per mode.
 
-Columns: `t_ms,x,y,z,depth,smoothed_depth,bend,flags,state`. Flags: 1 valid
-sample, 2 touched, 4 note-on (bend started; `bend` = its centre), 8 bend
-stepped, 16 bend produced (`bend` = the value sent).
+A first line `# bend mode=... sensitivity=... bx=... by=... strokes=...` is
+the device's setup when recording started (Alpha 6.7). Columns:
+`t_ms,x,y,z,depth,smoothed_depth,bend,flags,state,velocity,aftertouch`
+(Alpha 6.6 files stop at `state`). Flags: 1 valid sample, 2 touched, 4 bend
+started (`bend` = its centre), 8 bend stepped, 16 bend produced (`bend` =
+the value sent), 32 a stroke sample for the press path, 64 a stroke began,
+128 the note fired (`velocity`), 256 a held note's pass (`smoothed_depth`,
+`aftertouch`).

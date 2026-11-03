@@ -1,8 +1,9 @@
 # tools/
 
 Host-side helper scripts: `flash.sh` (flash a running board),
-`tiles_control.py` (the settings CLI over USB), `current_test.py`
-(guided current measurement) and `bootloader_watchdog.sh`. Planned: codegen from `shared/board-map/` and
+`tiles_control.py` (the settings CLI over USB), `studio/` (the calibration
+studio), `current_test.py` (guided current measurement) and
+`bootloader_watchdog.sh`. Planned: codegen from `shared/board-map/` and
 `shared/protocol/` into the firmware's C headers and the companion app's
 TypeScript types, and manufacturing scripts once they're needed.
 
@@ -156,6 +157,17 @@ it a couple of seconds before the first command.
 Not the real companion app (`companion-app/` -- not built yet) -- this is
 the plain script that proves the protocol and USB vendor interface
 actually work before investing in that.
+
+## studio/
+
+The calibration studio: one key's Hall reading and what velocity, pressure
+and pitch bend make of it, live in a browser, with all three bend modes side
+by side. Sources: a board (Alpha 6.7 or later), a simulated key (no
+hardware), or a capture file. See `studio/README.md`.
+
+```
+~/.venvs/tiles-tools/bin/python tools/studio/studio.py
+```
 
 ## current_test.py
 

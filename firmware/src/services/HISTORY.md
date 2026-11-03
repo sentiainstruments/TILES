@@ -10440,3 +10440,46 @@ change. Search it by file or feature name.
     deadzone, a "run" starts and baseline recentring stops, so a
     pressure-driven X shift then reads as bend for as long as the press is
     held. Fixes wait for real captures.
+- **Alpha 6.7 (2026-11-03): pitch bend keeps depth out by modelling it, and a
+  calibration studio.** The owner: "do fix 2 and 3" from
+  `reports/Hall sensor tilt and pressure separation.md`, and "a calibration
+  debug studio where we visualize what the sensor thinks it sees with a key".
+  - Why straight presses bend: a magnet even 0.3-0.5 mm off the Hall
+    elements' axis leans the field more as the gap closes, so X moves with
+    depth. Alpha 6.6 recentred while depth changed, then froze baseline and
+    |B| once a run started, so whatever press-driven X came after was held as
+    bend (a held tilt pressed harder grew by ~70% in the host test).
+  - `expression.pitch_bend_mode` (0x0203), latched per note:
+    `legacy` is Alpha 6.6 unchanged (16 million randomized steps, 0
+    differences); `cosine` (fix 2) divides each sample by its own |B| before
+    filtering and freezes nothing; `path` (fix 3, the default) subtracts the
+    pad's press path, r = (x - a - b*z) / |B| on the raw sample, a anchored
+    when the note settles, and only pulls slow creep out while no bend is
+    held. No depth-gated recentring, no frozen |B|.
+  - The slope b is per pad, learned from every strike's down-stroke (touch to
+    note-on): a least-squares line of X and Y against Z, kept only if it spans
+    a real press (150 raw) and stays near a line (RMS 120 raw); averaged over
+    16 strokes, then 1/16 per stroke so a few tilted strikes can't retrain it.
+    RAM only, from boot. Until a pad has 3 strokes, a note uses its own
+    direction at settle (the `cosine` assumption). The two-value calibration
+    stores nothing yet, so it can't seed it.
+  - The vibrato detector's energy is scaled back to raw units in every mode,
+    so its thresholds carry over.
+  - Capture: records grow to 24 bytes (velocity, aftertouch, flags to 16
+    bits: stroke, stroke begin, note-on, pressure); `CAPTURE STATUS` reports
+    the bend mode and the pad's learned path at the start, which
+    `tiles_control.py capture` writes as a `# bend` first line so replays
+    start where the device did. `CAPTURE WATCH` streams (a ring, repeated rest
+    passes skipped: the vendor pipe carries one 64-byte packet per pass,
+    ~32 KB/s), `HALL` lists every pad, `BEND PATHS|RESET`.
+  - `test/bend_replay.c` replays all three modes side by side (`--trace`,
+    `--pipe`); `tools/studio/` shows a board, a simulated key or a capture
+    live. In the studio's dipole sim with the magnet 0.8 mm off-axis, a
+    straight press-harder gesture reached full bend (12.9 semitones) in
+    `legacy` and 0.1-0.2 in `cosine` and `path`.
+  - Found on the way, not changed: sensor noise alone sits at the vibrato
+    detector's floor (captured still hold ~7.5 vs floor 8), so a slightly
+    noisier pad engages the synthetic 5.5 Hz vibrato on every note (rank 7 in
+    the report). A held tilt under extra pressure still moves ~15% in
+    `path`: the learned slope's error, which TMAG5273 averaging (rank 4)
+    would shrink.

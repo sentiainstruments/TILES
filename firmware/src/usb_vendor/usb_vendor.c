@@ -1,10 +1,13 @@
 #include "usb_vendor.h"
 
+#include "bend_core.h"
 #include "board/unit_id.h"
+#include "board_pins.h"
 #include "content.h"
 #include "diagnostics/capture.h"
 #include "diagnostics/loop_stats.h"
 #include "drum_seq.h"
+#include "expression.h"
 #include "hall.h"
 #include "haptics.h"
 #include "lighting.h"
@@ -71,9 +74,28 @@ typedef enum {
     LISTING_SCALES,
     LISTING_CONTENT,
     LISTING_CAPTURE,
+    LISTING_HALL,
+    LISTING_PATHS,
 } listing_t;
 static listing_t s_listing;
 static size_t s_listing_next;
+/* CAPTURE READ: the sequence number to stop before, and whether the rows
+ * are the compact live ones (READ <from>) with a "seq=" line first. */
+static uint32_t s_listing_end;
+static bool s_listing_live;
+static bool s_listing_header;
+
+/* CAPTURE READ <from> sends at most this many rows; the host asks again. */
+#define CAPTURE_READ_MAX_ROWS 300u
+
+/* The recorded pad's bend setup when the capture started, so a replay
+ * starts where the device did (CAPTURE STATUS). */
+static struct {
+    uint8_t mode;
+    float sensitivity;
+    float bx, by;
+    uint16_t strokes;
+} s_capture_setup;
 
 static void out_append(const char *text) {
     size_t n = strlen(text);
@@ -235,15 +257,47 @@ static bool listing_row(char *text, size_t cap) {
         return true;
     }
     case LISTING_CAPTURE: {
-        /* t,x,y,z,depth,smoothed_depth,bend,flags,state; %.9g round-trips a
-         * float, so a replay gets bend_core's exact input. */
-        const tiles_capture_record_t *r = tiles_capture_get((uint16_t)s_listing_next++);
+        if (s_listing_header) {
+            s_listing_header = false;
+            snprintf(text, cap, "seq=%lu", (unsigned long)s_listing_next);
+            return true;
+        }
+        /* t,x,y,z,depth,smoothed_depth,bend,flags,state,velocity,aftertouch;
+         * %.9g round-trips a float, so a replay gets bend_core's exact input.
+         * Live rows round it to fit the USB pipe. */
+        const tiles_capture_record_t *r =
+            s_listing_next < s_listing_end ? tiles_capture_get((uint32_t)s_listing_next++) : NULL;
         if (r == NULL) {
             return false;
         }
-        snprintf(text, cap, "%lu,%d,%d,%d,%u,%.9g,%u,%u,%u", (unsigned long)r->t_ms, r->x, r->y, r->z,
-                 (unsigned)r->depth, (double)r->smoothed_depth, (unsigned)r->bend, (unsigned)r->flags,
-                 (unsigned)r->state);
+        snprintf(text, cap, s_listing_live ? "%lu,%d,%d,%d,%u,%.1f,%u,%u,%u,%u,%u" : "%lu,%d,%d,%d,%u,%.9g,%u,%u,%u,%u,%u",
+                 (unsigned long)r->t_ms, r->x, r->y, r->z, (unsigned)r->depth, (double)r->smoothed_depth,
+                 (unsigned)r->bend, (unsigned)r->flags, (unsigned)r->state, (unsigned)r->velocity,
+                 (unsigned)r->aftertouch);
+        return true;
+    }
+    case LISTING_HALL: {
+        /* pad,x,y,z,depth,valid,touched: every pad now. */
+        if (s_listing_next >= TILES_NUM_PADS) {
+            return false;
+        }
+        uint8_t pad = (uint8_t)(++s_listing_next);
+        tiles_hall_sample_t hs = tiles_hall_get_sample(pad);
+        snprintf(text, cap, "%u,%d,%d,%d,%u,%u,%u", (unsigned)pad, hs.x, hs.y, hs.z,
+                 (unsigned)tiles_hall_get_depth(pad), hs.valid ? 1u : 0u, tiles_touch_is_touched(pad) ? 1u : 0u);
+        return true;
+    }
+    case LISTING_PATHS: {
+        float bx;
+        float by;
+        uint16_t strokes;
+        if (s_listing_next >= TILES_NUM_PADS ||
+            !tiles_expression_get_press_path((uint8_t)(s_listing_next + 1u), &bx, &by, &strokes)) {
+            return false;
+        }
+        s_listing_next++;
+        snprintf(text, cap, "pad=%u bx=%.9g by=%.9g strokes=%u", (unsigned)s_listing_next, (double)bx, (double)by,
+                 (unsigned)strokes);
         return true;
     }
     case LISTING_NONE:
@@ -445,31 +499,83 @@ static void handle_line(char *line) {
         start_listing(LISTING_SCALES);
         return;
     }
-    /* Sensor capture (diagnostics/capture.h): START <pad> records one pad,
-     * STOP ends it, STATUS reports, READ streams the records. */
+    /* Sensor capture (diagnostics/capture.h): START <pad> records one pad
+     * (~8 s), WATCH <pad> keeps recording (the studio), STOP ends it, STATUS
+     * reports, READ streams every record held, READ <from> the live rows
+     * from that sequence number on. */
     if (strcmp(cmd, "CAPTURE") == 0) {
         char *what = strtok(NULL, " ");
         char *arg = strtok(NULL, " ");
-        if (what != NULL && strcmp(what, "START") == 0 && arg != NULL) {
+        bool watch = what != NULL && strcmp(what, "WATCH") == 0;
+        if (what != NULL && (watch || strcmp(what, "START") == 0) && arg != NULL) {
             int pad = atoi(arg);
             if (pad < 1 || pad > 24) {
                 reply_err("pad-1-24");
                 return;
             }
-            tiles_capture_start((uint8_t)pad);
+            s_capture_setup.mode = tiles_expression_get_pitch_bend_mode();
+            s_capture_setup.sensitivity = tiles_expression_get_pitch_bend_sensitivity();
+            tiles_expression_get_press_path((uint8_t)pad, &s_capture_setup.bx, &s_capture_setup.by,
+                                            &s_capture_setup.strokes);
+            if (watch) {
+                tiles_capture_watch((uint8_t)pad);
+            } else {
+                tiles_capture_start((uint8_t)pad);
+            }
             reply_ok();
         } else if (what != NULL && strcmp(what, "STOP") == 0) {
             tiles_capture_stop();
             reply_ok();
         } else if (what != NULL && strcmp(what, "STATUS") == 0) {
-            snprintf(text, sizeof(text), "pad=%u running=%u count=%u max=%u", (unsigned)tiles_capture_pad(),
-                     tiles_capture_running() ? 1u : 0u, (unsigned)tiles_capture_count(), (unsigned)TILES_CAPTURE_MAX);
+            snprintf(text, sizeof(text), "pad=%u running=%u count=%u max=%u watching=%u total=%lu",
+                     (unsigned)tiles_capture_pad(), tiles_capture_running() ? 1u : 0u,
+                     (unsigned)tiles_capture_count(), (unsigned)TILES_CAPTURE_MAX,
+                     tiles_capture_watching() ? 1u : 0u, (unsigned long)tiles_capture_total());
+            reply(text);
+            snprintf(text, sizeof(text), "bend mode=%s sensitivity=%.9g bx=%.9g by=%.9g strokes=%u",
+                     TILES_BEND_MODE_NAMES[s_capture_setup.mode % TILES_BEND_MODE_COUNT],
+                     (double)s_capture_setup.sensitivity, (double)s_capture_setup.bx, (double)s_capture_setup.by,
+                     (unsigned)s_capture_setup.strokes);
             reply(text);
             reply_ok();
         } else if (what != NULL && strcmp(what, "READ") == 0) {
-            start_listing(LISTING_CAPTURE);
+            uint32_t total = tiles_capture_total();
+            uint32_t oldest = total > TILES_CAPTURE_MAX ? total - TILES_CAPTURE_MAX : 0u;
+            uint32_t from = oldest;
+            s_listing_live = arg != NULL;
+            if (s_listing_live) {
+                from = (uint32_t)strtoul(arg, NULL, 10);
+                from = from < oldest ? oldest : (from > total ? total : from);
+            }
+            s_listing_end = total;
+            if (s_listing_live && total - from > CAPTURE_READ_MAX_ROWS) {
+                s_listing_end = from + CAPTURE_READ_MAX_ROWS;
+            }
+            s_listing_header = s_listing_live;
+            s_listing = LISTING_CAPTURE;
+            s_listing_next = from;
+            fill_listing();
         } else {
-            reply_err("capture-start|stop|status|read");
+            reply_err("capture-start|watch|stop|status|read");
+        }
+        return;
+    }
+    /* Every pad's Hall reading now, one row each (the studio's grid). */
+    if (strcmp(cmd, "HALL") == 0) {
+        start_listing(LISTING_HALL);
+        return;
+    }
+    /* Learned press paths (services/bend_core.h): PATHS lists them, RESET
+     * forgets them all. */
+    if (strcmp(cmd, "BEND") == 0) {
+        char *what = strtok(NULL, " ");
+        if (what != NULL && strcmp(what, "PATHS") == 0) {
+            start_listing(LISTING_PATHS);
+        } else if (what != NULL && strcmp(what, "RESET") == 0) {
+            tiles_expression_reset_press_paths();
+            reply_ok();
+        } else {
+            reply_err("bend-paths|reset");
         }
         return;
     }

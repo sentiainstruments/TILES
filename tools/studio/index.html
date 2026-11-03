@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calibration studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@600;700&family=Sora:wght@300;400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #171d3a;
+    --ink-light: #e6e9f6;
+    --ink-2: #9ca3c6;
+    --line: rgba(201, 207, 238, .16);
+    --periwinkle: #94abf9;
+    --magenta: #ff00ff;
+    --title: clamp(1.75rem, 3.6vw, 2.25rem);
+    --lede: 1.0625rem;
+    --text: 1rem;
+    --small: .875rem;
+    --label: .6875rem;
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: dark; }
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--ink-light);
+    font: 300 var(--text)/1.5 Sora, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  .page { max-width: 1320px; margin: 0 auto; padding: 32px 24px 64px; }
+  h1 { font: 600 var(--title)/1.15 "Exo 2", sans-serif; margin: 0; letter-spacing: .01em; }
+  .lede { font-size: var(--lede); color: var(--ink-2); margin: 6px 0 0; max-width: 62ch; }
+  .label, h2, dt, label span, .seg button, button, select {
+    font: 400 var(--label)/1.4 Sora, sans-serif; text-transform: uppercase; letter-spacing: .12em;
+  }
+  h2 { margin: 0 0 10px; color: var(--ink-2); }
+  header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 32px; }
+  .status { font-size: var(--small); color: var(--ink-2); min-height: 1.5em; }
+  .status b { font-weight: 400; color: var(--ink-light); }
+  .notice { font-size: var(--small); color: var(--periwinkle); min-height: 1.5em; margin-top: 4px; }
+
+  .controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px;
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    padding: 14px 0; margin: 24px 0 8px;
+  }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; padding: 8px 14px; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  button, select, input[type=number] {
+    background: transparent; color: var(--ink-light); border: 1px solid var(--line);
+    border-radius: 999px; padding: 8px 14px; cursor: pointer;
+  }
+  select { padding-right: 10px; }
+  select option { background: var(--ink); }
+  input[type=number] {
+    font: 300 var(--small)/1.2 Sora, sans-serif; width: 6.5em; border-radius: 8px; padding: 6px 8px;
+  }
+  button:hover, select:hover { border-color: var(--ink-2); }
+  button[aria-pressed=true] { background: var(--ink-light); color: var(--ink); }
+  button:disabled, select:disabled, input:disabled { opacity: .35; cursor: default; }
+  label { display: inline-flex; align-items: center; gap: 8px; }
+  label span { color: var(--ink-2); }
+  .spacer { flex: 1; }
+  .controls .row { display: flex; gap: 10px; }
+
+  .panel { border-bottom: 1px solid var(--line); padding: 16px 0 12px; display: none; }
+  .panel.on { display: block; }
+  .panel .row { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; }
+  .sliders { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px 28px; margin-top: 14px; }
+  .sliders label { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
+  .sliders label span { grid-column: 1; }
+  .sliders label output { grid-column: 2; font-size: var(--small); }
+  .sliders input[type=range] { grid-column: 1 / 3; width: 100%; accent-color: var(--periwinkle); }
+  .hint { font-size: var(--small); color: var(--ink-2); }
+
+  main { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 0 40px; }
+  section { border-bottom: 1px solid var(--line); padding: 18px 0 16px; }
+  .duo { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 24px; }
+  canvas { display: block; width: 100%; }
+  #key { height: 250px; touch-action: none; }
+  #key.playable { cursor: grab; }
+  #pressure { height: 250px; }
+  #meters { height: 150px; }
+  #timeline { height: 240px; }
+  #path { height: 300px; }
+  .axis { display: inline-flex; margin-left: 10px; vertical-align: middle; }
+  .axis button { padding: 3px 10px; }
+  h2 .axis { text-transform: none; }
+  #pads { width: 100%; height: auto; display: block; }
+  #pads rect { cursor: pointer; }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 18px; align-items: baseline; }
+  dt { color: var(--ink-2); }
+  dd { margin: 0; font-size: var(--small); }
+  .big { font: 300 var(--title)/1 Sora, sans-serif; }
+  @media (max-width: 960px) {
+    main { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 560px) {
+    .page { padding: 24px 16px 48px; }
+    .duo { grid-template-columns: minmax(0, 1fr) 110px; gap: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div>
+      <h1>Calibration studio</h1>
+      <p class="lede">What one key's Hall sensor reads, and what velocity, pressure and pitch bend make of it, in all three bend modes at once.</p>
+    </div>
+    <div>
+      <div class="status" id="status">Starting…</div>
+      <div class="notice" id="notice"></div>
+    </div>
+  </header>
+
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Source">
+      <button data-source="device">TILES board</button>
+      <button data-source="sim" aria-pressed="true">Simulated key</button>
+      <button data-source="file">Capture file</button>
+    </div>
+    <label><span>Pad</span><select id="pad"></select></label>
+    <label title="How the board itself bends (expression.pitch_bend_mode)"><span>Board plays</span>
+      <select id="mode"><option>legacy</option><option>cosine</option><option>path</option></select></label>
+    <label title="Cosine delta for full bend (expression.pitch_bend_sensitivity)"><span>Full bend at</span>
+      <input id="sensitivity" type="number" step="0.005" min="0.03" max="0.2"></label>
+    <div class="spacer"></div>
+    <div class="row"><button id="reset">Forget learned paths</button><button id="save">Save last 8 s</button></div>
+  </div>
+
+  <div class="panel" id="sim-panel">
+    <div class="row">
+      <span class="label">Play a gesture</span>
+      <button data-gesture="strike">Strike</button>
+      <button data-gesture="press">Press harder, straight</button>
+      <button data-gesture="tilt">Lean, then press</button>
+      <button data-gesture="vibrato">Vibrato</button>
+      <span class="hint">Or play the key drawing: hold it, drag down to press, sideways to lean.</span>
+    </div>
+    <div class="sliders" id="sliders"></div>
+  </div>
+
+  <div class="panel" id="file-panel">
+    <div class="row">
+      <label><span>Capture</span><select id="file"></select></label>
+      <button id="play">Pause</button>
+      <label><span>Speed</span><select id="speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option></select></label>
+      <span class="hint">From firmware/test/captures/. Loops.</span>
+    </div>
+  </div>
+
+  <main>
+    <div>
+      <section>
+        <div class="duo">
+          <div>
+            <h2>The key, as the sensor reads it</h2>
+            <canvas id="key"></canvas>
+          </div>
+          <div>
+            <h2>Pressure</h2>
+            <canvas id="pressure"></canvas>
+          </div>
+        </div>
+      </section>
+      <section>
+        <h2>Bend, three ways</h2>
+        <canvas id="meters"></canvas>
+      </section>
+      <section>
+        <h2>Last 5 seconds</h2>
+        <canvas id="timeline"></canvas>
+      </section>
+    </div>
+    <div>
+      <section>
+        <h2>Press path <span class="axis seg"><button data-axis="x" aria-pressed="true">X</button><button data-axis="y">Y</button></span></h2>
+        <canvas id="path"></canvas>
+      </section>
+      <section>
+        <h2>Pads</h2>
+        <svg id="pads" viewBox="0 100 792 515" aria-label="The 24 pads"></svg>
+      </section>
+      <section>
+        <h2>Readings</h2>
+        <dl id="readings"></dl>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script>
+const C = { ink: '#171d3a', light: '#e6e9f6', ink2: '#9ca3c6', line: 'rgba(201,207,238,.16)', peri: '#94abf9', mag: '#ff00ff' };
+// One sample: the capture row, then each mode's delta and semitones, the learned path, the sim's truth.
+const T = 0, X = 1, Y = 2, Z = 3, DEPTH = 4, SD = 5, BEND = 6, FLAGS = 7, STATE = 8, VEL = 9, AT = 10;
+const BX = 17, BY = 18, STROKES = 19, TRUE_PRESS = 20, TRUE_TILT = 21;
+const MODES = [
+  { name: 'legacy', d: 11, s: 12, color: C.ink2, dash: [5, 4], width: 1.5 },
+  { name: 'cosine', d: 13, s: 14, color: 'rgba(230,233,246,.6)', dash: [], width: 1 },
+  { name: 'path', d: 15, s: 16, color: C.peri, dash: [], width: 2 },
+];
+const F = { VALID: 1, TOUCHED: 2, STARTED: 4, STEPPED: 8, BENT: 16, STROKE: 32, STROKE_BEGIN: 64, NOTE_ON: 128, PRESSURE: 256 };
+const LSB_PER_MT = 409.6, DEADZONE = 0.025, SEMI_PER_UNIT = 12 / (8191 * 12 / 48);
+const THRESHOLDS = [[150, 'strike'], [700, 'full strike'], [1450, 'full pressure']];
+
+const buf = [];
+const MAX_SAMPLES = 6000;
+let status = { source: 'sim' }, grid = [], paths = [];
+let notes = [], rest = [], restB = 0, maxB = 0, match = { n: 0, same: 0 };
+let axis = 'x', dirty = true;
+
+const $ = id => document.getElementById(id);
+const post = msg => fetch('/api/control', { method: 'POST', body: JSON.stringify(msg) });
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const latest = () => buf[buf.length - 1];
+const fmt = (v, d = 2) => (v == null || isNaN(v)) ? '–' : (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(d);
+
+// ---- data in ----
+function addSamples(list) {
+  for (const s of list) {
+    buf.push(s);
+    const f = s[FLAGS];
+    if (f & (F.NOTE_ON | F.STARTED)) { // Alpha 6.6 captures only mark STARTED
+      notes.push({ t: s[T], vel: s[VEL], x: s[X], y: s[Y], z: s[Z], peak: [0, 0, 0] });
+      if (notes.length > 40) notes.shift();
+    }
+    const note = notes[notes.length - 1];
+    if (note && (f & F.PRESSURE || f & F.STEPPED)) {
+      MODES.forEach((m, i) => { if (s[m.s] != null && Math.abs(s[m.s]) > Math.abs(note.peak[i])) note.peak[i] = s[m.s]; });
+      const b = Math.hypot(s[X], s[Y], s[Z]);
+      if (restB && b > maxB) maxB = b;
+    }
+    if (!(f & F.TOUCHED) && s[STATE] === 0 && f & F.VALID) {
+      const last = rest[rest.length - 1];
+      if (!last || last[0] !== s[X] || last[1] !== s[Y] || last[2] !== s[Z]) {
+        rest.push([s[X], s[Y], s[Z]]);
+        if (rest.length > 200) rest.shift();
+      }
+    }
+    if (f & F.BENT && status.mode) {
+      const lane = MODES.find(m => m.name === status.mode);
+      if (lane && s[lane.s] != null) {
+        match.n++;
+        if (Math.abs((s[BEND] - 8192) * SEMI_PER_UNIT - s[lane.s]) < 0.02) match.same++;
+      }
+    }
+  }
+  if (buf.length > MAX_SAMPLES) buf.splice(0, buf.length - MAX_SAMPLES);
+  dirty = true;
+}
+
+function resetData() {
+  buf.length = 0; notes = []; rest = []; restB = 0; maxB = 0; match = { n: 0, same: 0 }; grid = []; dirty = true;
+}
+
+const events = new EventSource('/api/events');
+events.addEventListener('samples', e => addSamples(JSON.parse(e.data)));
+events.addEventListener('status', e => { status = JSON.parse(e.data); showStatus(); dirty = true; });
+events.addEventListener('grid', e => { grid = JSON.parse(e.data); dirty = true; });
+events.addEventListener('paths', e => { paths = JSON.parse(e.data); dirty = true; });
+events.addEventListener('reset', () => resetData());
+events.addEventListener('notice', e => notice(JSON.parse(e.data)));
+events.onerror = () => { $('status').textContent = 'Lost the studio server. Is studio.py still running?'; };
+
+let noticeTimer;
+function notice(text) {
+  $('notice').textContent = text;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => { $('notice').textContent = ''; }, 5000);
+}
+
+// ---- controls ----
+for (let p = 1; p <= 24; p++) $('pad').add(new Option(`Pad ${p}`, p));
+document.querySelectorAll('[data-source]').forEach(b => b.onclick = async () => {
+  const msg = { source: b.dataset.source, pad: +$('pad').value };
+  if (msg.source === 'file') {
+    await loadFiles();
+    if (!$('file').value) { notice('No captures in firmware/test/captures/ yet.'); }
+    msg.file = $('file').value;
+  }
+  post(msg);
+});
+$('pad').onchange = () => post({ pad: +$('pad').value });
+$('mode').onchange = () => post({ mode: $('mode').value });
+$('sensitivity').onchange = () => post({ sensitivity: +$('sensitivity').value });
+$('reset').onclick = () => post({ reset_paths: true });
+$('save').onclick = () => post({ save: true });
+$('file').onchange = () => post({ source: 'file', file: $('file').value, pad: +$('pad').value });
+$('play').onclick = () => post({ playing: !status.playing });
+$('speed').onchange = () => post({ speed: +$('speed').value });
+document.querySelectorAll('[data-gesture]').forEach(b => b.onclick = () => post({ gesture: b.dataset.gesture }));
+document.querySelectorAll('[data-axis]').forEach(b => b.onclick = () => {
+  axis = b.dataset.axis;
+  document.querySelectorAll('[data-axis]').forEach(o => o.setAttribute('aria-pressed', o === b));
+  dirty = true;
+});
+
+async function loadFiles() {
+  const files = await (await fetch('/api/captures')).json();
+  const sel = $('file'), keep = sel.value;
+  sel.innerHTML = '';
+  files.forEach(f => sel.add(new Option(f, f)));
+  if (files.includes(keep)) sel.value = keep;
+}
+
+const SLIDERS = [
+  ['offset_x_mm', 'Magnet off-axis X', 0, 1.5, 0.05, 'mm'],
+  ['offset_y_mm', 'Magnet off-axis Y', 0, 1.5, 0.05, 'mm'],
+  ['rest_mt', 'Rest field', 3, 20, 0.5, 'mT'],
+  ['gap_mm', 'Gap at rest', 2, 6, 0.1, 'mm'],
+  ['travel_mm', 'Travel, full press', 0.2, 1.2, 0.05, 'mm'],
+  ['pivot_mm', 'Pivot below magnet', 0, 10, 0.5, 'mm'],
+  ['sensor_offset_x_ut', 'Sensor offset X', -1000, 1000, 50, 'µT'],
+  ['averaging', 'Sensor averaging', 0, 2, 1, ''],
+  ['tremor_deg', 'Hand tremor', 0, 0.3, 0.01, '°'],
+];
+const AVERAGING = [1, 8, 16];
+function buildSliders(params) {
+  const box = $('sliders');
+  if (box.childElementCount) { // already built: follow the sim's values
+    box.querySelectorAll('input').forEach(input => {
+      if (input === document.activeElement) return;
+      const key = input.dataset.key;
+      input.value = key === 'averaging' ? AVERAGING.indexOf(params[key]) : params[key];
+      input.dispatchEvent(new Event('show'));
+    });
+    return;
+  }
+  for (const [key, name, lo, hi, step, unit] of SLIDERS) {
+    const l = document.createElement('label');
+    const value = key === 'averaging' ? AVERAGING.indexOf(params[key]) : params[key];
+    l.innerHTML = `<span>${name}</span><output></output><input type="range" min="${lo}" max="${hi}" step="${step}" value="${value}">`;
+    const input = l.querySelector('input'), out = l.querySelector('output');
+    input.dataset.key = key;
+    const show = () => { out.textContent = key === 'averaging' ? `${AVERAGING[+input.value]}×` : `${(+input.value).toFixed(step < 0.1 ? 2 : step < 1 ? 1 : 0)} ${unit}`; };
+    show();
+    input.addEventListener('show', show);
+    input.oninput = () => { show(); post({ sim: { [key]: key === 'averaging' ? AVERAGING[+input.value] : +input.value } }); };
+    box.appendChild(l);
+  }
+}
+
+function showStatus() {
+  const s = status;
+  document.querySelectorAll('[data-source]').forEach(b => b.setAttribute('aria-pressed', b.dataset.source === s.source));
+  $('sim-panel').classList.toggle('on', s.source === 'sim');
+  $('file-panel').classList.toggle('on', s.source === 'file');
+  if (s.pad) $('pad').value = s.pad;
+  const live = s.source === 'device' && s.connected;
+  $('mode').disabled = $('sensitivity').disabled = !live;
+  $('save').disabled = s.source === 'file';
+  $('reset').disabled = s.source === 'file' || (s.source === 'device' && !s.connected);
+  $('key').classList.toggle('playable', s.source === 'sim');
+  if (s.mode) $('mode').value = s.mode;
+  if (s.sensitivity && document.activeElement !== $('sensitivity')) $('sensitivity').value = (+s.sensitivity).toFixed(3);
+  if (s.params) buildSliders(s.params);
+  if (s.source === 'file') $('play').textContent = s.playing ? 'Pause' : 'Play';
+  let text;
+  if (s.message) text = s.message;
+  else if (s.source === 'device') text = `Live from <b>TILES</b>, pad ${s.pad}${s.firmware ? ' · firmware ' + s.firmware : ''}`;
+  else if (s.source === 'sim') text = `<b>Simulated key</b>: a dipole magnet model, sizes guessed until a capture measures them`;
+  else text = `<b>${s.file}</b> · ${s.rows} samples`;
+  $('status').innerHTML = text;
+}
+
+// ---- playing the simulated key on its drawing ----
+let dragging = null, lastSent = 0;
+function sendManual(on, e) {
+  const r = $('key').getBoundingClientRect();
+  const press = on ? clamp((e.clientY - dragging.y) / (r.height * 0.45), 0, 1) : 0;
+  const tilt = on ? clamp((e.clientX - dragging.x) / (r.width * 0.3), -1, 1) * 4 : 0;
+  const now = performance.now();
+  if (!on || now - lastSent > 25) { lastSent = now; post({ manual: { on, press, tilt } }); }
+}
+$('key').addEventListener('pointerdown', e => {
+  if (status.source !== 'sim') return;
+  dragging = { x: e.clientX, y: e.clientY - 4 };
+  $('key').setPointerCapture(e.pointerId);
+  sendManual(true, e);
+});
+$('key').addEventListener('pointermove', e => { if (dragging) sendManual(true, e); });
+const release = e => { if (dragging) { sendManual(false, e); dragging = null; } };
+$('key').addEventListener('pointerup', release);
+$('key').addEventListener('pointercancel', release);
+
+// ---- drawing ----
+function surface(canvas) {
+  const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  const g = canvas.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, r.width, r.height);
+  return [g, r.width, r.height];
+}
+function label(g, text, x, y, color = C.ink2, align = 'left') {
+  g.font = '400 11px Sora, sans-serif';
+  g.letterSpacing = '0.12em';
+  g.fillStyle = color;
+  g.textAlign = align;
+  g.fillText(text.toUpperCase(), x, y);
+  g.letterSpacing = '0px';
+}
+function value(g, text, x, y, color = C.light, align = 'left', size = 14) {
+  g.font = `300 ${size}px Sora, sans-serif`;
+  g.fillStyle = color;
+  g.textAlign = align;
+  g.fillText(text, x, y);
+}
+function line(g, x1, y1, x2, y2, color = C.line, width = 1, dash = []) {
+  g.strokeStyle = color; g.lineWidth = width; g.setLineDash(dash);
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); g.setLineDash([]);
+}
+function lastWith(index) {
+  for (let i = buf.length - 1; i >= 0 && i > buf.length - 400; i--) if (buf[i][index] != null) return buf[i];
+  return null;
+}
+
+function drawKey() {
+  const [g, w, h] = surface($('key'));
+  const s = latest();
+  const cx = w / 2, base = h - 40;
+  line(g, 16, base, w - 16, base, C.line, 1.5);
+  g.fillStyle = C.ink2;
+  g.fillRect(cx - 14, base - 7, 28, 7);
+  label(g, 'Hall sensor · field lean ×4', cx, base + 20, C.ink2, 'center');
+  const keyW = Math.min(w * 0.6, 300), keyH = 22, restBottom = base - 64, travelPx = 34;
+  const pose = (press, angle, fill, stroke, dash) => {
+    g.save();
+    g.translate(cx, restBottom + press * travelPx - keyH / 2);
+    g.rotate(angle);
+    g.beginPath(); g.roundRect(-keyW / 2, -keyH / 2, keyW, keyH, 8);
+    if (fill) { g.fillStyle = fill; g.fill(); }
+    g.setLineDash(dash || []); g.strokeStyle = stroke; g.lineWidth = 1.5; g.stroke(); g.setLineDash([]);
+    g.fillStyle = C.ink2;
+    g.fillRect(-16, keyH / 2 - 1, 32, 8);
+    g.restore();
+  };
+  if (!s) { pose(0, 0, null, C.light); label(g, 'Waiting for samples', 16, 18); return; }
+  // What the sensor and the bend code think: depth for the press, path's bend for the lean
+  // (a lean toward +X bends down, so the angle flips the bend's sign).
+  const held = s[STATE] === 2 || (s[FLAGS] & F.PRESSURE);
+  const touched = s[FLAGS] & F.TOUCHED;
+  const semis = s[16] ?? 0;
+  pose(clamp(s[DEPTH] / 1450, 0, 1.15), -clamp(semis / 12, -1.3, 1.3) * 9 * Math.PI / 180,
+       held ? C.mag : null, held || touched ? C.mag : C.light);
+  // The sim's true pose, dashed on top: what the key really did.
+  if (s[TRUE_PRESS] != null) pose(s[TRUE_PRESS], s[TRUE_TILT] * 3 * Math.PI / 180, null, C.light, [4, 4]);
+  // The field at the sensor, its lean drawn 4x.
+  const lean = Math.atan2(s[X] * 4, Math.abs(s[Z]) || 1);
+  const len = 22, ax = cx + Math.sin(lean) * len, ay = base - 7 - Math.cos(lean) * len;
+  line(g, cx, base - 7, ax, ay, C.peri, 2);
+  g.fillStyle = C.peri; g.beginPath(); g.arc(ax, ay, 3, 0, Math.PI * 2); g.fill();
+
+  label(g, 'Depth', 16, 18); value(g, `${s[DEPTH]}`, 16, 38);
+  label(g, 'Bend (path)', w - 16, 18, C.ink2, 'right');
+  value(g, s[16] == null ? '–' : `${fmt(s[16])} st`, w - 16, 38, C.light, 'right');
+  if (s[TRUE_PRESS] != null) label(g, 'Dashed: what the key really did', 16, h - 6);
+}
+
+function drawPressure() {
+  const [g, w, h] = surface($('pressure'));
+  const s = latest();
+  const top = 12, bottom = h - 40, x = 8, bw = 18, full = 1600;
+  const y = v => bottom - (bottom - top) * clamp(v / full, 0, 1);
+  g.strokeStyle = C.line; g.lineWidth = 1; g.strokeRect(x + 0.5, top + 0.5, bw, bottom - top);
+  if (s) {
+    g.fillStyle = C.peri; g.fillRect(x + 1, y(s[DEPTH]), bw - 1, bottom - y(s[DEPTH]));
+    if (s[SD] > 0) line(g, x - 3, y(s[SD]), x + bw + 3, y(s[SD]), C.light, 1.5);
+  }
+  for (const [v, name] of THRESHOLDS) {
+    line(g, x + bw + 2, y(v), x + bw + 8, y(v), C.ink2, 1);
+    label(g, name, x + bw + 12, y(v) + 4);
+  }
+  const note = notes[notes.length - 1];
+  label(g, 'Pressure', x, h - 24); value(g, s ? `${s[AT]}` : '–', x + 78, h - 24, C.light, 'left', 14);
+  label(g, 'Velocity', x, h - 6); value(g, note ? `${note.vel}` : '–', x + 78, h - 6, C.light, 'left', 14);
+}
+
+function sensitivity() {
+  return +(status.sensitivity || 0.065) || 0.065;
+}
+
+function drawMeters() {
+  const [g, w, h] = surface($('meters'));
+  const sens = sensitivity(), left = 104, right = w - 96, rowH = h / 3;
+  const xOf = d => left + (right - left) * (clamp(d / sens, -1.25, 1.25) + 1.25) / 2.5;
+  const recent = buf.slice(-120);
+  const note = notes[notes.length - 1];
+  MODES.forEach((m, i) => {
+    const cy = rowH * i + rowH / 2;
+    g.fillStyle = 'rgba(201,207,238,.08)';
+    g.fillRect(xOf(-DEADZONE), cy - 9, xOf(DEADZONE) - xOf(-DEADZONE), 18);
+    line(g, left, cy, right, cy, C.line);
+    for (const d of [-sens, 0, sens]) line(g, xOf(d), cy - 9, xOf(d), cy + 9, C.ink2, 1);
+    label(g, m.name, 0, cy - 2, m.name === 'path' ? C.peri : C.light);
+    if (status.mode === m.name) label(g, 'on the board', 0, cy + 13);
+    g.fillStyle = m.name === 'path' ? C.peri : m.name === 'cosine' ? C.light : C.ink2;
+    recent.forEach((s, k) => {
+      if (s[m.d] == null) return;
+      g.globalAlpha = 0.08 + 0.3 * k / recent.length;
+      g.beginPath(); g.arc(xOf(s[m.d]), cy, 2, 0, Math.PI * 2); g.fill();
+    });
+    g.globalAlpha = 1;
+    const s = lastWith(m.d);
+    if (s && s === latest()) { g.beginPath(); g.arc(xOf(s[m.d]), cy, 5.5, 0, Math.PI * 2); g.fill(); }
+    value(g, s && s === latest() ? `${fmt(s[m.s])} st` : '–', w, cy + 1, C.light, 'right');
+    if (note) label(g, `peak ${Math.abs(note.peak[i]).toFixed(2)}`, w, cy + 15, C.ink2, 'right');
+  });
+  label(g, 'deadzone', (xOf(-DEADZONE) + xOf(DEADZONE)) / 2, h - 2, C.ink2, 'center');
+  label(g, 'full bend', xOf(sens), h - 2, C.ink2, 'center');
+}
+
+function drawTimeline() {
+  const [g, w, h] = surface($('timeline'));
+  const s = latest();
+  if (!s) return;
+  const span = 5000, t1 = s[T], t0 = t1 - span, left = 0, right = w;
+  const xOf = t => left + (right - left) * (t - t0) / span;
+  const dTop = 14, dBot = h * 0.36, bTop = h * 0.46, bBot = h - 14;
+  const view = buf.filter(v => v[T] >= t0);
+  // depth
+  const dy = v => dBot - (dBot - dTop) * clamp(v / 1600, 0, 1);
+  line(g, left, dy(150), right, dy(150), C.line, 1, [3, 4]);
+  label(g, 'Depth', 0, dTop - 2);
+  g.strokeStyle = C.light; g.lineWidth = 1.5; g.beginPath();
+  view.forEach((v, i) => i ? g.lineTo(xOf(v[T]), dy(v[DEPTH])) : g.moveTo(xOf(v[T]), dy(v[DEPTH])));
+  g.stroke();
+  // bend per mode
+  let range = 1;
+  for (const v of view) for (const m of MODES) if (v[m.s] != null) range = Math.max(range, Math.abs(v[m.s]));
+  range = Math.min(13, range * 1.15);
+  const by = v => (bTop + bBot) / 2 - (bBot - bTop) / 2 * clamp(v / range, -1, 1);
+  line(g, left, by(0), right, by(0), C.line);
+  label(g, `Bend, ±${range.toFixed(range < 3 ? 1 : 0)} semitones`, 0, bTop - 4);
+  for (const m of MODES) {
+    g.strokeStyle = m.color; g.lineWidth = m.width; g.setLineDash(m.dash); g.beginPath();
+    let open = false;
+    for (const v of view) {
+      if (v[m.s] == null) { open = false; continue; }
+      open ? g.lineTo(xOf(v[T]), by(v[m.s])) : g.moveTo(xOf(v[T]), by(v[m.s]));
+      open = true;
+    }
+    g.stroke(); g.setLineDash([]);
+  }
+  let lx = w;
+  for (const m of [...MODES].reverse()) {
+    g.font = '400 11px Sora, sans-serif'; g.letterSpacing = '0.12em';
+    const tw = g.measureText(m.name.toUpperCase()).width;
+    lx -= tw;
+    label(g, m.name, lx, bTop - 4, m.name === 'path' ? C.peri : m.name === 'cosine' ? C.light : C.ink2);
+    line(g, lx - 22, bTop - 8, lx - 6, bTop - 8, m.color, m.width, m.dash);
+    lx -= 34;
+  }
+  for (const n of notes) {
+    if (n.t < t0) continue;
+    line(g, xOf(n.t), dTop, xOf(n.t), bBot, C.line);
+    label(g, `vel ${n.vel}`, xOf(n.t) + 4, dTop + 10);
+  }
+}
+
+function drawPath() {
+  const [g, w, h] = surface($('path'));
+  const s = latest();
+  const comp = axis === 'x' ? X : Y, slopeIdx = axis === 'x' ? BX : BY;
+  if (!s) { label(g, 'Waiting for samples', 0, 16); return; }
+  const view = buf.filter(v => v[T] >= s[T] - 4000 && v[FLAGS] & F.VALID);
+  let zl = Infinity, zh = -Infinity, cl = Infinity, ch = -Infinity;
+  for (const v of view) { zl = Math.min(zl, v[Z]); zh = Math.max(zh, v[Z]); cl = Math.min(cl, v[comp]); ch = Math.max(ch, v[comp]); }
+  const zPad = Math.max(60, (zh - zl) * 0.08), cPad = Math.max(40, (ch - cl) * 0.12);
+  zl -= zPad; zh += zPad; cl -= cPad; ch += cPad;
+  const L = 8, R = w - 8, Tp = 14, B = h - 30;
+  const xOf = z => L + (R - L) * (z - zl) / (zh - zl), yOf = c => B - (B - Tp) * (c - cl) / (ch - cl);
+  g.strokeStyle = C.line; g.strokeRect(L + 0.5, Tp + 0.5, R - L, B - Tp);
+  for (const v of view) {
+    const f = v[FLAGS];
+    if (f & F.STROKE) { g.fillStyle = C.peri; g.globalAlpha = 0.9; g.beginPath(); g.arc(xOf(v[Z]), yOf(v[comp]), 2.6, 0, 7); g.fill(); }
+    else { g.fillStyle = f & F.PRESSURE ? C.light : C.ink2; g.globalAlpha = f & F.PRESSURE ? 0.35 : 0.5; g.fillRect(xOf(v[Z]) - 1, yOf(v[comp]) - 1, 2, 2); }
+  }
+  g.globalAlpha = 1;
+  const note = notes[notes.length - 1];
+  if (note) {
+    const c0 = axis === 'x' ? note.x : note.y;
+    // What COSINE assumes: the field keeps its direction, a line through zero.
+    const k = c0 / (note.z || 1);
+    line(g, xOf(zl), yOf(k * zl), xOf(zh), yOf(k * zh), C.ink2, 1, [4, 4]);
+    const b = s[slopeIdx];
+    if (b != null && s[STROKES] > 0) line(g, xOf(zl), yOf(c0 + b * (zl - note.z)), xOf(zh), yOf(c0 + b * (zh - note.z)), C.peri, 1.5);
+    g.fillStyle = C.mag; g.beginPath(); g.arc(xOf(note.z), yOf(c0), 3.5, 0, 7); g.fill();
+  }
+  label(g, `Z (raw) →   ${axis.toUpperCase()} (raw) ↑`, L, h - 12);
+  const learned = s[STROKES] ?? 0;
+  const text = learned ? `learned slope ${(s[slopeIdx] ?? 0).toFixed(3)} from ${learned} strokes` : 'no strokes learned yet';
+  label(g, text, L + 10, Tp + 18, C.peri);
+}
+
+const PAD = { x: 6.32, y: 106.78, sx: 135.09, sy: 133.14, w: 103.91, h: 102.42, r: 15.5 };
+function buildPads() {
+  const svg = $('pads');
+  for (let p = 1; p <= 24; p++) {
+    const col = (p - 1) % 6, row = Math.floor((p - 1) / 6);
+    const x = PAD.x + col * PAD.sx, y = PAD.y + row * PAD.sy;
+    svg.insertAdjacentHTML('beforeend',
+      `<g data-pad="${p}"><rect x="${x}" y="${y}" width="${PAD.w}" height="${PAD.h}" rx="${PAD.r}" fill="${C.mag}" fill-opacity="0" stroke="${C.light}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` +
+      `<text x="${x + 14}" y="${y + 30}" fill="${C.ink2}" font-family="Sora" font-size="20">${p}</text>` +
+      `<text class="strokes" x="${x + PAD.w - 12}" y="${y + PAD.h - 14}" fill="${C.ink2}" font-family="Sora" font-size="16" text-anchor="end"></text></g>`);
+  }
+  svg.querySelectorAll('g').forEach(el => el.onclick = () => { $('pad').value = el.dataset.pad; post({ pad: +el.dataset.pad }); });
+}
+function drawPads() {
+  const svg = $('pads');
+  svg.querySelectorAll('g').forEach(el => {
+    const p = +el.dataset.pad, cell = grid.find(r => r[0] === p), rect = el.firstChild;
+    const lit = cell && cell[6] ? 0.25 + 0.75 * clamp(cell[4] / 1450, 0, 1) : 0;
+    rect.setAttribute('fill-opacity', lit.toFixed(2));
+    rect.setAttribute('stroke', p === +status.pad ? C.peri : C.light);
+    rect.setAttribute('stroke-width', p === +status.pad ? 3 : 1.5);
+    const path = paths.find(r => r[0] === p);
+    el.querySelector('.strokes').textContent = path && path[3] ? `${path[3]}×` : '';
+  });
+}
+
+function drawReadings() {
+  const rows = [];
+  if (rest.length > 10) {
+    const n = rest.length, mean = [0, 1, 2].map(i => rest.reduce((a, r) => a + r[i], 0) / n);
+    const sd = [0, 1, 2].map(i => Math.sqrt(rest.reduce((a, r) => a + (r[i] - mean[i]) ** 2, 0) / (n - 1)));
+    restB = Math.hypot(...mean);
+    rows.push(['Rest field', `${(restB / LSB_PER_MT).toFixed(2)} mT`]);
+    rows.push(['Rest noise X · Y · Z', sd.map(v => (v / LSB_PER_MT * 1000).toFixed(0)).join(' · ') + ' µT']);
+  } else rows.push(['Rest field', 'hands off the key for a second']);
+  if (maxB && restB) rows.push(['Hardest press', `×${(maxB / restB).toFixed(2)} the rest field`]);
+  const s = latest();
+  if (s) {
+    rows.push([`Press path, pad ${status.pad ?? ''}`, s[STROKES] >= 3 ? `slope ${s[BX].toFixed(3)} · ${s[BY].toFixed(3)}, ${s[STROKES]} strokes`
+      : `learning: ${s[STROKES] ?? 0} of 3 strokes (until then, the note's own direction)`]);
+  }
+  const note = notes[notes.length - 1];
+  if (note) {
+    rows.push(['Last strike', `velocity ${note.vel}`]);
+    rows.push(['Last note, peak bend', MODES.map((m, i) => `${m.name} ${Math.abs(note.peak[i]).toFixed(2)}`).join(' · ') + ' st']);
+  }
+  if (status.source === 'device' && status.mode) {
+    rows.push(['Board plays', `${status.mode}, full bend at ${(+status.sensitivity).toFixed(3)}`]);
+    if (match.n) rows.push(['Replay vs board', `${(100 * match.same / match.n).toFixed(1)}% of ${match.n} bends agree`]);
+  }
+  $('readings').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+}
+
+let lastReadings = 0;
+function frame(now) {
+  if (dirty) {
+    dirty = false;
+    drawKey(); drawPressure(); drawMeters(); drawTimeline(); drawPath(); drawPads();
+    if (now - lastReadings > 250) { lastReadings = now; drawReadings(); }
+  }
+  requestAnimationFrame(frame);
+}
+buildPads();
+window.addEventListener('resize', () => { dirty = true; });
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

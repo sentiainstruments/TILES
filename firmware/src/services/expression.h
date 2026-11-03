@@ -46,6 +46,16 @@ float tiles_expression_get_pitch_bend_sensitivity(void);
 void tiles_expression_set_aftertouch_sensitivity(uint16_t depth_full_scale);
 uint16_t tiles_expression_get_aftertouch_sensitivity(void);
 
+/* How bend keeps depth out (tiles_bend_mode_t, bend_core.h): setting
+ * expression.pitch_bend_mode, default PATH. New notes use the new mode. */
+void tiles_expression_set_pitch_bend_mode(uint8_t mode);
+uint8_t tiles_expression_get_pitch_bend_mode(void);
+
+/* Pad 1-24's learned press path (bend_core.h): slopes and strokes learned
+ * since boot. False if out of range. Reset forgets every pad's. */
+bool tiles_expression_get_press_path(uint8_t logical_pad, float *bx, float *by, uint16_t *strokes);
+void tiles_expression_reset_press_paths(void);
+
 /* How far pad 1-24's sounding note is bent: 0 (centred, no note, or bend
  * off) to 1 (the pad's full bend, before the wire-range scaling), vibrato
  * included. For the LEDs' bend dimming (lighting.c). */

@@ -1,9 +1,13 @@
 #include "bend_core.h"
 
 #include <math.h>
+#include <stddef.h>
 
-/* Uses the field's direction (component / |B|), which cancels depth to
- * first order. Magnitude from X and Y, sign from X alone. */
+/* Bend = how far the field's direction has moved from where the note
+ * settled. Magnitude from X and Y, sign from X alone. Three ways to keep
+ * depth out of it (tiles_bend_mode_t). */
+
+const char *const TILES_BEND_MODE_NAMES[TILES_BEND_MODE_COUNT] = {"legacy", "cosine", "path"};
 
 /* Deadzone, as a soft knee. Straight presses moved the cosine up to ~0.05;
  * depth-gated recentring removed most of that, so 0.025. Changed alone:
@@ -57,6 +61,24 @@
 #define VIBRATO_MAX_WIRE_DEPTH 150.0f
 /* Local pi: M_PI isn't guaranteed on this newlib target. */
 #define BEND_PI 3.14159265358979323846f
+
+/* Press path learning (PATH). A stroke is learned only if it spans a real
+ * press (the strike threshold, raw Z) and stays close to a straight line:
+ * RMS off the line ~2.5x the X/Y noise at 1x averaging (~50). First
+ * guesses; tighten the residual if averaging goes up. */
+#define PATH_STROKE_MIN_SAMPLES 4u
+#define PATH_STROKE_MAX_SAMPLES 500u /* a resting finger restarts the stroke */
+#define PATH_STROKE_MIN_Z_RANGE 150.0f
+#define PATH_STROKE_MAX_RESIDUAL 120.0f
+/* Sanity bound on |dX/dZ|: about 2 x offset / gap, so 1.0 is a magnet 2 mm
+ * off at a 4 mm gap (the studio's sim reaches 0.44 at 0.8 mm). */
+#define PATH_MAX_SLOPE 1.0f
+/* Below this many strokes a note uses its own direction at settle (the
+ * COSINE assumption) instead. */
+#define PATH_MIN_STROKES 3u
+/* Strokes are averaged up to this many, then each new one moves the slope
+ * by 1/this, so a few tilted strikes can't retrain it. */
+#define PATH_AVERAGE_STROKES 16u
 
 /* component / |B|; a near-zero |B| returns 0. */
 static float direction_cosine_from(float x_component, float magnitude) {
@@ -168,19 +190,31 @@ static uint16_t apply_vibrato(tiles_bend_t *b, uint16_t bend, uint32_t now_ms) {
     return (uint16_t)with_vibrato;
 }
 
-void tiles_bend_start(tiles_bend_t *b, int16_t x, int16_t y, int16_t z, float depth, uint16_t center,
-                      uint32_t now_ms) {
+void tiles_bend_start(tiles_bend_t *b, tiles_bend_mode_t mode, const tiles_press_path_t *path, int16_t x,
+                      int16_t y, int16_t z, float depth, uint16_t center, uint32_t now_ms) {
     float fx = (float)x;
     float fy = (float)y;
     float fz = (float)z;
     float magnitude = sqrtf(fx * fx + fy * fy + fz * fz);
+    b->mode = (uint8_t)(mode < TILES_BEND_MODE_COUNT ? mode : TILES_BEND_MODE_LEGACY);
     b->center = center;
+    if (b->mode == TILES_BEND_MODE_COSINE) {
+        fx = direction_cosine_from(fx, magnitude);
+        fy = direction_cosine_from(fy, magnitude);
+    }
     b->x1 = fx;
     b->x2 = fx;
     b->y1 = fy;
     b->y2 = fy;
+    b->z1 = fz;
+    b->z2 = fz;
     b->magnitude = magnitude;
     b->run_magnitude = magnitude;
+    b->path_learned = path != NULL && path->strokes >= PATH_MIN_STROKES;
+    b->path_bx = b->path_learned ? path->bx : 0.0f;
+    b->path_by = b->path_learned ? path->by : 0.0f;
+    b->anchor_x = 0.0f;
+    b->anchor_y = 0.0f;
     b->prev_depth = depth;
     b->depth_rate = 0.0f;
     b->delta = 0.0f;
@@ -191,12 +225,45 @@ void tiles_bend_start(tiles_bend_t *b, int16_t x, int16_t y, int16_t z, float de
     b->wiggle_active = false;
 }
 
+/* PATH at settle: the slope (learned, or this note's own direction) and
+ * the anchor a = x - b*z, then the stages move to the residual, which is 0
+ * here by construction. */
+static void anchor_path(tiles_bend_t *b) {
+    if (!b->path_learned) {
+        float z = fabsf(b->z2) >= 1.0f ? b->z2 : 1.0f;
+        b->path_bx = b->x2 / z;
+        b->path_by = b->y2 / z;
+    }
+    b->anchor_x = b->x2 - b->path_bx * b->z2;
+    b->anchor_y = b->y2 - b->path_by * b->z2;
+    b->x1 = b->x2 = 0.0f;
+    b->y1 = b->y2 = 0.0f;
+}
+
 bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x, int16_t y, int16_t z,
                      float smoothed_depth, uint32_t now_ms, uint16_t *out_bend) {
     float fx = (float)x;
     float fy = (float)y;
     float fz = (float)z;
     float magnitude = sqrtf(fx * fx + fy * fy + fz * fz);
+
+    /* What the stages smooth: raw X/Y (LEGACY, and PATH until settle), or a
+     * per-sample cosine, divided before filtering so |B| can't lag it. */
+    float wiggle_scale = 1.0f; /* back to raw units for the vibrato thresholds */
+    if (b->mode == TILES_BEND_MODE_COSINE) {
+        fx = direction_cosine_from(fx, magnitude);
+        fy = direction_cosine_from(fy, magnitude);
+        wiggle_scale = b->magnitude;
+    } else if (b->mode == TILES_BEND_MODE_PATH) {
+        if (b->settled) {
+            fx = direction_cosine_from(fx - b->anchor_x - b->path_bx * fz, magnitude);
+            fy = direction_cosine_from(fy - b->anchor_y - b->path_by * fz, magnitude);
+            wiggle_scale = b->magnitude;
+        } else {
+            b->z1 += BEND_SMOOTHING_ALPHA * (fz - b->z1);
+            b->z2 += BEND_SMOOTHING_ALPHA * (b->z1 - b->z2);
+        }
+    }
 
     b->x1 += BEND_SMOOTHING_ALPHA * (fx - b->x1);
     b->x2 += BEND_SMOOTHING_ALPHA * (b->x1 - b->x2);
@@ -208,7 +275,7 @@ bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x,
     {
         float wiggle_x = b->x1 - b->x2;
         float wiggle_y = b->y1 - b->y2;
-        float wiggle = sqrtf(wiggle_x * wiggle_x + wiggle_y * wiggle_y);
+        float wiggle = sqrtf(wiggle_x * wiggle_x + wiggle_y * wiggle_y) * wiggle_scale;
         b->wiggle_energy += BEND_SMOOTHING_ALPHA * (wiggle - b->wiggle_energy);
     }
 
@@ -223,6 +290,9 @@ bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x,
     if (!b->settled) {
         /* Centred until the settle time, then the baseline from the cascade. */
         if ((now_ms - b->start_ms) >= BEND_SETTLE_MS) {
+            if (b->mode == TILES_BEND_MODE_PATH) {
+                anchor_path(b);
+            }
             b->baseline_x = b->x2;
             b->baseline_y = b->y2;
             b->settled = true;
@@ -231,31 +301,136 @@ bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x,
         return false;
     }
 
-    /* Recentre only while no run is confirmed (last pass's state), blending
-     * SLOW..FAST by depth activity, cubed: FAST is ~125x SLOW, and a linear
-     * blend let sensor noise erase real tilts. */
-    if (!b->run_active) {
-        float activity_shaped = depth_activity * depth_activity * depth_activity;
-        float recenter_alpha = BEND_BASELINE_RECENTER_ALPHA_SLOW +
-                               (BEND_BASELINE_RECENTER_ALPHA_FAST - BEND_BASELINE_RECENTER_ALPHA_SLOW) *
-                                   activity_shaped;
-        b->baseline_x += recenter_alpha * (b->x2 - b->baseline_x);
-        b->baseline_y += recenter_alpha * (b->y2 - b->baseline_y);
-        b->run_magnitude = b->magnitude;
+    float delta_x;
+    float delta_y;
+    if (b->mode == TILES_BEND_MODE_PATH) {
+        /* Depth is predicted by the path, so nothing chases it: only slow
+         * creep is pulled out, and only while no bend is held. */
+        if (!b->run_active) {
+            b->baseline_x += BEND_BASELINE_RECENTER_ALPHA_SLOW * (b->x2 - b->baseline_x);
+            b->baseline_y += BEND_BASELINE_RECENTER_ALPHA_SLOW * (b->y2 - b->baseline_y);
+        }
+        delta_x = b->baseline_x - b->x2;
+        delta_y = b->baseline_y - b->y2;
+    } else {
+        /* Recentre only while no run is confirmed (last pass's state), blending
+         * SLOW..FAST by depth activity, cubed: FAST is ~125x SLOW, and a linear
+         * blend let sensor noise erase real tilts. */
+        if (!b->run_active) {
+            float activity_shaped = depth_activity * depth_activity * depth_activity;
+            float recenter_alpha = BEND_BASELINE_RECENTER_ALPHA_SLOW +
+                                   (BEND_BASELINE_RECENTER_ALPHA_FAST - BEND_BASELINE_RECENTER_ALPHA_SLOW) *
+                                       activity_shaped;
+            b->baseline_x += recenter_alpha * (b->x2 - b->baseline_x);
+            b->baseline_y += recenter_alpha * (b->y2 - b->baseline_y);
+            b->run_magnitude = b->magnitude;
+        }
+        if (b->mode == TILES_BEND_MODE_COSINE) {
+            delta_x = b->baseline_x - b->x2;
+            delta_y = b->baseline_y - b->y2;
+        } else {
+            /* LEGACY depth compensation: compare against the baseline cosine
+             * predicted at the current magnitude. Invariants (each broke
+             * things): both terms divide by this pass's same magnitude; both
+             * use the fully cascaded x2/y2; during a confirmed run the
+             * magnitude is frozen. Sign: predicted - current. */
+            delta_x = direction_cosine_from(b->baseline_x, b->run_magnitude) -
+                      direction_cosine_from(b->x2, b->run_magnitude);
+            delta_y = direction_cosine_from(b->baseline_y, b->run_magnitude) -
+                      direction_cosine_from(b->y2, b->run_magnitude);
+        }
     }
-
-    /* Depth compensation: compare against the baseline cosine predicted at the
-     * current magnitude, so a pure depth change gives exactly 0. Invariants
-     * (each broke things): both terms divide by this pass's same magnitude;
-     * both use the fully cascaded x2/y2; during a confirmed run the magnitude
-     * is frozen. Sign: predicted - current. */
-    float delta_x = direction_cosine_from(b->baseline_x, b->run_magnitude) - direction_cosine_from(b->x2, b->run_magnitude);
-    float delta_y = direction_cosine_from(b->baseline_y, b->run_magnitude) - direction_cosine_from(b->y2, b->run_magnitude);
     float combined = sqrtf(delta_x * delta_x + delta_y * delta_y);
     /* No third smoothing stage: it made bends too slow to start. */
     b->delta = (delta_x >= 0.0f) ? combined : -combined;
 
     uint16_t bend = bend_14bit_from_cosine_delta(b, cfg, b->delta, now_ms);
     *out_bend = apply_vibrato(b, bend, now_ms);
+    return true;
+}
+
+/* ---- Press path learning ---- */
+
+void tiles_press_path_reset(tiles_press_path_t *p) {
+    *p = (tiles_press_path_t){0};
+}
+
+void tiles_press_path_stroke_begin(tiles_press_path_t *p) {
+    p->n = 0u;
+}
+
+void tiles_press_path_stroke_sample(tiles_press_path_t *p, int16_t x, int16_t y, int16_t z) {
+    float fx = (float)x;
+    float fy = (float)y;
+    float fz = (float)z;
+    if (p->n >= PATH_STROKE_MAX_SAMPLES) {
+        p->n = 0u;
+    }
+    if (p->n == 0u) {
+        p->x0 = fx;
+        p->y0 = fy;
+        p->z0 = fz;
+        p->sx = p->sy = p->sz = 0.0f;
+        p->sxx = p->syy = p->szz = p->szx = p->szy = 0.0f;
+        p->zmin = p->zmax = fz;
+    }
+    float dx = fx - p->x0;
+    float dy = fy - p->y0;
+    float dz = fz - p->z0;
+    p->sx += dx;
+    p->sy += dy;
+    p->sz += dz;
+    p->sxx += dx * dx;
+    p->syy += dy * dy;
+    p->szz += dz * dz;
+    p->szx += dz * dx;
+    p->szy += dz * dy;
+    p->zmin = fz < p->zmin ? fz : p->zmin;
+    p->zmax = fz > p->zmax ? fz : p->zmax;
+    p->n++;
+}
+
+/* Least-squares X and Y against Z over the stroke; false if it is too
+ * short, too shallow, or not a straight line. */
+static bool fit_stroke(const tiles_press_path_t *p, float *bx, float *by) {
+    if (p->n < PATH_STROKE_MIN_SAMPLES || p->zmax - p->zmin < PATH_STROKE_MIN_Z_RANGE) {
+        return false;
+    }
+    float n = (float)p->n;
+    float mx = p->sx / n;
+    float my = p->sy / n;
+    float mz = p->sz / n;
+    float var_z = p->szz / n - mz * mz;
+    if (var_z <= 0.0f) {
+        return false;
+    }
+    float cov_zx = p->szx / n - mz * mx;
+    float cov_zy = p->szy / n - mz * my;
+    /* Variance left once the line is taken out. */
+    float rest_x = (p->sxx / n - mx * mx) - cov_zx * cov_zx / var_z;
+    float rest_y = (p->syy / n - my * my) - cov_zy * cov_zy / var_z;
+    float limit = PATH_STROKE_MAX_RESIDUAL * PATH_STROKE_MAX_RESIDUAL;
+    if (rest_x > limit || rest_y > limit) {
+        return false;
+    }
+    *bx = cov_zx / var_z;
+    *by = cov_zy / var_z;
+    return fabsf(*bx) <= PATH_MAX_SLOPE && fabsf(*by) <= PATH_MAX_SLOPE;
+}
+
+bool tiles_press_path_stroke_end(tiles_press_path_t *p) {
+    float bx;
+    float by;
+    bool ok = fit_stroke(p, &bx, &by);
+    p->n = 0u;
+    if (!ok) {
+        return false;
+    }
+    if (p->strokes < UINT16_MAX) {
+        p->strokes++;
+    }
+    float weight = 1.0f / (float)(p->strokes < PATH_AVERAGE_STROKES ? p->strokes : PATH_AVERAGE_STROKES);
+    p->bx += weight * (bx - p->bx);
+    p->by += weight * (by - p->by);
     return true;
 }
