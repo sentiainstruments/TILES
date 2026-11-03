@@ -10543,3 +10543,12 @@ change. Search it by file or feature name.
   - The first run's suggestions put the deadzone (0.077) past full bend
     (0.044), making bend a switch; contradicting suggestions are now held
     back. Unit 2's full bend went back to 0.065; full pressure stays 1617.
+- **Drum mode in two shades (Alpha 6.9, 2026-11-03).** Asked: "make the
+  drum mode two shades, left side 16 steps is a shade, right side drum
+  selector is another shade". The first drum bank's shade was the mode's
+  orange, the same as the armed steps. Now the 16 steps are the mode's
+  orange, empty ones a faint glow (0.05) so the step area always shows; the
+  drum pads take bank shades that never match it: amber, red, rose, gold
+  (Volca: mint, deep teal, pale cyan, sea green where the steps are cyan).
+  Blue selection and playhead, white and red flashes unchanged. Manual's
+  drums card redrawn to match.

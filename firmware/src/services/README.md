@@ -66,7 +66,7 @@ row 1, each mode in its menu colour (`MENU_SLOTS` in `op_mode.c`).
 | Column | Modes |
 |---|---|
 | 1 | Melodic (magenta, default), Duet (pink: chords on columns 1-2, melody on 3-6), Bass guitar (lilac: rows = strings, columns = frets, "-"/"+" shift the frets) |
-| 2 | Sequencer (scarlet), Drums (orange: 16/32 steps on channel 10, Drum Rack order), Song (amber, beta: 24-slot looper, 128 steps per pattern) |
+| 2 | Sequencer (scarlet), Drums (orange steps, amber drum pads: 16/32 steps on channel 10, Drum Rack order), Song (amber, beta: 24-slot looper, 128 steps per pattern) |
 | 3 | Prism (blue: chord machine, `harmony`) |
 | 4 | Ableton (teal: Session View clip grid), Volca (cyan: a drum per channel) |
 | 5 | Bouncing notes (lime, `bounce`), Newton's cradle (steel), Sand (sand) |
