@@ -17,6 +17,23 @@ const char *const TILES_BEND_MODE_NAMES[TILES_BEND_MODE_COUNT] = {"legacy", "cos
 /* Settle time before the bend baseline is taken (bend stays centred): 25 ms
  * read the transient as bend, 250 ms started bends late. Unmeasured. */
 #define BEND_SETTLE_MS 120u
+/* COSINE/PATH: past BEND_SETTLE_MS the baseline also waits for the key to
+ * stop moving (the gap between the smoothing stages, against |B|), at most
+ * BEND_SETTLE_MAX_MS: a landing finger rocks the key for ~200 ms (unit 2,
+ * 2026-11-03), and a baseline taken mid-rock stayed bent all note. First
+ * guesses. */
+#define BEND_SETTLE_MAX_MS 400u
+#define BEND_SETTLE_STILL 0.012f
+/* COSINE/PATH: the deadzone widens by this X/Y noise (raw counts) over |B|,
+ * so a weak field (light pressure, unit 2's ~1 mT rest) needs a bigger
+ * lean. ~X/Y noise at 8x averaging (44 uT ~ 18 counts). */
+#define BEND_NOISE_XY 20.0f
+/* COSINE/PATH: below this depth, while the key comes up, the bend holds its
+ * last value: near rest the direction swings, and unit 2's release tails
+ * reached full bend. 0 = off. First guess. */
+#define BEND_RELEASE_DEPTH 250.0f
+/* Smoothed depth change per pass that counts as coming up. */
+#define BEND_RELEASE_RATE (-0.5f)
 
 /* Slow baseline recentring toward the smoothed X/Y while no bend run is
  * active, snapping fast while depth changes (pressure only couples into
@@ -83,6 +100,10 @@ const char *const TILES_BEND_MODE_NAMES[TILES_BEND_MODE_COUNT] = {"legacy", "cos
 const tiles_bend_tuning_t TILES_BEND_TUNING_DEFAULT = {
     .deadzone = BEND_DEADZONE_COSINE_DELTA,
     .settle_ms = BEND_SETTLE_MS,
+    .settle_max_ms = BEND_SETTLE_MAX_MS,
+    .settle_still = BEND_SETTLE_STILL,
+    .noise_xy = BEND_NOISE_XY,
+    .release_depth = BEND_RELEASE_DEPTH,
     .smoothing = BEND_SMOOTHING_ALPHA,
     .recenter_slow = BEND_BASELINE_RECENTER_ALPHA_SLOW,
     .recenter_fast = BEND_BASELINE_RECENTER_ALPHA_FAST,
@@ -129,9 +150,13 @@ static uint16_t bend_14bit_from_cosine_delta(tiles_bend_t *b, const tiles_bend_c
                                              uint32_t now_ms) {
     const tiles_bend_tuning_t *t = tuning_of(cfg);
     float magnitude = fabsf(delta);
+    float dead = t->deadzone;
+    if (b->mode != TILES_BEND_MODE_LEGACY && t->noise_xy > 0.0f && b->magnitude >= 1.0f) {
+        dead += t->noise_xy / b->magnitude; /* the whole curve moves out: same range to full bend */
+    }
     bool positive = delta >= 0.0f;
     float sign = positive ? 1.0f : -1.0f;
-    if (magnitude <= t->deadzone) {
+    if (magnitude <= dead) {
         b->run_active = false;
         magnitude = 0.0f;
     } else {
@@ -142,7 +167,7 @@ static uint16_t bend_14bit_from_cosine_delta(tiles_bend_t *b, const tiles_bend_c
             b->run_start_ms = now_ms;
         }
         b->run_positive = positive;
-        magnitude -= t->deadzone;
+        magnitude -= dead;
     }
 
     float usable_range = cfg->max_cosine_deviation - t->deadzone;
@@ -253,6 +278,7 @@ void tiles_bend_start(tiles_bend_t *b, tiles_bend_mode_t mode, const tiles_press
     b->run_active = false;
     b->wiggle_energy = 0.0f;
     b->wiggle_active = false;
+    b->last_bend = center;
 }
 
 /* PATH at settle: the slope (learned, or this note's own direction) and
@@ -321,8 +347,16 @@ bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x,
     b->prev_depth = smoothed_depth;
 
     if (!b->settled) {
-        /* Centred until the settle time, then the baseline from the cascade. */
-        if ((now_ms - b->start_ms) >= t->settle_ms) {
+        /* Centred until the settle time (and, COSINE/PATH, until the key is
+         * still), then the baseline from the cascade. */
+        uint32_t elapsed = now_ms - b->start_ms;
+        bool ready = elapsed >= t->settle_ms;
+        if (ready && b->mode != TILES_BEND_MODE_LEGACY && elapsed < t->settle_max_ms) {
+            float gap_x = b->x1 - b->x2;
+            float gap_y = b->y1 - b->y2;
+            ready = sqrtf(gap_x * gap_x + gap_y * gap_y) * wiggle_scale < t->settle_still * b->magnitude;
+        }
+        if (ready) {
             if (b->mode == TILES_BEND_MODE_PATH) {
                 anchor_path(b, t);
             }
@@ -375,8 +409,13 @@ bool tiles_bend_step(tiles_bend_t *b, const tiles_bend_config_t *cfg, int16_t x,
     /* No third smoothing stage: it made bends too slow to start. */
     b->delta = (delta_x >= 0.0f) ? combined : -combined;
 
-    uint16_t bend = bend_14bit_from_cosine_delta(b, cfg, b->delta, now_ms);
-    *out_bend = apply_vibrato(b, t, bend, now_ms);
+    uint16_t bend = apply_vibrato(b, t, bend_14bit_from_cosine_delta(b, cfg, b->delta, now_ms), now_ms);
+    if (b->mode != TILES_BEND_MODE_LEGACY && smoothed_depth < t->release_depth &&
+        b->depth_rate < BEND_RELEASE_RATE) {
+        bend = b->last_bend; /* coming up near rest: hold */
+    }
+    b->last_bend = bend;
+    *out_bend = bend;
     return true;
 }
 

@@ -25,10 +25,11 @@ matches what it sent bit for bit.
   rest baseline (`HALL`), the learned press paths (`BEND PATHS`), board
   health (`INFO`) and the live tuning (`TUNE`): `shared/protocol/README.md`.
 - **Simulated key** (`sim.py`): a dipole magnet over a TMAG5273 with
-  misalignment, sensor offset, noise and tremor you can set, and a copy of
-  the strike logic that follows the tuning. Play gestures, or hold the key
-  drawing and drag. The dashed outline is what the key really did. Sizes
-  are guesses until a real capture measures them.
+  misalignment, sensor offset and tremor you can set, and a copy of the
+  strike logic that follows the tuning (sensor averaging included). Play
+  gestures, or hold the key drawing and drag. The dashed outline is what
+  the key really did. Field and noise follow unit 2's first calibration;
+  misalignment, gap and pivot are guesses.
 - **Capture file**: anything in `firmware/test/captures/`, looped. Tuning
   changes replay it as a what-if.
 
@@ -45,13 +46,18 @@ peaks.
 
 Right, four tabs:
 
-- **Calibrate**: five steps on the watched pad, about a minute: hands off
-  (every pad's rest field and noise), strikes, straight presses, leans,
-  vibrato. Each step records a capture and says what it found. Then
-  suggested changes, each with its reason, to apply one by one or all at
-  once, and a report. On the simulated key the sim plays every step.
-- **Tune**: every `TUNE` key by group (strike and velocity, pressure and
-  release, key and touch, bend, vibrato, press path learner) with its
+- **Calibrate**: hands off (every pad's rest field and noise), then
+  strikes, straight presses, leans and vibrato on three test pads, picked
+  from the rest fields: the weakest, a middle and the strongest (editable).
+  About three minutes; each step records a capture and says what it found.
+  The suggestions are one set of values for every pad, never a value per
+  pad: the leakiest test pad sets the deadzone, medians set the feel, and
+  how depth grows with the rest field sets the automatic depth gain
+  (`key.depth_gain`). Apply them one by one or all at once; a report is
+  saved. On the simulated key the sim plays every step.
+- **Tune**: every `TUNE` key by group (sensor and depth, strike and
+  velocity, pressure and release, key and touch, bend, vibrato, press path
+  learner) with its
   default and range, plus the three saved settings (bend mode, full bend,
   full pressure). Live tuning lasts until the board powers off. "Copy as
   code" gives the changed values as the `#define` lines to paste into

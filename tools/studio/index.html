@@ -327,36 +327,34 @@ async function loadFiles() {
 const SLIDERS = [
   ['offset_x_mm', 'Magnet off-axis X', 0, 1.5, 0.05, 'mm'],
   ['offset_y_mm', 'Magnet off-axis Y', 0, 1.5, 0.05, 'mm'],
-  ['rest_mt', 'Rest field', 3, 20, 0.5, 'mT'],
+  ['rest_mt', 'Rest field', 0.3, 10, 0.1, 'mT'],
   ['gap_mm', 'Gap at rest', 2, 6, 0.1, 'mm'],
-  ['travel_mm', 'Travel, full press', 0.2, 1.2, 0.05, 'mm'],
+  ['travel_mm', 'Travel, full press', 0.2, 2.5, 0.05, 'mm'],
   ['pivot_mm', 'Pivot below magnet', 0, 10, 0.5, 'mm'],
   ['sensor_offset_x_ut', 'Sensor offset X', -1000, 1000, 50, 'µT'],
-  ['averaging', 'Sensor averaging', 0, 2, 1, ''],
   ['tremor_deg', 'Hand tremor', 0, 0.3, 0.01, '°'],
 ];
-const AVERAGING = [1, 8, 16];
 function buildSliders(params) {
   const box = $('sliders');
   if (box.childElementCount) {
     box.querySelectorAll('input').forEach(input => {
       if (input === document.activeElement) return;
       const key = input.dataset.key;
-      input.value = key === 'averaging' ? AVERAGING.indexOf(params[key]) : params[key];
+      input.value = params[key];
       input.dispatchEvent(new Event('show'));
     });
     return;
   }
   for (const [key, name, lo, hi, step, unit] of SLIDERS) {
     const l = document.createElement('label');
-    const value = key === 'averaging' ? AVERAGING.indexOf(params[key]) : params[key];
+    const value = params[key];
     l.innerHTML = `<span>${name}</span><output></output><input type="range" min="${lo}" max="${hi}" step="${step}" value="${value}">`;
     const input = l.querySelector('input'), out = l.querySelector('output');
     input.dataset.key = key;
-    const show = () => { out.textContent = key === 'averaging' ? `${AVERAGING[+input.value]}×` : `${(+input.value).toFixed(step < 0.1 ? 2 : step < 1 ? 1 : 0)} ${unit}`; };
+    const show = () => { out.textContent = `${(+input.value).toFixed(step < 0.1 ? 2 : step < 1 ? 1 : 0)} ${unit}`; };
     show();
     input.addEventListener('show', show);
-    input.oninput = () => { show(); post({ sim: { [key]: key === 'averaging' ? AVERAGING[+input.value] : +input.value } }); };
+    input.oninput = () => { show(); post({ sim: { [key]: +input.value } }); };
     box.appendChild(l);
   }
 }
@@ -675,7 +673,7 @@ function stepResult(id, r) {
   if (!r) return '';
   const parts = [];
   const mmm = d => d ? `${d.min} / ${d.median} / ${d.max}` : '–';
-  if (id === 'rest') parts.push(`<dl><dt>Pads measured</dt><dd>${r.pads_measured}</dd><dt>Rest field</dt><dd>Bz median ${r.rest_field_median_mt} mT, range ${r.rest_field_range_mt ? r.rest_field_range_mt.join('–') : '–'}</dd><dt>Z noise</dt><dd>median ${r.z_noise_median_ut} µT (X/Y are read only while a key is touched)</dd></dl>`);
+  if (id === 'rest') parts.push(`<dl><dt>Pads measured</dt><dd>${r.pads_measured}</dd><dt>Rest field</dt><dd>Bz median ${r.rest_field_median_mt} mT, range ${r.rest_field_range_mt ? r.rest_field_range_mt.join('–') : '–'}</dd><dt>Z noise</dt><dd>median ${r.z_noise_median_ut} µT (X/Y are read only while a key is touched)</dd><dt>Test pads</dt><dd>${(r.test_pads || []).join(', ')}: weakest, middle and strongest field</dd></dl>`);
   if (id === 'strikes') parts.push(`<dl><dt>Notes</dt><dd>${r.notes}</dd><dt>Velocity</dt><dd>${mmm(r.velocity)} (min / median / max)</dd><dt>Speed</dt><dd>${mmm(r.strike_ms)} ms to the strike depth</dd><dt>Peak depth</dt><dd>${mmm(r.peak_depth)}</dd></dl>`);
   if ((id === 'straight' || id === 'lean') && r.bend) {
     if (id === 'lean' && r.lean_median != null) parts.push(`<p class="hint">Lean peaks (${r.mode}): median ${r.lean_median}${r.left_right_ratio ? `, one side ${r.left_right_ratio}× the other` : ''}.</p>`);
@@ -685,50 +683,74 @@ function stepResult(id, r) {
       return `<tr><td>${m.name}</td><td>${b.peak_semitones ?? '–'} st</td><td>${b.delta_p99 ?? '–'}</td><td>${b.time_bent != null ? Math.round(b.time_bent * 100) + '%' : '–'}</td></tr>`;
     }).join('')}</table>`);
   }
-  if (id === 'vibrato' && r.wiggle_energy_p75 != null) parts.push(`<dl><dt>Wiggle</dt><dd>${r.wiggle_energy_p75} (75th pct)</dd><dt>Holding still</dt><dd>${r.still_energy_p95} (95th pct)</dd></dl>`);
+  if (id === 'vibrato' && r.wiggle_energy_p75 != null) parts.push(`<dl><dt>Wiggle</dt><dd>${r.wiggle_energy_p75} (75th pct)</dd><dt>Holding still</dt><dd>${r.still_energy_p95} (95th pct)</dd><dt>X/Y noise</dt><dd>${r.xy_noise_raw ?? '–'} raw, holding still</dd></dl>`);
   if (r.flags && r.flags.length) parts.push(`<ul class="flags">${r.flags.map(f => `<li>${esc(f)}</li>`).join('')}</ul>`);
   if (r.capture) parts.push(`<p class="hint">Capture: <code>${esc(r.capture)}</code></p>`);
   return parts.join('');
 }
 
+function summaryBlock(sum) {
+  if (!sum || !sum.test_pads || !sum.test_pads.length) return '';
+  const per = obj => obj && Object.keys(obj).length ? Object.entries(obj).map(([p, v]) => `pad ${p}: ${v}`).join(' · ') : '–';
+  const rows = [
+    ['Leak pressing straight', per(sum.leak_p99) + ' (99th pct delta)'],
+    ['Lean', sum.lean_median != null ? `median peak ${sum.lean_median}` : '–'],
+    ['Hardest press', per(sum.hardest_depth)],
+    ['Depth vs field', sum.depth_vs_field_slope != null ? `log slope ${sum.depth_vs_field_slope}` : '–'],
+    ['Vibrato', sum.still_energy != null ? `still ${sum.still_energy}, wiggle ${sum.wiggle_energy}` : '–'],
+    ['X/Y noise', sum.xy_noise_raw != null ? `${sum.xy_noise_raw} raw` : '–'],
+  ];
+  return `<h3>Across the test pads</h3><dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+}
+
 function renderCalibrate() {
   const cal = state.calibration, el = $('calibrate');
+  if (document.activeElement && document.activeElement.id === 'test-pads') return; // typing
+  const itemKey = it => it.pad == null ? it.step : `${it.step}:${it.pad}`;
   if (!cal.active && !Object.keys(cal.results).length) {
-    el.innerHTML = `<div class="card"><p>Five steps, about a minute on pad ${state.pad}: hands off, strikes, straight presses, leans, vibrato. Each step records a capture and says what it found; the studio then suggests the numbers to change, and saves a report to <code>firmware/test/calibration/</code>.</p>
+    el.innerHTML = `<div class="card"><p>Hands off, then strikes, straight presses, leans and vibrato on three test pads (the weakest, a middle and the strongest field), about three minutes. Each step records a capture; the suggestions are one set of values for every pad, from all test pads together, and the report goes to <code>firmware/test/calibration/</code>.</p>
       <button class="primary" data-cal="start">Start calibration</button></div>`;
   } else {
-    const step = cal.steps[cal.index];
-    const res = step && cal.results[step.id];
-    let body = `<ol class="steps">${cal.steps.map((s, i) => `<li><button data-goto="${i}" class="${s.done ? 'done' : ''} ${i === cal.index && cal.active ? 'current' : ''}">${i + 1}. ${s.title}</button></li>`).join('')}</ol>`;
-    if (cal.active && step) {
+    const it = cal.plan[cal.index];
+    const res = it && cal.results[itemKey(it)];
+    let body = `<ol class="steps">${cal.plan.map((p, i) => `<li><button data-goto="${i}" class="${p.done ? 'done' : ''} ${i === cal.index && cal.active ? 'current' : ''}">${p.pad == null ? p.title : `${p.title} · ${p.pad}`}</button></li>`).join('')}</ol>`;
+    if (cal.test_pads.length) body += `<div class="row hint" style="margin:6px 0 4px">Test pads <input id="test-pads" value="${cal.test_pads.join(', ')}" style="width:9em" aria-label="Test pads"><button data-pads>Use these</button></div>`;
+    if (cal.active && it) {
       const left = cal.seconds_left;
-      body += `<div class="card"><h3>${step.title}</h3><p>${esc(step.text)}</p>`;
+      body += `<div class="card"><h3>${it.title}${it.pad != null ? ` · pad ${it.pad}` : ''}</h3><p>${esc(it.text)}</p>`;
       if (cal.recording) {
-        body += `<div class="bar"><i style="width:${100 * (1 - left / step.seconds)}%"></i></div><p class="hint">Recording… ${num(left, 1)} s</p>`;
+        body += `<div class="bar"><i style="width:${100 * (1 - left / it.seconds)}%"></i></div><p class="hint">Recording… ${num(left, 1)} s</p>`;
       } else if (res) {
-        body += stepResult(step.id, res) + `<div class="row"><button class="primary" data-cal="next">${cal.index === cal.steps.length - 1 ? 'Finish and save report' : 'Next step'}</button><button data-cal="redo">Redo</button></div>`;
+        body += stepResult(it.step, res) + `<div class="row"><button class="primary" data-cal="next">${cal.index === cal.plan.length - 1 ? 'Finish and save report' : 'Next step'}</button><button data-cal="redo">Redo</button></div>`;
       } else {
-        body += `<div class="row"><button class="primary" data-cal="record">Record ${step.seconds} s</button>${status.source === 'sim' && step.id !== 'rest' ? '<span class="hint">The sim plays it for you.</span>' : ''}</div>`;
+        body += `<div class="row"><button class="primary" data-cal="record">Record ${it.seconds} s</button>${status.source === 'sim' && it.step !== 'rest' ? '<span class="hint">The sim plays it for you.</span>' : ''}</div>`;
       }
       body += `</div>`;
     } else {
       body += `<div class="card"><p>Done. ${Object.keys(cal.results).length} steps measured.</p><button data-cal="start">Calibrate again</button></div>`;
-      for (const s of cal.steps) if (cal.results[s.id]) body += `<h3>${s.title}</h3>` + stepResult(s.id, cal.results[s.id]);
     }
+    body += summaryBlock(cal.summary);
     if (cal.suggestions.length) {
-      body += `<h3>Suggested changes</h3><table><tr><th>Setting</th><th>Now → suggested</th><th></th></tr>${cal.suggestions.map(x => `<tr><td><code>${esc(x.key)}</code><div class="hint">${esc(x.why)}${x.kind === 'setting' ? ' · saved on the board' : ''}</div></td><td>${x.current} → <span class="accent">${x.suggested}</span>${x.blocked ? `<div class="hint">held back: ${esc(x.blocked)}</div>` : ''}</td><td>${x.applied ? '✓' : x.blocked ? '' : `<button data-apply="${esc(x.key)}">Apply</button>`}</td></tr>`).join('')}</table>
+      body += `<h3>Suggested values, for every pad</h3><table><tr><th>Setting</th><th>Now → suggested</th><th></th></tr>${cal.suggestions.map(x => `<tr><td><code>${esc(x.key)}</code><div class="hint">${esc(x.why)}${x.kind === 'setting' ? ' · saved on the board' : ''}</div></td><td>${x.current} → <span class="accent">${x.suggested}</span>${x.blocked ? `<div class="hint">held back: ${esc(x.blocked)}</div>` : ''}</td><td>${x.applied ? '✓' : x.blocked ? '' : `<button data-apply="${esc(x.key)}">Apply</button>`}</td></tr>`).join('')}</table>
         <div class="row" style="margin-top:10px"><button data-apply-all>Apply all</button><button data-report>Save report</button></div>`;
     }
     el.innerHTML = body;
   }
   el.querySelectorAll('[data-cal]').forEach(b => b.onclick = () => post({ calibrate: b.dataset.cal }));
   el.querySelectorAll('[data-goto]').forEach(b => b.onclick = () => post({ calibrate: 'goto', index: +b.dataset.goto }));
+  el.querySelectorAll('[data-pads]').forEach(b => b.onclick = () => post({ calibrate: 'pads', pads: $('test-pads').value.split(/[^0-9]+/).filter(Boolean).map(Number) }));
   el.querySelectorAll('[data-apply]').forEach(b => b.onclick = () => post({ apply: [b.dataset.apply] }));
   el.querySelectorAll('[data-apply-all]').forEach(b => b.onclick = () => post({ apply: 'all' }));
   el.querySelectorAll('[data-report]').forEach(b => b.onclick = () => post({ report: true }));
 }
 
 const TUNE_NAMES = {
+  'sensor.averaging': ['Sensor averaging', '1, 2, 4, 8, 16 or 32: less noise, a little more delay'],
+  'key.depth_gain': ['Depth from rest field', 'evens out weak and strong pads, 0 = off'],
+  'bend.settle_max_ms': ['Settle at most', 'ms, waiting for the key to stop moving'],
+  'bend.settle_still': ['Still enough', 'motion / |B| that counts as settled'],
+  'bend.noise_xy': ['Weak-field deadzone', 'X/Y noise (raw) over |B| added to it'],
+  'bend.release_depth': ['Hold on release below', 'depth, 0 = off'],
   'strike.depth': ['Strike depth', 'travel that makes a note'],
   'strike.overshoot_full': ['Full velocity at', 'depth past the strike'],
   'strike.followthrough_ms': ['Follow-through', 'ms, longest wait for the peak'],
@@ -766,13 +788,16 @@ const TUNE_NAMES = {
   'path.min_strokes': ['Strokes before use', ''],
   'path.average_strokes': ['Strokes averaged', ''],
 };
-const GROUPS = [['velocity', 'Strike and velocity'], ['pressure', 'Pressure and release'], ['key', 'Key and touch'], ['bend', 'Bend'], ['vibrato', 'Vibrato'], ['path', 'Press path learner']];
+const GROUPS = [['sensor', 'Sensor and depth'], ['velocity', 'Strike and velocity'], ['pressure', 'Pressure and release'], ['key', 'Key and touch'], ['bend', 'Bend'], ['vibrato', 'Vibrato'], ['path', 'Press path learner']];
 const SETTINGS = [
   ['expression.pitch_bend_mode', 'Bend mode', 'what the board plays', ['legacy', 'cosine', 'path']],
   ['expression.pitch_bend_sensitivity', 'Full bend at', 'cosine delta', [0.03, 0.3, 0.001]],
   ['expression.aftertouch_sensitivity', 'Full pressure at', 'depth', [200, 4000, 10]],
 ];
 const MACROS = {
+  'sensor.averaging': ['tune.h', 'TILES_TUNE_DEFAULT_SENSOR_AVERAGING', 'u'], 'key.depth_gain': ['tune.h', 'TILES_TUNE_DEFAULT_DEPTH_GAIN', 'f'],
+  'bend.settle_max_ms': ['bend_core.c', 'BEND_SETTLE_MAX_MS', 'u'], 'bend.settle_still': ['bend_core.c', 'BEND_SETTLE_STILL', 'f'],
+  'bend.noise_xy': ['bend_core.c', 'BEND_NOISE_XY', 'f'], 'bend.release_depth': ['bend_core.c', 'BEND_RELEASE_DEPTH', 'f'],
   'strike.depth': ['tune.h', 'TILES_TUNE_DEFAULT_STRIKE_DEPTH', 'f'], 'strike.overshoot_full': ['tune.h', 'TILES_TUNE_DEFAULT_OVERSHOOT_FULL', 'f'],
   'strike.followthrough_ms': ['tune.h', 'TILES_TUNE_DEFAULT_FOLLOWTHROUGH_MS', 'u'], 'strike.settle_rise': ['tune.h', 'TILES_TUNE_DEFAULT_SETTLE_RISE', 'f'],
   'velocity.time_fast_ms': ['tune.h', 'TILES_TUNE_DEFAULT_TIME_FAST_MS', 'u'], 'velocity.time_slow_ms': ['tune.h', 'TILES_TUNE_DEFAULT_TIME_SLOW_MS', 'u'],
@@ -824,9 +849,11 @@ function buildTune() {
   box.innerHTML = html;
   box.querySelectorAll('.tune-row[data-key]').forEach(rowEl => {
     const key = rowEl.dataset.key, [range, number] = rowEl.querySelectorAll('input');
-    range.oninput = () => { number.value = range.value; };
-    range.onchange = () => post({ tune: { key, value: +range.value } });
-    number.onchange = () => { range.value = number.value; post({ tune: { key, value: +number.value } }); };
+    // averaging is a power of two: round to the nearest one
+    const fix = v => key === 'sensor.averaging' ? 2 ** Math.round(Math.log2(Math.max(1, v))) : v;
+    range.oninput = () => { number.value = fix(+range.value); };
+    range.onchange = () => post({ tune: { key, value: fix(+range.value) } });
+    number.onchange = () => { range.value = number.value; post({ tune: { key, value: fix(+number.value) } }); };
     rowEl.querySelector('[data-reset]').onclick = () => post({ tune_reset: key });
   });
   box.querySelectorAll('[data-setting]').forEach(el => el.onchange = () => {
@@ -874,10 +901,10 @@ function renderPadTable() {
     if (p.sensor_ok === false) flags.push('sensor not answering');
     if (p.rest_confirmed === false) flags.push('rest unconfirmed');
     const path = p.path || {};
-    return `<tr class="click ${p.pad === state.pad ? 'focus' : ''}" data-pad="${p.pad}"><td>${p.pad}</td><td>${p.rest_field_mt ?? '–'}</td><td>${p.z_noise_ut ?? '–'}</td><td>${p.hardest_press_ratio != null ? '×' + p.hardest_press_ratio : '–'}</td><td>${path.strokes ? `${path.bx}, ${path.by}` : '–'}</td><td>${path.strokes ?? '–'}</td><td class="hint">${flags.join(', ')}</td></tr>`;
+    return `<tr class="click ${p.pad === state.pad ? 'focus' : ''}" data-pad="${p.pad}"><td>${p.pad}</td><td>${p.rest_field_mt ?? '–'}</td><td>${p.z_noise_ut ?? '–'}</td><td>${p.hardest_press_ratio != null ? '×' + p.hardest_press_ratio : '–'}</td><td>${p.depth_gain != null ? '×' + p.depth_gain : '–'}</td><td>${path.strokes ? `${path.bx}, ${path.by}` : '–'}</td><td>${path.strokes ?? '–'}</td><td class="hint">${flags.join(', ')}</td></tr>`;
   }).join('');
   $('pad-table').innerHTML = `<p class="hint">Rest numbers come from untouched reads, Z only (X/Y are read while a key is touched); keep hands off for a moment to fill them in. Hardest press is the strongest field seen, as a multiple of rest. Click a pad to watch it.</p>
-    <table><tr><th>Pad</th><th>Rest B<span class="unit">z</span> <span class="unit">mT</span></th><th>Z noise <span class="unit">µT</span></th><th>Hardest press</th><th>Press path b</th><th>Strokes</th><th></th></tr>${rows}</table>`;
+    <table><tr><th>Pad</th><th>Rest B<span class="unit">z</span> <span class="unit">mT</span></th><th>Z noise <span class="unit">µT</span></th><th>Hardest press</th><th>Depth gain</th><th>Press path b</th><th>Strokes</th><th></th></tr>${rows}</table>`;
   $('pad-table').querySelectorAll('tr[data-pad]').forEach(tr => tr.onclick = () => focusPad(+tr.dataset.pad));
 }
 

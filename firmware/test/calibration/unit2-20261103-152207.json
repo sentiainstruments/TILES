@@ -1,0 +1,1273 @@
+{
+ "time": "2026-11-03T15:22:07",
+ "source": {
+  "source": "device",
+  "connected": true,
+  "pad": 1,
+  "firmware": "alpha.6.8",
+  "unit": "2/4",
+  "can_tune": true,
+  "message": ""
+ },
+ "board": {
+  "unit": "2/4",
+  "firmware": "alpha.6.8",
+  "settings": "76",
+  "power": "usb_only",
+  "power.budget_ma": "500",
+  "power.led_ceiling_percent": "50",
+  "power.haptic_voices": "4",
+  "store.loaded": "1",
+  "store.restored": "1",
+  "store.slot": "1",
+  "store.seq": "70",
+  "store.saved_bytes": "7",
+  "store.writes": "0",
+  "store.last_result": "ok",
+  "store.pending": "0",
+  "store.failures": "0",
+  "content.storage": "ok",
+  "content.scales": "0/9",
+  "content.records": "0",
+  "content.bytes": "0/4076",
+  "content.writes": "0",
+  "content.last_result": "ok",
+  "loop.avg_us": "2575",
+  "loop.max_us": "3474",
+  "loop.max_ever_us": "6279",
+  "hall.rezeros": "0",
+  "hall.unconfirmed": "0",
+  "hall.reinits": "0",
+  "hall.dead": "0",
+  "touch.recoveries": "0",
+  "tune.changed": "0",
+  "boot.ms": "4371",
+  "boot.sensors_ms": "26",
+  "seq.storage": "ok",
+  "seq.saved_bytes": "97",
+  "seq.saves": "0",
+  "seq.pending": "0",
+  "seq.truncated": "0",
+  "drums.storage": "ok",
+  "drums.saved_bytes": "18",
+  "drums.saves": "0",
+  "drums.pending": "0",
+  "state.storage": "ok",
+  "state.saved": "mode:0",
+  "state.saves": "0",
+  "state.pending": "0"
+ },
+ "settings": {
+  "expression.pitch_bend_mode": "path",
+  "expression.pitch_bend_sensitivity": 0.065,
+  "expression.aftertouch_sensitivity": 900.0
+ },
+ "tune": [
+  {
+   "key": "strike.depth",
+   "value": 150.0,
+   "default": 150.0,
+   "min": 60.0,
+   "max": 600.0,
+   "group": "velocity"
+  },
+  {
+   "key": "strike.overshoot_full",
+   "value": 550.0,
+   "default": 550.0,
+   "min": 50.0,
+   "max": 3000.0,
+   "group": "velocity"
+  },
+  {
+   "key": "strike.followthrough_ms",
+   "value": 20.0,
+   "default": 20.0,
+   "min": 0.0,
+   "max": 100.0,
+   "group": "velocity"
+  },
+  {
+   "key": "strike.settle_rise",
+   "value": 8.0,
+   "default": 8.0,
+   "min": 1.0,
+   "max": 100.0,
+   "group": "velocity"
+  },
+  {
+   "key": "velocity.time_fast_ms",
+   "value": 10.0,
+   "default": 10.0,
+   "min": 0.0,
+   "max": 100.0,
+   "group": "velocity"
+  },
+  {
+   "key": "velocity.time_slow_ms",
+   "value": 300.0,
+   "default": 300.0,
+   "min": 20.0,
+   "max": 2000.0,
+   "group": "velocity"
+  },
+  {
+   "key": "velocity.depth_weight",
+   "value": 0.85,
+   "default": 0.85,
+   "min": 0.0,
+   "max": 1.0,
+   "group": "velocity"
+  },
+  {
+   "key": "velocity.curve",
+   "value": 1.0,
+   "default": 1.0,
+   "min": 0.2,
+   "max": 5.0,
+   "group": "velocity"
+  },
+  {
+   "key": "velocity.min",
+   "value": 8.0,
+   "default": 8.0,
+   "min": 1.0,
+   "max": 100.0,
+   "group": "velocity"
+  },
+  {
+   "key": "pressure.smoothing",
+   "value": 0.35,
+   "default": 0.35,
+   "min": 0.01,
+   "max": 1.0,
+   "group": "pressure"
+  },
+  {
+   "key": "release.smoothing",
+   "value": 0.5,
+   "default": 0.5,
+   "min": 0.01,
+   "max": 1.0,
+   "group": "pressure"
+  },
+  {
+   "key": "release.rate_min",
+   "value": 2.0,
+   "default": 2.0,
+   "min": 0.0,
+   "max": 50.0,
+   "group": "pressure"
+  },
+  {
+   "key": "release.rate_max",
+   "value": 25.0,
+   "default": 25.0,
+   "min": 0.5,
+   "max": 200.0,
+   "group": "pressure"
+  },
+  {
+   "key": "key.up_depth",
+   "value": 100.0,
+   "default": 100.0,
+   "min": 10.0,
+   "max": 500.0,
+   "group": "key"
+  },
+  {
+   "key": "key.retrigger_depth",
+   "value": 40.0,
+   "default": 40.0,
+   "min": 0.0,
+   "max": 500.0,
+   "group": "key"
+  },
+  {
+   "key": "key.retrigger_grace_ms",
+   "value": 50.0,
+   "default": 50.0,
+   "min": 0.0,
+   "max": 1000.0,
+   "group": "key"
+  },
+  {
+   "key": "key.touch_dropout_ms",
+   "value": 12.0,
+   "default": 12.0,
+   "min": 0.0,
+   "max": 200.0,
+   "group": "key"
+  },
+  {
+   "key": "key.pressed_dropout_ms",
+   "value": 300.0,
+   "default": 300.0,
+   "min": 0.0,
+   "max": 2000.0,
+   "group": "key"
+  },
+  {
+   "key": "key.strike_from_rest_ms",
+   "value": 150.0,
+   "default": 150.0,
+   "min": 0.0,
+   "max": 2000.0,
+   "group": "key"
+  },
+  {
+   "key": "bend.deadzone",
+   "value": 0.025,
+   "default": 0.025,
+   "min": 0.0,
+   "max": 0.2,
+   "group": "bend"
+  },
+  {
+   "key": "bend.settle_ms",
+   "value": 120.0,
+   "default": 120.0,
+   "min": 0.0,
+   "max": 1000.0,
+   "group": "bend"
+  },
+  {
+   "key": "bend.smoothing",
+   "value": 0.08,
+   "default": 0.08,
+   "min": 0.005,
+   "max": 1.0,
+   "group": "bend"
+  },
+  {
+   "key": "bend.recenter_slow",
+   "value": 0.002,
+   "default": 0.002,
+   "min": 0.0,
+   "max": 0.1,
+   "group": "bend"
+  },
+  {
+   "key": "bend.recenter_fast",
+   "value": 0.25,
+   "default": 0.25,
+   "min": 0.0,
+   "max": 1.0,
+   "group": "bend"
+  },
+  {
+   "key": "bend.depth_activity_full",
+   "value": 8.0,
+   "default": 8.0,
+   "min": 0.5,
+   "max": 100.0,
+   "group": "bend"
+  },
+  {
+   "key": "bend.arm_ms",
+   "value": 30.0,
+   "default": 30.0,
+   "min": 0.0,
+   "max": 500.0,
+   "group": "bend"
+  },
+  {
+   "key": "vibrato.floor",
+   "value": 8.0,
+   "default": 8.0,
+   "min": 0.0,
+   "max": 200.0,
+   "group": "vibrato"
+  },
+  {
+   "key": "vibrato.full",
+   "value": 16.0,
+   "default": 16.0,
+   "min": 0.5,
+   "max": 400.0,
+   "group": "vibrato"
+  },
+  {
+   "key": "vibrato.arm_ms",
+   "value": 80.0,
+   "default": 80.0,
+   "min": 0.0,
+   "max": 1000.0,
+   "group": "vibrato"
+  },
+  {
+   "key": "vibrato.rate_hz",
+   "value": 5.5,
+   "default": 5.5,
+   "min": 1.0,
+   "max": 15.0,
+   "group": "vibrato"
+  },
+  {
+   "key": "vibrato.depth",
+   "value": 150.0,
+   "default": 150.0,
+   "min": 0.0,
+   "max": 2000.0,
+   "group": "vibrato"
+  },
+  {
+   "key": "path.min_z_range",
+   "value": 150.0,
+   "default": 150.0,
+   "min": 10.0,
+   "max": 2000.0,
+   "group": "path"
+  },
+  {
+   "key": "path.max_residual",
+   "value": 120.0,
+   "default": 120.0,
+   "min": 5.0,
+   "max": 2000.0,
+   "group": "path"
+  },
+  {
+   "key": "path.max_slope",
+   "value": 1.0,
+   "default": 1.0,
+   "min": 0.05,
+   "max": 5.0,
+   "group": "path"
+  },
+  {
+   "key": "path.min_strokes",
+   "value": 3.0,
+   "default": 3.0,
+   "min": 1.0,
+   "max": 100.0,
+   "group": "path"
+  },
+  {
+   "key": "path.average_strokes",
+   "value": 16.0,
+   "default": 16.0,
+   "min": 1.0,
+   "max": 500.0,
+   "group": "path"
+  }
+ ],
+ "tune_changed": {},
+ "pads": [
+  {
+   "pad": 1,
+   "samples": 120,
+   "rest_z": 416,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 1.0,
+   "z_noise_ut": 58,
+   "hardest_press_ratio": 5.33,
+   "path": {
+    "bx": -0.0472,
+    "by": -0.09,
+    "strokes": 13
+   }
+  },
+  {
+   "pad": 2,
+   "samples": 120,
+   "rest_z": 384,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.89,
+   "z_noise_ut": 70,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 3,
+   "samples": 120,
+   "rest_z": 384,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.9,
+   "z_noise_ut": 64,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 4,
+   "samples": 120,
+   "rest_z": 400,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.88,
+   "z_noise_ut": 59,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 5,
+   "samples": 120,
+   "rest_z": 383,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.9,
+   "z_noise_ut": 65,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 6,
+   "samples": 120,
+   "rest_z": 336,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.86,
+   "z_noise_ut": 67,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 7,
+   "samples": 120,
+   "rest_z": 401,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 1.02,
+   "z_noise_ut": 57,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 8,
+   "samples": 120,
+   "rest_z": 304,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.82,
+   "z_noise_ut": 59,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 9,
+   "samples": 120,
+   "rest_z": 288,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.83,
+   "z_noise_ut": 59,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 10,
+   "samples": 120,
+   "rest_z": 272,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.6,
+   "z_noise_ut": 65,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 11,
+   "samples": 120,
+   "rest_z": 320,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.73,
+   "z_noise_ut": 61,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 12,
+   "samples": 120,
+   "rest_z": 384,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.93,
+   "z_noise_ut": 59,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 13,
+   "samples": 120,
+   "rest_z": 365,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.81,
+   "z_noise_ut": 63,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 14,
+   "samples": 120,
+   "rest_z": 352,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.84,
+   "z_noise_ut": 58,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 15,
+   "samples": 120,
+   "rest_z": 288,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.65,
+   "z_noise_ut": 61,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 16,
+   "samples": 120,
+   "rest_z": 320,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.78,
+   "z_noise_ut": 58,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 17,
+   "samples": 120,
+   "rest_z": 337,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.88,
+   "z_noise_ut": 59,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 18,
+   "samples": 120,
+   "rest_z": 480,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 1.04,
+   "z_noise_ut": 60,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 19,
+   "samples": 120,
+   "rest_z": 352,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.82,
+   "z_noise_ut": 57,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 20,
+   "samples": 120,
+   "rest_z": 320,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.8,
+   "z_noise_ut": 59,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 21,
+   "samples": 120,
+   "rest_z": 256,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.64,
+   "z_noise_ut": 66,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 22,
+   "samples": 120,
+   "rest_z": 209,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.53,
+   "z_noise_ut": 63,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 23,
+   "samples": 120,
+   "rest_z": 240,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 0.68,
+   "z_noise_ut": 62,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  },
+  {
+   "pad": 24,
+   "samples": 120,
+   "rest_z": 448,
+   "rest_confirmed": true,
+   "sensor_ok": true,
+   "rest_field_mt": 1.1,
+   "z_noise_ut": 63,
+   "path": {
+    "bx": 0.0,
+    "by": 0.0,
+    "strokes": 0
+   }
+  }
+ ],
+ "pad": 1,
+ "notes": [
+  {
+   "t_ms": 294630,
+   "velocity": 126,
+   "strike_ms": 12,
+   "peak_depth": 720,
+   "max_depth": 976,
+   "max_pressure": 127,
+   "release_velocity": 0,
+   "ended": true,
+   "bend_peak": {
+    "legacy": -0.26,
+    "cosine": -0.41,
+    "path": -0.41
+   },
+   "delta_p95": {
+    "legacy": 0.0023,
+    "cosine": 0.0061,
+    "path": 0.0115
+   },
+   "vibrato_peak": {
+    "legacy": 15.7,
+    "cosine": 19.9,
+    "path": 19.1
+   },
+   "steps": 49,
+   "time_score": 0.993,
+   "depth_score": 1.0,
+   "depth_share": 0.85,
+   "time_share": 0.149,
+   "length_ms": 168
+  },
+  {
+   "t_ms": 295567,
+   "velocity": 127,
+   "strike_ms": 0,
+   "peak_depth": 960,
+   "max_depth": 992,
+   "max_pressure": 127,
+   "release_velocity": 0,
+   "ended": true,
+   "bend_peak": {
+    "legacy": -0.1,
+    "cosine": -0.08,
+    "path": -0.04
+   },
+   "delta_p95": {
+    "legacy": 0.0048,
+    "cosine": 0.0046,
+    "path": 0.0031
+   },
+   "vibrato_peak": {
+    "legacy": 15.2,
+    "cosine": 11.9,
+    "path": 9.9
+   },
+   "steps": 55,
+   "time_score": 1.0,
+   "depth_score": 1.0,
+   "depth_share": 0.85,
+   "time_share": 0.15,
+   "length_ms": 191
+  },
+  {
+   "t_ms": 296483,
+   "velocity": 127,
+   "strike_ms": 0,
+   "peak_depth": 1088,
+   "max_depth": 1104,
+   "max_pressure": 127,
+   "release_velocity": 0,
+   "ended": true,
+   "bend_peak": {
+    "legacy": -0.2,
+    "cosine": 0.23,
+    "path": -0.15
+   },
+   "delta_p95": {
+    "legacy": 0.0109,
+    "cosine": 0.0103,
+    "path": 0.0088
+   },
+   "vibrato_peak": {
+    "legacy": 17.1,
+    "cosine": 17.7,
+    "path": 14.5
+   },
+   "steps": 58,
+   "time_score": 1.0,
+   "depth_score": 1.0,
+   "depth_share": 0.85,
+   "time_share": 0.15,
+   "length_ms": 198
+  },
+  {
+   "t_ms": 297394,
+   "velocity": 127,
+   "strike_ms": 0,
+   "peak_depth": 1040,
+   "max_depth": 1504,
+   "max_pressure": 127,
+   "release_velocity": 0,
+   "ended": true,
+   "bend_peak": {
+    "legacy": 0.61,
+    "cosine": 0.72,
+    "path": 0.72
+   },
+   "delta_p95": {
+    "legacy": 0.017,
+    "cosine": 0.0155,
+    "path": 0.0168
+   },
+   "vibrato_peak": {
+    "legacy": 14.8,
+    "cosine": 22.7,
+    "path": 20.2
+   },
+   "steps": 591,
+   "time_score": 1.0,
+   "depth_score": 1.0,
+   "depth_share": 0.85,
+   "time_share": 0.15,
+   "length_ms": 1832
+  },
+  {
+   "t_ms": 322993,
+   "velocity": 17,
+   "strike_ms": 275,
+   "peak_depth": 192,
+   "max_depth": 1616,
+   "max_pressure": 127,
+   "release_velocity": 0,
+   "ended": true,
+   "bend_peak": {
+    "legacy": 12.4,
+    "cosine": -12.39,
+    "path": 5.55
+   },
+   "delta_p95": {
+    "legacy": 0.1454,
+    "cosine": 0.1009,
+    "path": 0.0328
+   },
+   "vibrato_peak": {
+    "legacy": 27.9,
+    "cosine": 16.9,
+    "path": 15.2
+   },
+   "steps": 1793,
+   "time_score": 0.086,
+   "depth_score": 0.076,
+   "depth_share": 0.065,
+   "time_share": 0.013,
+   "length_ms": 5979
+  },
+  {
+   "t_ms": 330092,
+   "velocity": 9,
+   "strike_ms": 562,
+   "peak_depth": 160,
+   "max_depth": 1552,
+   "max_pressure": 127,
+   "release_velocity": 0,
+   "ended": true,
+   "bend_peak": {
+    "legacy": 12.82,
+    "cosine": 11.49,
+    "path": 12.59
+   },
+   "delta_p95": {
+    "legacy": 0.3375,
+    "cosine": 0.0491,
+    "path": 0.0661
+   },
+   "vibrato_peak": {
+    "legacy": 27.3,
+    "cosine": 23.4,
+    "path": 21.9
+   },
+   "steps": 1184,
+   "time_score": 0.0,
+   "depth_score": 0.018,
+   "depth_share": 0.015,
+   "time_share": 0.0,
+   "length_ms": 3891
+  },
+  {
+   "t_ms": 340576,
+   "velocity": 15,
+   "strike_ms": 544,
+   "peak_depth": 192,
+   "max_depth": 1712,
+   "max_pressure": 127,
+   "release_velocity": 0,
+   "ended": true,
+   "bend_peak": {
+    "legacy": 12.37,
+    "cosine": -12.69,
+    "path": 7.51
+   },
+   "delta_p95": {
+    "legacy": 0.1234,
+    "cosine": 0.1279,
+    "path": 0.0353
+   },
+   "vibrato_peak": {
+    "legacy": 22.4,
+    "cosine": 15.2,
+    "path": 15.2
+   },
+   "steps": 1430,
+   "time_score": 0.0,
+   "depth_score": 0.076,
+   "depth_share": 0.065,
+   "time_share": 0.0,
+   "length_ms": 4760
+  },
+  {
+   "t_ms": 346544,
+   "velocity": 23,
+   "strike_ms": 123,
+   "peak_depth": 176,
+   "max_depth": 1728,
+   "max_pressure": 127,
+   "release_velocity": 0,
+   "ended": true,
+   "bend_peak": {
+    "legacy": -0.87,
+    "cosine": 12.49,
+    "path": 11.79
+   },
+   "delta_p95": {
+    "legacy": 0.0198,
+    "cosine": 0.0696,
+    "path": 0.0601
+   },
+   "vibrato_peak": {
+    "legacy": 20.5,
+    "cosine": 26.6,
+    "path": 14.9
+   },
+   "steps": 1214,
+   "time_score": 0.61,
+   "depth_score": 0.047,
+   "depth_share": 0.04,
+   "time_share": 0.092,
+   "length_ms": 3895
+  },
+  {
+   "t_ms": 351655,
+   "velocity": 27,
+   "strike_ms": 111,
+   "peak_depth": 192,
+   "max_depth": 384,
+   "max_pressure": 51,
+   "release_velocity": 0,
+   "ended": true,
+   "bend_peak": {
+    "legacy": -0.3,
+    "cosine": -0.3,
+    "path": -0.32
+   },
+   "delta_p95": {
+    "legacy": 0.0168,
+    "cosine": 0.0252,
+    "path": 0.0225
+   },
+   "vibrato_peak": {
+    "legacy": 11.9,
+    "cosine": 11.9,
+    "path": 12.1
+   },
+   "steps": 90,
+   "time_score": 0.652,
+   "depth_score": 0.076,
+   "depth_share": 0.065,
+   "time_share": 0.098,
+   "length_ms": 325
+  },
+  {
+   "t_ms": 371292,
+   "velocity": 9,
+   "strike_ms": 541,
+   "peak_depth": 160,
+   "max_depth": 1392,
+   "max_pressure": 127,
+   "release_velocity": 0,
+   "ended": true,
+   "bend_peak": {
+    "legacy": 12.87,
+    "cosine": -12.42,
+    "path": 12.64
+   },
+   "delta_p95": {
+    "legacy": 0.3917,
+    "cosine": 0.1641,
+    "path": 0.1159
+   },
+   "vibrato_peak": {
+    "legacy": 23.7,
+    "cosine": 23.5,
+    "path": 22.9
+   },
+   "steps": 3694,
+   "time_score": 0.0,
+   "depth_score": 0.018,
+   "depth_share": 0.015,
+   "time_share": 0.0,
+   "length_ms": 11576
+  },
+  {
+   "t_ms": 385812,
+   "velocity": 19,
+   "strike_ms": 143,
+   "peak_depth": 160,
+   "max_depth": 1456,
+   "max_pressure": 127,
+   "release_velocity": 0,
+   "ended": true,
+   "bend_peak": {
+    "legacy": -12.81,
+    "cosine": -12.81,
+    "path": -12.83
+   },
+   "delta_p95": {
+    "legacy": 0.0993,
+    "cosine": 0.1403,
+    "path": 0.1091
+   },
+   "vibrato_peak": {
+    "legacy": 23.8,
+    "cosine": 30.7,
+    "path": 19.3
+   },
+   "steps": 2841,
+   "time_score": 0.541,
+   "depth_score": 0.018,
+   "depth_share": 0.015,
+   "time_share": 0.081,
+   "length_ms": 8845
+  },
+  {
+   "t_ms": 405875,
+   "velocity": 41,
+   "strike_ms": 116,
+   "peak_depth": 272,
+   "max_depth": 1152,
+   "max_pressure": 127,
+   "release_velocity": 0,
+   "ended": true,
+   "bend_peak": {
+    "legacy": -0.87,
+    "cosine": -3.39,
+    "path": 2.23
+   },
+   "delta_p95": {
+    "legacy": 0.0178,
+    "cosine": 0.0322,
+    "path": 0.0275
+   },
+   "vibrato_peak": {
+    "legacy": 22.4,
+    "cosine": 21.5,
+    "path": 22.1
+   },
+   "steps": 2670,
+   "time_score": 0.634,
+   "depth_score": 0.222,
+   "depth_share": 0.189,
+   "time_share": 0.095,
+   "length_ms": 8249
+  }
+ ],
+ "calibration": {
+  "active": true,
+  "index": 5,
+  "recording": false,
+  "seconds_left": null,
+  "steps": [
+   {
+    "id": "rest",
+    "title": "Hands off",
+    "seconds": 4,
+    "text": "Take your hands off TILES. This measures every pad's resting field and sensor noise.",
+    "done": true
+   },
+   {
+    "id": "strikes",
+    "title": "Strikes",
+    "seconds": 12,
+    "text": "Strike pad 1 about 8 times, from the softest note you would play to the hardest.",
+    "done": true
+   },
+   {
+    "id": "straight",
+    "title": "Straight presses",
+    "seconds": 12,
+    "text": "Press pad 1 straight down, slowly from light to as hard as you play and back, 3 times. Don't lean. Any bend here is pressure leaking into pitch.",
+    "done": true
+   },
+   {
+    "id": "lean",
+    "title": "Leans",
+    "seconds": 12,
+    "text": "Press pad 1, lean it to one side as far as you want a full bend, hold a second, come back, then the other side. Twice each way.",
+    "done": true
+   },
+   {
+    "id": "vibrato",
+    "title": "Vibrato",
+    "seconds": 8,
+    "text": "Press pad 1 and wiggle it side to side like a vibrato for 4 seconds, then hold it still for 4 seconds.",
+    "done": true
+   }
+  ],
+  "results": {
+   "rest": {
+    "pads_measured": 24,
+    "rest_field_median_mt": 0.83,
+    "rest_field_range_mt": [
+     0.54,
+     1.09
+    ],
+    "z_noise_median_ut": 60.5,
+    "flags": [
+     "rest fields span 0.54-1.09 mT: the same travel gives a weak pad far less depth, so less velocity and pressure"
+    ]
+   },
+   "strikes": {
+    "notes": 8,
+    "velocity": {
+     "min": 22,
+     "median": 101.5,
+     "max": 127
+    },
+    "strike_ms": {
+     "min": 0,
+     "median": 12.0,
+     "max": 145
+    },
+    "peak_depth": {
+     "min": 176,
+     "median": 576.0,
+     "max": 1088
+    },
+    "flags": [
+     "a third or more of the strikes hit 127"
+    ],
+    "capture": "firmware/test/captures/unit2-pad1-strikes-20261103-152009.csv"
+   },
+   "straight": {
+    "bend": {
+     "legacy": {
+      "peak_semitones": 12.37,
+      "delta_p95": 0.1148,
+      "delta_p99": 0.1331,
+      "time_bent": 0.612
+     },
+     "cosine": {
+      "peak_semitones": 12.69,
+      "delta_p95": 0.1263,
+      "delta_p99": 0.1291,
+      "time_bent": 0.99
+     },
+     "path": {
+      "peak_semitones": 11.79,
+      "delta_p95": 0.0417,
+      "delta_p99": 0.0618,
+      "time_bent": 0.333
+     }
+    },
+    "max_pressure_depth": 1702,
+    "flags": [
+     "legacy bent 12.37 semitones on straight presses",
+     "cosine bent 12.69 semitones on straight presses",
+     "path bent 11.79 semitones on straight presses"
+    ],
+    "capture": "firmware/test/captures/unit2-pad1-straight-20261103-152059.csv"
+   },
+   "lean": {
+    "mode": "path",
+    "leans": {
+     "+": [
+      0.0263,
+      0.1058,
+      0.026
+     ],
+     "-": [
+      0.1161,
+      0.0466
+     ]
+    },
+    "bend": {
+     "legacy": {
+      "peak_semitones": 12.81,
+      "delta_p95": 0.0993,
+      "delta_p99": 0.1048,
+      "time_bent": 0.834
+     },
+     "cosine": {
+      "peak_semitones": 12.81,
+      "delta_p95": 0.1403,
+      "delta_p99": 0.1446,
+      "time_bent": 0.978
+     },
+     "path": {
+      "peak_semitones": 12.83,
+      "delta_p95": 0.1091,
+      "delta_p99": 0.1142,
+      "time_bent": 0.883
+     }
+    },
+    "flags": [
+     "one side reads 0.32x the other (key pivot or magnet off-centre)"
+    ],
+    "lean_median": 0.0466,
+    "left_right_ratio": 0.32,
+    "capture": "firmware/test/captures/unit2-pad1-lean-20261103-152144.csv"
+   },
+   "vibrato": {
+    "mode": "path",
+    "flags": [
+     "a wiggle barely reads above holding still: at this noise the vibrato can't tell them apart"
+    ],
+    "wiggle_energy_p75": 12.6,
+    "still_energy_p95": 17.0,
+    "capture": "firmware/test/captures/unit2-pad1-vibrato-20261103-152201.csv"
+   }
+  },
+  "suggestions": [
+   {
+    "key": "strike.overshoot_full",
+    "current": 550.0,
+    "suggested": 890,
+    "why": "your hardest strikes (90th percentile) should just reach full velocity",
+    "kind": "tune"
+   },
+   {
+    "key": "bend.deadzone",
+    "current": 0.025,
+    "suggested": 0.077,
+    "why": "straight presses read up to 0.062 in path: the deadzone should sit above that",
+    "kind": "tune"
+   },
+   {
+    "key": "expression.aftertouch_sensitivity",
+    "current": 900.0,
+    "suggested": 1617,
+    "why": "your hardest press should just reach full pressure (127)",
+    "kind": "setting"
+   },
+   {
+    "key": "expression.pitch_bend_sensitivity",
+    "current": 0.065,
+    "suggested": 0.044,
+    "why": "a comfortable lean (the median of yours) should give a full bend",
+    "kind": "setting"
+   },
+   {
+    "key": "vibrato.depth",
+    "current": 150.0,
+    "suggested": 0,
+    "why": "turn the added vibrato off until the sensor is quieter",
+    "kind": "tune"
+   }
+  ],
+  "files": []
+ },
+ "files": [
+  "firmware/test/captures/unit2-pad1-strikes-20261103-152009.csv",
+  "firmware/test/captures/unit2-pad1-straight-20261103-152041.csv",
+  "firmware/test/captures/unit2-pad1-straight-20261103-152059.csv",
+  "firmware/test/captures/unit2-pad1-lean-20261103-152130.csv",
+  "firmware/test/captures/unit2-pad1-lean-20261103-152144.csv",
+  "firmware/test/captures/unit2-pad1-vibrato-20261103-152201.csv"
+ ]
+}

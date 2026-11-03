@@ -15,7 +15,10 @@
 
 #include "bend_core.h"
 
-static const tiles_bend_config_t CFG = {0.065f, 12.0f, NULL};
+/* The defaults with Alpha 6.9's additions off (fixed settle, no field-aware
+ * deadzone, no release hold): the basics below were written against these. */
+static tiles_bend_tuning_t s_plain;
+static const tiles_bend_config_t CFG = {0.065f, 12.0f, &s_plain};
 #define RANGE 2047 /* 12 of the receiver's 48 semitones: 8191 / 4 */
 
 /* Runs `ms` of 2 ms samples at a fixed reading; returns the last bend (or
@@ -283,7 +286,78 @@ static void test_tuning(void) {
     assert(b.wiggle_energy > 8.0f);
 }
 
+/* 14. COSINE/PATH settle once the key is still: a landing that rocks for
+ * 250 ms moves the baseline past it, and a settle at 120 ms would have left
+ * a held bend. 15. a weak field needs a bigger lean (the deadzone widens by
+ * noise_xy / |B|). 16. coming up near rest holds the bend. */
+static void test_onset_release(void) {
+    const tiles_bend_config_t cfg = {0.065f, 12.0f, NULL}; /* the full defaults */
+    tiles_bend_t b;
+    uint16_t out = 0u;
+
+    /* 14: x rocks from 160 to 0 over 250 ms (|B| ~1000), then stays */
+    uint32_t t = 0u;
+    tiles_bend_start(&b, TILES_BEND_MODE_PATH, NULL, 160, 0, 1000, 600.0f, TILES_BEND_CENTER, t);
+    for (; t < 1200u; t += 2u) {
+        int16_t x = t < 250u ? (int16_t)(160 - (int)(t * 160u / 250u)) : 0;
+        tiles_bend_step(&b, &cfg, x, 0, 1000, 600.0f, t, &out);
+    }
+    assert(b.settled && out == TILES_BEND_CENTER);
+    tiles_bend_t fixed;
+    tiles_bend_config_t at120 = {0.065f, 12.0f, &s_plain};
+    t = 0u;
+    tiles_bend_start(&fixed, TILES_BEND_MODE_PATH, NULL, 160, 0, 1000, 600.0f, TILES_BEND_CENTER, t);
+    for (; t < 1200u; t += 2u) {
+        int16_t x = t < 250u ? (int16_t)(160 - (int)(t * 160u / 250u)) : 0;
+        tiles_bend_step(&fixed, &at120, x, 0, 1000, 600.0f, t, &out);
+    }
+    assert(out != TILES_BEND_CENTER); /* the old fixed settle keeps a bend */
+
+    /* 15: the same 0.04 lean bends at |B| 3000, not at |B| 600 */
+    tiles_bend_tuning_t noisy = TILES_BEND_TUNING_DEFAULT;
+    noisy.noise_xy = 20.0f;
+    noisy.release_depth = 0.0f;
+    const tiles_bend_config_t ncfg = {0.065f, 12.0f, &noisy};
+    for (int strong = 0; strong <= 1; strong++) {
+        int16_t z = strong ? 3000 : 600;
+        t = 0u;
+        tiles_bend_start(&b, TILES_BEND_MODE_PATH, NULL, 0, 0, z, 600.0f, TILES_BEND_CENTER, t);
+        for (; t < 1200u; t += 2u) {
+            int16_t x = t < 500u ? 0 : (int16_t)(0.04f * z);
+            tiles_bend_step(&b, &ncfg, x, 0, z, 600.0f, t, &out);
+        }
+        assert(strong ? out != TILES_BEND_CENTER : out == TILES_BEND_CENTER);
+    }
+
+    /* 16: a held lean, then the key comes up to rest while the lean swings */
+    t = 0u;
+    tiles_bend_start(&b, TILES_BEND_MODE_PATH, NULL, 0, 0, 2000, 800.0f, TILES_BEND_CENTER, t);
+    float depth = 800.0f;
+    uint16_t held = TILES_BEND_CENTER;
+    for (; t < 1500u; t += 2u) {
+        held = tiles_bend_step(&b, &cfg, t < 500u ? 0 : 120, 0, 2000, depth, t, &out) ? out : held;
+    }
+    assert(held != TILES_BEND_CENTER);
+    uint16_t at_hold = 0u;
+    for (; depth > 50.0f; t += 2u, depth -= 4.0f) {
+        int16_t swing = depth < 240.0f ? (int16_t)(-300 + (int)(t % 7u) * 100) : 120;
+        tiles_bend_step(&b, &cfg, swing, 0, (int16_t)(1200 + depth), depth, t, &out);
+        if (at_hold == 0u && depth < 248.0f) {
+            at_hold = out;
+        }
+        if (depth < 240.0f) {
+            assert(out == at_hold); /* the swings near rest never reach the output */
+        }
+    }
+    assert(at_hold != TILES_BEND_CENTER);
+}
+
 int main(void) {
+    s_plain = TILES_BEND_TUNING_DEFAULT;
+    s_plain.settle_max_ms = s_plain.settle_ms;
+    s_plain.noise_xy = 0.0f;
+    s_plain.release_depth = 0.0f;
+    test_onset_release();
     test_tuning();
     for (int mode = 0; mode < TILES_BEND_MODE_COUNT; mode++) {
         s_mode = (tiles_bend_mode_t)mode;

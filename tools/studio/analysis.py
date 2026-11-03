@@ -60,6 +60,7 @@ class PadStats:
         self.rest_z = None
         self.rest_confirmed = None
         self.sensor_ok = None
+        self.depth_gain = None  # the board's automatic gain (key.depth_gain)
         self.path = None  # (bx, by, strokes)
 
     def add(self, x, y, z, depth, touched, key_up):
@@ -73,7 +74,7 @@ class PadStats:
 
     def summary(self):
         out = {"pad": self.pad, "samples": len(self.rest), "rest_z": self.rest_z,
-               "rest_confirmed": self.rest_confirmed, "sensor_ok": self.sensor_ok}
+               "rest_confirmed": self.rest_confirmed, "sensor_ok": self.sensor_ok, "depth_gain": self.depth_gain}
         if len(self.rest) >= 8:
             rest_b = abs(statistics.fmean(self.rest))
             out.update({"rest_field_mt": rnd(rest_b / LSB_PER_MT, 2),
@@ -136,11 +137,12 @@ class Notes:
 
 STEPS = [
     {"id": "rest", "title": "Hands off", "seconds": 4,
-     "text": "Take your hands off TILES. This measures every pad's resting field and sensor noise."},
+     "text": "Take your hands off TILES. This measures every pad's resting field and sensor noise, and picks "
+             "the test pads: the weakest, a middle and the strongest field."},
     {"id": "strikes", "title": "Strikes", "seconds": 12,
      "text": "Strike pad {pad} about 8 times, from the softest note you would play to the hardest."},
     {"id": "straight", "title": "Straight presses", "seconds": 12,
-     "text": "Press pad {pad} straight down, slowly from light to as hard as you play and back, 3 times. "
+     "text": "Press pad {pad} straight down, slowly from light to as hard as it goes and back, 3 times. "
              "Don't lean. Any bend here is pressure leaking into pitch."},
     {"id": "lean", "title": "Leans", "seconds": 12,
      "text": "Press pad {pad}, lean it to one side as far as you want a full bend, hold a second, come back, "
@@ -149,6 +151,8 @@ STEPS = [
      "text": "Press pad {pad} and wiggle it side to side like a vibrato for 4 seconds, then hold it still "
              "for 4 seconds."},
 ]
+STEP = {s["id"]: s for s in STEPS}
+PAD_STEPS = ("strikes", "straight", "lean", "vibrato")
 
 
 def suggestion(key, current, value, why, kind="tune"):
@@ -177,33 +181,29 @@ def analyse_rest(pads):
     if fields and max(fields) > 1.5 * min(fields):
         flags.append(f"rest fields span {min(fields)}-{max(fields)} mT: the same travel gives a weak pad far less "
                      "depth, so less velocity and pressure")
+    ranked = sorted(measured, key=lambda r: r["rest_field_mt"])
+    test = [ranked[0]["pad"], ranked[len(ranked) // 2]["pad"], ranked[-1]["pad"]] if len(ranked) >= 3 else \
+        [r["pad"] for r in ranked]
     return {"pads_measured": len(measured), "rest_field_median_mt": rnd(med_field, 2),
             "rest_field_range_mt": [min(fields), max(fields)] if fields else None,
-            "z_noise_median_ut": med_noise, "flags": flags}, []
+            "z_noise_median_ut": med_noise, "test_pads": list(dict.fromkeys(test)), "flags": flags}
 
 
 def analyse_strikes(notes, tune):
     if not notes:
-        return {"notes": 0, "flags": ["no notes: strike harder than the strike depth?"]}, []
+        return {"notes": 0, "peaks": [], "flags": ["no notes: strike harder than the strike depth?"]}
     vels = [n["velocity"] for n in notes]
     peaks = [n["peak_depth"] for n in notes if n["peak_depth"]]
     times = [n["strike_ms"] for n in notes if n["strike_ms"] is not None]
     res = {"notes": len(notes), "velocity": {"min": min(vels), "median": statistics.median(vels), "max": max(vels)},
            "strike_ms": {"min": min(times), "median": statistics.median(times), "max": max(times)} if times else None,
            "peak_depth": {"min": min(peaks), "median": statistics.median(peaks), "max": max(peaks)} if peaks else None,
-           "flags": []}
-    sugg = []
-    strike, over = tune.get("strike.depth", 150), tune.get("strike.overshoot_full", 550)
-    if peaks and len(notes) >= 4:
-        want = round(max(100, pct(peaks, 0.9) - strike))
-        if abs(want - over) / over > 0.15:
-            sugg.append(suggestion("strike.overshoot_full", over, want,
-                                   "your hardest strikes (90th percentile) should just reach full velocity"))
+           "peaks": peaks, "flags": []}
     if max(vels) < 110:
         res["flags"].append("the hardest strike stayed under 110")
     if sum(v >= 127 for v in vels) > len(vels) / 3:
         res["flags"].append("a third or more of the strikes hit 127")
-    return res, sugg
+    return res
 
 
 def bend_stats(samples):
@@ -219,41 +219,23 @@ def bend_stats(samples):
     return out
 
 
-def analyse_straight(samples, tune, settings, board_mode):
+def bend_was_off(samples):
+    return any(s[FLAGS] & PRESSURE for s in samples) and not any(s[FLAGS] & STEPPED for s in samples)
+
+
+def analyse_straight(samples, board_mode, on_board=True):
     stats = bend_stats(samples)
     depths = [s[SD] for s in samples if s[FLAGS] & PRESSURE and s[SD]]
     res = {"bend": stats, "max_pressure_depth": round(max(depths)) if depths else None, "flags": []}
-    sugg = []
-    mode = board_mode if board_mode in MODES else "path"
-    leak = stats[mode]["delta_p99"]
-    dead = tune.get("bend.deadzone", 0.025)
-    if leak is not None:
-        want = round(min(0.08, max(0.01, 1.25 * leak)), 3)
-        if leak > dead * 0.9:
-            sugg.append(suggestion("bend.deadzone", dead, want,
-                                   f"straight presses read up to {leak:.3f} in {mode}: the deadzone should sit above that"))
-        elif dead > 2 * want and dead > 0.015:
-            sugg.append(suggestion("bend.deadzone", dead, max(want, 0.012),
-                                   f"straight presses stay under {leak:.3f}: a smaller deadzone makes small bends easier"))
-    best = min((m for m in MODES if stats[m]["peak_semitones"] is not None),
-               key=lambda m: stats[m]["peak_semitones"], default=None)
-    if best and board_mode and best != board_mode and stats[board_mode]["peak_semitones"] is not None:
-        if stats[board_mode]["peak_semitones"] - stats[best]["peak_semitones"] > 0.25:
-            sugg.append(suggestion("expression.pitch_bend_mode", board_mode, best,
-                                   f"{best} leaked least on straight presses", kind="setting"))
-    if depths:
-        full = settings.get("expression.aftertouch_sensitivity")
-        want = int(round(max(depths) * 0.95))
-        if full and abs(want - full) / full > 0.15:
-            sugg.append(suggestion("expression.aftertouch_sensitivity", full, want,
-                                   "your hardest press should just reach full pressure (127)", kind="setting"))
     for m in MODES:
         if (stats[m]["peak_semitones"] or 0) > 0.5:
             res["flags"].append(f"{m} bent {stats[m]['peak_semitones']} semitones on straight presses")
-    return res, sugg
+    if on_board and bend_was_off(samples):
+        res["flags"].append("pitch bend was off on the board: these bends are the replay's")
+    return res
 
 
-def analyse_lean(samples, tune, settings, board_mode):
+def analyse_lean(samples, tune, board_mode):
     mode = board_mode if board_mode in MODES else "path"
     d_col = MODE_COLS[mode][0]
     dead = tune.get("bend.deadzone", 0.025)
@@ -275,14 +257,8 @@ def analyse_lean(samples, tune, settings, board_mode):
     allp = peaks["+"] + peaks["-"]
     res = {"mode": mode, "leans": {k: [round(v, 4) for v in vs] for k, vs in peaks.items()},
            "bend": bend_stats(samples), "flags": []}
-    sugg = []
     if len(allp) >= 2:
-        sens = settings.get("expression.pitch_bend_sensitivity", 0.065)
-        want = round(min(0.3, max(dead + 0.015, statistics.median(allp) * 0.95)), 3)
         res["lean_median"] = round(statistics.median(allp), 4)
-        if abs(want - sens) / sens > 0.12:
-            sugg.append(suggestion("expression.pitch_bend_sensitivity", sens, want,
-                                   "a comfortable lean (the median of yours) should give a full bend", kind="setting"))
         if peaks["+"] and peaks["-"]:
             ratio = statistics.median(peaks["+"]) / statistics.median(peaks["-"])
             res["left_right_ratio"] = round(ratio, 2)
@@ -290,58 +266,142 @@ def analyse_lean(samples, tune, settings, board_mode):
                 res["flags"].append(f"one side reads {ratio:.2f}x the other (key pivot or magnet off-centre)")
     else:
         res["flags"].append("fewer than two leans past the deadzone")
-    return res, sugg
+    return res
 
 
-def analyse_vibrato(samples, tune, board_mode):
+def xy_noise(samples):
+    """X/Y noise (raw counts) of touched samples: each against a centred 15-sample average."""
+    out = []
+    for col in (X, Y):
+        v = [s[col] for s in samples if s[FLAGS] & TOUCHED]
+        if len(v) < 40:
+            return None
+        res = [v[i] - statistics.fmean(v[max(0, i - 7):i + 8]) for i in range(len(v))]
+        out.append(statistics.pstdev(res))
+    return round(max(out), 1)
+
+
+def analyse_vibrato(samples, board_mode):
     mode = board_mode if board_mode in MODES else "path"
     vib = MODE_COLS[mode][2]
     held = [s for s in samples if s[vib] is not None]
     res = {"mode": mode, "flags": []}
     if len(held) < 50:
         res["flags"].append("too little held time to judge")
-        return res, []
+        return res
     half = len(held) // 2
-    wiggle = [s[vib] for s in held[:half]]
-    still = [s[vib] for s in held[half + half // 5:]]  # skip the slowdown
-    w75, s95 = pct(wiggle, 0.75), pct(still, 0.95)
-    res.update({"wiggle_energy_p75": rnd(w75, 1), "still_energy_p95": rnd(s95, 1)})
-    floor, full = tune.get("vibrato.floor", 8), tune.get("vibrato.full", 16)
-    sugg = []
+    still_samples = held[half + half // 5:]  # skip the slowdown
+    w75 = pct([s[vib] for s in held[:half]], 0.75)
+    s95 = pct([s[vib] for s in still_samples], 0.95)
+    res.update({"wiggle_energy_p75": rnd(w75, 1), "still_energy_p95": rnd(s95, 1),
+                "xy_noise_raw": xy_noise(still_samples)})
     if w75 < 1.4 * s95:
         res["flags"].append("a wiggle barely reads above holding still: at this noise the vibrato can't tell them apart")
-        if tune.get("vibrato.depth", 150) > 0:
-            sugg.append(suggestion("vibrato.depth", tune.get("vibrato.depth", 150), 0,
-                                   "turn the added vibrato off until the sensor is quieter"))
-        return res, sugg
-    want_floor = round(1.25 * s95, 1)
-    want_full = round(max(want_floor + 2, 0.8 * w75), 1)
-    if abs(want_floor - floor) > 1:
-        sugg.append(suggestion("vibrato.floor", floor, want_floor, "just above the energy of holding still"))
-    if abs(want_full - full) > 1:
-        sugg.append(suggestion("vibrato.full", full, want_full, "most of your wiggle reaches full vibrato depth"))
-    return res, sugg
+    return res
 
 
-def reconcile(suggestions, tune, settings):
-    """Suggestions from different steps can contradict: a deadzone at or past the full-bend point turns bend
-    into a switch. Holds both back with the reason instead."""
-    flat = [x for sid in (s["id"] for s in STEPS) for x in suggestions.get(sid, [])]
-    find = lambda key: next((x for x in flat if x["key"] == key), None)
-    dz_s, sens_s = find("bend.deadzone"), find("expression.pitch_bend_sensitivity")
-    dead = dz_s["suggested"] if dz_s else tune.get("bend.deadzone", 0.025)
-    sens = sens_s["suggested"] if sens_s else settings.get("expression.pitch_bend_sensitivity", 0.065)
-    for x in flat:
-        x.pop("blocked", None)
-    if (dz_s or sens_s) and sens < dead + 0.015:
-        for x in (dz_s, sens_s):
-            if x:
-                x["blocked"] = (f"a straight press reads about as much as a lean (deadzone {dead:g}, full bend "
-                                f"{sens:g}): no threshold separates them yet")
-    return flat
+def general(results, pads, tune, settings, board_mode):
+    """One set of values from every test pad together: the worst pad for leaks, medians for feel, and how
+    depth grows with the rest field for the automatic depth gain. Never a value per pad."""
+    def by(step):
+        return {int(k.split(":")[1]): v for k, v in results.items() if k.startswith(step + ":")}
+
+    strikes, straight, lean, vib = by("strikes"), by("straight"), by("lean"), by("vibrato")
+    mode = board_mode if board_mode in MODES else "path"
+    sugg, summary = [], {"test_pads": sorted(set(strikes) | set(straight) | set(lean) | set(vib))}
+
+    peaks = [p for r in strikes.values() for p in r.get("peaks", [])]
+    strike, over = tune.get("strike.depth", 150), tune.get("strike.overshoot_full", 550)
+    if len(peaks) >= 4:
+        want = round(max(100, pct(peaks, 0.9) - strike))
+        summary["strike_peak_p90"] = pct(peaks, 0.9)
+        if abs(want - over) / over > 0.15:
+            sugg.append(suggestion("strike.overshoot_full", over, want,
+                                   "the hardest strikes across the test pads (90th percentile) just reach full velocity"))
+
+    leaks = {p: r["bend"][mode]["delta_p99"] for p, r in straight.items() if r["bend"][mode]["delta_p99"] is not None}
+    lean_peaks = [v for r in lean.values() for side in r.get("leans", {}).values() for v in side]
+    summary.update({"leak_p99": leaks, "lean_median": rnd(statistics.median(lean_peaks), 4) if lean_peaks else None})
+    dead = tune.get("bend.deadzone", 0.025)
+    sens = settings.get("expression.pitch_bend_sensitivity", 0.065)
+    want_dead = want_sens = None
+    if leaks:
+        worst = max(leaks.values())
+        want = round(min(0.08, max(0.01, 1.25 * worst)), 3)
+        if worst > dead * 0.9 or (dead > 2 * want and dead > 0.015):
+            want_dead = max(want, 0.012)
+            sugg.append(suggestion("bend.deadzone", dead, want_dead,
+                                   f"the leakiest test pad read up to {worst:.3f} pressing straight ({mode})"))
+    if len(lean_peaks) >= 3:
+        floor = (want_dead or dead) + 0.015
+        want_sens = round(min(0.3, max(floor, statistics.median(lean_peaks) * 0.95)), 3)
+        if abs(want_sens - sens) / sens > 0.12:
+            sugg.append(suggestion("expression.pitch_bend_sensitivity", sens, want_sens,
+                                   "a comfortable lean (the median across the test pads) gives a full bend", "setting"))
+
+    hardest = {p: r["max_pressure_depth"] for p, r in straight.items() if r.get("max_pressure_depth")}
+    summary["hardest_depth"] = hardest
+    full = settings.get("expression.aftertouch_sensitivity")
+    if hardest and full:
+        want = int(round(statistics.median(hardest.values()) * 0.95))
+        if abs(want - full) / full > 0.15:
+            sugg.append(suggestion("expression.aftertouch_sensitivity", full, want,
+                                   "a hard press on a typical test pad just reaches full pressure", "setting"))
+    # Depth vs rest field across the test pads: the exponent that evens them out.
+    fields = {p: pads[p].summary().get("rest_field_mt") for p in hardest if p in pads}
+    pts = [(math.log(fields[p]), math.log(hardest[p])) for p in hardest if fields.get(p) and hardest[p] > 0]
+    if len(pts) >= 2 and max(f for f, _ in pts) - min(f for f, _ in pts) > math.log(1.2):
+        mx, my = statistics.fmean(f for f, _ in pts), statistics.fmean(d for _, d in pts)
+        slope = sum((f - mx) * (d - my) for f, d in pts) / sum((f - mx) ** 2 for f, _ in pts)
+        current = tune.get("key.depth_gain", 0.0)
+        want = round(min(2.0, max(0.0, current + slope)), 2)  # depths already carry the current gain
+        summary["depth_vs_field_slope"] = round(slope, 2)
+        if abs(want - current) > 0.2:
+            sugg.append(suggestion("key.depth_gain", current, want,
+                                   f"hard presses grew with the rest field (slope {slope:.2f} on a log scale): this "
+                                   "evens out weak and strong pads"))
+
+    stills = [r["still_energy_p95"] for r in vib.values() if r.get("still_energy_p95") is not None]
+    wiggles = [r["wiggle_energy_p75"] for r in vib.values() if r.get("wiggle_energy_p75") is not None]
+    noise = [r["xy_noise_raw"] for r in vib.values() if r.get("xy_noise_raw")]
+    summary.update({"still_energy": max(stills) if stills else None, "wiggle_energy": min(wiggles) if wiggles else None,
+                    "xy_noise_raw": max(noise) if noise else None})
+    if stills and wiggles:
+        s95, w75 = max(stills), min(wiggles)
+        v_floor, v_full, v_depth = tune.get("vibrato.floor", 8), tune.get("vibrato.full", 16), tune.get("vibrato.depth", 150)
+        if w75 < 1.4 * s95:
+            if v_depth > 0:
+                sugg.append(suggestion("vibrato.depth", v_depth, 0,
+                                       "on some test pad a wiggle barely reads above holding still: added vibrato off"))
+        else:
+            want_floor = round(1.25 * s95, 1)
+            want_full = round(max(want_floor + 2, 0.8 * w75), 1)
+            if abs(want_floor - v_floor) > 1:
+                sugg.append(suggestion("vibrato.floor", v_floor, want_floor, "just above holding still on every test pad"))
+            if abs(want_full - v_full) > 1:
+                sugg.append(suggestion("vibrato.full", v_full, want_full, "every test pad's wiggle reaches full depth"))
+    if noise:
+        n = max(noise)
+        want = round(n, 0)
+        if abs(want - tune.get("bend.noise_xy", 20)) > 4:
+            sugg.append(suggestion("bend.noise_xy", tune.get("bend.noise_xy", 20), want,
+                                   f"X/Y noise measured while holding still: {n} raw"))
+        averaging = tune.get("sensor.averaging", 8)
+        if n > 30 and averaging < 16:
+            sugg.append(suggestion("sensor.averaging", averaging, min(32, int(averaging) * 2),
+                                   f"X/Y noise of {n} raw is still large next to a ~1 mT field"))
+
+    if want_dead is not None and (want_sens or sens) < want_dead + 0.015:
+        for x in sugg:
+            if x["key"] in ("bend.deadzone", "expression.pitch_bend_sensitivity"):
+                x["blocked"] = (f"a straight press reads about as much as a lean ({want_dead:g} vs "
+                                f"{summary['lean_median']}): no threshold separates them yet")
+    return sugg, summary
 
 
 class Calibration:
+    """Hands off, then strikes, straight presses, leans and vibrato on each test pad."""
+
     def __init__(self):
         self.reset()
 
@@ -350,21 +410,32 @@ class Calibration:
         self.index = 0
         self.recording = False
         self.started = 0.0
+        self.plan = [("rest", None)]
         self.results = {}
-        self.suggestions = {}
-        self.files = []
-        self.mark = 0
+        self.suggestions = []
+        self.summary = {}
+        self.applied = set()
 
-    def step(self):
-        return STEPS[self.index] if self.active and self.index < len(STEPS) else None
+    def set_test_pads(self, pads):
+        self.plan = [("rest", None)] + [(s, p) for p in pads for s in PAD_STEPS]
 
-    def public(self, pad, tune=None, settings=None):
-        step = self.step()
-        left = max(0.0, step["seconds"] - (time.monotonic() - self.started)) if step and self.recording else None
+    def item(self):
+        return self.plan[self.index] if self.active and self.index < len(self.plan) else None
+
+    @staticmethod
+    def key(step, pad):
+        return step if pad is None else f"{step}:{pad}"
+
+    def public(self):
+        item = self.item()
+        left = max(0.0, STEP[item[0]]["seconds"] - (time.monotonic() - self.started)) \
+            if item and self.recording else None
+        for x in self.suggestions:
+            x["applied"] = x["key"] in self.applied
         return {"active": self.active, "index": self.index, "recording": self.recording,
                 "seconds_left": rnd(left, 1),
-                "steps": [{"id": s["id"], "title": s["title"], "seconds": s["seconds"],
-                           "text": s["text"].format(pad=pad), "done": s["id"] in self.results} for s in STEPS],
-                "results": self.results,
-                "suggestions": reconcile(self.suggestions, tune or {}, settings or {}),
-                "files": self.files}
+                "test_pads": [p for s, p in self.plan if s == "strikes"],
+                "plan": [{"step": s, "pad": p, "title": STEP[s]["title"], "seconds": STEP[s]["seconds"],
+                          "text": STEP[s]["text"].format(pad=p), "done": self.key(s, p) in self.results}
+                         for s, p in self.plan],
+                "results": self.results, "suggestions": self.suggestions, "summary": self.summary}

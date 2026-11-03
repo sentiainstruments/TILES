@@ -1,7 +1,7 @@
 #pragma once
 
 /* TMAG5273A1 3-axis Hall sensor (datasheet SLYS045C): continuous X/Y/Z,
- * +/-80 mT, 1x averaging, no CRC. All 24 share address 0x35 behind the
+ * +/-80 mT, set averaging, no CRC. All 24 share address 0x35 behind the
  * muxes; services/hall selects the channel. */
 
 #include <stdbool.h>
@@ -24,9 +24,13 @@ typedef struct {
  * tiles_tmag5273_init(). */
 bool tiles_tmag5273_identify(i2c_inst_t *bus, uint8_t addr);
 
-/* Writes the device and sensor config described above. The caller must
- * have selected this sensor's mux channel. */
-bool tiles_tmag5273_init(tiles_tmag5273_t *dev, i2c_inst_t *bus, uint8_t addr);
+/* Writes the device and sensor config described above, with `averaging`
+ * (1, 2, 4, 8, 16 or 32; rounded down). The caller must have selected this
+ * sensor's mux channel. */
+bool tiles_tmag5273_init(tiles_tmag5273_t *dev, i2c_inst_t *bus, uint8_t addr, uint8_t averaging);
+
+/* Changes only the averaging (one register write); same mux rule. */
+bool tiles_tmag5273_set_averaging(const tiles_tmag5273_t *dev, uint8_t averaging);
 
 /* Reads X/Y/Z (6 bytes from X_MSB_RESULT) as signed raw counts (no mT
  * conversion). Doesn't check CONV_STATUS, so reading faster than the

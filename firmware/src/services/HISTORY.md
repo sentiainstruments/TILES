@@ -10511,3 +10511,35 @@ change. Search it by file or feature name.
     page, `/api/state` and saved reports (`firmware/test/calibration/`).
     On the sim (magnet 0.8 mm off-axis), straight presses bent 12.87
     semitones in `legacy`, 0.14 in `cosine`, 0.15 in `path`.
+- **Alpha 6.9 (2026-11-03): unit 2's first calibration, and what it
+  changed.** Unit 2 on 6.8, pad 1 (`firmware/test/calibration/unit2-20261103-152220.md`):
+  - The rest field is 0.52-1.10 mT across the 24 pads, not the ~7 mT the
+    sim assumed. At 1x averaging X/Y read in 16-count steps with ~50 raw of
+    noise, about a full bend of direction at light pressure; holding still
+    read more vibrato energy (17) than wiggling (12.6), so the added
+    vibrato played on every held note. Untouched pads read Z only, so X/Y
+    at rest are stale (the studio's rest numbers now come from Z).
+  - `path` still bent on straight presses (up to 11.8 semitones), from two
+    things in the captures: the finger's landing rocks the key for ~200 ms
+    and the baseline was taken at 120 ms, mid-rock, leaving an offset
+    outside the deadzone for the whole note; and lifting off, the field
+    falls back to ~1 mT and its direction swings to a full bend. Less noise
+    or the right slope alone didn't fix either (replayed on the captures).
+  - COSINE/PATH now (LEGACY untouched, still Alpha 6.6 bit for bit):
+    the baseline waits for the key to be still (`bend.settle_still`), at
+    most `bend.settle_max_ms` 400; the deadzone widens by `bend.noise_xy` /
+    |B| so a weak field needs a bigger lean; below `bend.release_depth` 250
+    while the key comes up, the bend holds its last value.
+  - `sensor.averaging` (default 8x, live: written to every sensor while no
+    pad is touched): X/Y noise ~2.8x lower; XYZ takes ~0.63 ms at 8x.
+  - `key.depth_gain` (default 0, off): each pad's depth times (median rest
+    |Bz| / its own)^gain, from the rest baselines the board already keeps,
+    so weak-field pads give the same depth for the same press without
+    per-pad settings. The calibration fits the exponent across test pads.
+  - The owner: no manual per-pad adjustments, one general set of values
+    from auto calibration on a few test pads. The studio's calibration now
+    picks three test pads (weakest, middle, strongest rest field) and
+    pools them: the leakiest pad sets the deadzone, medians set the feel.
+  - The first run's suggestions put the deadzone (0.077) past full bend
+    (0.044), making bend a switch; contradicting suggestions are now held
+    back. Unit 2's full bend went back to 0.065; full pressure stays 1617.

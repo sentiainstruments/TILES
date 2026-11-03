@@ -38,7 +38,12 @@ int main(void) {
 
     char line[160];
     assert(tiles_tune_describe(0u, line, sizeof(line)));
-    assert(strcmp(line, "key=strike.depth value=150 default=150 min=60 max=600 group=velocity") == 0);
+    assert(strcmp(line, "key=sensor.averaging value=8 default=8 min=1 max=32 group=sensor") == 0);
+    /* averaging the sensor can do; settle within its maximum */
+    assert(tiles_tune_set("sensor.averaging", "16") == TILES_TUNE_OK && t->sensor_averaging == 16u);
+    assert(tiles_tune_set("sensor.averaging", "12") == TILES_TUNE_CONFLICT && t->sensor_averaging == 16u);
+    assert(tiles_tune_set("bend.settle_ms", "600") == TILES_TUNE_CONFLICT);
+    assert(tiles_tune_reset(NULL));
     for (uint16_t i = 0; i < tiles_tune_count(); i++) {
         assert(tiles_tune_describe(i, line, sizeof(line)) && strstr(line, " group=") != NULL);
     }

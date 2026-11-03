@@ -27,7 +27,7 @@ before re-tuning a constant or reviving an approach that was dropped.
 | Module | Role |
 |---|---|
 | `expression` | Touch + Hall fusion: strike detection, velocity, pressure, release velocity, melodic harmonics, MPE channel allocation; feeds `bend_core`. |
-| `tune` | The feel constants (strike, velocity, pressure, key and touch timing, bend, vibrato, press path learner) as one live table every mode reads. `TUNE` over USB changes them until power-off; the calibration studio (`tools/studio/`) drives it. Defaults and why: `tune.h`, and `bend_core.c` for bend. |
+| `tune` | The feel constants (sensor averaging, the automatic per-pad depth gain, strike, velocity, pressure, key and touch timing, bend, vibrato, press path learner) as one live table every mode reads. `TUNE` over USB changes them until power-off; the calibration studio (`tools/studio/`) drives it. Defaults and why: `tune.h`, and `bend_core.c` for bend. |
 | `bend_core` | Per-note pitch bend from sideways tilt, with its smoothing, baseline, deadzone and vibrato, in three modes (`expression.pitch_bend_mode`: `legacy`, `cosine`, `path`, the default), and each pad's press path learned from its strikes. No hardware; tested, and recorded captures replay through it in all three modes. |
 | `note_map` | Pad → note: scales (picker order), key, octave, bass guitar frets, chord strip + melody grid. |
 | `mpe_alloc` | Pure MPE channel choice / steal order (MMA RP-053 3.2). Tested. |

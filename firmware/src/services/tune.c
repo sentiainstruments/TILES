@@ -25,6 +25,8 @@ typedef struct {
 
 /* Ranges refuse nonsense, not taste. */
 static const tune_entry_t TABLE[] = {
+    {"sensor.averaging", "sensor", U(sensor_averaging), 1.0f, 32.0f},
+    {"key.depth_gain", "sensor", F(depth_gain), 0.0f, 2.0f},
     {"strike.depth", "velocity", F(strike_depth), 60.0f, 600.0f},
     {"strike.overshoot_full", "velocity", F(overshoot_full), 50.0f, 3000.0f},
     {"strike.followthrough_ms", "velocity", U(followthrough_ms), 0.0f, 100.0f},
@@ -46,6 +48,10 @@ static const tune_entry_t TABLE[] = {
     {"key.strike_from_rest_ms", "key", U(strike_from_rest_ms), 0.0f, 2000.0f},
     {"bend.deadzone", "bend", F(bend.deadzone), 0.0f, 0.2f},
     {"bend.settle_ms", "bend", U(bend.settle_ms), 0.0f, 1000.0f},
+    {"bend.settle_max_ms", "bend", U(bend.settle_max_ms), 0.0f, 2000.0f},
+    {"bend.settle_still", "bend", F(bend.settle_still), 0.0f, 0.2f},
+    {"bend.noise_xy", "bend", F(bend.noise_xy), 0.0f, 200.0f},
+    {"bend.release_depth", "bend", F(bend.release_depth), 0.0f, 2000.0f},
     {"bend.smoothing", "bend", F(bend.smoothing), 0.005f, 1.0f},
     {"bend.recenter_slow", "bend", F(bend.recenter_slow), 0.0f, 0.1f},
     {"bend.recenter_fast", "bend", F(bend.recenter_fast), 0.0f, 1.0f},
@@ -69,6 +75,8 @@ static void ensure_ready(void) {
         return;
     }
     s_default = (tiles_tune_t){
+        .sensor_averaging = TILES_TUNE_DEFAULT_SENSOR_AVERAGING,
+        .depth_gain = TILES_TUNE_DEFAULT_DEPTH_GAIN,
         .strike_depth = TILES_TUNE_DEFAULT_STRIKE_DEPTH,
         .overshoot_full = TILES_TUNE_DEFAULT_OVERSHOOT_FULL,
         .followthrough_ms = TILES_TUNE_DEFAULT_FOLLOWTHROUGH_MS,
@@ -113,9 +121,12 @@ static void put(tiles_tune_t *t, const tune_entry_t *e, float v) {
     }
 }
 
-/* Orders the code relies on (a division, or a threshold above another). */
+/* Orders the code relies on (a division, or a threshold above another), and
+ * averaging the sensor can do. */
 static bool consistent(const tiles_tune_t *t) {
-    return (float)t->key_up_depth < t->strike_depth && t->retrigger_depth < t->strike_depth &&
+    uint32_t avg = t->sensor_averaging;
+    return avg >= 1u && avg <= 32u && (avg & (avg - 1u)) == 0u && t->bend.settle_ms <= t->bend.settle_max_ms &&
+           (float)t->key_up_depth < t->strike_depth && t->retrigger_depth < t->strike_depth &&
            t->time_fast_ms < t->time_slow_ms && t->release_rate_min < t->release_rate_max &&
            t->bend.recenter_slow <= t->bend.recenter_fast && t->bend.vibrato_floor < t->bend.vibrato_full;
 }

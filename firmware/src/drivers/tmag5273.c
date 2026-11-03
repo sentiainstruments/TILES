@@ -16,9 +16,15 @@
 #define EXPECTED_MANUFACTURER_ID_LSB 0x49u
 #define EXPECTED_MANUFACTURER_ID_MSB 0x54u
 
-/* DEVICE_CONFIG_1 (table 8-3): no CRC, no tempco, 1x averaging, standard
- * sequential reads. */
-#define DEVICE_CONFIG_1_VALUE 0x00u
+/* DEVICE_CONFIG_1 (table 8-3): no CRC, no tempco, standard sequential reads;
+ * CONV_AVG (bits 4-2) = log2 of the averaging. */
+static uint8_t device_config_1(uint8_t averaging) {
+    uint8_t code = 0u;
+    while (code < 5u && (1u << (code + 1u)) <= averaging) {
+        code++;
+    }
+    return (uint8_t)(code << 2);
+}
 
 /* DEVICE_CONFIG_2 (table 8-4): low active-current mode, glitch filter on,
  * continuous measure -> 0x02. */
@@ -55,11 +61,11 @@ bool tiles_tmag5273_identify(i2c_inst_t *bus, uint8_t addr) {
     return id[0] == EXPECTED_MANUFACTURER_ID_LSB && id[1] == EXPECTED_MANUFACTURER_ID_MSB;
 }
 
-bool tiles_tmag5273_init(tiles_tmag5273_t *dev, i2c_inst_t *bus, uint8_t addr) {
+bool tiles_tmag5273_init(tiles_tmag5273_t *dev, i2c_inst_t *bus, uint8_t addr, uint8_t averaging) {
     dev->bus = bus;
     dev->addr = addr;
 
-    if (!write_reg(bus, addr, REG_DEVICE_CONFIG_1, DEVICE_CONFIG_1_VALUE)) {
+    if (!write_reg(bus, addr, REG_DEVICE_CONFIG_1, device_config_1(averaging))) {
         return false;
     }
     if (!write_reg(bus, addr, REG_DEVICE_CONFIG_2, DEVICE_CONFIG_2_VALUE)) {
@@ -73,6 +79,10 @@ bool tiles_tmag5273_init(tiles_tmag5273_t *dev, i2c_inst_t *bus, uint8_t addr) {
     }
 
     return true;
+}
+
+bool tiles_tmag5273_set_averaging(const tiles_tmag5273_t *dev, uint8_t averaging) {
+    return write_reg(dev->bus, dev->addr, REG_DEVICE_CONFIG_1, device_config_1(averaging));
 }
 
 bool tiles_tmag5273_read_xyz(const tiles_tmag5273_t *dev, tiles_tmag5273_sample_t *out) {

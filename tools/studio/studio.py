@@ -628,7 +628,7 @@ class Pipeline(threading.Thread):
         return paths[0]
 
     # ---- calibration ----
-    def _calibrate(self, action, msg):
+    def _calibrate(self, action, msg, batch):
         cal = self.cal
         if action == "start":
             cal.reset()
@@ -638,63 +638,71 @@ class Pipeline(threading.Thread):
             self.source.fast_hall(False)
         elif action == "goto":
             cal.index, cal.recording = int(msg.get("index", 0)), False
+        elif action == "pads":  # the test pads, chosen by hand
+            pads = [int(p) for p in msg.get("pads", []) if 1 <= int(p) <= 24]
+            if pads:
+                cal.set_test_pads(list(dict.fromkeys(pads)))
+                cal.index = min(cal.index, len(cal.plan) - 1)
         elif action == "next":
             cal.index, cal.recording = cal.index + 1, False
-            if cal.index >= len(A.STEPS):
+            if cal.index >= len(cal.plan):
                 self.hub.publish("notice", f"Calibration done. Report: {self._save_report()}")
                 cal.active = False
-        elif action in ("record", "redo") and cal.step():
-            step = cal.step()
+        elif action in ("record", "redo") and cal.item():
+            step, pad = cal.item()
+            if pad is not None and pad != self.source.pad:
+                lines, events = self.source.control({"pad": pad})
+                self._feed(lines, batch)
+                self._events(events)
             cal.recording, cal.started = True, time.monotonic()
             self.step_samples, self.step_rows = [], []
-            if step["id"] == "rest":
+            if step == "rest":
                 for p in self.pads.values():
                     p.rest.clear()
                 self.source.fast_hall(True)
             else:
-                self.source.play_sequence(step["id"])
+                self.source.play_sequence(step)
 
     def _finish_step(self):
-        cal, step = self.cal, self.cal.step()
+        cal = self.cal
+        step, pad = cal.item()
         cal.recording = False
         self.source.fast_hall(False)
         tune, mode = self.tune_values(), self.settings.get("expression.pitch_bend_mode")
         samples = self.step_samples
-        if step["id"] == "rest":
-            res, sugg = A.analyse_rest(self.pads)
+        if step == "rest":
+            res = A.analyse_rest(self.pads)
+            if len(cal.plan) == 1 and res["test_pads"]:
+                cal.set_test_pads(res["test_pads"])
         else:
             t0 = samples[0][A.T] if samples else 0
-            notes = [n for n in self.notes.notes if n["t_ms"] >= t0]
-            if step["id"] == "strikes":
-                res, sugg = A.analyse_strikes(notes, tune)
-            elif step["id"] == "straight":
-                res, sugg = A.analyse_straight(samples, tune, self.settings, mode)
-            elif step["id"] == "lean":
-                res, sugg = A.analyse_lean(samples, tune, self.settings, mode)
+            if step == "strikes":
+                res = A.analyse_strikes([n for n in self.notes.notes if n["t_ms"] >= t0], tune)
+            elif step == "straight":
+                res = A.analyse_straight(samples, mode, isinstance(self.source, DeviceSource))
+            elif step == "lean":
+                res = A.analyse_lean(samples, tune, mode)
             else:
-                res, sugg = A.analyse_vibrato(samples, tune, mode)
+                res = A.analyse_vibrato(samples, mode)
             if self.step_rows:
                 stamp = time.strftime("%Y%m%d-%H%M%S")
-                res["capture"] = self._write_capture(
-                    self.step_rows, f"{self._unit()}-pad{self.source.pad}-{step['id']}-{stamp}.csv")
-        cal.results[step["id"]] = res
-        cal.suggestions[step["id"]] = sugg
+                res["capture"] = self._write_capture(self.step_rows, f"{self._unit()}-pad{pad}-{step}-{stamp}.csv")
+        cal.results[cal.key(step, pad)] = res
+        cal.suggestions, cal.summary = A.general(cal.results, self.pads, tune, self.settings, mode)
 
     def _apply(self, keys):
-        A.reconcile(self.cal.suggestions, self.tune_values(), self.settings)
         errors = []
-        for sid, suggestions in self.cal.suggestions.items():
-            for s in suggestions:
-                if (keys != "all" and s["key"] not in keys) or s.get("blocked"):
-                    continue
-                if s["kind"] == "tune":
-                    error = self._tune_set(s["key"], s["suggested"])
-                else:
-                    error = self._setting_set(s["key"], s["suggested"])
-                if error:
-                    errors.append(error)
-                else:
-                    s["applied"] = True
+        for s in self.cal.suggestions:
+            if (keys != "all" and s["key"] not in keys) or s.get("blocked"):
+                continue
+            if s["kind"] == "tune":
+                error = self._tune_set(s["key"], s["suggested"])
+            else:
+                error = self._setting_set(s["key"], s["suggested"])
+            if error:
+                errors.append(error)
+            else:
+                self.cal.applied.add(s["key"])
         return errors
 
     # ---- the loop ----
@@ -736,7 +744,7 @@ class Pipeline(threading.Thread):
         elif msg.get("reset_paths"):
             self._feed(self.source.reset_paths(), batch)
         elif "calibrate" in msg:
-            self._calibrate(msg["calibrate"], msg)
+            self._calibrate(msg["calibrate"], msg, batch)
         elif "apply" in msg:
             errors = self._apply(msg["apply"])
             error = "; ".join(errors) if errors else None
@@ -757,6 +765,7 @@ class Pipeline(threading.Thread):
                     if len(r) >= 10:
                         p = self.pads[r[0]]
                         p.rest_z, p.rest_confirmed, p.sensor_ok = r[7], bool(r[8]), bool(r[9])
+                        p.depth_gain = r[10] if len(r) >= 11 else None
                 self.hub.publish("grid", data)
             elif event == "paths":
                 for pad, bx, by, n in data:
@@ -818,7 +827,7 @@ class Pipeline(threading.Thread):
             "pads": [p.summary() for p in self.pads.values()],
             "pad": status.get("pad"),
             "notes": self.notes.public(12),
-            "calibration": self.cal.public(status.get("pad"), self.tune_values(), self.settings),
+            "calibration": self.cal.public(),
             "files": self.files[-20:],
         }
 
@@ -832,7 +841,7 @@ class Pipeline(threading.Thread):
             self._feed(lines, batch)
             self._events(events)
             now = time.monotonic()
-            if self.cal.recording and now - self.cal.started >= self.cal.step()["seconds"]:
+            if self.cal.recording and now - self.cal.started >= A.STEP[self.cal.item()[0]]["seconds"]:
                 self._finish_step()
                 last_state = 0.0
             if now - last_flush > 0.033:
@@ -855,7 +864,7 @@ def step_markdown(sid, r):
     if sid == "rest":
         out.append(f"{r['pads_measured']} pads measured. Rest field (Bz) median {r['rest_field_median_mt']} mT "
                    f"(range {r['rest_field_range_mt']}); Z noise median {r['z_noise_median_ut']} uT. X/Y are "
-                   "read only while a key is touched.")
+                   f"read only while a key is touched. Test pads: {', '.join(map(str, r.get('test_pads', [])))}.")
     elif sid == "strikes":
         out.append(f"{r['notes']} notes. Velocity {mmm(r.get('velocity'))}, touch to threshold "
                    f"{mmm(r.get('strike_ms'), ' ms')}, peak depth {mmm(r.get('peak_depth'))} (min / median / max).")
@@ -870,7 +879,7 @@ def step_markdown(sid, r):
             out.append(f"| {mode} | {b['peak_semitones']} | {b['delta_p95']} / {b['delta_p99']} | {b['time_bent']} |")
     elif sid == "vibrato" and "wiggle_energy_p75" in r:
         out.append(f"Vibrato energy ({r['mode']}): wiggle {r['wiggle_energy_p75']} (75th pct) vs holding still "
-                   f"{r['still_energy_p95']} (95th pct).")
+                   f"{r['still_energy_p95']} (95th pct); X/Y noise holding still {r.get('xy_noise_raw')} raw.")
     if r.get("flags") or r.get("capture"):
         out.append("")
     out += [f"- {flag}" for flag in r.get("flags", [])]
@@ -905,10 +914,24 @@ def report_markdown(s):
     cal = s["calibration"]
     if cal["results"]:
         lines += ["## Steps", ""]
-        for step in cal["steps"]:
-            res = cal["results"].get(step["id"])
+        for item in cal["plan"]:
+            key = item["step"] if item["pad"] is None else f"{item['step']}:{item['pad']}"
+            res = cal["results"].get(key)
             if res is not None:
-                lines += [f"### {step['title']}", ""] + step_markdown(step["id"], res) + [""]
+                title = item["title"] + (f", pad {item['pad']}" if item["pad"] is not None else "")
+                lines += [f"### {title}", ""] + step_markdown(item["step"], res) + [""]
+    summary = cal.get("summary") or {}
+    if summary.get("test_pads"):
+        lines += ["## Across the test pads", "", f"Test pads: {', '.join(map(str, summary['test_pads']))}.", ""]
+        for key, label in (("leak_p99", "Straight-press leak, 99th pct delta"), ("hardest_depth", "Hardest press depth")):
+            if summary.get(key):
+                lines.append(f"- {label}: " + ", ".join(f"pad {p} {v}" for p, v in summary[key].items()))
+        for key, label in (("lean_median", "Lean, median peak delta"), ("depth_vs_field_slope", "Depth vs rest field, log slope"),
+                           ("strike_peak_p90", "Strike peak depth, 90th pct"), ("still_energy", "Vibrato energy holding still (worst)"),
+                           ("wiggle_energy", "Vibrato energy wiggling (weakest)"), ("xy_noise_raw", "X/Y noise holding still, raw")):
+            if summary.get(key) is not None:
+                lines.append(f"- {label}: {summary[key]}")
+        lines.append("")
     if cal["suggestions"]:
         lines += ["## Suggestions", "", "| Key | Now | Suggested | Why | Applied |", "|---|---|---|---|---|"]
         for x in cal["suggestions"]:

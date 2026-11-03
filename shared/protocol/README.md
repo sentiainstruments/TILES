@@ -71,7 +71,7 @@ CAPTURE READ\n            every record held, one line each, then OK:
 CAPTURE READ <from>\n     seq=<first>, then up to 300 records from sequence number <from>
                           on (smoothed_depth to 0.1), then OK; ask again from first + rows
 HALL\n                    every pad now, one line each, then OK:
-                          pad,x,y,z,depth,valid,touched,rest_z,rest_confirmed,sensor_ok
+                          pad,x,y,z,depth,valid,touched,rest_z,rest_confirmed,sensor_ok,depth_gain
 BEND PATHS\n              every pad's learned press path, then OK: pad=<p> bx=<b> by=<b> strokes=<n>
 BEND RESET\n              forget every learned press path: OK
 TUNE\n                    live tuning (firmware/src/services/tune.h), one line per key, then OK:
@@ -81,8 +81,9 @@ TUNE SET <key> <value>\n  OK | ERR unknown-key | bad-value | out-of-range | conf
 TUNE RESET [<key>]\n      one key, or every key, back to its default: OK
 ```
 
-`TUNE` values are the feel constants (strike, velocity, pressure, key, bend,
-vibrato, press path learner). They apply at once and are **never saved**: a
+`TUNE` values are the feel constants (sensor averaging and the automatic
+per-pad depth gain, strike, velocity, pressure, key, bend, vibrato, press
+path learner). They apply at once and are **never saved**: a
 board boots with the defaults compiled in. The calibration studio
 (`tools/studio/`) is the tool for them; values that work become the defaults
 in the code.

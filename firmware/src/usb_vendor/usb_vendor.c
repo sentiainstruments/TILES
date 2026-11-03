@@ -280,8 +280,8 @@ static bool listing_row(char *text, size_t cap) {
         return true;
     }
     case LISTING_HALL: {
-        /* pad,x,y,z,depth,valid,touched,rest_z,rest_confirmed,sensor_ok: every
-         * pad now. */
+        /* pad,x,y,z,depth,valid,touched,rest_z,rest_confirmed,sensor_ok,
+         * depth_gain: every pad now. */
         if (s_listing_next >= TILES_NUM_PADS) {
             return false;
         }
@@ -290,9 +290,9 @@ static bool listing_row(char *text, size_t cap) {
         int16_t rest_z = 0;
         bool rest_ok = false;
         bool sensor_ok = tiles_hall_get_rest(pad, &rest_z, &rest_ok);
-        snprintf(text, cap, "%u,%d,%d,%d,%u,%u,%u,%d,%u,%u", (unsigned)pad, hs.x, hs.y, hs.z,
+        snprintf(text, cap, "%u,%d,%d,%d,%u,%u,%u,%d,%u,%u,%.3f", (unsigned)pad, hs.x, hs.y, hs.z,
                  (unsigned)tiles_hall_get_depth(pad), hs.valid ? 1u : 0u, tiles_touch_is_touched(pad) ? 1u : 0u,
-                 rest_z, rest_ok ? 1u : 0u, sensor_ok ? 1u : 0u);
+                 rest_z, rest_ok ? 1u : 0u, sensor_ok ? 1u : 0u, (double)tiles_hall_get_depth_gain(pad));
         return true;
     }
     case LISTING_PATHS: {

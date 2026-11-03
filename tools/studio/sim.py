@@ -5,8 +5,10 @@ and a small copy of expression.c's strike logic, following the live tuning,
 so its rows carry the same flags as a device capture
 (firmware/src/diagnostics/capture.h).
 
-Sizes are guesses until a real capture measures them: rest field, gap,
-travel and pivot are all settable from the studio."""
+Field sizes and noise follow unit 2's first calibration (2026-11-03): about
+1 mT at rest, about 5x that on a hard press, X/Y noise as the datasheet
+says. Misalignment, gap and pivot are still guesses; all settable from the
+studio, and the sensor averaging follows the live tuning."""
 
 import math
 import random
@@ -25,13 +27,12 @@ SETTLE_SAMPLES = 2
 DEFAULTS = {
     "offset_x_mm": 0.4,  # magnet off the Hall elements' axis
     "offset_y_mm": 0.1,
-    "rest_mt": 7.5,  # Bz at rest
+    "rest_mt": 1.0,  # Bz at rest (unit 2: 0.52-1.10 mT)
     "gap_mm": 4.0,
-    "travel_mm": 0.6,  # at press 1.0
+    "travel_mm": 1.7,  # at press 1.0: ~5x the rest field, as unit 2's hardest presses
     "pivot_mm": 5.0,  # pivot below the magnet centre
     "sensor_offset_x_ut": 300.0,
     "sensor_offset_y_ut": -150.0,
-    "averaging": 1,  # 1, 8 or 16: noise / sqrt(N)
     "tremor_deg": 0.04,
 }
 
@@ -155,7 +156,7 @@ class Sim:
     def set_params(self, values):
         for key, value in values.items():
             if key in self.params:
-                self.params[key] = int(value) if key == "averaging" else float(value)
+                self.params[key] = float(value)
         self.rest_z = self._field(0.0, 0.0, 0.0)[2]
 
     def play(self, name, arg=None):
@@ -195,13 +196,14 @@ class Sim:
         return bx, by, bz
 
     def _read(self):
-        # 1x noise below the datasheet's 125/68 uT: set so a still hold gives
-        # the vibrato energy captured on unit 2 (~7.5, services/HISTORY.md).
-        n = max(1, self.params["averaging"])
-        sxy = 0.085 / math.sqrt(n) * LSB_PER_MT
-        sz = 0.046 / math.sqrt(n) * LSB_PER_MT
+        # The datasheet's 1x noise (125 / 68 uT; unit 2 read ~50 raw X/Y),
+        # over sqrt(sensor.averaging), and the 1x 16-count steps.
+        n = max(1, int(self.tv("sensor.averaging", 8)))
+        sxy = 0.125 / math.sqrt(n) * LSB_PER_MT
+        sz = 0.068 / math.sqrt(n) * LSB_PER_MT
         bx, by, bz = self._field(self.press, self.tilt_x, self.tilt_y)
-        clamp = lambda v: max(-32768, min(32767, int(round(v))))
+        step = 16 if n == 1 else 1
+        clamp = lambda v: max(-32768, min(32767, int(round(v / step)) * step))
         return (
             clamp(bx * LSB_PER_MT + self.rng.gauss(0, sxy)),
             clamp(by * LSB_PER_MT + self.rng.gauss(0, sxy)),

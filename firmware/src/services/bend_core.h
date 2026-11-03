@@ -30,6 +30,10 @@ extern const char *const TILES_BEND_MODE_NAMES[TILES_BEND_MODE_COUNT];
 typedef struct {
     float deadzone;            /* cosine delta, soft knee */
     uint32_t settle_ms;        /* before the baseline is taken */
+    uint32_t settle_max_ms;    /* COSINE/PATH: waiting for the key to stop moving, at most */
+    float settle_still;        /* COSINE/PATH: stage gap / |B| that counts as still */
+    float noise_xy;            /* COSINE/PATH: deadzone widening, raw X/Y noise over |B| */
+    float release_depth;       /* COSINE/PATH: hold the bend below it while coming up; 0 = off */
     float smoothing;           /* EMA alpha of each stage */
     float recenter_slow;       /* baseline pull with no bend held */
     float recenter_fast;       /* LEGACY/COSINE, while depth changes */
@@ -91,6 +95,7 @@ typedef struct {
     float wiggle_energy; /* gap between the two stages, for vibrato */
     bool wiggle_active;
     uint32_t wiggle_start_ms;
+    uint16_t last_bend; /* the last output, held through a release */
 } tiles_bend_t;
 
 /* At note-on: seeds every stage from this sample, so nothing ramps from 0.

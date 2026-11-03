@@ -62,7 +62,21 @@
 #define TILES_TUNE_DEFAULT_PRESSED_DROPOUT_MS 300u
 #define TILES_TUNE_DEFAULT_STRIKE_FROM_REST_MS 150u
 
+/* ---- Sensor and depth ---- */
+/* TMAG5273 averaging (1, 2, 4, 8, 16 or 32), every sensor, applied while no
+ * pad is touched. X/Y noise falls ~1/sqrt(N) (125 uT at 1x); XYZ takes
+ * ~0.63 ms at 8x and 1.25 ms at 16x, inside a pass. Unit 2's ~1 mT rest
+ * field made 1x noise as large as a full bend at light pressure. */
+#define TILES_TUNE_DEFAULT_SENSOR_AVERAGING 8u
+/* Per-pad depth from the rest field: depth x (median rest |Bz| / this
+ * pad's)^gain, so a weak-field pad gives the same depth for the same press.
+ * Unit 2's rest fields span 0.52-1.10 mT. 0 = off until a calibration
+ * measures the exponent (about 1-1.33 for a dipole). */
+#define TILES_TUNE_DEFAULT_DEPTH_GAIN 0.0f
+
 typedef struct {
+    uint32_t sensor_averaging;
+    float depth_gain;
     float strike_depth;
     float overshoot_full;
     uint32_t followthrough_ms;
