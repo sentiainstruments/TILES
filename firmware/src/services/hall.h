@@ -10,6 +10,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "tune.h"
+
 typedef struct {
     int16_t x;
     int16_t y;
@@ -41,9 +43,17 @@ tiles_hall_sample_t tiles_hall_get_sample(uint8_t logical_pad);
 bool tiles_hall_recapture_baseline(void);
 
 /* |Z - rest Z| for one pad: an uncalibrated distance from rest, >= 0
- * whatever the sensor's polarity. 0 if out of range, uninitialized, not
+ * whatever the sensor's polarity, times the pad's depth gain (1 unless
+ * key.depth_gain is set, tune.h). 0 if out of range, uninitialized, not
  * yet sampled, or its rest unconfirmed. */
 uint16_t tiles_hall_get_depth(uint8_t logical_pad);
+
+/* That gain, for pad 1-24 (1 if out of range). */
+float tiles_hall_get_depth_gain(uint8_t logical_pad);
+
+/* Pad 1-24's rest baseline (raw Z) and whether it was confirmed at rest.
+ * False if out of range or the sensor never initialized. */
+bool tiles_hall_get_rest(uint8_t logical_pad, int16_t *baseline_z, bool *confirmed);
 
 /* For INFO: re-zeros so far (all pads), pads whose rest is unconfirmed
  * now, sensors set up again since boot (one that reset or came back), pads
@@ -58,8 +68,6 @@ typedef struct {
 } tiles_hall_rest_info_t;
 tiles_hall_rest_info_t tiles_hall_get_rest_info(void);
 
-/* Depth below which a key counts as up: above bare contact (a resting
- * finger reads up to ~96), under the strike threshold (150, expression.h)
- * with room for hysteresis. */
-#define TILES_HALL_KEY_UP_DEPTH 100u
+/* Depth below which a key counts as up (live: tune.h). */
+#define TILES_HALL_KEY_UP_DEPTH (tiles_tune()->key_up_depth)
 #define TILES_HALL_RELEASE_FOLLOW_MS 300u

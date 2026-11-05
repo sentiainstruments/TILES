@@ -26,7 +26,9 @@ before re-tuning a constant or reviving an approach that was dropped.
 
 | Module | Role |
 |---|---|
-| `expression` | Touch + Hall fusion: strike detection, velocity, pressure, per-note pitch bend from tilt, vibrato, release velocity, melodic harmonics, MPE channel allocation. |
+| `expression` | Touch + Hall fusion: strike detection, velocity, pressure, release velocity, melodic harmonics, MPE channel allocation; feeds `bend_core`. |
+| `tune` | The feel constants (sensor averaging, the automatic per-pad depth gain, strike, velocity, pressure, key and touch timing, bend, vibrato, press path learner) as one live table every mode reads. `TUNE` over USB changes them until power-off; the calibration studio (`tools/studio/`) drives it. Defaults and why: `tune.h`, and `bend_core.c` for bend. |
+| `bend_core` | Per-note pitch bend from sideways tilt, with its smoothing, baseline, deadzone and vibrato, in three modes (`expression.pitch_bend_mode`: `legacy`, `cosine`, `path`, the default), and each pad's press path learned from its strikes. No hardware; tested, and recorded captures replay through it in all three modes. |
 | `note_map` | Pad → note: scales (picker order), key, octave, bass guitar frets, chord strip + melody grid. |
 | `mpe_alloc` | Pure MPE channel choice / steal order (MMA RP-053 3.2). Tested. |
 | `midi_channels` | The 16-channel map: fixed parts (drums 10, game 11, chord 12, sequencer 13-16), pool 2-9 shared by Song and the live MPE zone. Tested. |
@@ -64,11 +66,11 @@ row 1, each mode in its menu colour (`MENU_SLOTS` in `op_mode.c`).
 | Column | Modes |
 |---|---|
 | 1 | Melodic (magenta, default), Duet (pink: chords on columns 1-2, melody on 3-6), Bass guitar (lilac: rows = strings, columns = frets, "-"/"+" shift the frets) |
-| 2 | Sequencer (scarlet), Drums (orange: 16/32 steps on channel 10, Drum Rack order), Song (amber, beta: 24-slot looper, 128 steps per pattern) |
+| 2 | Sequencer (scarlet), Drums (orange steps, amber drum pads: 16/32 steps on channel 10, Drum Rack order), Song (amber, beta: 24-slot looper, 128 steps per pattern) |
 | 3 | Prism (blue: chord machine, `harmony`) |
 | 4 | Ableton (teal: Session View clip grid), Volca (cyan: a drum per channel) |
 | 5 | Bouncing notes (lime, `bounce`), Newton's cradle (steel), Sand (sand) |
-| 6 | Ripples (water), Orbits (night sky) |
+| 6 | Ripples (water: soft crests with a fading wake; the stone, each ripple's root, ultramarine and breathing with the bar), Orbits (night sky) |
 
 Every mode but melodic can be taken off the menu (settings `modes.*`);
 removing the one in use returns to melodic. The current mode pulses white.
@@ -143,3 +145,8 @@ crash reboot (`__uninitialized_ram`, `tiles_op_mode_init()`).
 - CV/gate and the DAC80502 driver are not yet verified on hardware.
 - Per-pad Hall calibration curves, and Hall-depth wake from standby,
   are not built (see `../diagnostics/README.md`).
+- **Next for expression:** first make pitch bend solid (bend logic in its
+  own host-tested module, replaying recorded sensor captures). Only then
+  add MPE slide (CC74) on the forward/back tilt axis: it follows the tilt
+  while held and springs back to centre (64) when eased off; a setting,
+  off by default; bend becomes left/right only.

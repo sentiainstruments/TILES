@@ -10424,3 +10424,161 @@ change. Search it by file or feature name.
   column). Colour 0.8/0.55/0.25 (a dark ochre); piles 0.35 -> 0.25, the
   surface grain 0.75 -> 0.55, the floor 0.06 -> 0.05; falling grains in the
   same ochre, brighter. The playhead stays white at 0.12.
+
+- **Alpha 6.6 (2026-11-02): pitch bend moves to `bend_core`, and a sensor
+  capture for tuning it.** The owner: pressing straight down still bends,
+  so polish pitch bend before adding MPE slide (CC74, pinned: forward/back
+  tilt, springing back to centre). Step one is tooling, no behaviour change:
+  - `bend_core.{h,c}`: the bend pipeline out of `expression.c`, unchanged
+    (the old inline code and the module gave identical output on 12 million
+    randomized samples), with host tests.
+  - `diagnostics/capture`: `CAPTURE START <pad>` records one pad's raw X/Y/Z,
+    depth and what bend_core was fed, per pass, ~8 s in RAM;
+    `tiles_control.py capture` saves it as CSV; `test/bend_replay.c` replays
+    it, checks it matches the device, and reports each note's bend.
+  - Observation while extracting: once a press pushes the delta past the
+    deadzone, a "run" starts and baseline recentring stops, so a
+    pressure-driven X shift then reads as bend for as long as the press is
+    held. Fixes wait for real captures.
+- **Alpha 6.7 (2026-11-03): pitch bend keeps depth out by modelling it, and a
+  calibration studio.** The owner: "do fix 2 and 3" from
+  `reports/Hall sensor tilt and pressure separation.md`, and "a calibration
+  debug studio where we visualize what the sensor thinks it sees with a key".
+  - Why straight presses bend: a magnet even 0.3-0.5 mm off the Hall
+    elements' axis leans the field more as the gap closes, so X moves with
+    depth. Alpha 6.6 recentred while depth changed, then froze baseline and
+    |B| once a run started, so whatever press-driven X came after was held as
+    bend (a held tilt pressed harder grew by ~70% in the host test).
+  - `expression.pitch_bend_mode` (0x0203), latched per note:
+    `legacy` is Alpha 6.6 unchanged (16 million randomized steps, 0
+    differences); `cosine` (fix 2) divides each sample by its own |B| before
+    filtering and freezes nothing; `path` (fix 3, the default) subtracts the
+    pad's press path, r = (x - a - b*z) / |B| on the raw sample, a anchored
+    when the note settles, and only pulls slow creep out while no bend is
+    held. No depth-gated recentring, no frozen |B|.
+  - The slope b is per pad, learned from every strike's down-stroke (touch to
+    note-on): a least-squares line of X and Y against Z, kept only if it spans
+    a real press (150 raw) and stays near a line (RMS 120 raw); averaged over
+    16 strokes, then 1/16 per stroke so a few tilted strikes can't retrain it.
+    RAM only, from boot. Until a pad has 3 strokes, a note uses its own
+    direction at settle (the `cosine` assumption). The two-value calibration
+    stores nothing yet, so it can't seed it.
+  - The vibrato detector's energy is scaled back to raw units in every mode,
+    so its thresholds carry over.
+  - Capture: records grow to 24 bytes (velocity, aftertouch, flags to 16
+    bits: stroke, stroke begin, note-on, pressure); `CAPTURE STATUS` reports
+    the bend mode and the pad's learned path at the start, which
+    `tiles_control.py capture` writes as a `# bend` first line so replays
+    start where the device did. `CAPTURE WATCH` streams (a ring, repeated rest
+    passes skipped: the vendor pipe carries one 64-byte packet per pass,
+    ~32 KB/s), `HALL` lists every pad, `BEND PATHS|RESET`.
+  - `test/bend_replay.c` replays all three modes side by side (`--trace`,
+    `--pipe`); `tools/studio/` shows a board, a simulated key or a capture
+    live. In the studio's dipole sim with the magnet 0.8 mm off-axis, a
+    straight press-harder gesture reached full bend (12.9 semitones) in
+    `legacy` and 0.1-0.2 in `cosine` and `path`.
+  - Found on the way, not changed: sensor noise alone sits at the vibrato
+    detector's floor (captured still hold ~7.5 vs floor 8), so a slightly
+    noisier pad engages the synthetic 5.5 Hz vibrato on every note (rank 7 in
+    the report). A held tilt under extra pressure still moves ~15% in
+    `path`: the learned slope's error, which TMAG5273 averaging (rank 4)
+    would shrink.
+- **Alpha 6.8 (2026-11-03): live tuning, and the studio calibrates.** The
+  owner: the studio "should help understand and calibrate and give us info
+  you can access and i can access as well"; first, "we need to be able to
+  tune behavior and read all important parameters". Of ~50 feel constants
+  only 3 could change without a rebuild.
+  - `tune.{h,c}`: 36 constants in one live table (strike and velocity,
+    pressure and release, key and touch timing, bend, vibrato, press path
+    learner), `TUNE` / `TUNE SET` / `TUNE RESET` over USB, never saved. The
+    old names (`TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA`,
+    `TILES_HALL_KEY_UP_DEPTH`, `TILES_STRIKE_FOLLOWTHROUGH_MS`, ...) read it,
+    so the 8 modes that share the strike threshold and velocity curve follow
+    a change together. A set that breaks an order the code needs (key-up at
+    or above the strike depth, fast at or above slow) is refused.
+  - `bend_core` takes its constants through `tiles_bend_config_t.tuning`
+    (NULL = defaults), so the host replay runs with the board's tuning.
+    LEGACY still matches Alpha 6.6 bit for bit (16 million random steps).
+  - `bend_core.c` compiles with `-ffp-contract=off` on the board and the
+    computer: GCC (board) and clang (arm64 Mac) fuse multiply-adds
+    differently, which could break the replay's exact match by one ulp.
+  - Capture records gain strike timing and peak at note-on, and a note-off
+    with release velocity; `HALL` adds each pad's rest baseline, whether it
+    was confirmed, and whether the sensor answers; INFO adds `tune.changed`.
+  - The studio: a guided calibration (hands off, strikes, straight presses,
+    leans, vibrato) that records a capture per step and suggests changes
+    with reasons; a tuning tab; a pad table; board health; one state for the
+    page, `/api/state` and saved reports (`firmware/test/calibration/`).
+    On the sim (magnet 0.8 mm off-axis), straight presses bent 12.87
+    semitones in `legacy`, 0.14 in `cosine`, 0.15 in `path`.
+- **Alpha 6.9 (2026-11-03): unit 2's first calibration, and what it
+  changed.** Unit 2 on 6.8, pad 1 (`firmware/test/calibration/unit2-20261103-152220.md`):
+  - The rest field is 0.52-1.10 mT across the 24 pads, not the ~7 mT the
+    sim assumed. At 1x averaging X/Y read in 16-count steps with ~50 raw of
+    noise, about a full bend of direction at light pressure; holding still
+    read more vibrato energy (17) than wiggling (12.6), so the added
+    vibrato played on every held note. Untouched pads read Z only, so X/Y
+    at rest are stale (the studio's rest numbers now come from Z).
+  - `path` still bent on straight presses (up to 11.8 semitones), from two
+    things in the captures: the finger's landing rocks the key for ~200 ms
+    and the baseline was taken at 120 ms, mid-rock, leaving an offset
+    outside the deadzone for the whole note; and lifting off, the field
+    falls back to ~1 mT and its direction swings to a full bend. Less noise
+    or the right slope alone didn't fix either (replayed on the captures).
+  - COSINE/PATH now (LEGACY untouched, still Alpha 6.6 bit for bit):
+    the baseline waits for the key to be still (`bend.settle_still`), at
+    most `bend.settle_max_ms` 400; the deadzone widens by `bend.noise_xy` /
+    |B| so a weak field needs a bigger lean; below `bend.release_depth` 250
+    while the key comes up, the bend holds its last value.
+  - `sensor.averaging` (default 8x, live: written to every sensor while no
+    pad is touched): X/Y noise ~2.8x lower; XYZ takes ~0.63 ms at 8x.
+  - `key.depth_gain` (default 0, off): each pad's depth times (median rest
+    |Bz| / its own)^gain, from the rest baselines the board already keeps,
+    so weak-field pads give the same depth for the same press without
+    per-pad settings. The calibration fits the exponent across test pads.
+  - The owner: no manual per-pad adjustments, one general set of values
+    from auto calibration on a few test pads. The studio's calibration now
+    picks three test pads (weakest, middle, strongest rest field) and
+    pools them: the leakiest pad sets the deadzone, medians set the feel.
+  - The first run's suggestions put the deadzone (0.077) past full bend
+    (0.044), making bend a switch; contradicting suggestions are now held
+    back. Unit 2's full bend went back to 0.065; full pressure stays 1617.
+- **Drum mode in two shades (Alpha 6.9, 2026-11-03).** Asked: "make the
+  drum mode two shades, left side 16 steps is a shade, right side drum
+  selector is another shade". The first drum bank's shade was the mode's
+  orange, the same as the armed steps. Now the 16 steps are the mode's
+  orange, empty ones a faint glow (0.05) so the step area always shows; the
+  drum pads take bank shades that never match it: amber, red, rose, gold
+  (Volca: mint, deep teal, pale cyan, sea green where the steps are cyan).
+  Blue selection and playhead, white and red flashes unchanged. Manual's
+  drums card redrawn to match.
+- **Ripples: the root in deep blue (Alpha 6.9, 2026-11-04).** Asked: "make
+  ripples shade of the root ripple a different shade of blue. on device and
+  manual". Stones and the rings spreading from them were the same water blue,
+  so a ring crossing a stone hid where ripples start. A stone, and a ring's
+  first moment on it, now light deep blue (0.05, 0.25, 1.0); the rings and the
+  resting pond stay water blue. Manual's Ripples frames redrawn to match.
+- **Ripples: soft crest and wake (Alpha 6.9, 2026-11-05).** Asked: "ripples
+  feel clunky, this should feel like the ps2 menu" (slow, glowing, easing
+  light). The ring was a 0.55-pad front squared, so a crest between two pads
+  left both nearly dark (w^2 about 0.01) and pads blinked one by one; its floor
+  of 0.2 snapped to nothing at the reach; notes blinked white on sixteenths.
+  Now: a Gaussian crest (sigma 0.5 pad, both neighbours of a between-pads
+  crest at 0.3+), a deep-blue wake easing out behind it (e-folding 0.5 beat,
+  the ring lives until it is under 5 %), the ring's light smoothstepped to
+  nothing at reach + edge, a faint white glint on hard crests, a lying stone
+  breathing with the bar (brightest at its drop) and notes blooming pale blue
+  with a squared ease-out over half a beat. Sound and timing unchanged. A slow
+  swell on the resting pond was left out: at 0.05 the 8-bit pads only have
+  2-5 steps there and it would flicker. test_ripples_look checks the
+  between-pads crest and that no pad jumps more than 0.02 a step after the
+  notes, including when the ring ends.
+- **Ripples: stones apart from the pond (Alpha 6.9, 2026-11-05).** Asked:
+  "the shades of blue of the pond and the ripple generators are too similar,
+  we need a bigger distinction". Water (0.3, 0.7, 1.0) and stone (0.05, 0.25,
+  1.0) were only ~12 degrees of hue apart, and the rings' wake was drawn in
+  the stone colour, so rings read as stones too. The stone (and a ring's root)
+  is now ultramarine (0.12, 0, 1.0): no green, ~35 degrees from the water and
+  far more saturated; the wake is water. The water, the mode's menu colour, is
+  unchanged. test_ripples_look checks a lying stone has no green against the
+  pond's 0.7. Manual's stone colour and the cover's first ring match.

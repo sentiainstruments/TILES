@@ -26,7 +26,7 @@
 #define TILES_FW_STAGE TILES_FW_STAGE_ALPHA
 #define TILES_FW_STAGE_NAME "alpha" /* matches TILES_FW_STAGE */
 #define TILES_FW_BUILD 6u
-#define TILES_FW_POINT 5u
+#define TILES_FW_POINT 9u
 
 _Static_assert(TILES_FW_BUILD <= 9u && TILES_FW_POINT <= 99u, "bcdDevice holds N 0-9, P 0-99");
 

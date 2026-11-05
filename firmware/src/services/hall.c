@@ -11,7 +11,9 @@
 
 #include "pico/time.h"
 
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static tiles_tca9548a_t s_hall_muxes[TILES_NUM_HALL_MUXES]; /* index 0/1/2 = mux 1/2/3 */
 static bool s_pad_init_ok[TILES_NUM_PADS];
@@ -41,6 +43,13 @@ static uint32_t s_boot_us; /* init and the boot recapture */
  * stops being read every call (0 = not following). */
 static bool s_pad_was_touched[TILES_NUM_PADS];
 static uint32_t s_pad_follow_until_ms[TILES_NUM_PADS];
+/* Live tuning applied here (tune.h): the averaging every sensor has, and
+ * each pad's depth gain from its rest field with what it was worked out
+ * from. */
+static uint32_t s_applied_averaging;
+static float s_gain[TILES_NUM_PADS];
+static float s_gain_exponent = -1.0f;
+static int16_t s_gain_baseline[TILES_NUM_PADS];
 
 static int mux_index_for_addr(uint8_t mux_i2c_addr) {
     if (mux_i2c_addr == TILES_I2C0_ADDR_HALL_MUX1) {
@@ -129,7 +138,7 @@ static bool setup_sensor(uint8_t pad_index) {
     }
     tiles_tmag5273_t dev;
     return tiles_tmag5273_identify(i2c0, cfg->hall.sensor_i2c_addr) &&
-           tiles_tmag5273_init(&dev, i2c0, cfg->hall.sensor_i2c_addr);
+           tiles_tmag5273_init(&dev, i2c0, cfg->hall.sensor_i2c_addr, (uint8_t)tiles_tune()->sensor_averaging);
 }
 
 /* For a pad just read by the background pass (untouched): its rest guard
@@ -161,7 +170,9 @@ bool tiles_hall_init(void) {
     s_scan_cursor = 0;
 
     uint32_t start_us = time_us_32();
+    s_applied_averaging = tiles_tune()->sensor_averaging;
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_gain[i] = 1.0f;
         s_pad_sample[i] = (tiles_hall_sample_t){0};
         s_pad_fail_streak[i] = 0u;
         tiles_rest_guard_set(&s_rest[i], 0, true);
@@ -201,6 +212,17 @@ static void sensor_upkeep(uint32_t now_ms) {
             return;
         }
     }
+    if (tiles_tune()->sensor_averaging != s_applied_averaging) {
+        /* Live tuning changed the averaging: every sensor, at once. */
+        s_applied_averaging = tiles_tune()->sensor_averaging;
+        for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+            const tiles_pad_config_t *cfg = board_pad_config((uint8_t)(i + 1u));
+            if (s_pad_init_ok[i] && cfg != NULL && select_pad(cfg)) {
+                tiles_tmag5273_t dev = {.bus = i2c0, .addr = cfg->hall.sensor_i2c_addr};
+                tiles_tmag5273_set_averaging(&dev, (uint8_t)s_applied_averaging);
+            }
+        }
+    }
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         if (s_pad_init_ok[i] && s_pad_fail_streak[i] >= HALL_FAIL_LIMIT) {
             s_pad_init_ok[i] = false;
@@ -238,7 +260,7 @@ static void sensor_upkeep(uint32_t now_ms) {
         }
         tiles_tmag5273_t dev = {.bus = i2c0, .addr = cfg->hall.sensor_i2c_addr};
         if (!tiles_tmag5273_config_ok(&dev)) {
-            if (tiles_tmag5273_init(&dev, i2c0, cfg->hall.sensor_i2c_addr)) {
+            if (tiles_tmag5273_init(&dev, i2c0, cfg->hall.sensor_i2c_addr, (uint8_t)s_applied_averaging)) {
                 s_reinits++;
                 printf("[hall] pad %u sensor had reset; set up again\n", (unsigned)(i + 1u));
             } else {
@@ -249,7 +271,46 @@ static void sensor_upkeep(uint32_t now_ms) {
     }
 }
 
+static int compare_u16(const void *a, const void *b) {
+    return (int)*(const uint16_t *)a - (int)*(const uint16_t *)b;
+}
+
+/* Each pad's depth gain, (median rest |Bz| / its own)^key.depth_gain, worked
+ * out again when the exponent or a rest baseline changes. A dipole's depth
+ * for the same travel grows with its field (about the 1-1.33 power), so
+ * this evens out pads whose magnets sit higher or are weaker. */
+static void update_depth_gains(void) {
+    float exponent = tiles_tune()->depth_gain;
+    bool changed = exponent != s_gain_exponent;
+    for (uint8_t i = 0; i < TILES_NUM_PADS && !changed; i++) {
+        changed = s_pad_init_ok[i] && s_rest[i].baseline != s_gain_baseline[i];
+    }
+    if (!changed) {
+        return;
+    }
+    s_gain_exponent = exponent;
+    uint16_t rest[TILES_NUM_PADS];
+    uint8_t n = 0u;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_gain_baseline[i] = s_rest[i].baseline;
+        if (s_pad_init_ok[i] && s_rest[i].baseline != 0) {
+            rest[n++] = (uint16_t)abs(s_rest[i].baseline);
+        }
+    }
+    if (n == 0u) {
+        return;
+    }
+    qsort(rest, n, sizeof(rest[0]), compare_u16);
+    float median = (float)rest[n / 2u];
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        float own = (float)abs(s_rest[i].baseline);
+        float gain = (exponent > 0.0f && own > 0.0f) ? powf(median / own, exponent) : 1.0f;
+        s_gain[i] = gain < 0.5f ? 0.5f : (gain > 2.5f ? 2.5f : gain);
+    }
+}
+
 void tiles_hall_scan(void) {
+    update_depth_gains();
     /* Priority pass: every touched, initialized pad is read this call, and
      * every pad just released until its key reads up (see hall.h). */
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
@@ -330,7 +391,25 @@ uint16_t tiles_hall_get_depth(uint8_t logical_pad) {
     if (!s_pad_init_ok[i] || !s_pad_sample[i].valid) {
         return 0u;
     }
-    return tiles_rest_guard_depth(&s_rest[i], s_pad_sample[i].z);
+    uint16_t depth = tiles_rest_guard_depth(&s_rest[i], s_pad_sample[i].z);
+    if (s_gain[i] == 1.0f) {
+        return depth;
+    }
+    float scaled = (float)depth * s_gain[i] + 0.5f;
+    return (uint16_t)(scaled < 65535.0f ? scaled : 65535.0f);
+}
+
+float tiles_hall_get_depth_gain(uint8_t logical_pad) {
+    return (logical_pad >= 1u && logical_pad <= TILES_NUM_PADS) ? s_gain[logical_pad - 1u] : 1.0f;
+}
+
+bool tiles_hall_get_rest(uint8_t logical_pad, int16_t *baseline_z, bool *confirmed) {
+    if (logical_pad < 1u || logical_pad > TILES_NUM_PADS || !s_pad_init_ok[logical_pad - 1u]) {
+        return false;
+    }
+    *baseline_z = s_rest[logical_pad - 1u].baseline;
+    *confirmed = s_rest[logical_pad - 1u].confirmed;
+    return true;
 }
 
 tiles_hall_rest_info_t tiles_hall_get_rest_info(void) {

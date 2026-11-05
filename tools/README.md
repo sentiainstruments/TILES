@@ -1,8 +1,9 @@
 # tools/
 
 Host-side helper scripts: `flash.sh` (flash a running board),
-`tiles_control.py` (the settings CLI over USB), `current_test.py`
-(guided current measurement) and `bootloader_watchdog.sh`. Planned: codegen from `shared/board-map/` and
+`tiles_control.py` (the settings CLI over USB), `studio/` (the calibration
+studio), `current_test.py` (guided current measurement) and
+`bootloader_watchdog.sh`. Planned: codegen from `shared/board-map/` and
 `shared/protocol/` into the firmware's C headers and the companion app's
 TypeScript types, and manufacturing scripts once they're needed.
 
@@ -124,6 +125,15 @@ slots (pads 16-24), saved to flash before the `OK`:
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py content list    # every record, with its pack
 ```
 
+**Recording a pad's sensor data** for tuning pitch bend on the computer:
+records one pad for a few seconds (about 8 at most) while you play it, and
+saves a CSV that `firmware/test/bend_replay.c` replays (gestures and file
+names: `firmware/test/captures/README.md`):
+
+```
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py capture 8 6 firmware/test/captures/unit2-pad8-straight-press.csv
+```
+
 **Rebooting into the bootloader for flashing**, no BOOTSEL button --
 `flash.sh` (below) is the usual way now; this still works as a fallback:
 
@@ -147,6 +157,20 @@ it a couple of seconds before the first command.
 Not the real companion app (`companion-app/` -- not built yet) -- this is
 the plain script that proves the protocol and USB vendor interface
 actually work before investing in that.
+
+## studio/
+
+The calibration studio: each key's Hall reading and what velocity, pressure
+and pitch bend make of it, live in a browser, with all three bend modes side
+by side; a guided calibration that suggests changes; live tuning of every
+feel constant (`TUNE`). Sources: a board (Alpha 6.8 or later to tune), a
+simulated key (no hardware), or a capture file. Its state is also JSON at
+`/api/state`, and reports and captures are saved in the repo. See
+`studio/README.md`.
+
+```
+~/.venvs/tiles-tools/bin/python tools/studio/studio.py
+```
 
 ## current_test.py
 

@@ -37,6 +37,9 @@ void tiles_phys_out_clear(tiles_phys_out_t *out);
 #define TILES_RIPPLES_COLOR_R 0.3f /* water */
 #define TILES_RIPPLES_COLOR_G 0.7f
 #define TILES_RIPPLES_COLOR_B 1.0f
+#define TILES_RIPPLES_STONE_R 0.12f /* a stone and a ring's root: ultramarine, no green, well apart from the water */
+#define TILES_RIPPLES_STONE_G 0.0f
+#define TILES_RIPPLES_STONE_B 1.0f
 #define TILES_SAND_COLOR_R 0.8f /* sand: a dark, warm ochre */
 #define TILES_SAND_COLOR_G 0.55f
 #define TILES_SAND_COLOR_B 0.25f

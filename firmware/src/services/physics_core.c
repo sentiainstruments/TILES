@@ -165,13 +165,22 @@ static float wrap_pi(float a) {
 #define RIPPLE_MIN_LEVEL 0.05f /* quieter crossings don't play */
 #define RIPPLE_HIT_BEATS 0.25f
 #define RIPPLE_DROP_BEATS 0.5f
-#define RIPPLE_FRONT_WIDTH 0.55f /* pads either side of a front that light */
 #define RIPPLE_SPLASH_MIN 0.2f
 #define RIPPLE_SPLASH_SHARE 0.55f
 #define RIPPLE_SPLASH_AGAIN 0.6f /* chance a landing drop splashes again */
 /* The pond at rest, and a stone lying in it. */
 #define RIPPLE_SURFACE_LEVEL 0.05f
 #define RIPPLE_STONE_LEVEL 0.3f
+/* The look: a soft crest (wide enough that one between two pads lights
+ * both), a wake of water easing out behind it, a stone breathing with the
+ * bar and notes that bloom rather than blink. First guesses. */
+#define RIPPLE_CREST_SIGMA 0.5f /* pads */
+#define RIPPLE_WAKE_BEATS 0.5f  /* the wake's e-folding time */
+#define RIPPLE_WAKE_SHARE 0.45f
+#define RIPPLE_SOFTEST 0.3f /* the softest ring's crest, of a full one's */
+#define RIPPLE_GLINT 0.3f   /* a hard ring's crest whitens this much */
+#define RIPPLE_BREATH 0.4f  /* a stone's swell toward its next drop */
+#define RIPPLE_BLOOM_BEATS 0.5f
 
 void tiles_ripples_clear(tiles_ripples_t *r, uint32_t seed, double now) {
     bool splash = r->splash;
@@ -368,8 +377,8 @@ void tiles_ripples_step(tiles_ripples_t *r, double now, tiles_phys_out_t *out) {
                 }
             }
         }
-        if (radius > ring->reach + RIPPLE_EDGE + RIPPLE_FRONT_WIDTH) {
-            ring->live = false;
+        if (now - ring->t0 > (double)((ring->reach + RIPPLE_EDGE) / TILES_RIPPLES_SPEED + 3.0f * RIPPLE_WAKE_BEATS)) {
+            ring->live = false; /* crest gone and wake under 5 % */
         }
     }
     for (uint8_t i = 0; i < TILES_RIPPLES_MAX_HITS; i++) {
@@ -441,6 +450,12 @@ uint32_t tiles_ripples_erasable(const tiles_ripples_t *r) {
     return bits;
 }
 
+/* A ring's light at a distance: eased to nothing at its edge. */
+static float ring_glow(const tiles_ripple_ring_t *ring, float d) {
+    float f = clamp01(1.0f - d / (ring->reach + RIPPLE_EDGE));
+    return (RIPPLE_SOFTEST + (1.0f - RIPPLE_SOFTEST) * ring->strength) * f * f * (3.0f - 2.0f * f);
+}
+
 void tiles_ripples_render(const tiles_ripples_t *r, double now, tiles_phys_frame_t frame) {
     clear_frame(frame);
     for (uint8_t cell = 0; cell < TILES_PHYS_CELLS; cell++) {
@@ -449,8 +464,10 @@ void tiles_ripples_render(const tiles_ripples_t *r, double now, tiles_phys_frame
     for (uint8_t i = 0; i < TILES_RIPPLES_MAX_STONES; i++) {
         const tiles_ripple_stone_t *s = &r->stone[i];
         if (s->live) {
-            light(frame, s->cell, TILES_RIPPLES_COLOR_R, TILES_RIPPLES_COLOR_G, TILES_RIPPLES_COLOR_B,
-                  RIPPLE_STONE_LEVEL + 0.3f * s->strength);
+            float to_drop = (float)fmod((s->next - now) / TILES_RIPPLES_LOOP_BEATS, 1.0);
+            float breath = 0.5f + 0.5f * cosf(PHYS_TWO_PI * to_drop); /* 1 at a drop */
+            light(frame, s->cell, TILES_RIPPLES_STONE_R, TILES_RIPPLES_STONE_G, TILES_RIPPLES_STONE_B,
+                  (RIPPLE_STONE_LEVEL + 0.3f * s->strength) * (1.0f - RIPPLE_BREATH + RIPPLE_BREATH * breath));
         }
     }
     for (uint8_t i = 0; i < TILES_RIPPLES_MAX_RINGS; i++) {
@@ -464,11 +481,21 @@ void tiles_ripples_render(const tiles_ripples_t *r, double now, tiles_phys_frame
         }
         for (uint8_t cell = 0; cell < TILES_PHYS_CELLS; cell++) {
             float d = hypotf(cell_x(cell) - ring->x, cell_y(cell) - ring->y);
-            float w = 1.0f - fabsf(d - radius) / RIPPLE_FRONT_WIDTH;
-            float level = d < 0.1f ? ring->strength : ring_level(ring, d);
-            if (w > 0.0f && level > 0.0f) {
-                light(frame, cell, TILES_RIPPLES_COLOR_R, TILES_RIPPLES_COLOR_G, TILES_RIPPLES_COLOR_B,
-                      w * w * fmaxf(level, 0.2f));
+            float glow = ring_glow(ring, d);
+            if (glow <= 0.0f) {
+                continue;
+            }
+            float u = radius - d; /* how far the crest has passed this cell */
+            float crest = expf(-0.5f * u * u / (RIPPLE_CREST_SIGMA * RIPPLE_CREST_SIGMA));
+            bool root = d < 0.1f;
+            light(frame, cell, root ? TILES_RIPPLES_STONE_R : TILES_RIPPLES_COLOR_R,
+                  root ? TILES_RIPPLES_STONE_G : TILES_RIPPLES_COLOR_G,
+                  root ? TILES_RIPPLES_STONE_B : TILES_RIPPLES_COLOR_B, glow * crest);
+            light(frame, cell, 1.0f, 1.0f, 1.0f, glow * RIPPLE_GLINT * ring->strength * crest * crest * crest);
+            if (u > 0.0f) {
+                float wake = RIPPLE_WAKE_SHARE * (1.0f - crest) *
+                             expf(-u / (TILES_RIPPLES_SPEED * RIPPLE_WAKE_BEATS));
+                light(frame, cell, TILES_RIPPLES_COLOR_R, TILES_RIPPLES_COLOR_G, TILES_RIPPLES_COLOR_B, glow * wake);
             }
         }
     }
@@ -482,7 +509,13 @@ void tiles_ripples_render(const tiles_ripples_t *r, double now, tiles_phys_frame
         float y = cell_y(d->from) + (cell_y(d->to) - cell_y(d->from)) * k - sinf(PHYS_PI * k) * 0.6f;
         dot(frame, x, y, 0.75f, 0.9f, 1.0f, 0.8f);
     }
-    render_flashes(frame, r->flash_t, r->flash_amp, now);
+    for (uint8_t cell = 0; cell < TILES_PHYS_CELLS; cell++) {
+        float age = (float)(now - r->flash_t[cell]);
+        if (age >= 0.0f && age < RIPPLE_BLOOM_BEATS) {
+            float k = 1.0f - age / RIPPLE_BLOOM_BEATS;
+            light(frame, cell, 0.8f, 0.92f, 1.0f, r->flash_amp[cell] * k * k);
+        }
+    }
 }
 
 bool tiles_ripples_active(const tiles_ripples_t *r) {

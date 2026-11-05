@@ -19,8 +19,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* The mode's color (menu pad, underglow, armed steps): orange, between the
- * Sequencer's scarlet and Song's amber (op_mode.c's sequencer family). */
+/* The mode's color (menu pad, underglow, the steps): orange, between the
+ * Sequencer's scarlet and Song's amber (op_mode.c's sequencer family). The
+ * drum pads take other shades (drum_seq.c's bank_shade()). */
 #define TILES_DRUM_SEQ_COLOR_R 1.0f
 #define TILES_DRUM_SEQ_COLOR_G 0.32f
 #define TILES_DRUM_SEQ_COLOR_B 0.0f

@@ -3,6 +3,7 @@
 #include "settings.h"
 #include "settings_persist.h"
 
+#include "bend_core.h"
 #include "board_pins.h"
 #include "cv_gate.h"
 #include "din_midi.h"
@@ -66,6 +67,8 @@ static tiles_setting_value_t get_mpe(void) { return U(tiles_expression_is_mpe_en
 static void set_mpe(tiles_setting_value_t v) { tiles_expression_set_mpe_enabled(v.u != 0u); }
 static tiles_setting_value_t get_bend(void) { return F(tiles_expression_get_pitch_bend_sensitivity()); }
 static void set_bend(tiles_setting_value_t v) { tiles_expression_set_pitch_bend_sensitivity(v.f); }
+static tiles_setting_value_t get_bend_mode(void) { return U(tiles_expression_get_pitch_bend_mode()); }
+static void set_bend_mode(tiles_setting_value_t v) { tiles_expression_set_pitch_bend_mode((uint8_t)v.u); }
 static tiles_setting_value_t get_aftertouch(void) { return U(tiles_expression_get_aftertouch_sensitivity()); }
 static void set_aftertouch(tiles_setting_value_t v) { tiles_expression_set_aftertouch_sensitivity((uint16_t)v.u); }
 static tiles_setting_value_t get_harmonics(void) { return U(tiles_expression_is_melodic_harmonics_enabled() ? 1u : 0u); }
@@ -204,6 +207,8 @@ static const tiles_setting_def_t TABLE[] = {
                   get_bend, set_bend),
     TILES_SETTING(0x0202, "expression.aftertouch_sensitivity", TILES_SETTING_UINT, {.u = 1}, {.u = 65535}, NULL,
                   get_aftertouch, set_aftertouch),
+    TILES_SETTING(0x0203, "expression.pitch_bend_mode", TILES_SETTING_ENUM, {.u = 0}, {.u = TILES_BEND_MODE_COUNT - 1u},
+                  TILES_BEND_MODE_NAMES, get_bend_mode, set_bend_mode),
     /* CV / gate (calibration limited to what the jack can use). The enable
      * switch is volatile: CV/gate boots OFF every time (services/cv_gate.h);
      * the calibration is saved. */
