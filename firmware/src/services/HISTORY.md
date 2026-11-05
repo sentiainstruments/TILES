@@ -10573,3 +10573,12 @@ change. Search it by file or feature name.
   2-5 steps there and it would flicker. test_ripples_look checks the
   between-pads crest and that no pad jumps more than 0.02 a step after the
   notes, including when the ring ends.
+- **Ripples: stones apart from the pond (Alpha 6.9, 2026-11-05).** Asked:
+  "the shades of blue of the pond and the ripple generators are too similar,
+  we need a bigger distinction". Water (0.3, 0.7, 1.0) and stone (0.05, 0.25,
+  1.0) were only ~12 degrees of hue apart, and the rings' wake was drawn in
+  the stone colour, so rings read as stones too. The stone (and a ring's root)
+  is now ultramarine (0.12, 0, 1.0): no green, ~35 degrees from the water and
+  far more saturated; the wake is water. The water, the mode's menu colour, is
+  unchanged. test_ripples_look checks a lying stone has no green against the
+  pond's 0.7. Manual's stone colour and the cover's first ring match.

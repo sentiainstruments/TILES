@@ -197,6 +197,19 @@ static void test_ripples_look(void) {
         assert(t < t0 + 8.0);
     }
     assert(worst < 0.02f);
+
+    /* A lying stone reads apart from the pond: no green in it, the pond's green
+     * kept at 0.7 of its blue. */
+    tiles_ripples_clear(&r, 7u, t0 = 60.0);
+    tiles_phys_out_clear(&out);
+    tiles_ripples_strike(&r, 3u, 0.6f, t0, &out);
+    tiles_ripples_release(&r, 3u);
+    for (t = t0; t < t0 + 3.5; t += DT) {
+        tiles_phys_out_clear(&out);
+        tiles_ripples_step(&r, t, &out);
+    }
+    tiles_ripples_render(&r, t, f);
+    assert(f[3][1] < 0.15f * f[3][2] && f[20][1] > 0.6f * f[20][2]);
 }
 
 /* Runs Sand for `beats`, collecting the playhead's notes (degree >= 0,

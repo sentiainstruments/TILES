@@ -172,7 +172,7 @@ static float wrap_pi(float a) {
 #define RIPPLE_SURFACE_LEVEL 0.05f
 #define RIPPLE_STONE_LEVEL 0.3f
 /* The look: a soft crest (wide enough that one between two pads lights
- * both), a deep-blue wake easing out behind it, a stone breathing with the
+ * both), a wake of water easing out behind it, a stone breathing with the
  * bar and notes that bloom rather than blink. First guesses. */
 #define RIPPLE_CREST_SIGMA 0.5f /* pads */
 #define RIPPLE_WAKE_BEATS 0.5f  /* the wake's e-folding time */
@@ -495,7 +495,7 @@ void tiles_ripples_render(const tiles_ripples_t *r, double now, tiles_phys_frame
             if (u > 0.0f) {
                 float wake = RIPPLE_WAKE_SHARE * (1.0f - crest) *
                              expf(-u / (TILES_RIPPLES_SPEED * RIPPLE_WAKE_BEATS));
-                light(frame, cell, TILES_RIPPLES_STONE_R, TILES_RIPPLES_STONE_G, TILES_RIPPLES_STONE_B, glow * wake);
+                light(frame, cell, TILES_RIPPLES_COLOR_R, TILES_RIPPLES_COLOR_G, TILES_RIPPLES_COLOR_B, glow * wake);
             }
         }
     }

@@ -70,7 +70,7 @@ row 1, each mode in its menu colour (`MENU_SLOTS` in `op_mode.c`).
 | 3 | Prism (blue: chord machine, `harmony`) |
 | 4 | Ableton (teal: Session View clip grid), Volca (cyan: a drum per channel) |
 | 5 | Bouncing notes (lime, `bounce`), Newton's cradle (steel), Sand (sand) |
-| 6 | Ripples (water: soft crests with a deep-blue wake; the stone, each ripple's root, deep blue and breathing with the bar), Orbits (night sky) |
+| 6 | Ripples (water: soft crests with a fading wake; the stone, each ripple's root, ultramarine and breathing with the bar), Orbits (night sky) |
 
 Every mode but melodic can be taken off the menu (settings `modes.*`);
 removing the one in use returns to melodic. The current mode pulses white.
