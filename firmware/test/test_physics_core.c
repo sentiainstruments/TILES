@@ -164,6 +164,41 @@ static void test_ripples(void) {
     r.splash = false;
 }
 
+/* The look: a crest between two pads lights both, and once the notes are
+ * done a ring eases back to the still pond without a jump, even as it ends. */
+static void test_ripples_look(void) {
+    tiles_phys_out_t out;
+    tiles_phys_frame_t f, prev;
+    double t0 = 40.0;
+    tiles_ripples_clear(&r, 7u, t0);
+    tiles_phys_out_clear(&out);
+    tiles_ripples_strike(&r, 12u, 1.0f, t0, &out); /* row 2, col 0 */
+    tiles_ripples_release(&r, 12u);
+    tiles_ripples_strike(&r, 12u, 1.0f, t0, &out); /* lifted: the ring stays */
+    tiles_ripples_step(&r, t0 + 1.5 / TILES_RIPPLES_SPEED, &out);
+    tiles_ripples_render(&r, t0 + 1.5 / TILES_RIPPLES_SPEED, f);
+    assert(f[13][2] > 0.3f && f[14][2] > 0.3f);
+
+    double t = t0 + 2.0;
+    tiles_ripples_step(&r, t, &out);
+    tiles_ripples_render(&r, t, prev);
+    float worst = 0.0f;
+    while (tiles_ripples_active(&r)) {
+        t += DT;
+        tiles_phys_out_clear(&out);
+        tiles_ripples_step(&r, t, &out);
+        tiles_ripples_render(&r, t, f);
+        for (uint8_t cell = 0; cell < TILES_PHYS_CELLS; cell++) {
+            for (uint8_t ch = 0; ch < 3u; ch++) {
+                worst = fmaxf(worst, fabsf(f[cell][ch] - prev[cell][ch]));
+            }
+        }
+        memcpy(prev, f, sizeof(f));
+        assert(t < t0 + 8.0);
+    }
+    assert(worst < 0.02f);
+}
+
 /* Runs Sand for `beats`, collecting the playhead's notes (degree >= 0,
  * loud) by column. */
 static void run_sand(double *t, double beats, int played[6], int degree[6], double when[6]) {
@@ -543,6 +578,7 @@ static void test_cradle(void) {
 
 int main(void) {
     test_ripples();
+    test_ripples_look();
     test_sand();
     test_orbits();
     test_cradle();

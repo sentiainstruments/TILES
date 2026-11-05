@@ -10552,3 +10552,24 @@ change. Search it by file or feature name.
   (Volca: mint, deep teal, pale cyan, sea green where the steps are cyan).
   Blue selection and playhead, white and red flashes unchanged. Manual's
   drums card redrawn to match.
+- **Ripples: the root in deep blue (Alpha 6.9, 2026-11-04).** Asked: "make
+  ripples shade of the root ripple a different shade of blue. on device and
+  manual". Stones and the rings spreading from them were the same water blue,
+  so a ring crossing a stone hid where ripples start. A stone, and a ring's
+  first moment on it, now light deep blue (0.05, 0.25, 1.0); the rings and the
+  resting pond stay water blue. Manual's Ripples frames redrawn to match.
+- **Ripples: soft crest and wake (Alpha 6.9, 2026-11-05).** Asked: "ripples
+  feel clunky, this should feel like the ps2 menu" (slow, glowing, easing
+  light). The ring was a 0.55-pad front squared, so a crest between two pads
+  left both nearly dark (w^2 about 0.01) and pads blinked one by one; its floor
+  of 0.2 snapped to nothing at the reach; notes blinked white on sixteenths.
+  Now: a Gaussian crest (sigma 0.5 pad, both neighbours of a between-pads
+  crest at 0.3+), a deep-blue wake easing out behind it (e-folding 0.5 beat,
+  the ring lives until it is under 5 %), the ring's light smoothstepped to
+  nothing at reach + edge, a faint white glint on hard crests, a lying stone
+  breathing with the bar (brightest at its drop) and notes blooming pale blue
+  with a squared ease-out over half a beat. Sound and timing unchanged. A slow
+  swell on the resting pond was left out: at 0.05 the 8-bit pads only have
+  2-5 steps there and it would flicker. test_ripples_look checks the
+  between-pads crest and that no pad jumps more than 0.02 a step after the
+  notes, including when the ring ends.
