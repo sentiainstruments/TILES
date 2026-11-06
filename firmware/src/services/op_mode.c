@@ -1618,10 +1618,13 @@ static void pattern_store_write_all(void) {
     }
 
     watchdog_update();
-    uint32_t prev_interrupts = save_and_disable_interrupts();
+    uint32_t prev_interrupts;
+    if (!tiles_flash_write_begin(&prev_interrupts)) {
+        return;
+    }
     flash_range_erase(TILES_PATTERN_FLASH_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(TILES_PATTERN_FLASH_OFFSET, s_write_buf, sizeof(s_write_buf));
-    restore_interrupts(prev_interrupts);
+    tiles_flash_write_end(prev_interrupts);
     watchdog_update();
 }
 
@@ -3713,10 +3716,13 @@ static void song_store_write_all(void) {
             memcpy(s_write_buf, src + offset_in_store, copy_len);
         }
         watchdog_update();
-        uint32_t prev_interrupts = save_and_disable_interrupts();
+        uint32_t prev_interrupts;
+        if (!tiles_flash_write_begin(&prev_interrupts)) {
+            return;
+        }
         flash_range_erase(TILES_SONG_FLASH_OFFSET + sector * FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE);
         flash_range_program(TILES_SONG_FLASH_OFFSET + sector * FLASH_SECTOR_SIZE, s_write_buf, FLASH_SECTOR_SIZE);
-        restore_interrupts(prev_interrupts);
+        tiles_flash_write_end(prev_interrupts);
         watchdog_update();
     }
 }

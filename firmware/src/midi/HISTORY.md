@@ -551,3 +551,21 @@ owner's feedback that prompted each change.
   bcdDevice 0xSNPP (N 0-9, P 0-99, a static assert guards it); Identity
   Reply stage, N, P, 0. Alpha 1-4 keep their numbers (unit 2 had already
   reported alpha.3, so renumbering would have gone backwards).
+- **USB audio, Alpha 7 (2026-11-06).** Asked: "implement usb c audio into
+  computers for recording into daw even if we havent made the sound
+  design or synth engines" (and a headphone DAC for the first release,
+  docs/hardware/audio-output.md). TILES now enumerates a UAC2 audio
+  input, stereo 48 kHz / 24-bit, after the reset interface so MIDI,
+  vendor and reset keep their interface numbers (0x85 isochronous IN,
+  768-byte packets). A placeholder MPE test voice runs on core 1
+  (audio/), fed by a copy of every channel message midi_out.c sends
+  (not channel 10, not Parts-routed Song/Volca). TinyUSB only re-arms the
+  endpoint in tud_task(), which the ~2 ms main loop calls about five
+  times a pass, so packets carry 48 frames per USB frame since the last
+  one: a missed frame is made up in the next packet rather than lost
+  (INFO audio.late_frames). Flash writes now pause core 1 through
+  tiles_flash_write_begin/end (multicore lockout; XIP is off during an
+  erase). Built and host-tested, not yet run on a board: no unit was
+  connected. To check on hardware: enumeration on macOS, a clean
+  recording in Live, audio.late_frames/underruns, and that MIDI timing
+  and settings saves are unchanged.

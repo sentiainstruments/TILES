@@ -5,6 +5,7 @@
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "hardware/watchdog.h"
+#include "pico/multicore.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -19,6 +20,34 @@ _Static_assert(TILES_KV_NUM_SLOTS == TILES_FLASH_CONTENT_SLOTS, "flash_map.h and
 _Static_assert(TILES_KV_NUM_SLOTS == TILES_FLASH_DRUM_SLOTS, "flash_map.h and kv_store.h disagree on slot count");
 _Static_assert(TILES_KV_NUM_SLOTS == TILES_FLASH_STATE_SLOTS, "flash_map.h and kv_store.h disagree on slot count");
 _Static_assert(TILES_KV_NUM_SLOTS == TILES_FLASH_SEQ_SLOTS, "flash_map.h and kv_store.h disagree on slot count");
+
+#define FLASH_LOCKOUT_TIMEOUT_US 10000u
+
+static bool s_core1_locked;
+static uint32_t s_lockout_fails;
+
+bool tiles_flash_write_begin(uint32_t *irq_state) {
+    s_core1_locked = multicore_lockout_victim_is_initialized(1);
+    if (s_core1_locked && !multicore_lockout_start_timeout_us(FLASH_LOCKOUT_TIMEOUT_US)) {
+        s_core1_locked = false;
+        s_lockout_fails++;
+        return false;
+    }
+    *irq_state = save_and_disable_interrupts();
+    return true;
+}
+
+void tiles_flash_write_end(uint32_t irq_state) {
+    restore_interrupts(irq_state);
+    if (s_core1_locked) {
+        s_core1_locked = false;
+        (void)multicore_lockout_end_timeout_us(FLASH_LOCKOUT_TIMEOUT_US);
+    }
+}
+
+uint32_t tiles_flash_lockout_fails(void) {
+    return s_lockout_fails;
+}
 
 static bool region_safe(uint32_t region_offset) {
     uintptr_t image_end = (uintptr_t)&__flash_binary_end - XIP_BASE;
@@ -55,17 +84,21 @@ static bool region_read(uint32_t base, uint8_t slot, uint32_t offset, uint8_t *b
     return true;
 }
 
-/* Code runs from flash, so interrupts are off during erase and program
- * (the SDK doesn't do it); the watchdog is fed before and after. An erase
- * takes tens of ms: callers save with the pads idle or the clock stopped. */
+/* Code runs from flash, so interrupts are off and the audio core paused
+ * during erase and program (the SDK doesn't do it); the watchdog is fed
+ * before and after. An erase takes tens of ms: callers save with the pads
+ * idle or the clock stopped. */
 static bool region_erase(uint32_t base, uint8_t slot) {
     if (slot >= TILES_KV_NUM_SLOTS) {
         return false;
     }
     watchdog_update();
-    uint32_t prev = save_and_disable_interrupts();
+    uint32_t prev;
+    if (!tiles_flash_write_begin(&prev)) {
+        return false;
+    }
     flash_range_erase(base + (uint32_t)slot * FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE);
-    restore_interrupts(prev);
+    tiles_flash_write_end(prev);
     watchdog_update();
     return true;
 }
@@ -76,9 +109,12 @@ static bool region_program(uint32_t base, uint8_t slot, uint32_t offset, const u
         return false;
     }
     watchdog_update();
-    uint32_t prev = save_and_disable_interrupts();
+    uint32_t prev;
+    if (!tiles_flash_write_begin(&prev)) {
+        return false;
+    }
     flash_range_program(base + (uint32_t)slot * FLASH_SECTOR_SIZE + offset, buf, len); /* buf is RAM (the caller's stack) */
-    restore_interrupts(prev);
+    tiles_flash_write_end(prev);
     watchdog_update();
     return true;
 }

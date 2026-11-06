@@ -67,6 +67,8 @@ add_executable(sentia_tiles_firmware
     profiles/settings_persist.c
     profiles/settings_table.c
     usb_vendor/usb_vendor.c
+    audio/audio_engine.c
+    audio/usb_audio.c
 )
 
 pico_generate_pio_header(sentia_tiles_firmware ${CMAKE_CURRENT_SOURCE_DIR}/drivers/sk6805.pio)
@@ -82,6 +84,7 @@ target_include_directories(sentia_tiles_firmware PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/usb_vendor
     ${CMAKE_CURRENT_SOURCE_DIR}/storage
     ${CMAKE_CURRENT_SOURCE_DIR}/profiles
+    ${CMAKE_CURRENT_SOURCE_DIR}/audio
 )
 
 target_link_libraries(sentia_tiles_firmware
@@ -98,6 +101,7 @@ target_link_libraries(sentia_tiles_firmware
     hardware_flash
     tinyusb_device
     pico_unique_id
+    pico_multicore
     pico_rand
     pico_usb_reset
     m
@@ -116,6 +120,10 @@ pico_enable_stdio_uart(sentia_tiles_firmware 0)
 # reading costs at most 5 ms once, then prints are dropped. Paired with the
 # 1 KB CDC TX buffer in midi/tusb_config.h.
 target_compile_definitions(sentia_tiles_firmware PRIVATE PICO_STDIO_USB_STDOUT_TIMEOUT_US=5000)
+
+# Core 1 runs the audio engine (audio/usb_audio.c); 4 KB rather than the
+# SDK's 2 KB leaves room for the engine and pico_time's sleep.
+target_compile_definitions(sentia_tiles_firmware PRIVATE PICO_CORE1_STACK_SIZE=0x1000)
 
 # No fused multiply-adds in the bend math, so the computer's replay
 # (test/bend_replay.c, built the same way) matches the board bit for bit.

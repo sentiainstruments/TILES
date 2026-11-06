@@ -18,7 +18,9 @@
 #include "product_identity.h"
 #include "settings.h"
 #include "settings_persist.h"
+#include "storage_flash.h"
 #include "touch.h"
+#include "usb_audio.h"
 #include "tune.h"
 
 #include "tusb.h"
@@ -702,6 +704,23 @@ static void handle_line(char *line) {
         snprintf(text, sizeof(text), "content.writes=%lu", (unsigned long)content.kv.writes);
         reply(text);
         snprintf(text, sizeof(text), "content.last_result=%s", kv_result_name(content.kv.last_result));
+        reply(text);
+        tiles_usb_audio_info_t audio = tiles_usb_audio_get_info();
+        snprintf(text, sizeof(text), "audio.streaming=%d", audio.streaming ? 1 : 0);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.packets=%lu", (unsigned long)audio.packets);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.late_frames=%lu", (unsigned long)audio.late_frames);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.underruns=%lu", (unsigned long)audio.underruns);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.midi_drops=%lu", (unsigned long)audio.midi_drops);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.voices=%u", (unsigned)audio.voices);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.load_pct=%u", (unsigned)audio.load_pct);
+        reply(text);
+        snprintf(text, sizeof(text), "flash.lockout_fails=%lu", (unsigned long)tiles_flash_lockout_fails());
         reply(text);
         tiles_loop_stats_t loop = tiles_loop_stats_get();
         snprintf(text, sizeof(text), "loop.avg_us=%lu", (unsigned long)loop.avg_us);

@@ -45,6 +45,7 @@
 #include "services/touch.h"
 #include "storage/storage_flash.h"
 #include "usb_vendor/usb_vendor.h"
+#include "audio/usb_audio.h"
 
 /* A power switch can reset the PCA9685s without the MCU: re-assert OE,
  * reconfigure, then let buttons and haptics repaint. */
@@ -227,6 +228,10 @@ int main(void) {
     /* MPE zone declaration for DIN (USB repeats it on mount), after settings,
      * so a saved "MPE off" announces a withdrawn zone. */
     tiles_expression_announce_mpe_zone();
+
+    /* Core 1: TILES's own sound for USB audio. Last before the loop, so no
+     * boot-time flash write runs before it can be paused. */
+    tiles_usb_audio_init();
 
     /* Between the slower services: USB, MIDI in, clock and playback again, so a
      * Clock arriving mid-pass is stepped within a fraction of a pass. */

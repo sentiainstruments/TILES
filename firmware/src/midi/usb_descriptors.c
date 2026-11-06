@@ -1,5 +1,6 @@
 /* Composite USB device: CDC console + MIDI (three cables) + vendor
- * (settings) + picotool reset, built with TinyUSB's descriptor macros.
+ * (settings) + picotool reset + audio input, built with TinyUSB's
+ * descriptor macros.
  * Replaces pico_stdio_usb's descriptors (tinyusb_device is linked). */
 
 #include <stdio.h>
@@ -11,6 +12,7 @@
 #include "pico/usb_reset.h"
 #include "product_identity.h"
 #include "tusb.h"
+#include "usb_audio.h"
 
 /* Full speed only: the RP2350 has no high-speed PHY. */
 
@@ -58,6 +60,9 @@ enum {
     ITF_NUM_MIDI_STREAMING,
     ITF_NUM_VENDOR,
     ITF_NUM_RESET, /* picotool reset interface; see tusb_config.h */
+    /* Audio last, so the interfaces above keep their numbers. */
+    ITF_NUM_AUDIO_CONTROL,
+    ITF_NUM_AUDIO_STREAMING,
     ITF_NUM_TOTAL,
 };
 
@@ -70,6 +75,8 @@ enum {
 
 #define EPNUM_VENDOR_OUT 0x04u
 #define EPNUM_VENDOR_IN 0x84u
+
+#define EPNUM_AUDIO_IN 0x85u
 
 /* String indices; see string_desc_arr below. */
 enum {
@@ -95,8 +102,17 @@ enum {
     (TUD_MIDI_DESC_HEAD_LEN + MIDI_NUM_CABLES * TUD_MIDI_DESC_JACK_LEN + 2u * TUD_MIDI_DESC_EP_LEN(MIDI_NUM_CABLES))
 TU_VERIFY_STATIC(MIDI_NUM_CABLES == TILES_USB_MIDI_NUM_CABLES, "descriptor cable count vs midi_ports.h");
 
-#define CONFIG_TOTAL_LEN \
-    (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TILES_MIDI_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_RPI_RESET_DESC_LEN)
+#define CONFIG_TOTAL_LEN                                                                                     \
+    (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TILES_MIDI_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_RPI_RESET_DESC_LEN + \
+     TILES_AUDIO_FUNC_DESC_LEN)
+
+TU_VERIFY_STATIC(CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX == TILES_AUDIO_EP_SIZE, "tusb_config.h vs usb_audio.h");
+TU_VERIFY_STATIC(CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX == TILES_AUDIO_BYTES_PER_SAMPLE, "sample size");
+TU_VERIFY_STATIC(CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX == TILES_AUDIO_CHANNELS, "channel count");
+
+#define AUDIO_STEREO (AUDIO_CHANNEL_CONFIG_FRONT_LEFT | AUDIO_CHANNEL_CONFIG_FRONT_RIGHT)
+/* UAC2 terminal type "Synthesizer" (embedded function); TinyUSB has no name for it. */
+#define AUDIO_TERM_TYPE_SYNTHESIZER 0x0713u
 
 uint8_t const desc_fs_configuration[] = {
     /* config number, interface count, string index, total length, attributes, mA */
@@ -128,6 +144,31 @@ uint8_t const desc_fs_configuration[] = {
 
     /* Control transfers only (no endpoints, no string); see tusb_config.h. */
     TUD_RPI_RESET_DESCRIPTOR(ITF_NUM_RESET, 0),
+
+    /* USB audio (UAC2): the test voice -> USB streaming, on a fixed 48 kHz
+     * clock. Alt 1 streams stereo 24-bit in 4-byte subslots. */
+    TUD_AUDIO_DESC_IAD(ITF_NUM_AUDIO_CONTROL, 2, 0),
+    TUD_AUDIO_DESC_STD_AC(ITF_NUM_AUDIO_CONTROL, 0, 0),
+    TUD_AUDIO_DESC_CS_AC(0x0200, AUDIO_FUNC_MUSICAL_INSTRUMENT,
+                         TUD_AUDIO_DESC_CLK_SRC_LEN + TUD_AUDIO_DESC_INPUT_TERM_LEN + TUD_AUDIO_DESC_OUTPUT_TERM_LEN, 0),
+    TUD_AUDIO_DESC_CLK_SRC(TILES_AUDIO_ENTITY_CLOCK, AUDIO_CLOCK_SOURCE_ATT_INT_FIX_CLK,
+                           (AUDIO_CTRL_R << AUDIO_CLOCK_SOURCE_CTRL_CLK_FRQ_POS) |
+                               (AUDIO_CTRL_R << AUDIO_CLOCK_SOURCE_CTRL_CLK_VAL_POS),
+                           0, 0),
+    TUD_AUDIO_DESC_INPUT_TERM(TILES_AUDIO_ENTITY_INPUT, AUDIO_TERM_TYPE_SYNTHESIZER, 0, TILES_AUDIO_ENTITY_CLOCK,
+                              TILES_AUDIO_CHANNELS, AUDIO_STEREO, 0, 0, 0),
+    TUD_AUDIO_DESC_OUTPUT_TERM(TILES_AUDIO_ENTITY_OUTPUT, AUDIO_TERM_TYPE_USB_STREAMING, 0, TILES_AUDIO_ENTITY_INPUT,
+                               TILES_AUDIO_ENTITY_CLOCK, 0, 0),
+    TUD_AUDIO_DESC_STD_AS_INT(ITF_NUM_AUDIO_STREAMING, 0, 0, 0),
+    TUD_AUDIO_DESC_STD_AS_INT(ITF_NUM_AUDIO_STREAMING, 1, 1, 0),
+    TUD_AUDIO_DESC_CS_AS_INT(TILES_AUDIO_ENTITY_OUTPUT, AUDIO_CTRL_NONE, AUDIO_FORMAT_TYPE_I,
+                             AUDIO_DATA_FORMAT_TYPE_I_PCM, TILES_AUDIO_CHANNELS, AUDIO_STEREO, 0),
+    TUD_AUDIO_DESC_TYPE_I_FORMAT(TILES_AUDIO_BYTES_PER_SAMPLE, TILES_AUDIO_BITS_PER_SAMPLE),
+    TUD_AUDIO_DESC_STD_AS_ISO_EP(EPNUM_AUDIO_IN,
+                                 (uint8_t)(TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS | TUSB_ISO_EP_ATT_DATA),
+                                 TILES_AUDIO_EP_SIZE, 1),
+    TUD_AUDIO_DESC_CS_AS_ISO_EP(AUDIO_CS_AS_ISO_DATA_EP_ATT_NON_MAX_PACKETS_OK, AUDIO_CTRL_NONE,
+                                AUDIO_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_UNDEFINED, 0),
 };
 TU_VERIFY_STATIC(sizeof(desc_fs_configuration) == CONFIG_TOTAL_LEN, "configuration descriptor length");
 

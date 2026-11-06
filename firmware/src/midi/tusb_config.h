@@ -33,6 +33,25 @@
 #define CFG_TUD_VENDOR_RX_BUFSIZE 64
 #define CFG_TUD_VENDOR_TX_BUFSIZE 64
 
+/* USB audio: one stereo 48 kHz / 24-bit input (audio/usb_audio.h; the
+ * numbers are checked against it there). No flow control: each packet
+ * carries what usb_audio.c writes, so a late one can be made up. */
+#define CFG_TUD_AUDIO 1
+#define TILES_AUDIO_FUNC_DESC_LEN                                                                                 \
+    (TUD_AUDIO_DESC_IAD_LEN + TUD_AUDIO_DESC_STD_AC_LEN + TUD_AUDIO_DESC_CS_AC_LEN + TUD_AUDIO_DESC_CLK_SRC_LEN + \
+     TUD_AUDIO_DESC_INPUT_TERM_LEN + TUD_AUDIO_DESC_OUTPUT_TERM_LEN + 2 * TUD_AUDIO_DESC_STD_AS_INT_LEN +         \
+     TUD_AUDIO_DESC_CS_AS_INT_LEN + TUD_AUDIO_DESC_TYPE_I_FORMAT_LEN + TUD_AUDIO_DESC_STD_AS_ISO_EP_LEN +         \
+     TUD_AUDIO_DESC_CS_AS_ISO_EP_LEN)
+#define CFG_TUD_AUDIO_FUNC_1_DESC_LEN TILES_AUDIO_FUNC_DESC_LEN
+#define CFG_TUD_AUDIO_FUNC_1_N_AS_INT 1
+#define CFG_TUD_AUDIO_FUNC_1_CTRL_BUF_SZ 64
+#define CFG_TUD_AUDIO_ENABLE_EP_IN 1
+#define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX 4
+#define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX 2
+#define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX 768
+#define CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ (2 * 768)
+#define CFG_TUD_AUDIO_EP_IN_FLOW_CONTROL 0
+
 /* pico-sdk's USB reset interface, so picotool can reboot into BOOTSEL
  * without the button. Options spelled out as the SDK defaults; the CDC
  * magic-baud reset stays off. */

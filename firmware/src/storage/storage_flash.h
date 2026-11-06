@@ -9,6 +9,15 @@
 #include "kv_store.h"
 
 #include <stdbool.h>
+#include <stdint.h>
+
+/* Brackets every flash erase or program in the firmware. XIP is off while
+ * they run, so the audio core (audio/usb_audio.c) is paused and interrupts
+ * are masked here. False if that core didn't pause within 10 ms: nothing
+ * was done, skip the write (counted in INFO flash.lockout_fails). */
+bool tiles_flash_write_begin(uint32_t *irq_state);
+void tiles_flash_write_end(uint32_t irq_state);
+uint32_t tiles_flash_lockout_fails(void);
 
 /* False if the application image has grown into the settings region -- then
  * nothing here may write, or it would corrupt the running program. */

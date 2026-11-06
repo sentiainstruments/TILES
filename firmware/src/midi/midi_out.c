@@ -1,6 +1,7 @@
 #include "midi_out.h"
 
 #include "din_midi.h"
+#include "usb_audio.h"
 #include "usb_midi_packet.h"
 
 #include "tusb.h"
@@ -156,7 +157,15 @@ static void usb_write(uint8_t cable, const char *what, const uint8_t *msg, uint3
 }
 
 /* Two sinks: USB MAIN while mounted, and DIN whenever initialized. DIN
- * first: it only queues, while USB may wait. daw_cc is the exception. */
+ * first: it only queues, while USB may wait. daw_cc is the exception.
+ * TILES's own sound hears what it plays: not drums (channel 10) or what
+ * Song and Volca route to PARTS. */
+static void to_audio(uint8_t status, uint8_t data1, uint8_t data2) {
+    if (s_parts_depth == 0u && (status & 0x0Fu) != 9u) {
+        tiles_usb_audio_midi(status, data1, data2);
+    }
+}
+
 static void send1(uint8_t status) {
     uint8_t msg[1] = {status};
     tiles_din_midi_send(msg, sizeof(msg));
@@ -166,12 +175,14 @@ static void send1(uint8_t status) {
 static void send2(uint8_t status, uint8_t data1) {
     uint8_t msg[2] = {status, data1};
     tiles_din_midi_send(msg, sizeof(msg));
+    to_audio(status, data1, 0u);
     usb_write(cable_for_channel_message(status), "send2", msg, sizeof(msg));
 }
 
 static void send3(uint8_t status, uint8_t data1, uint8_t data2) {
     uint8_t msg[3] = {status, data1, data2};
     tiles_din_midi_send(msg, sizeof(msg));
+    to_audio(status, data1, data2);
     usb_write(cable_for_channel_message(status), "send3", msg, sizeof(msg));
 }
 

@@ -6,10 +6,10 @@ never goes over MIDI; that's `usb_vendor/`.
 
 | File | What it is |
 |---|---|
-| `usb_device`, `usb_descriptors.c`, `tusb_config.h` | The composite USB device: CDC console, MIDI (2 cables), vendor (settings), picotool reset interface. MS OS 2.0 descriptors give Windows WinUSB for the vendor and reset interfaces. |
+| `usb_device`, `usb_descriptors.c`, `tusb_config.h` | The composite USB device: CDC console, MIDI (3 cables), vendor (settings), picotool reset interface, and a USB audio input (last, so the others keep their interface numbers; `../audio/README.md`). MS OS 2.0 descriptors give Windows WinUSB for the vendor and reset interfaces. |
 | `product_identity.h` | USB VID/PID, firmware version, SysEx manufacturer ID, all in one place. **The USB ID is a test ID and must be replaced before any unit ships.** |
 | `midi_ports.h` | The ports: MAIN (cable 0, "MIDI"), DAW (cable 1, "DAW"), DIN. |
-| `midi_out` | Every outgoing message, including the MPE zone setup (RPN 6 + RPN 0), per-note setup, panic, DAW-only CCs and SysEx. |
+| `midi_out` | Every outgoing message, including the MPE zone setup (RPN 6 + RPN 0), per-note setup, panic, DAW-only CCs and SysEx. Channel messages are also copied to TILES's own sound (`../audio/`). |
 | `midi_in` | The one reader of all MIDI input. It parses each source with its own parser (running status, SysEx, Real-Time) and fires callbacks. |
 | `usb_midi_packet` | USB-MIDI 1.0 packet packing, used instead of TinyUSB's byte-stream API. Pure, tested. |
 | `din_midi`, `din_midi_queue`, `din_midi_tx.pio` | DIN: a PIO UART out, UART0 in, and the hardware-free queues (coalescing, running status, Real-Time priority). The queues are pure and tested. |

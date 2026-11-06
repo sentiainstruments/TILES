@@ -42,6 +42,10 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_bounce_core.c src/
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_physics_core.c src/services/physics_core.c -lm -o /tmp/sentia_tiles_test_physics_core
 /tmp/sentia_tiles_test_physics_core
 
+# TILES's own sound (USB audio): the test voice and the cross-core ring.
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/audio test/test_audio_engine.c src/audio/audio_engine.c -lm -o /tmp/sentia_tiles_test_audio_engine
+/tmp/sentia_tiles_test_audio_engine
+
 # Strike settle: when a struck pad's note can go before the follow-through ends.
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_strike_settle.c src/services/strike_settle.c src/services/tune.c src/services/bend_core.c -lm -o /tmp/sentia_tiles_test_strike_settle
 /tmp/sentia_tiles_test_strike_settle
