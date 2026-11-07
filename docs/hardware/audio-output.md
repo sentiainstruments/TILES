@@ -8,6 +8,12 @@ USB audio input (`firmware/src/audio/README.md`).
 Rev A0 has no audio path: the DAC80502 is a CV DAC (0-10 V through a
 x4 stage and 1 kOhm, unipolar, 12 V only), not suitable for headphones.
 
+Considered and dropped: USB-C headphone dongles. The USB-C port is
+device-only and can't power or host one; a second (host) port would
+need a connector, a 5 V source switch and PIO-USB on core 1, and many
+dongles are passive with no DAC. The built-in jack is simpler, cheaper
+and works with any headphones.
+
 ## Parts
 
 | Part | Job | Why |
