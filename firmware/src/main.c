@@ -41,6 +41,7 @@
 #include "services/pedal.h"
 #include "services/play_state.h"
 #include "services/power.h"
+#include "services/show_link.h"
 #include "services/standby.h"
 #include "services/touch.h"
 #include "storage/storage_flash.h"
@@ -203,6 +204,9 @@ int main(void) {
     /* MIDI Identity replies (registers a SysEx callback). */
     tiles_midi_identity_init();
 
+    /* A computer's light show over SysEx (registers a SysEx callback). */
+    tiles_show_link_init();
+
     /* MIDI clock (registers a Real-Time callback). */
     tiles_midi_clock_init();
 
@@ -336,6 +340,7 @@ int main(void) {
             tiles_debug_trace('Y');
             tiles_standby_scan();
         }
+        tiles_show_link_service();
         tiles_debug_trace('L');
         tiles_lighting_service();
         timing_tick();

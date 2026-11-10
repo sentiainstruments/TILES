@@ -256,6 +256,15 @@ static uint8_t s_service_cursor;
 static uint8_t s_test_white_level;
 static uint8_t s_test_white_percent;
 static bool s_standby_active;
+
+/* Show takeover: its own colours and written record, so a mode switching
+ * the standby path on or off underneath can't take the LEDs back. */
+#define SHOW_WRITES_PER_PASS 4u
+static bool s_show_active;
+static tiles_rgb01_t s_show_rgb[TILES_NUM_PADS];
+static tiles_rgb01_t s_show_written[TILES_NUM_PADS];
+static bool s_show_written_valid[TILES_NUM_PADS];
+static tiles_rgb01_t s_show_underglow;
 /* Whether a crash/debug/pattern/capture override owned the underglow last
  * frame (restore on release; see tiles_lighting_service()). */
 static bool s_underglow_override_was_active;
@@ -485,6 +494,9 @@ static tiles_rgb01_t pad_idle_rgb(uint8_t logical_pad) {
  * (applied in write_pad()) and the pressure hue / bend dimming
  * (apply_pad_fx()). The single source of truth for a pad's look. */
 static tiles_rgb01_t pad_look_rgb(uint8_t pad_index) {
+    if (s_show_active) {
+        return s_show_rgb[pad_index];
+    }
     if (s_standby_active) {
         return standby_pad_rgb(pad_index, to_ms_since_boot(get_absolute_time()));
     }
@@ -616,6 +628,32 @@ static bool service_standby_frame(uint32_t now_ms) {
     return any;
 }
 
+/* Under the show: up to SHOW_WRITES_PER_PASS pads whose colour changed most
+ * since written. True if it wrote any. */
+static bool service_show_frame(void) {
+    bool any = false;
+    for (uint8_t n = 0; n < SHOW_WRITES_PER_PASS; n++) {
+        uint8_t best = TILES_NUM_PADS;
+        float best_change = 0.004f;
+        for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+            const tiles_rgb01_t *want = &s_show_rgb[i], *shown = &s_show_written[i];
+            float change = !s_show_written_valid[i]
+                               ? 2.0f
+                               : fmaxf(fabsf(want->r - shown->r), fmaxf(fabsf(want->g - shown->g), fabsf(want->b - shown->b)));
+            if (change > best_change) {
+                best_change = change;
+                best = i;
+            }
+        }
+        if (best == TILES_NUM_PADS) {
+            break;
+        }
+        write_pad(best);
+        any = true;
+    }
+    return any;
+}
+
 /* While a light effect animates: up to PLAY_FX_WRITES_PER_PASS pads whose
  * effect changed most since written. True if it wrote any (the pass's
  * usual write then waits). */
@@ -667,7 +705,10 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
     s_pad_fx_shown[pad_index] = pad_fx_active(pad_index);
     s_pad_written_ms[pad_index] = to_ms_since_boot(get_absolute_time());
     tiles_rgb01_t desired = pad_desired_rgb(pad_index);
-    if (s_standby_active) {
+    if (s_show_active) {
+        s_show_written[pad_index] = desired;
+        s_show_written_valid[pad_index] = true;
+    } else if (s_standby_active) {
         s_standby_written[pad_index] = desired;
         s_standby_written_valid[pad_index] = true;
     }
@@ -675,7 +716,9 @@ static void write_pad(uint8_t pad_index /* 0-23 */) {
     if (s_test_white_level != 0u) {
         pixel = tiles_sk6805_pack_rgb(s_test_white_level, s_test_white_level, s_test_white_level);
     } else {
-        desired = apply_pad_fx(pad_index, desired);
+        if (!s_show_active) {
+            desired = apply_pad_fx(pad_index, desired);
+        }
         float scale = (float)static_ceiling_level() * led_intensity();
         uint8_t r = (uint8_t)(scale * clamp01(desired.r));
         uint8_t g = (uint8_t)(scale * clamp01(desired.g));
@@ -804,7 +847,7 @@ static void write_pattern_flash_underglow(float r, float g, float b) {
 static void write_underglow(void) {
     uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
     for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
-        const tiles_rgb01_t *c = &s_underglow_rgb[i];
+        const tiles_rgb01_t *c = s_show_active ? &s_show_underglow : &s_underglow_rgb[i];
         float k = led_intensity();
         pixels[i] = tiles_sk6805_pack_rgb(underglow_channel_level(c->r * k), underglow_channel_level(c->g * k),
                                            underglow_channel_level(c->b * k));
@@ -930,6 +973,15 @@ void tiles_lighting_service(void) {
         return;
     }
 
+    /* The show draws everything but the crash indicator. */
+    if (s_show_active) {
+        if (tiles_crash_indicator_is_active()) {
+            write_crash_underglow();
+        }
+        (void)service_show_frame();
+        return;
+    }
+
     /* Underglow override priority: crash > pattern flash > debug > Song
      * capture. */
     bool underglow_override_active = false;
@@ -1030,6 +1082,46 @@ void tiles_lighting_set_standby_active(bool active) {
         if (s_initialized) {
             write_underglow();
         }
+    }
+}
+
+void tiles_lighting_set_show_active(bool active) {
+    if (active == s_show_active) {
+        return;
+    }
+    s_show_active = active;
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_show_written_valid[i] = false;
+        s_standby_written_valid[i] = false; /* a standby screen repaints after */
+        s_show_rgb[i] = (tiles_rgb01_t){0.0f, 0.0f, 0.0f};
+    }
+    s_show_underglow = (tiles_rgb01_t){0.0f, 0.0f, 0.0f};
+    if (!s_initialized) {
+        return;
+    }
+    /* Off: the underglow as its owner left it; the pads come back on the
+     * round-robin. */
+    write_underglow();
+}
+
+void tiles_lighting_set_show_pad_rgb(uint8_t logical_pad, float r, float g, float b) {
+    if (!s_show_active || logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
+        return;
+    }
+    s_show_rgb[logical_pad - 1u] = (tiles_rgb01_t){clamp01(r), clamp01(g), clamp01(b)};
+}
+
+void tiles_lighting_set_show_underglow_rgb(float r, float g, float b) {
+    if (!s_show_active) {
+        return;
+    }
+    tiles_rgb01_t c = {clamp01(r), clamp01(g), clamp01(b)};
+    if (c.r == s_show_underglow.r && c.g == s_show_underglow.g && c.b == s_show_underglow.b) {
+        return;
+    }
+    s_show_underglow = c;
+    if (s_initialized && !tiles_crash_indicator_is_active()) {
+        write_underglow(); /* one chain write for all four */
     }
 }
 

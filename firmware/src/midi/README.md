@@ -19,7 +19,7 @@ never goes over MIDI; that's `usb_vendor/`.
 
 | Port | Carries | macOS / Live name |
 |---|---|---|
-| MAIN | Notes, MPE, pedals, clock and transport Start/Stop, Identity | "SENTIA TILES 2 MIDI" / "SENTIA TILES 2 (MIDI)" (unit 2) |
+| MAIN | Notes, MPE, pedals, clock and transport Start/Stop, Identity; show-link SysEx in (`../services/README.md`, "Show link") | "SENTIA TILES 2 MIDI" / "SENTIA TILES 2 (MIDI)" (unit 2) |
 | DAW | Only the Ableton control surface script: Scene Launch and transport CCs out; clip/scene SysEx and TILES DISPLAY echo notes in | "SENTIA TILES 2 DAW" / "SENTIA TILES 2 (DAW)" (unit 2) |
 | DIN | Everything MAIN carries | TRS jack |
 

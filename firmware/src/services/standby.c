@@ -11,6 +11,7 @@
 #include "op_mode.h"
 #include "pedal.h"
 #include "pixel_font.h"
+#include "show_link.h"
 #include "touch.h"
 
 #include "pico/rand.h"
@@ -1843,6 +1844,16 @@ void tiles_standby_scan(void) {
         s_last_activity_ms = now_ms;
         if (s_state != TILES_STANDBY_STATE_AWAKE) {
             print_wake_source(now_ms);
+            exit_standby();
+        }
+        return;
+    }
+
+    /* A computer's show running the LEDs counts as activity: no standby
+     * screen or deep sleep under it. */
+    if (tiles_show_link_active()) {
+        s_last_activity_ms = now_ms;
+        if (s_state != TILES_STANDBY_STATE_AWAKE) {
             exit_standby();
         }
         return;

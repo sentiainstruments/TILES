@@ -25,6 +25,7 @@ add_executable(sentia_tiles_firmware
     services/expression.c
     services/power.c
     services/standby.c
+    services/show_link.c
     services/haptics.c
     services/boot_sequence.c
     services/octave_control.c

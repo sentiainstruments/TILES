@@ -53,6 +53,7 @@ before re-tuning a constant or reviving an approach that was dropped.
 | `expression_control` | Square: pitch bend toggle, expression menu; circle + square: MPE on/off. |
 | `lighting` | Pad LEDs and underglow; power-derived brightness ceiling; idle colors by note role; indicator priority on the underglow; on touched pads, every mode: hue turns toward Sentia blue with pressure, brightness swells down with bend; LED intensity (Feel menu row 4) scales pads, underglow and button LEDs. |
 | `standby` | Screensaver animations and deep sleep; circle holds. |
+| `show_link` | Show takeover: a computer's light show (Show Control) streams the music as SysEx and, while it does, owns every LED (see "Show link"). |
 | `boot_sequence` | Power-on animation (+ a Hall baseline recapture). |
 | `game_mode` | Snake, Tile Breaker, Tile Drop, Paddle, Echo. |
 | `pixel_font` | 4x4 font for the marquee and the transpose display. |
@@ -109,7 +110,10 @@ crash reboot (`__uninitialized_ram`, `tiles_op_mode_init()`).
   `tiles_buttons_set_standby_active()` and draws with the standby
   setters. Crash, debug, pattern-confirmation and capture indicators
   write the underglow directly through a fixed priority chain in
-  `lighting.c`.
+  `lighting.c`. Above all of them (but the crash indicator) is the show
+  takeover (`tiles_lighting_set_show_active()`): its own colours and
+  written record, so the modes switching the standby path underneath
+  can't take the LEDs back.
 - **Who owns the pads and buttons.** A module that uses the grid or
   "-"/"+" for its own purpose says so (`*_owns_pad_grid()`,
   `*_owns_octave_buttons()`, `tiles_game_mode_is_active()`), and the
@@ -138,6 +142,28 @@ crash reboot (`__uninitialized_ram`, `tiles_op_mode_init()`).
 - **Unmeasured constants.** Most timing and feel constants are marked
   as first guesses in their comments; the measured ones say what
   capture they came from. Re-measure before retuning.
+
+## Show link
+
+SysEx from the computer, on the MIDI or the DAW port, manufacturer
+`0x7D`, sub-ID `0x02` (the DAW script's scene messages are `0x01`); every
+value 7-bit:
+
+| Message | Bytes after `F0` | Meaning |
+|---|---|---|
+| Mode | `7D 02 01 on anim aR aG aB bR bG bB` | takeover on (1) or off (0); animation: 0 meter, 1 pulse, 2 ripple, 3 sparkle; the main and second colour |
+| Frame | `7D 02 02 kick accent level b1 b2 b3 b4 b5 b6` | sent ~30 times a second and at once on a kick: kick strength (0 none), snare/hat accent (0 none), loudness, six bands low to high (one per pad column) |
+
+While it's on and a message came within 2 s, the underglow strobes on
+each kick (white, falling toward the main colour) and the pads play the
+animation: **meter** (each column a bar from its band, white, yellow,
+red at the top, like the standby equalizer), **pulse** (the grid in the
+main colour on each kick over a dim bed of the second), **ripple** (a
+ring from the centre on each kick) or **sparkle** (pads sparking in the
+second colour on snares and hats, a wash on kicks). Without messages for
+2 s it lets go and everything is as it was; while it runs, standby and
+deep sleep wait. Pads still play notes underneath. The decays are first
+guesses.
 
 ## Status
 

@@ -10582,3 +10582,14 @@ change. Search it by file or feature name.
   far more saturated; the wake is water. The water, the mode's menu colour, is
   unchanged. test_ripples_look checks a lying stone has no green against the
   pond's 0.7. Manual's stone colour and the cover's first ring match.
+- `show_link.c` (2026-11-10) — "do the tiles led takeover mode. when
+  clicked on computer it overrides all and makes the underglow a beat
+  strobe light style and the top 24 pad grid into different music
+  related animations we can select including one thats like a vu meter
+  like the screensaver". Show Control (the Mac light-show app in the
+  LMD9020 repo) streams kick, accent, loudness and six bands as SysEx
+  (`7D 02`); the lighting module got a takeover path of its own above
+  the standby path, since many modes switch that path and would have
+  taken the LEDs back. SysEx rather than the USB settings protocol: the
+  show is live music data at ~30 Hz, and every host can send MIDI
+  without a USB driver. Built and host-tested; not yet run on a board.
