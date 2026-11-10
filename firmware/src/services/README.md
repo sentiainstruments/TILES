@@ -151,19 +151,23 @@ value 7-bit:
 
 | Message | Bytes after `F0` | Meaning |
 |---|---|---|
-| Mode | `7D 02 01 on anim aR aG aB bR bG bB` | takeover on (1) or off (0); animation: 0 meter, 1 pulse, 2 ripple, 3 sparkle; the main and second colour |
+| Mode | `7D 02 01 on anim aR aG aB bR bG bB` | takeover on (1) or off (0); animation (below); the main and second colour |
+| Look | `7D 02 03 glow len bright tail bed gain speed meter cR cG cB` | underglow: 0 white, 1 main, 2 second, 3 off; strobe length (20-400 ms); pad brightness (15-100%); tail, the pads' decays (0.25-4x, 64 = 1x); bed under the hits (0-3x); meter reach (0.5-2x, 64 = 1x); speed of ripple, rain and chase (0.4-2.5x, 64 = 1x); meter in the colours (1) or white/yellow/red (0); the accent colour |
 | Frame | `7D 02 02 kick accent level b1 b2 b3 b4 b5 b6` | sent ~30 times a second and at once on a kick: kick strength (0 none), snare/hat accent (0 none), loudness, six bands low to high (one per pad column) |
 
 While it's on and a message came within 2 s, the underglow strobes on
-each kick (white, falling toward the main colour) and the pads play the
-animation: **meter** (each column a bar from its band, white, yellow,
-red at the top, like the standby equalizer), **pulse** (the grid in the
-main colour on each kick over a dim bed of the second), **ripple** (a
-ring from the centre on each kick) or **sparkle** (pads sparking in the
-second colour on snares and hats, a wash on kicks). Without messages for
-2 s it lets go and everything is as it was; while it runs, standby and
-deep sleep wait. Pads still play notes underneath. The decays are first
-guesses.
+each kick (white falling toward the main colour, or in a colour) and the
+pads play the animation: **0 meter** (each column a bar from its band,
+like the standby equalizer), **1 pulse** (the grid in the main colour on
+each kick over a dim bed of the second), **2 ripple** (a ring from the
+centre on each kick), **3 sparkle** (pads sparking in the accent colour
+on snares and hats, a wash on kicks), **4 rain** (drops fall from the top
+row: kicks in the main colour, accents in the accent colour), **5 chase**
+(a lit column steps across on each kick) or **6 spectrum** (the meter's
+bars coloured main to second across the grid, peaks in the accent
+colour). Without messages for 2 s it lets go and everything is as it
+was; while it runs, standby and deep sleep wait. Pads still play notes
+underneath. The decays are first guesses.
 
 ## Status
 
