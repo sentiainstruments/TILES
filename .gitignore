@@ -1,6 +1,7 @@
 # Firmware build output
 firmware/build/
 firmware/build-unit*/
+firmware/build-bench/
 # Update kits (tools/make_update_kit.sh)
 dist/
 firmware/cmake-build-*/
