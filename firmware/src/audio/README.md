@@ -58,7 +58,7 @@ MIDI Studio and replug (the same cache as the Parts port).
 
 ## Next
 
-- The real engines (the web player's sounds are the starting point:
-  `TILES_QuickStart/play/synth-worklet.js`).
-- The same engine output to an I2S DAC for headphones and line out on
-  the next board (`../../../docs/hardware/audio-output.md`).
+The plan (voices, engines, effects, budgets, clocks) is
+`../../../docs/architecture/audio-engine.md`; TILES v1 (First Edition)
+adds the DAC and jack (`../../../docs/hardware/audio-output.md`,
+`tiles-v1.md`).

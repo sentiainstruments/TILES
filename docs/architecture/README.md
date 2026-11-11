@@ -11,6 +11,10 @@ belonging to one module.
   talks to the device (USB vendor interface, the settings table,
   layouts as portable files), what's built, the next steps, and the app
   stack choice.
+- [`audio-engine.md`](audio-engine.md): TILES's own sound -- the CPU,
+  RAM and flash budget, voice pools (8 played, 4 sequencer, drums), the
+  engines, reverb and delay, the load guard, and the USB and DAC
+  outputs and clocks.
 - [`content-packs.md`](content-packs.md): how sold packs reach a device --
   data content (scales, later layouts) pushed into the content store, code
   content (modes, games) unlocked per unit by signed entitlements -- and
