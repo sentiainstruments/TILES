@@ -648,6 +648,33 @@ static void handle_line(char *line) {
     }
 
     /* Unit, firmware version, then flash-store status (for "did it save?"). */
+#if TILES_DSP_BENCH
+    /* BENCH START runs the DSP stress test on core 1; BENCH reports it
+     * (one line per kernel: cycles per sample per voice), or "running". */
+    if (strcmp(cmd, "BENCH") == 0) {
+        char *what = strtok(NULL, " ");
+        if (what != NULL && strcmp(what, "START") == 0) {
+            tiles_usb_audio_bench_start();
+            reply_ok();
+            return;
+        }
+        const tiles_dsp_bench_t *b = tiles_usb_audio_bench_result();
+        if (b == NULL) {
+            reply("running");
+        } else {
+            snprintf(text, sizeof(text), "clk_mhz=%lu", (unsigned long)b->clk_mhz);
+            reply(text);
+            for (uint32_t i = 0; i < b->count; i++) {
+                snprintf(text, sizeof(text), "%s units=%lu cycles=%lu.%03lu peak=%ld", b->item[i].name,
+                         (unsigned long)b->item[i].units, (unsigned long)(b->item[i].milli_cycles / 1000u),
+                         (unsigned long)(b->item[i].milli_cycles % 1000u), (long)b->item[i].peak_milli);
+                reply(text);
+            }
+        }
+        reply_ok();
+        return;
+    }
+#endif
     if (strcmp(cmd, "INFO") == 0) {
         tiles_settings_persist_info_t info = tiles_settings_persist_get_info();
         snprintf(text, sizeof(text), "unit=%u/%u", (unsigned)TILES_UNIT_NUMBER, (unsigned)TILES_UNIT_COUNT);

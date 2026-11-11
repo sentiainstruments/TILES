@@ -130,6 +130,14 @@ target_compile_definitions(sentia_tiles_firmware PRIVATE PICO_CORE1_STACK_SIZE=0
 # (test/bend_replay.c, built the same way) matches the board bit for bit.
 set_source_files_properties(services/bend_core.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 
+# cmake -DTILES_DSP_BENCH=ON: the DSP stress test (audio/dsp_bench.c,
+# settings shell BENCH). Never in a release: it holds 180 KB of RAM.
+option(TILES_DSP_BENCH "Build the DSP stress test" OFF)
+if(TILES_DSP_BENCH)
+    target_sources(sentia_tiles_firmware PRIVATE audio/dsp_bench.c)
+    target_compile_definitions(sentia_tiles_firmware PRIVATE TILES_DSP_BENCH=1)
+endif()
+
 # cmake -DTILES_UNIT=N: a build for unit N (board/unit_id.h's default
 # otherwise; tools/make_update_kit.sh).
 if(DEFINED TILES_UNIT)

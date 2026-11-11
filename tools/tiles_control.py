@@ -44,6 +44,7 @@ Usage:
     python3 tools/tiles_control.py tune                  # live tuning: every key, value, default, range
     python3 tools/tiles_control.py tune set bend.deadzone 0.03   # until power-off (the studio does this)
     python3 tools/tiles_control.py tune reset            # all keys back to their defaults (or: tune reset <key>)
+    python3 tools/tiles_control.py bench                 # DSP stress test (a -DTILES_DSP_BENCH=ON build only)
 
 Changes apply immediately and are saved to flash automatically a couple of
 seconds after the last one (only while no pad is being touched); `save` just
@@ -213,6 +214,22 @@ def capture(session, pad, seconds, path):
     print(f"{len(rows)} samples saved to {path} ({status[0] if status else ''})")
 
 
+def bench(session):
+    """Runs the DSP stress test on core 1 (docs/architecture/audio-engine.md) and prints
+    every kernel's cycles per sample; only a firmware built with -DTILES_DSP_BENCH=ON has it."""
+    reply = session.command("BENCH START")
+    if reply != ["OK"]:
+        sys.exit(f"bench: {' '.join(reply)} (not a TILES_DSP_BENCH build?)")
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        time.sleep(1.0)
+        lines = session.command("BENCH", multi_line=True)
+        if lines and lines[0] != "running":
+            print("\n".join(lines))
+            return
+    sys.exit("bench: no result after 60 s")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -252,6 +269,9 @@ def main():
         request, multi = f"TUNE SET {sys.argv[3]} {sys.argv[4]}", False
     elif command == "tune" and argc in (3, 4) and sys.argv[2].lower() == "reset":
         request, multi = " ".join(["TUNE RESET"] + sys.argv[3:]), False
+    elif command == "bench" and argc == 2:
+        bench(session)
+        return
     elif command == "capture" and argc == 5:
         capture(session, int(sys.argv[2]), float(sys.argv[3]), sys.argv[4])
         return

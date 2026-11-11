@@ -37,3 +37,11 @@ typedef struct {
 } tiles_usb_audio_info_t;
 
 tiles_usb_audio_info_t tiles_usb_audio_get_info(void);
+
+#if TILES_DSP_BENCH
+#include "dsp_bench.h"
+/* Bench builds: core 1 runs the DSP stress test (a few seconds). */
+void tiles_usb_audio_bench_start(void);
+/* NULL until the last run finished. */
+const tiles_dsp_bench_t *tiles_usb_audio_bench_result(void);
+#endif

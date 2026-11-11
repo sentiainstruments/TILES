@@ -6,14 +6,14 @@ test voice streamed as a USB audio input (Alpha 7,
 `firmware/src/audio/README.md`). TILES v1 (First Edition) adds a stereo
 DAC and one phones/line jack (`../hardware/audio-output.md`).
 
-Agreed 2026-11-11. Every cycle figure below is an estimate until the
-test voice is measured on a board (see "Order of work").
+Agreed 2026-11-11. Cycle figures are **measured on unit 2** the same day
+(the DSP stress test, below), not estimates.
 
 ## Budget
 
 | | Today | Notes |
 |---|---|---|
-| CPU | core 1 only, ~3,100 cycles per sample at 150 MHz / 48 kHz; plan on ~2,300 | core 0 scans the pads and stays as it is |
+| CPU | core 1 only: 3,125 cycles per sample at 150 MHz / 48 kHz; the load guard aims at 75 % (~2,340) | core 0 scans the pads and stays as it is (its loop measured the same, 2.2 ms, during the test) |
 | RAM | ~275 KB free of 520 KB | ~355 KB in release builds: the 80 KB sensor-capture buffer is a development tool and is compiled out |
 | Flash | ~3.5 MB free of 4 MB | code, wavetables, small samples; not a full sampled piano |
 
@@ -34,51 +34,95 @@ shortened tail, never a click in a recording.
 ## Engines
 
 The web player's sounds (`TILES_QuickStart/play/synth-worklet.js`) are
-the starting point, ported to C on core 1.
+the starting point, ported to C on core 1. The web player's sampled grand
+piano (hundreds of MB) doesn't fit; a modelled or FM piano takes its
+place. Sound names stay Sentia's own (no instrument or product names).
 
-| Engine | Kind | Cycles per voice per sample |
+## Measured cost
+
+Cycles per output sample at 150 MHz, measured on unit 2 with the
+instrument loop running on core 0, two runs within 2 % of each other.
+High-quality float prototypes (`firmware/src/audio/dsp_bench.c`), run
+from RAM.
+
+**Voices** (per voice)
+
+| Kernel | Cycles |
+|---|---|
+| Wavetable: 8 frames x 2048, morph by pressure, SVF low-pass | ~112 |
+| Analog: 2 anti-aliased saws, zero-delay 4-pole ladder, 2 envelopes, LFO; filter worked out every sample | ~325 |
+| The same analog voice, filter worked out every 8 samples (6 kHz control rate) | ~192 |
+| The same analog voice run from flash instead of RAM | ~670 |
+| FM: 4 operators in two stacks with feedback (not yet optimized) | ~190 |
+| Plucked string: Karplus-Strong with allpass tuning | ~69 |
+| Granular: one grain (window, interpolated read) | ~75 |
+
+**Drums** (per sounding hit): kick ~155 (~135 with its state in
+registers), snare ~160, clap ~125; hat from six anti-aliased squares
+~460, from filtered noise ~130.
+
+**Effects** (per 48 kHz sample): plate reverb run at 24 kHz ~400,
+ping-pong delay at 24 kHz ~160, chorus ~210, master (clip and 24-bit
+output) ~100-130.
+
+**Everything at once** (the real test; the parts overlap a little, so
+this is less than their sum)
+
+| Scene | Cycles | Core 1 |
 |---|---|---|
-| Wavetable, morphed by pressure (Pure Sine) | wavetable | ~40-60 |
-| Plucked / physical string | physical model | ~40-80 |
-| Electric piano | 4-operator FM | ~100-150 |
-| Analog-style pad (Aurora 80s): 2 oscillators, filter, 2 envelopes, LFO | virtual analog | ~150-250 |
-| Grain Cloud | granular, one cloud of ~24 grains | ~500-700 in all |
-| Drum kit, synthesized (Drum Rack order from C1) | drum synthesis | ~50-150 per hit |
+| Drums (kick, snare, hat) + chorus + delay + reverb, no voices | ~1,380 | 44 % |
+| Wavetable 8 + plucked 4 + drums + all effects | ~2,440 | **78 %** |
+| Analog (filter every 8 samples) 8 + plucked 4 + drums (noise hat) + all effects | ~2,750 | **88 %** |
+| FM 8 + plucked 4 + drums + all effects | ~3,090 | 99 % |
+| Analog (filter every 8 samples) 12 + plucked 4 + the same | ~3,480 | 111 % |
+| Analog (filter every sample) 8 + plucked 4 + the same | ~4,150 | 133 % |
 
-The web player's sampled grand piano (hundreds of MB) doesn't fit; a
-modelled or FM piano takes its place. Sound names stay Sentia's own
-(no instrument or product names).
+### What that means
+
+- **8 played + 4 sequencer + drums + reverb + delay fits at 150 MHz**
+  with wavetable and plucked sounds (78 %) and with the analog voice once
+  its filter runs at control rate (88 %; ~80 % without the chorus).
+- **FM** needs the same treatment (control-rate envelopes, state in
+  registers) to come down to about 85 %.
+- **12 + 4 analog voices don't fit at 150 MHz** (111 %); at ~200 MHz the
+  same scene would be about 83 %.
+- The effects bus is a quarter to a third of the core; the reverb is the
+  biggest single item.
+
+### Rules the test settled
+
+1. **All audio code runs from RAM, never inlined into flash code.** From
+   flash the analog voice is 2.1x slower; kernels the compiler had folded
+   into flash-resident callers measured about 2x slower too
+   (`__no_inline_not_in_flash_func`).
+2. **Filter coefficients at control rate** (every 8 samples): -40 % on
+   the analog voice.
+3. **No per-sample divisions** (a division-free clip), and voice state
+   in registers for the block (`restrict` buffers, locals): 5-20 %.
+4. **No six-oscillator metallic hats**: filtered noise, or a rendered
+   sample, at a quarter of the cost.
+5. A grain cloud is 12-16 grains (~900-1,200 cycles), not 24.
 
 ## Effects
 
 One shared bus after the voices, with a send level per sound (drums
 lighter on reverb).
 
-| Effect | Cycles per sample | RAM |
-|---|---|---|
-| Reverb: plate/room, run at 24 kHz (a tail needs no top octave) | ~150-250 | ~35-80 KB |
-| Delay: stereo ping-pong, tempo-synced, feedback with tone; 2 s (a bar at 120 BPM) stored at 24 kHz, so repeats darken like tape | ~40-80 | 192 KB |
-| Chorus (optional) | ~60-80 | ~4 KB |
+| Effect | RAM |
+|---|---|
+| Reverb: plate, run at 24 kHz (a tail needs no top octave) | ~73 KB (float lines) |
+| Delay: stereo ping-pong, tempo-synced, feedback with tone; 2 s (a bar at 120 BPM) stored at 24 kHz, so repeats darken like tape | 192 KB |
+| Chorus (optional) | ~8 KB |
 
-About 250 KB of RAM in all: this is why the capture buffer leaves
+About 270 KB of RAM in all: this is why the capture buffer leaves
 release builds.
 
-## Does it fit
+## The DSP stress test
 
-Everything at once: 8 played + 4 sequencer + drums + the effects bus.
-
-| Main sound | 8 played | 4 sequencer | Drums | Effects | Total (budget ~2,300) |
-|---|---|---|---|---|---|
-| Wavetable, FM, plucked | ~400-1,000 | ~200-500 | ~300-500 | ~350-400 | ~1,250-2,400 |
-| Analog-style pad | ~1,600 | ~800 | ~300-500 | ~350-400 | ~3,100 |
-
-The analog-style pad with everything running needs one of:
-
-1. a lighter engine on the sequencer lanes (bass, pluck), which suits
-   most patterns anyway;
-2. filters and mixing in fixed point with the M33's DSP instructions
-   (roughly 2x where it matters);
-3. a faster clock (below), once qualified.
+`cmake -DTILES_DSP_BENCH=ON` builds it in (never in a release: it holds
+180 KB of RAM); `tools/tiles_control.py bench` runs it on core 1 and
+prints the cycles per sample of every kernel and scene. Rerun it after
+any engine change and before settling a voice count.
 
 ## Outputs and clocks
 
@@ -102,10 +146,8 @@ The analog-style pad with everything running needs one of:
 
 ## Order of work
 
-1. Measure the test voice on unit 2 (Alpha 7): hold 16 notes with the
-   USB input open and read `audio.load_pct` (estimated ~25 %). If it
-   reads much higher, every figure here scales down.
+1. ~~Measure on a board~~: done 2026-11-11 (above).
 2. Engine framework: the three voice pools, the load guard, the effects
-   bus and per-sound sends.
+   bus and per-sound sends, following the rules above.
 3. Port the engines one at a time, wavetable first.
 4. v1 bring-up: I2S, the clock change, mute and headphone detect.

@@ -11,6 +11,7 @@ real engines replace the voice code, not the plumbing.
 | `audio_engine.c/.h` | The test voice: up to 16 MPE voices, a sine with a little harmonic colour. Plain C, no Pico code, tested on the computer (`test/test_audio_engine.c`). |
 | `audio_ring.h` | The lock-free single-producer/single-consumer ring the two cores talk through. |
 | `usb_audio.c/.h` | Starts core 1, feeds it TILES's MIDI, and answers TinyUSB's audio callbacks. The descriptor is in `midi/usb_descriptors.c`, the TinyUSB options in `midi/tusb_config.h`. |
+| `dsp_bench.c/.h` | The DSP stress test: high-quality prototypes of every planned engine, drum and effect, timed on core 1. Only in `-DTILES_DSP_BENCH=ON` builds (`tools/tiles_control.py bench`); results in `../../../docs/architecture/audio-engine.md`. |
 
 ## How it runs
 

@@ -46,6 +46,10 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_physics_core.c src
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/audio test/test_audio_engine.c src/audio/audio_engine.c -lm -o /tmp/sentia_tiles_test_audio_engine
 /tmp/sentia_tiles_test_audio_engine
 
+# The DSP stress test's kernels: each makes finite, non-silent sound.
+cc -std=gnu11 -O2 -Wall -Wextra -Wpedantic -Isrc/audio test/test_dsp_bench.c src/audio/dsp_bench.c -lm -o /tmp/sentia_tiles_test_dsp_bench
+/tmp/sentia_tiles_test_dsp_bench
+
 # Strike settle: when a struck pad's note can go before the follow-through ends.
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_strike_settle.c src/services/strike_settle.c src/services/tune.c src/services/bend_core.c -lm -o /tmp/sentia_tiles_test_strike_settle
 /tmp/sentia_tiles_test_strike_settle
