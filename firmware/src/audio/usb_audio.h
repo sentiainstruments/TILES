@@ -38,6 +38,11 @@ typedef struct {
 
 tiles_usb_audio_info_t tiles_usb_audio_get_info(void);
 
+/* True while nothing TILES plays itself can be heard: no host has the
+ * input open, or no voice sounds. Flash erases (tens of ms, core 1
+ * paused) wait for this. */
+bool tiles_usb_audio_is_quiet(void);
+
 #if TILES_DSP_BENCH
 #include "dsp_bench.h"
 /* Bench builds: core 1 runs the DSP stress test (a few seconds). */

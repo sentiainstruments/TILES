@@ -5,6 +5,7 @@
 #include "audio_ring.h"
 
 #include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -131,16 +132,115 @@ static void test_pressure_and_velocity(void) {
     CHECK(loud > soft * 1.5, "velocity didn't set the level (%.4f vs %.4f)", soft, loud);
 }
 
+/* Status bytes by part (channel nibbles from services/midi_channels.h). */
+#define ON(nib) ((uint8_t)(0x90u | (nib)))
+#define OFF(nib) ((uint8_t)(0x80u | (nib)))
+#define MELODIC 1u /* the MPE pool: track 2 */
+#define DRUMS 9u
+#define PHYSICS 10u /* track 4 */
+#define CHORDS 11u  /* track 3 */
+#define LANE4 12u
+#define LANE3 13u
+#define LANE2 14u
+#define LANE1 15u
+
+static void test_tracks(void) {
+    bool lane;
+    CHECK(tiles_audio_engine_track(LANE1, &lane) == 0u && lane, "lane 1 not on track 1");
+    CHECK(tiles_audio_engine_track(LANE2, &lane) == 1u && lane, "lane 2 not on track 2");
+    CHECK(tiles_audio_engine_track(LANE3, &lane) == 2u && lane, "lane 3 not on track 3");
+    CHECK(tiles_audio_engine_track(LANE4, &lane) == 3u && lane, "lane 4 not on track 4");
+    CHECK(tiles_audio_engine_track(MELODIC, &lane) == 1u && !lane, "melodic not on track 2");
+    CHECK(tiles_audio_engine_track(0u, &lane) == 1u && !lane, "MPE master not on track 2");
+    CHECK(tiles_audio_engine_track(CHORDS, &lane) == 2u && !lane, "chords not on track 3");
+    CHECK(tiles_audio_engine_track(PHYSICS, &lane) == 3u && !lane, "physics not on track 4");
+    CHECK(tiles_audio_engine_track(DRUMS, &lane) == TILES_AUDIO_TRACK_DRUMS, "drums not on the drum track");
+}
+
 static void test_voices(void) {
+    /* A track holds 8 at most. */
     reset();
-    for (uint8_t i = 0; i < 20u; i++) {
-        tiles_audio_engine_midi((uint8_t)(0x90u | (i % 15u + 1u)), (uint8_t)(48u + i), 100);
+    for (uint8_t i = 0; i < 10u; i++) {
+        tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(48u + i), 100);
     }
-    render(SECOND / 10u);
-    CHECK(tiles_audio_engine_active_voices() == TILES_AUDIO_VOICES, "voice count %u",
+    CHECK(tiles_audio_engine_track_voices(1u) == TILES_AUDIO_TRACK_VOICES, "track 2 holds %u",
+          tiles_audio_engine_track_voices(1u));
+
+    /* Melodic playing takes lane 2's voice, never its own first. */
+    reset();
+    for (uint8_t i = 0; i < 4u; i++) {
+        tiles_audio_engine_midi(ON(LANE2), (uint8_t)(60u + i), 100);
+        tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(70u + i), 100);
+    }
+    tiles_audio_engine_midi(ON(MELODIC), 80, 100);
+    CHECK(tiles_audio_engine_track_voices(1u) == 8u, "track 2 holds %u", tiles_audio_engine_track_voices(1u));
+    for (uint8_t i = 0; i < 4u; i++) {
+        tiles_audio_engine_midi(OFF(MELODIC), (uint8_t)(70u + i), 0);
+    }
+    tiles_audio_engine_midi(OFF(MELODIC), 80, 0);
+    render(SECOND / 2u);
+    CHECK(tiles_audio_engine_track_voices(1u) == 3u, "lane 2 kept %u notes, want 3",
+          tiles_audio_engine_track_voices(1u));
+
+    /* A lane note never takes a played one: skipped. */
+    reset();
+    for (uint8_t i = 0; i < 8u; i++) {
+        tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(60u + i), 100);
+    }
+    tiles_audio_engine_midi(ON(LANE2), 40, 100);
+    for (uint8_t i = 0; i < 8u; i++) {
+        tiles_audio_engine_midi(OFF(MELODIC), (uint8_t)(60u + i), 0);
+    }
+    render(SECOND / 2u);
+    CHECK(tiles_audio_engine_active_voices() == 0u, "the lane note took a played voice");
+
+    /* 12 in all: a full pool gives a tail first, then a sequencer note on
+     * any track, before anyone's played notes. */
+    reset();
+    for (uint8_t i = 0; i < 4u; i++) {
+        tiles_audio_engine_midi(ON(LANE1), (uint8_t)(40u + i), 100);
+        tiles_audio_engine_midi(ON(CHORDS), (uint8_t)(60u + i), 100);
+        tiles_audio_engine_midi(ON(PHYSICS), (uint8_t)(80u + i), 100);
+    }
+    CHECK(tiles_audio_engine_active_voices() == TILES_AUDIO_VOICES, "pool holds %u",
           tiles_audio_engine_active_voices());
+    tiles_audio_engine_midi(OFF(CHORDS), 61, 0);
+    tiles_audio_engine_midi(ON(MELODIC), 70, 100);
+    CHECK(tiles_audio_engine_track_voices(2u) == 3u && tiles_audio_engine_track_voices(0u) == 4u,
+          "a full pool didn't give the tail first");
+    tiles_audio_engine_midi(ON(MELODIC), 71, 100);
+    CHECK(tiles_audio_engine_track_voices(0u) == 3u && tiles_audio_engine_track_voices(2u) == 3u &&
+              tiles_audio_engine_track_voices(3u) == 4u && tiles_audio_engine_track_voices(1u) == 2u,
+          "a full pool didn't give lane 1's note (tracks %u %u %u %u)", tiles_audio_engine_track_voices(0u),
+          tiles_audio_engine_track_voices(1u), tiles_audio_engine_track_voices(2u),
+          tiles_audio_engine_track_voices(3u));
+    /* With no sequencer notes left, the busiest track gives its oldest. */
+    reset();
+    for (uint8_t i = 0; i < 6u; i++) {
+        tiles_audio_engine_midi(ON(PHYSICS), (uint8_t)(80u + i), 100);
+    }
+    for (uint8_t i = 0; i < 4u; i++) {
+        tiles_audio_engine_midi(ON(CHORDS), (uint8_t)(60u + i), 100);
+    }
+    tiles_audio_engine_midi(ON(LANE1), 40, 100);
+    tiles_audio_engine_midi(ON(LANE1), 41, 100);
+    tiles_audio_engine_midi(ON(MELODIC), 70, 100);
+    tiles_audio_engine_midi(ON(MELODIC), 71, 100);
+    CHECK(tiles_audio_engine_track_voices(0u) == 0u, "lane 1 kept %u notes", tiles_audio_engine_track_voices(0u));
+    tiles_audio_engine_midi(ON(MELODIC), 72, 100);
+    CHECK(tiles_audio_engine_track_voices(3u) == 5u && tiles_audio_engine_track_voices(2u) == 4u &&
+              tiles_audio_engine_track_voices(1u) == 3u,
+          "the busiest track didn't give its oldest");
+    tiles_audio_engine_midi(ON(LANE2), 50, 100);
+    CHECK(tiles_audio_engine_track_voices(1u) == 3u, "a lane note took a played voice in a full pool");
+    render(SECOND / 10u);
     double level = rms(SECOND / 10u);
     CHECK(level > 0.0 && level < 1.0, "full polyphony level %.3f", level);
+
+    /* Drum hits wait for the drum engine. */
+    reset();
+    tiles_audio_engine_midi(ON(DRUMS), 36, 100);
+    CHECK(tiles_audio_engine_active_voices() == 0u, "a drum hit took a voice");
 
     reset();
     tiles_audio_engine_midi(0x91, 60, 100);
@@ -167,6 +267,7 @@ int main(void) {
     test_pitch_and_bend();
     test_release_and_sustain();
     test_pressure_and_velocity();
+    test_tracks();
     test_voices();
     test_ring();
     if (s_failures) {

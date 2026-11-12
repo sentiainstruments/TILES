@@ -23,8 +23,10 @@ data.
   data that changes while music plays (drum mode's pattern; the mode,
   scale, key and octave in `services/play_state.c`). Each save is a
   new page-aligned record after the last (page programs only, well under a
-  millisecond); erasing the spare sector is a separate call the owner makes
-  when a stall doesn't matter. Same power-cut guarantee as kv_store, tested
+  millisecond each, and `tiles_log_append_start/step` puts out one page
+  per call so a big record never stalls more than one); erasing the spare
+  sector is a separate call the owner makes when a stall doesn't matter
+  (the clock stopped and TILES's own sound silent). Same power-cut guarantee as kv_store, tested
   the same way (`firmware/test/test_log_store.c`).
 - **`storage_flash.{h,c}`** -- the real flash ops (XIP reads; erase/program
   with interrupts off and the watchdog petted before/after, the same

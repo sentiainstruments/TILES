@@ -30,6 +30,7 @@
 #include "standby.h"
 #include "storage_flash.h"
 #include "touch.h"
+#include "usb_audio.h"
 
 #include "flash_map.h"
 
@@ -1700,6 +1701,8 @@ static uint32_t s_seq_next_check_ms;
 static uint32_t s_seq_retry_after_ms;
 static uint32_t s_seq_saves;
 static uint16_t s_seq_saved_bytes;
+static uint16_t s_seq_saving_len; /* the record going out */
+static bool s_seq_saving_truncated;
 static bool s_seq_truncated;
 static uint8_t s_seq_blob[TILES_LOG_MAX_PAYLOAD];
 
@@ -1730,7 +1733,27 @@ static void seq_autosave_init(bool crash_recovered) {
     s_seq_fingerprint = seq_fingerprint_now();
 }
 
-static void seq_autosave_service(uint32_t now_ms, bool clock_running, bool pads_touched) {
+/* What a page-at-a-time save reports when it ends. */
+static void seq_save_result(tiles_log_result_t r, uint32_t now_ms) {
+    if (r == TILES_LOG_PENDING) {
+        return;
+    }
+    if (r != TILES_LOG_OK) {
+        s_seq_dirty = true;
+        s_seq_retry_after_ms = (now_ms + SEQ_SAVE_RETRY_MS) | 1u;
+        return;
+    }
+    if (s_seq_saving_truncated && !s_seq_truncated) {
+        printf("[op_mode] sequencer autosave full: kept %u bytes\n", (unsigned)s_seq_saving_len);
+    }
+    s_seq_truncated = s_seq_saving_truncated;
+    s_seq_retry_after_ms = 0u;
+    s_seq_saves++;
+    s_seq_saved_bytes = s_seq_saving_len;
+}
+
+/* playing: the clock runs or TILES's own sound rings, so no erase. */
+static void seq_autosave_service(uint32_t now_ms, bool playing, bool pads_touched) {
     bool step_entered = s_seq_step_entered;
     s_seq_step_entered = false;
     if (!s_seq_storage) {
@@ -1745,10 +1768,15 @@ static void seq_autosave_service(uint32_t now_ms, bool clock_running, bool pads_
             s_seq_changed_ms = now_ms;
         }
     }
+    /* A record goes out one page per pass (under a millisecond each). */
+    if (s_seq_log.pending) {
+        seq_save_result(tiles_log_append_step(&s_seq_log), now_ms);
+        return;
+    }
     if (!s_seq_dirty) {
-        /* Idle and stopped: erase the spare sector now, so saves while
-         * playing never need to. */
-        if (!clock_running && !pads_touched && s_seq_log.have_newest && !s_seq_log.blank[1u - s_seq_log.newest_slot]) {
+        /* Stopped, silent and idle: erase the spare sector now, so saves
+         * while playing never need to. */
+        if (!playing && !pads_touched && s_seq_log.have_newest && !s_seq_log.blank[1u - s_seq_log.newest_slot]) {
             (void)tiles_log_prepare(&s_seq_log);
         }
         return;
@@ -1757,28 +1785,20 @@ static void seq_autosave_service(uint32_t now_ms, bool clock_running, bool pads_
         (s_seq_retry_after_ms != 0u && (int32_t)(now_ms - s_seq_retry_after_ms) < 0)) {
         return;
     }
-    if (clock_running && any_lane_running() && !step_entered) {
+    if (playing && any_lane_running() && !step_entered) {
         return; /* playing: right after a step starts */
     }
-    bool truncated = false;
-    uint16_t len = tiles_seq_encode(s_seq_pattern, s_seq_active_alt, s_seq_edit_lane, s_seq_blob, sizeof(s_seq_blob),
-                                    &truncated);
-    tiles_log_result_t r = tiles_log_append(&s_seq_log, s_seq_blob, len, TILES_SEQ_BLOB_VERSION, !clock_running);
+    s_seq_saving_truncated = false;
+    s_seq_saving_len = tiles_seq_encode(s_seq_pattern, s_seq_active_alt, s_seq_edit_lane, s_seq_blob,
+                                        sizeof(s_seq_blob), &s_seq_saving_truncated);
+    s_seq_dirty = false; /* a change from here on marks it again */
+    tiles_log_result_t r =
+        tiles_log_append_start(&s_seq_log, s_seq_blob, s_seq_saving_len, TILES_SEQ_BLOB_VERSION, !playing);
     if (r == TILES_LOG_ERR_NEEDS_ERASE) {
-        return; /* saved once the clock stops */
+        s_seq_dirty = true;
+        return; /* saved once the clock stops and the sound is silent */
     }
-    if (r != TILES_LOG_OK) {
-        s_seq_retry_after_ms = (now_ms + SEQ_SAVE_RETRY_MS) | 1u;
-        return;
-    }
-    if (truncated && !s_seq_truncated) {
-        printf("[op_mode] sequencer autosave full: kept %u bytes\n", (unsigned)len);
-    }
-    s_seq_truncated = truncated;
-    s_seq_dirty = false;
-    s_seq_retry_after_ms = 0u;
-    s_seq_saves++;
-    s_seq_saved_bytes = len;
+    seq_save_result(r, now_ms);
 }
 
 tiles_op_mode_seq_store_info_t tiles_op_mode_get_seq_store_info(void) {
@@ -3303,7 +3323,8 @@ void tiles_op_mode_scan(void) {
                          : s_active_mode == OP_MODE_ORBITS              ? OP_PLAY_STATE_ORBITS
                          : s_active_mode == OP_MODE_CRADLE              ? OP_PLAY_STATE_CRADLE
                                                                         : (uint8_t)s_active_mode;
-    tiles_play_state_service(now_ms, saved_mode, tiles_midi_clock_is_running(), !any_pad_touched());
+    tiles_play_state_service(now_ms, saved_mode, tiles_midi_clock_is_running() || !tiles_usb_audio_is_quiet(),
+                             !any_pad_touched());
 
     /* Boot guard: keep triangle's LED off for a moment (see
      * s_boot_relight_guard_until_ms). A no-op while a menu owns the LED. */
@@ -3400,11 +3421,14 @@ void tiles_op_mode_scan(void) {
     tiles_midi_clock_state_t step_clock = clock;
     step_clock.start_edge = fresh_start_edge;
     advance_playback(step_clock);
-    /* Right after the advance: they save just after a step starts. */
-    tiles_drum_seq_persist_service(now_ms, clock.running);
-    seq_autosave_service(now_ms, clock.running, any_pad_touched());
-    /* Pattern bank and Song saves, once the clock stops. */
-    if (!clock.running && !any_pad_touched()) {
+    /* Right after the advance: they save just after a step starts. An
+     * erase waits for the clock to stop and TILES's own sound to fall
+     * silent (it pauses core 1 for tens of ms). */
+    bool quiet = tiles_usb_audio_is_quiet();
+    tiles_drum_seq_persist_service(now_ms, clock.running || !quiet);
+    seq_autosave_service(now_ms, clock.running || !quiet, any_pad_touched());
+    /* Pattern bank and Song saves (erases), once stopped and silent. */
+    if (!clock.running && quiet && !any_pad_touched()) {
         if (s_pattern_store_pending) {
             s_pattern_store_pending = false;
             pattern_store_write_all();

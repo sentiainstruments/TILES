@@ -8,7 +8,7 @@ real engines replace the voice code, not the plumbing.
 
 | File | What it is |
 |---|---|
-| `audio_engine.c/.h` | The test voice: up to 16 MPE voices, a sine with a little harmonic colour. Plain C, no Pico code, tested on the computer (`test/test_audio_engine.c`). |
+| `audio_engine.c/.h` | The test voice, a sine with a little harmonic colour, on the four tracks: 12 MPE voices, at most 8 a track, with the stealing rule in `../../../docs/architecture/audio-engine.md` ("Tracks"). Plain C, no Pico code, tested on the computer (`test/test_audio_engine.c`). |
 | `audio_ring.h` | The lock-free single-producer/single-consumer ring the two cores talk through. |
 | `usb_audio.c/.h` | Starts core 1, feeds it TILES's MIDI, and answers TinyUSB's audio callbacks. The descriptor is in `midi/usb_descriptors.c`, the TinyUSB options in `midi/tusb_config.h`. |
 | `dsp_bench.c/.h` | The DSP stress test: high-quality prototypes of every planned engine, drum and effect, timed on core 1. Only in `-DTILES_DSP_BENCH=ON` builds (`tools/tiles_control.py bench`); results in `../../../docs/architecture/audio-engine.md`. |
@@ -19,10 +19,11 @@ real engines replace the voice code, not the plumbing.
   core 1 (idle until now) runs the engine. It keeps 3 ms of audio
   rendered ahead in a ring and sleeps in between.
 - **The engine hears what TILES plays.** `midi_out.c` copies every
-  channel message it sends into a queue for core 1, except drums
-  (channel 10) and what Song and Volca route to the Parts port. The same
-  messages go to USB MIDI and DIN, so recording MIDI and audio together
-  lines up.
+  channel message it sends into a queue for core 1, except drum hits
+  (sent between `tiles_midi_out_drums_begin/end`, any channel in Volca
+  mode), which wait for the drum engine. The channel says the track
+  (`tiles_audio_engine_track()`). The same messages go to USB MIDI and
+  DIN, so recording MIDI and audio together lines up.
 - **USB takes 48 frames a millisecond.** TinyUSB re-arms the isochronous
   endpoint only inside `tud_task()`, which the main loop calls a few
   times a pass. Each packet therefore carries 48 frames per USB frame
@@ -33,11 +34,13 @@ real engines replace the voice code, not the plumbing.
   programmed, so no core may run from flash. Every write goes through
   `tiles_flash_write_begin()/end()` (`storage/storage_flash.h`), which
   locks core 1 out (`multicore_lockout`) and masks interrupts; the USB
-  stream stops for that time too (an erase is tens of ms). Saves wait
-  for idle pads or a stopped clock, except the sequencer's autosave
-  while playing: it writes pre-erased flash right after a step (a few
-  ms, no erase), which will gap the built-in sound. To fix before the
-  engines ship (for example, hold it in RAM until the clock stops).
+  stream stops for that time too (an erase is tens of ms). So an erase
+  waits for the clock to stop and this sound to be silent
+  (`tiles_usb_audio_is_quiet()`: no host listening, or no voice
+  sounding): the autosaves, settings, pattern bank and Song. Saves while
+  playing write one 256-byte page per main-loop pass (under a
+  millisecond, inside the 3 ms ring; a late USB frame is made up).
+  Custom scales from the companion app still save at once.
 - **Latency** added by TILES: the 3 ms ring plus one packet, about 4 ms,
   on top of the host's own input buffer.
 

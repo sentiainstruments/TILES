@@ -17,6 +17,7 @@
 #include "pedal.h"
 #include "storage_flash.h"
 #include "touch.h"
+#include "usb_audio.h"
 
 #include "pico/time.h"
 
@@ -324,10 +325,10 @@ static const tiles_setting_def_t TABLE[] = {
 
 /* "Hands off the pads": a flash erase stalls the firmware for tens of ms. */
 /* Settings save (an erase: tens of ms of everything stalled) with the pads
- * idle and the clock stopped, so playing never hiccups; a change made
- * mid-song lands once it stops. */
+ * idle, the clock stopped and TILES's own sound silent, so playing never
+ * hiccups; a change made mid-song lands once it stops. */
 static bool pads_idle(void) {
-    if (tiles_midi_clock_is_running()) {
+    if (tiles_midi_clock_is_running() || !tiles_usb_audio_is_quiet()) {
         return false;
     }
     for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {

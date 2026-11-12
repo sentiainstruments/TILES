@@ -107,6 +107,20 @@ void tiles_midi_out_parts_end(void) {
     }
 }
 
+static uint8_t s_drums_depth;
+
+void tiles_midi_out_drums_begin(void) {
+    if (s_drums_depth < 255u) {
+        s_drums_depth++;
+    }
+}
+
+void tiles_midi_out_drums_end(void) {
+    if (s_drums_depth > 0u) {
+        s_drums_depth--;
+    }
+}
+
 static uint8_t cable_for_channel_message(uint8_t status) {
     if (!s_parts_separate) {
         return TILES_USB_MIDI_CABLE_MAIN;
@@ -158,10 +172,10 @@ static void usb_write(uint8_t cable, const char *what, const uint8_t *msg, uint3
 
 /* Two sinks: USB MAIN while mounted, and DIN whenever initialized. DIN
  * first: it only queues, while USB may wait. daw_cc is the exception.
- * TILES's own sound hears what it plays: not drums (channel 10) or what
- * Song and Volca route to PARTS. */
+ * TILES's own sound hears everything but drum hits, which wait for the
+ * drum engine (Volca mode puts them on any channel). */
 static void to_audio(uint8_t status, uint8_t data1, uint8_t data2) {
-    if (s_parts_depth == 0u && (status & 0x0Fu) != 9u) {
+    if (s_drums_depth == 0u) {
         tiles_usb_audio_midi(status, data1, data2);
     }
 }

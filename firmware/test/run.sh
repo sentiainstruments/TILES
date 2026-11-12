@@ -43,7 +43,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_physics_core.c src
 /tmp/sentia_tiles_test_physics_core
 
 # TILES's own sound (USB audio): the test voice and the cross-core ring.
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/audio test/test_audio_engine.c src/audio/audio_engine.c -lm -o /tmp/sentia_tiles_test_audio_engine
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/audio -Isrc/services test/test_audio_engine.c src/audio/audio_engine.c -lm -o /tmp/sentia_tiles_test_audio_engine
 /tmp/sentia_tiles_test_audio_engine
 
 # The DSP stress test's kernels: each makes finite, non-silent sound.

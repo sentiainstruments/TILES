@@ -12,7 +12,7 @@ belonging to one module.
   layouts as portable files), what's built, the next steps, and the app
   stack choice.
 - [`audio-engine.md`](audio-engine.md): TILES's own sound -- the CPU,
-  RAM and flash budget, voice pools (8 played, 4 sequencer, drums), the
+  RAM and flash budget, four tracks plus drums (12 voices), the
   engines, reverb and delay, the load guard, and the USB and DAC
   outputs and clocks.
 - [`content-packs.md`](content-packs.md): how sold packs reach a device --

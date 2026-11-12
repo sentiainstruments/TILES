@@ -138,7 +138,9 @@ crash reboot (`__uninitialized_ram`, `tiles_op_mode_init()`).
   `op_mode.c` (`../storage/flash_map.h`). Scale/key/octave and the
   active mode survive a power cycle (`play_state`, saved ~2 s after a
   change) and a crash reboot (`__uninitialized_ram`); running sequencer
-  lanes survive only a crash reboot.
+  lanes survive only a crash reboot. No save erases flash while the clock
+  runs or TILES's own sound rings (`tiles_usb_audio_is_quiet()`); saves
+  while playing go out a page per pass (`../audio/README.md`).
 - **Unmeasured constants.** Most timing and feel constants are marked
   as first guesses in their comments; the measured ones say what
   capture they came from. Re-measure before retuning.

@@ -46,8 +46,9 @@ bool tiles_drum_seq_is_volca(void);
 void tiles_drum_seq_init(const tiles_kv_ops_t *ops);
 
 /* Every scan: writes a changed pattern to flash at a safe moment (see
- * DRUM_SAVE_QUIET_MS in drum_seq.c). */
-void tiles_drum_seq_persist_service(uint32_t now_ms, bool clock_running);
+ * DRUM_SAVE_QUIET_MS in drum_seq.c), a page per pass; `playing` (the clock
+ * runs or TILES's own sound rings) holds off any erase. */
+void tiles_drum_seq_persist_service(uint32_t now_ms, bool playing);
 
 typedef struct {
     bool storage;

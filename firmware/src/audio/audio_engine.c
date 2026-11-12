@@ -1,5 +1,7 @@
 #include "audio_engine.h"
 
+#include "midi_channels.h"
+
 #include <math.h>
 #include <string.h>
 
@@ -26,6 +28,8 @@ typedef struct {
     uint8_t state;
     uint8_t channel;
     uint8_t note;
+    uint8_t track;
+    bool lane;      /* a sequencer lane's note, not a played one */
     float velocity; /* 0..1 */
     float poly;     /* poly pressure 0..1 */
     float env;      /* attack/release envelope 0..1 */
@@ -64,33 +68,124 @@ static float osc(uint32_t phase) {
     return s_sine[i] + frac * (s_sine[i + 1u] - s_sine[i]);
 }
 
-static voice_t *voice_for_note_on(uint8_t channel, uint8_t note) {
-    voice_t *free_voice = NULL, *quietest = NULL, *oldest = NULL;
+uint8_t tiles_audio_engine_track(uint8_t channel, bool *from_lane) {
+    *from_lane = true;
+    switch (channel) {
+    case TILES_MIDI_CH_SEQ_LANE_0:
+        return 0u;
+    case TILES_MIDI_CH_SEQ_LANE_1:
+        return 1u;
+    case TILES_MIDI_CH_SEQ_LANE_2:
+        return 2u;
+    case TILES_MIDI_CH_SEQ_LANE_3:
+        return 3u;
+    default:
+        break;
+    }
+    *from_lane = false;
+    switch (channel) {
+    case TILES_MIDI_CH_CHORD: /* Prism, Duet's chords, the chord strip */
+        return 2u;
+    case TILES_MIDI_CH_GAME: /* the physics modes, bouncing notes, games */
+        return 3u;
+    case TILES_MIDI_CH_DRUMS:
+        return TILES_AUDIO_TRACK_DRUMS;
+    default: /* the MPE master and pool: melodic, Duet's melody, bass, Song */
+        return 1u;
+    }
+}
+
+/* The voice to give up on `track` (-1: any): the quietest releasing tail,
+ * else (unless tails_only) the oldest sequencer note, else, for a played
+ * note only, the oldest played note. */
+static voice_t *victim(int32_t track, bool tails_only, bool take_played) {
+    voice_t *tail = NULL, *lane = NULL, *played = NULL;
     for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
         voice_t *v = &s_voice[i];
-        if (v->state != VOICE_OFF && v->channel == channel && v->note == note) {
-            return v; /* the same note again: retrigger, never two */
+        if (v->state == VOICE_OFF || (track >= 0 && v->track != (uint8_t)track)) {
+            continue;
         }
+        if (v->state == VOICE_RELEASE) {
+            if (tail == NULL || v->env < tail->env) {
+                tail = v;
+            }
+        } else if (v->lane) {
+            if (lane == NULL || v->age < lane->age) {
+                lane = v;
+            }
+        } else if (played == NULL || v->age < played->age) {
+            played = v;
+        }
+    }
+    if (tail != NULL || tails_only) {
+        return tail;
+    }
+    if (lane != NULL) {
+        return lane;
+    }
+    return take_played ? played : NULL;
+}
+
+/* A free voice while the track has fewer than 8 and the pool fewer than
+ * 12. A full track gives up one of its own (so a played note takes its
+ * lane's voice). A full pool gives, in order: a releasing tail anywhere,
+ * this track's oldest sequencer note, the oldest sequencer note anywhere,
+ * then (for a played note) the oldest played note on the busiest track. A
+ * sequencer note never takes a played one: with nothing left it is
+ * skipped (NULL). */
+static voice_t *voice_for_note_on(uint8_t channel, uint8_t note, uint8_t track, bool lane) {
+    voice_t *free_voice = NULL;
+    uint32_t total = 0, per_track[TILES_AUDIO_TRACKS] = {0};
+    for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
+        voice_t *v = &s_voice[i];
         if (v->state == VOICE_OFF) {
             if (free_voice == NULL) {
                 free_voice = v;
             }
-        } else if (v->state == VOICE_RELEASE) {
-            if (quietest == NULL || v->env < quietest->env) {
-                quietest = v;
-            }
-        } else if (oldest == NULL || v->age < oldest->age) {
-            oldest = v;
+            continue;
         }
+        if (v->channel == channel && v->note == note) {
+            return v; /* the same note again: retrigger, never two */
+        }
+        total++;
+        per_track[v->track]++;
     }
-    if (free_voice != NULL) {
+    bool played = !lane;
+    if (per_track[track] >= TILES_AUDIO_TRACK_VOICES) {
+        return victim((int32_t)track, false, played);
+    }
+    if (total < TILES_AUDIO_VOICES) {
         return free_voice;
     }
-    return quietest != NULL ? quietest : oldest;
+    voice_t *v = victim(-1, true, false);
+    if (v == NULL) {
+        v = victim((int32_t)track, false, false);
+    }
+    if (v == NULL) {
+        v = victim(-1, false, false);
+    }
+    if (v == NULL && played) {
+        uint8_t busiest = 0u;
+        for (uint8_t t = 1u; t < TILES_AUDIO_TRACKS; t++) {
+            if (per_track[t] > per_track[busiest]) {
+                busiest = t;
+            }
+        }
+        v = victim((int32_t)busiest, false, true);
+    }
+    return v;
 }
 
 static void note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
-    voice_t *v = voice_for_note_on(channel, note);
+    bool lane;
+    uint8_t track = tiles_audio_engine_track(channel, &lane);
+    if (track == TILES_AUDIO_TRACK_DRUMS) {
+        return; /* the drum kit comes with the drum engine */
+    }
+    voice_t *v = voice_for_note_on(channel, note, track, lane);
+    if (v == NULL) {
+        return;
+    }
     if (v->state == VOICE_OFF) {
         v->phase = 0; /* a sine from zero starts without a click */
         v->env = 0.0f;
@@ -99,6 +194,8 @@ static void note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
     v->state = VOICE_ON;
     v->channel = channel;
     v->note = note;
+    v->track = track;
+    v->lane = lane;
     v->velocity = (float)velocity / 127.0f;
     v->poly = 0.0f;
     v->age = ++s_age;
@@ -237,6 +334,16 @@ uint8_t tiles_audio_engine_active_voices(void) {
     uint8_t count = 0;
     for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
         if (s_voice[i].state != VOICE_OFF) {
+            count++;
+        }
+    }
+    return count;
+}
+
+uint8_t tiles_audio_engine_track_voices(uint8_t track) {
+    uint8_t count = 0;
+    for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
+        if (s_voice[i].state != VOICE_OFF && s_voice[i].track == track) {
             count++;
         }
     }

@@ -168,17 +168,20 @@ static bool erase_slot(tiles_log_t *log, uint8_t slot) {
 }
 
 bool tiles_log_prepare(tiles_log_t *log) {
-    if (log->ops == NULL || !log->have_newest) {
+    if (log->ops == NULL || !log->have_newest || log->pending) { /* never the sector a record is going to */
         return false;
     }
     uint8_t other = (uint8_t)(1u - log->newest_slot);
     return !log->blank[other] && erase_slot(log, other);
 }
 
-tiles_log_result_t tiles_log_append(tiles_log_t *log, const uint8_t *payload, uint16_t len, uint16_t payload_version,
-                                    bool allow_erase) {
+tiles_log_result_t tiles_log_append_start(tiles_log_t *log, const uint8_t *payload, uint16_t len,
+                                          uint16_t payload_version, bool allow_erase) {
     if (log->ops == NULL) {
         return TILES_LOG_ERR_NOT_INIT;
+    }
+    if (log->pending) {
+        return TILES_LOG_ERR_BUSY;
     }
     if (len > TILES_LOG_MAX_PAYLOAD) {
         return TILES_LOG_ERR_TOO_BIG;
@@ -198,7 +201,7 @@ tiles_log_result_t tiles_log_append(tiles_log_t *log, const uint8_t *payload, ui
     }
 
     uint32_t seq = log->have_newest ? log->newest_seq + 1u : 1u;
-    uint8_t hdr[TILES_LOG_HEADER_SIZE];
+    uint8_t *hdr = log->pend_hdr;
     put_u32(&hdr[0], TILES_LOG_MAGIC);
     put_u32(&hdr[4], seq);
     put_u16(&hdr[8], len);
@@ -211,33 +214,63 @@ tiles_log_result_t tiles_log_append(tiles_log_t *log, const uint8_t *payload, ui
     log->next_free_page[slot] = (uint8_t)(page + pages);
     log->blank[slot] = false;
 
+    log->pending = true;
+    log->pend_payload = payload;
+    log->pend_seq = seq;
+    log->pend_len = len;
+    log->pend_version = payload_version;
+    log->pend_slot = slot;
+    log->pend_page = page;
+    log->pend_left = pages;
+    return tiles_log_append_step(log);
+}
+
+tiles_log_result_t tiles_log_append_step(tiles_log_t *log) {
+    if (!log->pending) {
+        return TILES_LOG_ERR_NOT_INIT;
+    }
+    uint8_t k = (uint8_t)(log->pend_left - 1u); /* last page first, page 0 (the magic) last */
     uint8_t buf[TILES_KV_PAGE_SIZE];
-    for (int k = (int)pages - 1; k >= 0; k--) { /* page 0 (the magic) last */
-        memset(buf, 0xFF, sizeof(buf));
-        for (uint32_t i = 0; i < TILES_KV_PAGE_SIZE; i++) {
-            uint32_t pos = (uint32_t)k * TILES_KV_PAGE_SIZE + i;
-            if (pos < TILES_LOG_HEADER_SIZE) {
-                buf[i] = hdr[pos];
-            } else if (pos - TILES_LOG_HEADER_SIZE < len) {
-                buf[i] = payload[pos - TILES_LOG_HEADER_SIZE];
-            }
-        }
-        if (!log->ops->program(slot, (uint32_t)(page + k) * TILES_KV_PAGE_SIZE, buf, TILES_KV_PAGE_SIZE)) {
-            return TILES_LOG_ERR_PROGRAM;
+    memset(buf, 0xFF, sizeof(buf));
+    for (uint32_t i = 0; i < TILES_KV_PAGE_SIZE; i++) {
+        uint32_t pos = (uint32_t)k * TILES_KV_PAGE_SIZE + i;
+        if (pos < TILES_LOG_HEADER_SIZE) {
+            buf[i] = log->pend_hdr[pos];
+        } else if (pos - TILES_LOG_HEADER_SIZE < log->pend_len) {
+            buf[i] = log->pend_payload[pos - TILES_LOG_HEADER_SIZE];
         }
     }
+    if (!log->ops->program(log->pend_slot, (uint32_t)(log->pend_page + k) * TILES_KV_PAGE_SIZE, buf,
+                           TILES_KV_PAGE_SIZE)) {
+        log->pending = false;
+        return TILES_LOG_ERR_PROGRAM;
+    }
+    if (--log->pend_left > 0u) {
+        return TILES_LOG_PENDING;
+    }
+    log->pending = false;
 
     uint32_t got_seq;
     uint16_t got_len, got_version;
-    if (!record_valid(log, slot, page, &got_seq, &got_len, &got_version) || got_seq != seq || got_len != len) {
+    if (!record_valid(log, log->pend_slot, log->pend_page, &got_seq, &got_len, &got_version) ||
+        got_seq != log->pend_seq || got_len != log->pend_len) {
         return TILES_LOG_ERR_VERIFY;
     }
     log->have_newest = true;
-    log->newest_slot = slot;
-    log->newest_page = page;
-    log->newest_seq = seq;
-    log->newest_len = len;
-    log->newest_version = payload_version;
+    log->newest_slot = log->pend_slot;
+    log->newest_page = log->pend_page;
+    log->newest_seq = log->pend_seq;
+    log->newest_len = log->pend_len;
+    log->newest_version = log->pend_version;
     log->writes++;
     return TILES_LOG_OK;
+}
+
+tiles_log_result_t tiles_log_append(tiles_log_t *log, const uint8_t *payload, uint16_t len, uint16_t payload_version,
+                                    bool allow_erase) {
+    tiles_log_result_t r = tiles_log_append_start(log, payload, len, payload_version, allow_erase);
+    while (r == TILES_LOG_PENDING) {
+        r = tiles_log_append_step(log);
+    }
+    return r;
 }

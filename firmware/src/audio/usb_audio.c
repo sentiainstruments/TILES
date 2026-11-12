@@ -135,6 +135,10 @@ void tiles_usb_audio_midi(uint8_t status, uint8_t data1, uint8_t data2) {
     }
 }
 
+bool tiles_usb_audio_is_quiet(void) {
+    return !s_streaming || s_voices == 0u;
+}
+
 tiles_usb_audio_info_t tiles_usb_audio_get_info(void) {
     tiles_usb_audio_info_t info = {
         .streaming = s_streaming,

@@ -17,15 +17,29 @@ Agreed 2026-11-11. Cycle figures are **measured on unit 2** the same day
 | RAM | ~275 KB free of 520 KB | ~355 KB in release builds: the 80 KB sensor-capture buffer is a development tool and is compiled out |
 | Flash | ~3.7 MB free of 4 MB (the image is ~330 KB) | 1.5 MB for the 8 drum sample slots, ~1 MB kept for code, the rest for wavetables; not a full sampled piano |
 
-## Voices
+## Tracks
 
-| Pool | Voices | Plays |
+Four tracks plus drums play at once, each track one engine (its own
+sound). A sequencer lane plays on its track; a mode played live takes
+over a track and borrows its lane's voices.
+
+| Track | Sequencer lane | Played on it (and takes the lane's voices) |
 |---|---|---|
-| Played | 8 | what you play on the pads, MPE per note |
-| Sequencer | 4 | one per sequencer lane; its own pool, so a running pattern never steals a held note |
-| Drums | the kit (8 sounds, each synthesized or one sample slot) | drum mode and the drum lanes; only a few ring at once |
+| 1 | lane 1 | nothing: the sequencer's own |
+| 2 | lane 2 | melodic, Duet's melody, bass guitar, Song's tracks (the MPE channels) |
+| 3 | lane 3 | Prism, Duet's chord columns, the chord strip (channel 12) |
+| 4 | lane 4 | the physics modes, bouncing notes, games (channel 11) |
+| Drums | the drum lanes | drum mode and Volca mode: the kit (8 sounds, each synthesized or one sample slot) |
 
-An engine never runs more than 12 voices (8 + 4).
+**Voices:** up to 12 across the four tracks, at most 8 on one. A new note
+takes a free voice while both allow it. A full track gives up one of its
+own: a releasing tail, then its lane's oldest note, then (for a played
+note only) its oldest played note. A full pool gives, in order: a tail
+anywhere, this track's lane note, any lane's note, then (for a played
+note) the oldest played note on the busiest track. A sequencer note never
+takes a played one; with nothing left it is skipped. Built in
+`firmware/src/audio/audio_engine.c` (the test voice), tested in
+`test/test_audio_engine.c`.
 
 **Load guard, from the first engine on:** if core 1 runs short of time,
 it releases the quietest voice instead of glitching. The worst case is a
@@ -89,9 +103,10 @@ this is less than their sum)
 
 ### What that means
 
-- **8 played + 4 sequencer + drums + reverb + delay fits at 150 MHz**
-  with wavetable and plucked sounds (78 %) and with the analog voice once
-  its filter runs at control rate (88 %; ~80 % without the chorus).
+- **12 voices across the tracks + drums + reverb + delay fits at
+  150 MHz** (the scenes' 8 + 4) with wavetable and plucked sounds (78 %)
+  and with the analog voice once its filter runs at control rate (88 %;
+  ~80 % without the chorus).
 - **FM** needs the same treatment (control-rate envelopes, state in
   registers) to come down to about 85 %.
 - **Six-operator FM:** 12 voices with the effects need ~200 MHz (79 %);
@@ -186,7 +201,8 @@ settling a voice count.
 ## Order of work
 
 1. ~~Measure on a board~~: done 2026-11-11 (above).
-2. Engine framework: the three voice pools, the load guard, the effects
+2. Engine framework: an engine per track (the voice rule above is
+   built), the load guard, the effects
    bus and per-sound sends, following the rules above.
 3. Port the engines one at a time, wavetable first.
 4. Sample player: the 8 slots, DMA streaming, checked with the soak.

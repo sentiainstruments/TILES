@@ -112,6 +112,8 @@ static uint32_t s_retry_after_ms;
 static bool s_step_entered;
 static uint32_t s_saves;
 static uint16_t s_saved_bytes;
+static uint16_t s_saving_len; /* the record going out */
+static bool s_saving_truncated;
 static uint8_t s_blob[TILES_LOG_MAX_PAYLOAD];
 
 static uint32_t now_ms(void) {
@@ -138,22 +140,26 @@ static bool volca_channel(uint8_t note, uint8_t *channel) {
 static void drum_midi_on(uint8_t note, uint8_t velocity) {
     uint8_t channel;
     tiles_midi_out_parts_begin();
+    tiles_midi_out_drums_begin();
     if (!s_volca) {
         tiles_midi_note_on(TILES_MIDI_CH_DRUMS, note, velocity);
     } else if (volca_channel(note, &channel)) {
         tiles_midi_note_on(channel, TILES_VOLCA_NOTE, velocity);
     }
+    tiles_midi_out_drums_end();
     tiles_midi_out_parts_end();
 }
 
 static void drum_midi_off(uint8_t note) {
     uint8_t channel;
     tiles_midi_out_parts_begin();
+    tiles_midi_out_drums_begin();
     if (!s_volca) {
         tiles_midi_note_off(TILES_MIDI_CH_DRUMS, note, 0u);
     } else if (volca_channel(note, &channel)) {
         tiles_midi_note_off(channel, TILES_VOLCA_NOTE, 0u);
     }
+    tiles_midi_out_drums_end();
     tiles_midi_out_parts_end();
 }
 
@@ -386,16 +392,42 @@ static bool any_pad_touched(void) {
     return false;
 }
 
-void tiles_drum_seq_persist_service(uint32_t now, bool clock_running) {
+/* What a page-at-a-time save reports when it ends. */
+static void save_result(tiles_log_result_t r, uint32_t now) {
+    if (r == TILES_LOG_PENDING) {
+        return;
+    }
+    if (r != TILES_LOG_OK) {
+        s_dirty = true;
+        s_retry_after_ms = now + DRUM_SAVE_RETRY_MS;
+        if (s_retry_after_ms == 0u) {
+            s_retry_after_ms = 1u;
+        }
+        return;
+    }
+    if (s_saving_truncated) {
+        printf("[drums] pattern too big to save whole: kept %u bytes\n", (unsigned)s_saving_len);
+    }
+    s_retry_after_ms = 0u;
+    s_saves++;
+    s_saved_bytes = s_saving_len;
+}
+
+void tiles_drum_seq_persist_service(uint32_t now, bool playing) {
     bool step_entered = s_step_entered;
     s_step_entered = false;
     if (!s_storage) {
         return;
     }
+    /* A record goes out one page per pass (under a millisecond each). */
+    if (s_log.pending) {
+        save_result(tiles_log_append_step(&s_log), now);
+        return;
+    }
     if (!s_dirty) {
-        /* Idle and stopped: erase the spare sector now, so saves while playing
-         * never need to. */
-        if (!clock_running && s_log.have_newest && !s_log.blank[1u - s_log.newest_slot] && !any_pad_touched()) {
+        /* Stopped, silent and idle: erase the spare sector now, so saves
+         * while playing never need to. */
+        if (!playing && s_log.have_newest && !s_log.blank[1u - s_log.newest_slot] && !any_pad_touched()) {
             (void)tiles_log_prepare(&s_log);
         }
         return;
@@ -404,29 +436,18 @@ void tiles_drum_seq_persist_service(uint32_t now, bool clock_running) {
         (s_retry_after_ms != 0u && (int32_t)(now - s_retry_after_ms) < 0) || any_pad_touched()) {
         return;
     }
-    if (clock_running && s_player.running && (!step_entered || tiles_drum_player_repeats_pending(&s_player))) {
+    if (playing && s_player.running && (!step_entered || tiles_drum_player_repeats_pending(&s_player))) {
         return; /* playing: right after a step starts, nothing else due */
     }
-    bool truncated = false;
-    uint16_t len = tiles_drum_pattern_encode(&s_pattern, s_blob, sizeof(s_blob), &truncated);
-    tiles_log_result_t r = tiles_log_append(&s_log, s_blob, len, TILES_DRUM_BLOB_VERSION, !clock_running);
+    s_saving_truncated = false;
+    s_saving_len = tiles_drum_pattern_encode(&s_pattern, s_blob, sizeof(s_blob), &s_saving_truncated);
+    s_dirty = false; /* a change from here on marks it again */
+    tiles_log_result_t r = tiles_log_append_start(&s_log, s_blob, s_saving_len, TILES_DRUM_BLOB_VERSION, !playing);
     if (r == TILES_LOG_ERR_NEEDS_ERASE) {
-        return; /* saved once the clock stops */
+        s_dirty = true;
+        return; /* saved once the clock stops and the sound is silent */
     }
-    if (r != TILES_LOG_OK) {
-        s_retry_after_ms = now + DRUM_SAVE_RETRY_MS;
-        if (s_retry_after_ms == 0u) {
-            s_retry_after_ms = 1u;
-        }
-        return;
-    }
-    if (truncated) {
-        printf("[drums] pattern too big to save whole: kept %u bytes\n", (unsigned)len);
-    }
-    s_dirty = false;
-    s_retry_after_ms = 0u;
-    s_saves++;
-    s_saved_bytes = len;
+    save_result(r, now);
 }
 
 tiles_drum_seq_store_info_t tiles_drum_seq_get_store_info(void) {
