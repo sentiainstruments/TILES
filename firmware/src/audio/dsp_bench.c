@@ -928,6 +928,7 @@ static const uint32_t *smp_region(uint32_t voice, bool cached) {
 
 typedef struct {
     const uint32_t *src; /* int16 pairs */
+    uint32_t loop;       /* samples it plays before starting over */
     uint32_t pos, step;  /* 16.16, in samples */
     uint32_t w, a, b;    /* the pair word under pos and the next one */
     float gl, gr;
@@ -935,8 +936,9 @@ typedef struct {
 
 static const float k_smp_ratio[SMP_VOICES] = {1.0f, 1.0f, 1.0f, 1.0f, 1.06f, 0.94f, 1.0f, 1.12f};
 
-static void smp_init(smp_voice_t *v, const uint32_t *src, uint32_t slot) {
+static void smp_init(smp_voice_t *v, const uint32_t *src, uint32_t slot, uint32_t loop) {
     v->src = src;
+    v->loop = loop;
     v->pos = 0;
     v->step = (uint32_t)(k_smp_ratio[slot] * 65536.0f);
     v->w = 0;
@@ -947,6 +949,7 @@ static void smp_init(smp_voice_t *v, const uint32_t *src, uint32_t slot) {
 
 static void HOT(smp_process)(smp_voice_t *v, float *restrict l, float *restrict r, uint32_t n) {
     const uint32_t *src = v->src;
+    uint32_t loop = v->loop;
     uint32_t pos = v->pos, step = v->step, w = v->w, a = v->a, b = v->b;
     for (uint32_t i = 0; i < n; i++) {
         uint32_t idx = pos >> 16, wi = idx >> 1;
@@ -968,8 +971,8 @@ static void HOT(smp_process)(smp_voice_t *v, float *restrict l, float *restrict 
         l[i] += y * v->gl;
         r[i] += y * v->gr;
         pos += step;
-        if ((pos >> 16) >= SMP_LOOP_SAMPLES) {
-            pos -= SMP_LOOP_SAMPLES << 16;
+        if ((pos >> 16) >= loop) {
+            pos -= loop << 16;
         }
     }
     v->pos = pos;
@@ -1464,7 +1467,7 @@ static void bench_drums(run_t *x) {
             }
         }
         for (uint32_t i = 0; i < SMP_VOICES; i++) {
-            smp_init(&sv[i], pass == 0u ? ram : smp_region(i, pass == 1u), i);
+            smp_init(&sv[i], pass == 0u ? ram : smp_region(i, pass == 1u), i, SMP_LOOP_SAMPLES);
         }
         begin(x);
         for (uint32_t b = 0; b < BLOCKS; b++) {
@@ -1602,7 +1605,7 @@ static void bench_scene(run_t *x, int engine, uint32_t played, uint32_t seq, int
     hat_init(&h);
     nhat_init(&nh);
     for (uint32_t i = 0; i < SMP_VOICES; i++) {
-        smp_init(&sd[i], smp_region(i, true), i);
+        smp_init(&sd[i], smp_region(i, true), i, SMP_LOOP_SAMPLES);
     }
     static float send_l[BLOCK], send_r[BLOCK];
     begin(x);
@@ -1654,6 +1657,132 @@ static void bench_scene(run_t *x, int engine, uint32_t played, uint32_t seq, int
     finish(x, name, 1);
 }
 
+/* Capacity: how many voices of a mix fit next to 5 drums ringing and every
+ * effect, under the admission target. Voices are dealt round-robin over
+ * the mix's engines; drums are 5 synthesized hits or 5 samples from RAM. */
+#define CAP_MAX_VOICES 32u
+#define CAP_DRUMS 5u
+#define CAP_TARGET_PCT 85u
+#define CAP_SMP_RAM_SAMPLES 4096u
+
+static uint32_t capacity_run(run_t *x, const int *mix, uint32_t mix_len, uint32_t n, bool sample_drums) {
+    static fm6b_voice_t fm6[CAP_MAX_VOICES];
+    static va_voice_t va[CAP_MAX_VOICES];
+    static wt_voice_t wt[CAP_MAX_VOICES];
+    static int engine_of[CAP_MAX_VOICES];
+    static reverb_t rvb;
+    static delay_t dl;
+    static chorus_t ch;
+    static kick_t k1, k2;
+    static snare_t sn;
+    static clap_t cl;
+    static nhat_t nh;
+    static smp_voice_t sd[CAP_DRUMS];
+    static float send_l[BLOCK], send_r[BLOCK];
+    s_arena_used = 0;
+    if (!reverb_init(&rvb) || !delay_init(&dl) || !chorus_init(&ch)) {
+        return 0u;
+    }
+    bool need_wt = false;
+    for (uint32_t i = 0; i < mix_len; i++) {
+        need_wt = need_wt || mix[i] == ENGINE_WAVETABLE;
+    }
+    if (need_wt && !wt_tables()) {
+        return 0u;
+    }
+    uint32_t *ram = NULL;
+    if (sample_drums) {
+        ram = arena_alloc(CAP_SMP_RAM_SAMPLES * 2u);
+        if (!ram) {
+            return 0u;
+        }
+        uint32_t rng = 0xF00Du;
+        for (uint32_t i = 0; i < CAP_SMP_RAM_SAMPLES / 2u; i++) {
+            ram[i] = (uint32_t)(int32_t)(noise(&rng) * 2147483647.0f) & 0x3FFF3FFFu;
+        }
+        for (uint32_t i = 0; i < CAP_DRUMS; i++) {
+            smp_init(&sd[i], ram, i, CAP_SMP_RAM_SAMPLES - 4u);
+        }
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        float note = 45.0f + 2.0f * (float)i, pan = (float)(i % 9u) / 4.0f - 1.0f;
+        engine_of[i] = mix[i % mix_len];
+        if (engine_of[i] == ENGINE_FM6) {
+            fm6b_init(&fm6[i], note, pan, (i & 1u) ? k_fm6_alg1 : k_fm6_alg5);
+        } else if (engine_of[i] == ENGINE_ANALOG_FAST) {
+            va_init(&va[i], note, pan);
+        } else {
+            wt_init(&wt[i], note, pan);
+        }
+    }
+    kick_init(&k1);
+    kick_init(&k2);
+    snare_init(&sn);
+    clap_init(&cl);
+    nhat_init(&nh);
+    begin(x);
+    for (uint32_t b = 0; b < BLOCKS; b++) {
+        clear(x);
+        for (uint32_t i = 0; i < n; i++) {
+            if (engine_of[i] == ENGINE_FM6) {
+                fm6b_process(&fm6[i], x->l, x->r, BLOCK);
+            } else if (engine_of[i] == ENGINE_ANALOG_FAST) {
+                va_fast_process(&va[i], x->l, x->r, BLOCK);
+            } else {
+                wt_process(&wt[i], x->l, x->r, BLOCK);
+            }
+        }
+        if (sample_drums) {
+            for (uint32_t i = 0; i < CAP_DRUMS; i++) {
+                smp_process(&sd[i], x->l, x->r, BLOCK);
+            }
+        } else {
+            kick_process(&k1, x->l, x->r, BLOCK);
+            kick_process(&k2, x->l, x->r, BLOCK);
+            snare_process(&sn, x->l, x->r, BLOCK);
+            clap_process(&cl, x->l, x->r, BLOCK);
+            nhat_process(&nh, x->l, x->r, BLOCK);
+        }
+        for (uint32_t i = 0; i < BLOCK; i++) {
+            send_l[i] = 0.3f * x->l[i];
+            send_r[i] = 0.3f * x->r[i];
+        }
+        chorus_process(&ch, send_l, send_r, x->l, x->r, BLOCK);
+        delay_process(&dl, send_l, send_r, x->l, x->r, BLOCK);
+        reverb_process(&rvb, send_l, send_r, x->l, x->r, BLOCK);
+        master_fast_process(x->l, x->r, s_out, BLOCK);
+        watch(x);
+    }
+    uint32_t elapsed = x->now_us() - x->t0;
+    return (uint32_t)((uint64_t)elapsed * x->clk_mhz * 1000u / ((uint64_t)BLOCK * BLOCKS));
+}
+
+/* Item: units = voices that fit, cycles = the load with them. 0 voices
+ * with 0 cycles: the arena ran out. */
+static void bench_capacity(run_t *x, const int *mix, uint32_t mix_len, bool sample_drums, const char *name) {
+    uint64_t budget_milli = (uint64_t)x->clk_mhz * 1000000u / 48000u * CAP_TARGET_PCT * 10u;
+    uint32_t fit = 0, fit_milli = capacity_run(x, mix, mix_len, 0u, sample_drums);
+    float fit_peak = x->peak;
+    for (uint32_t n = 1; n <= CAP_MAX_VOICES && fit_milli != 0u; n++) {
+        uint32_t m = capacity_run(x, mix, mix_len, n, sample_drums);
+        if (m == 0u || m > budget_milli) {
+            break;
+        }
+        fit = n;
+        fit_milli = m;
+        fit_peak = x->peak;
+    }
+    if (x->out->count >= TILES_DSP_BENCH_MAX_ITEMS) {
+        return;
+    }
+    tiles_dsp_bench_item_t *it = &x->out->item[x->out->count++];
+    strncpy(it->name, name, sizeof(it->name) - 1u);
+    it->name[sizeof(it->name) - 1u] = '\0';
+    it->units = fit;
+    it->milli_cycles = fit_milli;
+    it->peak_milli = (int32_t)(fit_peak * 1000.0f);
+}
+
 void tiles_dsp_bench_run(tiles_dsp_bench_t *out, uint32_t (*now_us)(void), uint32_t clk_mhz) {
     for (uint32_t i = 0; i <= 2048u; i++) {
         s_sin[i] = sinf(6.2831853f * (float)i / 2048.0f);
@@ -1688,13 +1817,22 @@ void tiles_dsp_bench_run(tiles_dsp_bench_t *out, uint32_t (*now_us)(void), uint3
     bench_scene(&x, ENGINE_FM6, 8, 4, DRUMS_SYNTH, "scene_fm6_8+4");
     bench_scene(&x, ENGINE_FM6, 8, 4, DRUMS_SAMPLES, "scene_fm6_8+4_smp");
     bench_scene(&x, ENGINE_ANALOG_FAST, 8, 4, DRUMS_SAMPLES, "scene_analog_fast_8+4_smp");
+    static const int fm[] = {ENGINE_FM6}, an[] = {ENGINE_ANALOG_FAST}, wtm[] = {ENGINE_WAVETABLE};
+    static const int mix3[] = {ENGINE_FM6, ENGINE_ANALOG_FAST, ENGINE_WAVETABLE};
+    for (uint32_t d = 0; d < 2u; d++) {
+        bool smp = d == 1u;
+        bench_capacity(&x, fm, 1u, smp, smp ? "cap_fm6_smpdrums" : "cap_fm6_synthdrums");
+        bench_capacity(&x, an, 1u, smp, smp ? "cap_analog_smpdrums" : "cap_analog_synthdrums");
+        bench_capacity(&x, wtm, 1u, smp, smp ? "cap_wavetable_smpdrums" : "cap_wavetable_synthdrums");
+        bench_capacity(&x, mix3, 3u, smp, smp ? "cap_mix3_smpdrums" : "cap_mix3_synthdrums");
+    }
 }
 
 void tiles_dsp_bench_soak(uint32_t (*now_us)(void), uint32_t ms, bool cached) {
     static smp_voice_t v[SMP_VOICES];
     static float l[BLOCK], r[BLOCK];
     for (uint32_t i = 0; i < SMP_VOICES; i++) {
-        smp_init(&v[i], smp_region(i, cached), i);
+        smp_init(&v[i], smp_region(i, cached), i, SMP_LOOP_SAMPLES);
     }
     uint32_t start = now_us();
     uint32_t blocks = 0;

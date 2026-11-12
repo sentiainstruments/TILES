@@ -220,7 +220,7 @@ def bench(session):
     reply = session.command("BENCH START")
     if reply != ["OK"]:
         sys.exit(f"bench: {' '.join(reply)} (not a TILES_DSP_BENCH build?)")
-    deadline = time.time() + 60
+    deadline = time.time() + 180
     while time.time() < deadline:
         time.sleep(1.0)
         lines = session.command("BENCH", multi_line=True)
@@ -228,7 +228,7 @@ def bench(session):
             print("\n".join(lines))
             break
     else:
-        sys.exit("bench: no result after 60 s")
+        sys.exit("bench: no result after 180 s")
     # Core 0's loop while core 1 streams the 8 sample slots from flash in real time
     # (loop.* is the last whole second).
     def loop_now():

@@ -22,6 +22,7 @@ static int s_failures;
     } while (0)
 
 #define SECOND TILES_AUDIO_RATE_HZ
+#define GUARD_TEST_BLOCKS 3u
 static int32_t s_buf[2u * SECOND];
 
 static void render(uint32_t frames) {
@@ -48,8 +49,16 @@ static double rms(uint32_t frames) {
     return sqrt(sum / frames);
 }
 
+/* 150 MHz: the voices' budget is 85 % of 3,125 cycles minus the 1,200
+ * reserve, 1,456. */
 static void reset(void) {
-    tiles_audio_engine_init(12u);
+    tiles_audio_engine_init(12u, 150u, NULL);
+}
+
+static void costs(uint32_t cycles) {
+    for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
+        tiles_audio_engine_set_track_cost(t, cycles);
+    }
 }
 
 static void test_silence_and_format(void) {
@@ -194,16 +203,16 @@ static void test_voices(void) {
     render(SECOND / 2u);
     CHECK(tiles_audio_engine_active_voices() == 0u, "the lane note took a played voice");
 
-    /* 12 in all: a full pool gives a tail first, then a sequencer note on
-     * any track, before anyone's played notes. */
+    /* A full budget (12 voices at 120 cycles) gives a tail first, then a
+     * sequencer note on any track, before anyone's played notes. */
     reset();
+    costs(120u);
     for (uint8_t i = 0; i < 4u; i++) {
         tiles_audio_engine_midi(ON(LANE1), (uint8_t)(40u + i), 100);
         tiles_audio_engine_midi(ON(CHORDS), (uint8_t)(60u + i), 100);
         tiles_audio_engine_midi(ON(PHYSICS), (uint8_t)(80u + i), 100);
     }
-    CHECK(tiles_audio_engine_active_voices() == TILES_AUDIO_VOICES, "pool holds %u",
-          tiles_audio_engine_active_voices());
+    CHECK(tiles_audio_engine_active_voices() == 12u, "the budget holds %u", tiles_audio_engine_active_voices());
     tiles_audio_engine_midi(OFF(CHORDS), 61, 0);
     tiles_audio_engine_midi(ON(MELODIC), 70, 100);
     CHECK(tiles_audio_engine_track_voices(2u) == 3u && tiles_audio_engine_track_voices(0u) == 4u,
@@ -216,6 +225,7 @@ static void test_voices(void) {
           tiles_audio_engine_track_voices(3u));
     /* With no sequencer notes left, the busiest track gives its oldest. */
     reset();
+    costs(120u);
     for (uint8_t i = 0; i < 6u; i++) {
         tiles_audio_engine_midi(ON(PHYSICS), (uint8_t)(80u + i), 100);
     }
@@ -237,6 +247,30 @@ static void test_voices(void) {
     double level = rms(SECOND / 10u);
     CHECK(level > 0.0 && level < 1.0, "full polyphony level %.3f", level);
 
+    /* A heavy note takes as many light ones as it needs. */
+    reset();
+    costs(100u);
+    tiles_audio_engine_set_track_cost(1u, 300u);
+    for (uint8_t i = 0; i < 4u; i++) {
+        tiles_audio_engine_midi(ON(LANE1), (uint8_t)(40u + i), 100);
+    }
+    for (uint8_t i = 0; i < 3u; i++) {
+        tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(60u + i), 100);
+    }
+    tiles_audio_engine_midi(ON(MELODIC), 63, 100);
+    CHECK(tiles_audio_engine_track_voices(0u) == 2u && tiles_audio_engine_track_voices(1u) == 4u,
+          "a heavy note took %u light voices", 4u - tiles_audio_engine_track_voices(0u));
+
+    /* A note that can't fit is skipped and takes nothing. */
+    reset();
+    costs(300u);
+    for (uint8_t i = 0; i < 4u; i++) {
+        tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(60u + i), 100);
+    }
+    tiles_audio_engine_midi(ON(LANE1), 40, 100);
+    CHECK(tiles_audio_engine_track_voices(0u) == 0u && tiles_audio_engine_track_voices(1u) == 4u,
+          "a lane note that couldn't fit took a voice");
+
     /* Drum hits wait for the drum engine. */
     reset();
     tiles_audio_engine_midi(ON(DRUMS), 36, 100);
@@ -246,6 +280,31 @@ static void test_voices(void) {
     tiles_audio_engine_midi(0x91, 60, 100);
     tiles_audio_engine_midi(0x91, 60, 100);
     CHECK(tiles_audio_engine_active_voices() == 1u, "same note twice took two voices");
+}
+
+/* A clock that makes every track's voices look slow: each timing takes
+ * 100 us (15,000 cycles a track, ~234 a voice-sample for 4 voices; 60,000
+ * a 16-frame block), over the 90 % ceiling but short of a pause. */
+static uint32_t s_fake_us;
+static uint32_t slow_clock(void) {
+    s_fake_us += 100u;
+    return s_fake_us;
+}
+
+static void test_guard(void) {
+    tiles_audio_engine_init(12u, 150u, slow_clock);
+    for (uint8_t i = 0; i < 4u; i++) {
+        tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(60u + i), 100);
+    }
+    render(16u * 2u);
+    CHECK(tiles_audio_engine_shed_count() == 0u, "the guard acted before %u blocks", GUARD_TEST_BLOCKS);
+    render(16u);
+    CHECK(tiles_audio_engine_shed_count() == 1u, "the guard ended %u voices after 3 blocks over",
+          tiles_audio_engine_shed_count());
+    CHECK(tiles_audio_engine_track_cost(1u) > 150u, "track 2's cost didn't follow the timing (%u)",
+          tiles_audio_engine_track_cost(1u));
+    render(SECOND / 10u);
+    CHECK(tiles_audio_engine_track_voices(1u) < 4u, "an ended voice still sounds");
 }
 
 static void test_ring(void) {
@@ -269,6 +328,7 @@ int main(void) {
     test_pressure_and_velocity();
     test_tracks();
     test_voices();
+    test_guard();
     test_ring();
     if (s_failures) {
         printf("test_audio_engine: %d failure(s)\n", s_failures);

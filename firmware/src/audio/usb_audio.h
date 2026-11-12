@@ -34,6 +34,8 @@ typedef struct {
     uint32_t midi_drops;  /* messages lost to a full queue */
     uint8_t voices;       /* sounding now */
     uint8_t load_pct;     /* core 1 time spent rendering, last second */
+    uint32_t shed;        /* voices the load guard ended */
+    uint16_t cost[4];     /* each track's measured cycles per voice-sample */
 } tiles_usb_audio_info_t;
 
 tiles_usb_audio_info_t tiles_usb_audio_get_info(void);

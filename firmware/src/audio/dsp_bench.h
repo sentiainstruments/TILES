@@ -9,12 +9,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define TILES_DSP_BENCH_MAX_ITEMS 40u
+#define TILES_DSP_BENCH_MAX_ITEMS 48u
 
 typedef struct {
     char name[24];
-    uint32_t units;        /* voices, grains or 1 */
-    uint32_t milli_cycles; /* cycles per output sample per unit, x1000 */
+    uint32_t units;        /* voices, grains or 1; cap_*: voices that fit */
+    uint32_t milli_cycles; /* cycles per output sample per unit, x1000 (cap_*: the whole load) */
     int32_t peak_milli;    /* output peak x1000, a sanity check */
 } tiles_dsp_bench_item_t;
 

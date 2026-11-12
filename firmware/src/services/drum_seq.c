@@ -114,6 +114,7 @@ static uint32_t s_saves;
 static uint16_t s_saved_bytes;
 static uint16_t s_saving_len; /* the record going out */
 static bool s_saving_truncated;
+static uint32_t s_saving_page_ms; /* when its last page went out */
 static uint8_t s_blob[TILES_LOG_MAX_PAYLOAD];
 
 static uint32_t now_ms(void) {
@@ -419,9 +420,12 @@ void tiles_drum_seq_persist_service(uint32_t now, bool playing) {
     if (!s_storage) {
         return;
     }
-    /* A record goes out one page per pass (under a millisecond each). */
+    /* A record goes out a page at a time (under a millisecond each). */
     if (s_log.pending) {
-        save_result(tiles_log_append_step(&s_log), now);
+        if (now - s_saving_page_ms >= TILES_LOG_PAGE_GAP_MS) {
+            s_saving_page_ms = now;
+            save_result(tiles_log_append_step(&s_log), now);
+        }
         return;
     }
     if (!s_dirty) {
@@ -442,6 +446,7 @@ void tiles_drum_seq_persist_service(uint32_t now, bool playing) {
     s_saving_truncated = false;
     s_saving_len = tiles_drum_pattern_encode(&s_pattern, s_blob, sizeof(s_blob), &s_saving_truncated);
     s_dirty = false; /* a change from here on marks it again */
+    s_saving_page_ms = now;
     tiles_log_result_t r = tiles_log_append_start(&s_log, s_blob, s_saving_len, TILES_DRUM_BLOB_VERSION, !playing);
     if (r == TILES_LOG_ERR_NEEDS_ERASE) {
         s_dirty = true;

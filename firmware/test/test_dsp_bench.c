@@ -20,13 +20,17 @@ int main(void) {
     tiles_dsp_bench_run(&r, now_us, 1000u);
     int failures = 0;
     tiles_dsp_bench_soak(now_us, 30u, true);
-    if (r.count < 38u) {
+    if (r.count < 46u) {
         printf("FAIL only %u tests ran (arena too small?)\n", (unsigned)r.count);
         failures++;
     }
     for (uint32_t i = 0; i < r.count; i++) {
         const tiles_dsp_bench_item_t *it = &r.item[i];
         bool silent_ok = strncmp(it->name, "overhead", 8) == 0;
+        if (strncmp(it->name, "cap_", 4) == 0 && (it->units == 0u || it->milli_cycles == 0u)) {
+            printf("FAIL %s: nothing fit (arena?)\n", it->name);
+            failures++;
+        }
         bool sound = it->peak_milli > 0 || silent_ok;
         /* Voices are summed unscaled, so a peak a few times full scale is fine. */
         bool sane = it->peak_milli < 20000;

@@ -13,7 +13,7 @@ Agreed 2026-11-11. Cycle figures are **measured on unit 2** the same day
 
 | | Today | Notes |
 |---|---|---|
-| CPU | core 1 only: 3,125 cycles per sample at 150 MHz / 48 kHz; the load guard aims at 75 % (~2,340) | core 0 scans the pads and stays as it is (its loop measured the same, 2.2 ms, during the test; flash reads from core 1 slow it, see Drum samples) |
+| CPU | core 1 only: 3,125 cycles per sample at 150 MHz / 48 kHz; voices are let in up to 85 % and the live guard holds 90 % (Guardrails) | core 0 scans the pads and stays as it is (its loop measured the same, 2.2 ms, during the test; flash reads from core 1 slow it, see Drum samples) |
 | RAM | ~275 KB free of 520 KB | ~355 KB in release builds: the 80 KB sensor-capture buffer is a development tool and is compiled out |
 | Flash | ~3.7 MB free of 4 MB (the image is ~330 KB) | 1.5 MB for the 8 drum sample slots, ~1 MB kept for code, the rest for wavetables; not a full sampled piano |
 
@@ -29,21 +29,69 @@ over a track and borrows its lane's voices.
 | 2 | lane 2 | melodic, Duet's melody, bass guitar, Song's tracks (the MPE channels) |
 | 3 | lane 3 | Prism, Duet's chord columns, the chord strip (channel 12) |
 | 4 | lane 4 | the physics modes, bouncing notes, games (channel 11) |
-| Drums | the drum lanes | drum mode and Volca mode: the kit (8 sounds, each synthesized or one sample slot) |
+| Drums | the drum lanes | drum mode and Volca mode: the kit (8 sounds, each synthesized or one sample slot), 5 ringing at once |
 
-**Voices:** up to 12 across the four tracks, at most 8 on one. A new note
-takes a free voice while both allow it. A full track gives up one of its
-own: a releasing tail, then its lane's oldest note, then (for a played
-note only) its oldest played note. A full pool gives, in order: a tail
-anywhere, this track's lane note, any lane's note, then (for a played
-note) the oldest played note on the busiest track. A sequencer note never
-takes a played one; with nothing left it is skipped. Built in
-`firmware/src/audio/audio_engine.c` (the test voice), tested in
-`test/test_audio_engine.c`.
+How many synth voices sound at once is set by what they cost, not by a
+count: see Guardrails. At most 8 on one track.
 
-**Load guard, from the first engine on:** if core 1 runs short of time,
-it releases the quietest voice instead of glitching. The worst case is a
-shortened tail, never a click in a recording.
+## Guardrails
+
+Every engine and effect pushed as far as the core allows, and the sound
+never breaks up.
+
+1. **Reserved first: the effects and 5 drums.** Reverb, delay, chorus and
+   the master, plus 5 drums ringing, are kept ~1,200 cycles a sample
+   (measured with synthesized drums; ~1,000 with sample drums). Voices
+   never take it, so the effects stay at full quality. The drum engine
+   rings 5 hits at most (`TILES_AUDIO_DRUM_VOICES`); a sixth takes the
+   oldest hit's voice.
+2. **Voices share the rest by cost.** Every voice counts its engine's
+   cycles per sample, and all of them together stay under 85 % of core 1
+   (1,456 cycles for voices at 150 MHz). Each track's cost starts from
+   its engine's measured figure and then follows live timing: every
+   block, core 1 times each track's voices. An engine people program
+   needs no figure up front; it is measured as it plays.
+3. **A note that doesn't fit takes room**, as many voices as it needs: a
+   full track (8) gives from itself first, so a played note takes its
+   lane's voice. Otherwise a releasing tail anywhere, this track's oldest
+   sequencer note, the oldest sequencer note anywhere, then (for a played
+   note) the oldest played note on the busiest track. A sequencer note
+   never takes a played one; if it can't fit it is skipped and takes
+   nothing. A heavy FM note may take two wavetable voices' room. A taken
+   voice fades over ~2 ms in the real engines (the test voice cuts).
+4. **The live guard holds 90 %.** Three 16-frame blocks in a row over it
+   (1 ms) end the quietest voice over 10 ms: the worst case is a
+   shortened tail, never a click in a recording. The engine's cost
+   follows, so fewer voices are let in after. A block a flash write
+   paused is neither counted nor learned from. `audio.shed` and `audio.cost` in
+   INFO show it working.
+5. **Saves never break the sound.** No erase while the clock runs or the
+   sound rings; pages go out at least 8 ms apart, so at 90 % core 1
+   refills its 3 ms of audio between them.
+
+Built in `firmware/src/audio/audio_engine.c` (with the test voice),
+tested in `test/test_audio_engine.c`.
+
+**What fits: measured on unit 2, 150 MHz**, voices dealt over the four
+tracks, 5 drums ringing, reverb + delay + chorus + master, at 85 %
+(`cap_*` in the stress test):
+
+| Every voice | With 5 synth drums | With 5 sample drums (RAM) |
+|---|---|---|
+| FM, 6 operators | 6 | 7 |
+| Regular (analog, filter at control rate) | 7 | 8 |
+| Wavetable | 13 | 15 |
+| A third each of the three | 8 | 9 |
+
+What raises it, roughly a voice per ~150-220 cycles freed:
+
+- **Sample drums** instead of synthesized: ~170 cycles (+1).
+- **Chorus off:** ~230 cycles (+1-2). It stays optional per sound.
+- **Faster FM** (fixed-point operators, envelopes at control rate):
+  untested.
+- **Clock:** at 153.6 MHz (v1) +2 %; a qualified 200 MHz gives voices
+  ~2,340 cycles instead of 1,456, so about FM 10, regular 12, wavetable
+  21, mixed 13 (worked out from the cycle counts, not run).
 
 ## Engines
 
@@ -201,9 +249,9 @@ settling a voice count.
 ## Order of work
 
 1. ~~Measure on a board~~: done 2026-11-11 (above).
-2. Engine framework: an engine per track (the voice rule above is
-   built), the load guard, the effects
-   bus and per-sound sends, following the rules above.
+2. Engine framework: an engine per track (the tracks and guardrails are
+   built, with the test voice), the effects bus and per-sound sends,
+   following the rules above.
 3. Port the engines one at a time, wavetable first.
 4. Sample player: the 8 slots, DMA streaming, checked with the soak.
 5. v1 bring-up: I2S, the clock change, mute and headphone detect.

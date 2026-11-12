@@ -25,6 +25,7 @@
 
 TU_VERIFY_STATIC(2u * TARGET_FRAMES < AUDIO_RING_WORDS, "ring holds the target");
 TU_VERIFY_STATIC(TILES_AUDIO_EP_SIZE <= 1023u, "full-speed isochronous packet limit");
+TU_VERIFY_STATIC(TILES_AUDIO_TRACKS == 4u, "tiles_usb_audio_info_t.cost has 4 tracks");
 
 static uint32_t s_audio_words[AUDIO_RING_WORDS];
 static uint32_t s_midi_words[MIDI_RING_WORDS];
@@ -71,6 +72,10 @@ void tiles_usb_audio_bench_soak(uint32_t ms, bool cached) {
     s_soak_ms = ms;
 }
 #endif
+
+static uint32_t engine_now_us(void) {
+    return time_us_32();
+}
 
 static void core1_main(void) {
     /* Flash writes on core 0 pause this core (storage_flash.h). */
@@ -120,7 +125,8 @@ void tiles_usb_audio_init(void) {
     }
     tiles_spsc_init(&s_audio_ring, s_audio_words, AUDIO_RING_WORDS);
     tiles_spsc_init(&s_midi_ring, s_midi_words, MIDI_RING_WORDS);
-    tiles_audio_engine_init((uint8_t)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES);
+    tiles_audio_engine_init((uint8_t)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES, clock_get_hz(clk_sys) / 1000000u,
+                            engine_now_us);
     multicore_launch_core1(core1_main);
     s_started = true;
 }
@@ -148,7 +154,11 @@ tiles_usb_audio_info_t tiles_usb_audio_get_info(void) {
         .midi_drops = s_midi_drops,
         .voices = s_voices,
         .load_pct = s_load_pct,
+        .shed = tiles_audio_engine_shed_count(),
     };
+    for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
+        info.cost[t] = (uint16_t)tiles_audio_engine_track_cost(t);
+    }
     return info;
 }
 

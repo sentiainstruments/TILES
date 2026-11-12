@@ -760,6 +760,11 @@ static void handle_line(char *line) {
         reply(text);
         snprintf(text, sizeof(text), "audio.load_pct=%u", (unsigned)audio.load_pct);
         reply(text);
+        snprintf(text, sizeof(text), "audio.shed=%lu", (unsigned long)audio.shed);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.cost=%u,%u,%u,%u", (unsigned)audio.cost[0], (unsigned)audio.cost[1],
+                 (unsigned)audio.cost[2], (unsigned)audio.cost[3]);
+        reply(text);
         snprintf(text, sizeof(text), "flash.lockout_fails=%lu", (unsigned long)tiles_flash_lockout_fails());
         reply(text);
         tiles_loop_stats_t loop = tiles_loop_stats_get();

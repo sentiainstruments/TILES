@@ -66,13 +66,17 @@ tiles_log_result_t tiles_log_append(tiles_log_t *log, const uint8_t *payload, ui
                                     bool allow_erase);
 
 /* The same append one page per call, for saves while sound plays: start
- * programs the first page (after any erase it is allowed), then step once
- * per main-loop pass while it returns TILES_LOG_PENDING. The payload must
+ * programs the first page (after any erase it is allowed), then step at
+ * most every TILES_LOG_PAGE_GAP_MS while it returns TILES_LOG_PENDING. The payload must
  * stay unchanged until it returns something else. A power cut between
  * steps leaves the previous record, as with append. */
 tiles_log_result_t tiles_log_append_start(tiles_log_t *log, const uint8_t *payload, uint16_t len,
                                           uint16_t payload_version, bool allow_erase);
 tiles_log_result_t tiles_log_append_step(tiles_log_t *log);
+
+/* A page program pauses core 1 (~0.5 ms); this far apart, core 1 refills
+ * its 3 ms of audio between them even at the 90 % ceiling. */
+#define TILES_LOG_PAGE_GAP_MS 8u
 
 /* True if a record of `len` bytes would be appended without an erase. */
 bool tiles_log_fits_without_erase(const tiles_log_t *log, uint16_t len);

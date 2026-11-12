@@ -13,12 +13,24 @@
 #define TILES_AUDIO_RATE_HZ 48000u
 #define TILES_AUDIO_TRACKS 4u
 #define TILES_AUDIO_TRACK_DRUMS TILES_AUDIO_TRACKS /* the kit: no voices here yet */
-#define TILES_AUDIO_VOICES 12u      /* the four tracks together */
+#define TILES_AUDIO_VOICES 32u      /* slots; the budget decides how many sound */
 #define TILES_AUDIO_TRACK_VOICES 8u /* one track's most */
+#define TILES_AUDIO_DRUM_VOICES 5u  /* drum hits ringing at once (the drum engine) */
+
+/* The guardrails (docs/architecture/audio-engine.md, "Guardrails"): every
+ * voice together stays under TARGET % of core 1, after the reserve for the
+ * effects bus and 5 drums (measured on unit 2: 5 synthesized drums with
+ * reverb, delay, chorus and master, ~1,200 cycles per sample); the live
+ * guard ends voices above CEILING %. */
+#define TILES_AUDIO_TARGET_PCT 85u
+#define TILES_AUDIO_CEILING_PCT 90u
+#define TILES_AUDIO_RESERVE_CYCLES 1200u
 
 /* Builds the sine table; call once before anything else. bend_range is the
- * semitones a full pitch bend means (what TILES announces to receivers). */
-void tiles_audio_engine_init(uint8_t bend_range_semitones);
+ * semitones a full pitch bend means (what TILES announces to receivers).
+ * clk_mhz sets the budget; now_us (NULL: none) times each track's voices
+ * live, to learn their cost and run the load guard. */
+void tiles_audio_engine_init(uint8_t bend_range_semitones, uint32_t clk_mhz, uint32_t (*now_us)(void));
 
 /* One channel message (status 0x80-0xEF). Note on/off, poly and channel
  * pressure, pitch bend, CC 64 (sustain), CC 120/123 (all off). */
@@ -39,3 +51,11 @@ uint8_t tiles_audio_engine_track(uint8_t channel, bool *from_lane);
 
 /* Voices sounding on one track (releases included). */
 uint8_t tiles_audio_engine_track_voices(uint8_t track);
+
+/* A track's cost per voice in cycles per sample: set when an engine loads
+ * (its measured figure), then followed live. */
+void tiles_audio_engine_set_track_cost(uint8_t track, uint32_t cycles);
+uint32_t tiles_audio_engine_track_cost(uint8_t track);
+
+/* Voices the load guard has ended since boot. */
+uint32_t tiles_audio_engine_shed_count(void);

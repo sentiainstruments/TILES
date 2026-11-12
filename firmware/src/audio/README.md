@@ -8,7 +8,7 @@ real engines replace the voice code, not the plumbing.
 
 | File | What it is |
 |---|---|
-| `audio_engine.c/.h` | The test voice, a sine with a little harmonic colour, on the four tracks: 12 MPE voices, at most 8 a track, with the stealing rule in `../../../docs/architecture/audio-engine.md` ("Tracks"). Plain C, no Pico code, tested on the computer (`test/test_audio_engine.c`). |
+| `audio_engine.c/.h` | The test voice, a sine with a little harmonic colour, on the four tracks, with the guardrails: voices admitted by measured cost, at most 8 a track, the stealing order and the live load guard (`../../../docs/architecture/audio-engine.md`, "Guardrails"). Plain C, no Pico code, tested on the computer (`test/test_audio_engine.c`). |
 | `audio_ring.h` | The lock-free single-producer/single-consumer ring the two cores talk through. |
 | `usb_audio.c/.h` | Starts core 1, feeds it TILES's MIDI, and answers TinyUSB's audio callbacks. The descriptor is in `midi/usb_descriptors.c`, the TinyUSB options in `midi/tusb_config.h`. |
 | `dsp_bench.c/.h` | The DSP stress test: high-quality prototypes of every planned engine, drum and effect, timed on core 1. Only in `-DTILES_DSP_BENCH=ON` builds (`tools/tiles_control.py bench`); results in `../../../docs/architecture/audio-engine.md`. |
@@ -38,8 +38,9 @@ real engines replace the voice code, not the plumbing.
   waits for the clock to stop and this sound to be silent
   (`tiles_usb_audio_is_quiet()`: no host listening, or no voice
   sounding): the autosaves, settings, pattern bank and Song. Saves while
-  playing write one 256-byte page per main-loop pass (under a
-  millisecond, inside the 3 ms ring; a late USB frame is made up).
+  playing write one 256-byte page at a time, at least 8 ms apart (under
+  a millisecond each; core 1 refills the 3 ms ring between them, and a
+  late USB frame is made up).
   Custom scales from the companion app still save at once.
 - **Latency** added by TILES: the 3 ms ring plus one packet, about 4 ms,
   on top of the host's own input buffer.
@@ -55,6 +56,8 @@ real engines replace the voice code, not the plumbing.
 | `audio.underruns` | 0 (core 1 never fell behind) |
 | `audio.midi_drops` | 0 |
 | `audio.load_pct` | core 1 time rendering in the last second |
+| `audio.shed` | voices the load guard ended; 0 unless the sounds asked for more than the core has |
+| `audio.cost` | each track's measured cycles per voice-sample (150 until it has played) |
 | `flash.lockout_fails` | 0 |
 
 On a Mac: Audio MIDI Setup shows "SENTIA TILES N" with 2 inputs at

@@ -1703,6 +1703,7 @@ static uint32_t s_seq_saves;
 static uint16_t s_seq_saved_bytes;
 static uint16_t s_seq_saving_len; /* the record going out */
 static bool s_seq_saving_truncated;
+static uint32_t s_seq_page_ms; /* when its last page went out */
 static bool s_seq_truncated;
 static uint8_t s_seq_blob[TILES_LOG_MAX_PAYLOAD];
 
@@ -1768,9 +1769,12 @@ static void seq_autosave_service(uint32_t now_ms, bool playing, bool pads_touche
             s_seq_changed_ms = now_ms;
         }
     }
-    /* A record goes out one page per pass (under a millisecond each). */
+    /* A record goes out a page at a time (under a millisecond each). */
     if (s_seq_log.pending) {
-        seq_save_result(tiles_log_append_step(&s_seq_log), now_ms);
+        if (now_ms - s_seq_page_ms >= TILES_LOG_PAGE_GAP_MS) {
+            s_seq_page_ms = now_ms;
+            seq_save_result(tiles_log_append_step(&s_seq_log), now_ms);
+        }
         return;
     }
     if (!s_seq_dirty) {
@@ -1792,6 +1796,7 @@ static void seq_autosave_service(uint32_t now_ms, bool playing, bool pads_touche
     s_seq_saving_len = tiles_seq_encode(s_seq_pattern, s_seq_active_alt, s_seq_edit_lane, s_seq_blob,
                                         sizeof(s_seq_blob), &s_seq_saving_truncated);
     s_seq_dirty = false; /* a change from here on marks it again */
+    s_seq_page_ms = now_ms;
     tiles_log_result_t r =
         tiles_log_append_start(&s_seq_log, s_seq_blob, s_seq_saving_len, TILES_SEQ_BLOB_VERSION, !playing);
     if (r == TILES_LOG_ERR_NEEDS_ERASE) {
