@@ -54,6 +54,11 @@ SCALE PUT <slot> <name> <intervals> [pack=<id>] [item=<id>] [version=<n>]\n
 SCALE DELETE <slot>\n     empty a slot: OK (also when already empty)
 CONTENT LIST\n            every record in the content store, one line each, then OK
 CONTENT CLEAR\n           wipe the content store (every custom scale): OK
+SAMPLE LIST\n             the drum sampler's 8 slots, one line each, then OK (see "Drum samples")
+SAMPLE BEGIN <slot> <channels> <frames> <crc32> <name>\n
+                          load a slot: OK <bytes>, then the audio as raw bytes, then OK / ERR
+SAMPLE DELETE <slot>\n    empty a slot: OK (also when already empty)
+SAMPLE PLAY <slot> [velocity]\n  hit a slot in TILES's own sound: OK
 TEST LEDS <0-100>\n       bench only: every LED white at that % (current measurement)
 TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
 TEST MODE <name>\n        bench only: switch mode (melodic duet sequencer bass song ableton drums volca prism bounce ripples sand orbits cradle)
@@ -349,6 +354,46 @@ OK
 Built-in scales aren't listed: they're fixed per firmware version (pads
 1-15 of the picker, `SCALE_GRID_ORDER` in `firmware/src/services/note_map.c`).
 
+### Drum samples
+
+The drum sampler's 8 slots (`firmware/src/audio/sample_slot.h`), slot
+`n` = drum `n` of drum mode's first bank. A slot holds 16-bit
+little-endian audio at 48 kHz, mono or stereo (interleaved L/R), up to
+96,000 frames mono (2 s) or 48,000 stereo (1 s). The sender converts
+(rate, depth, trimming); the device stores and plays what arrives.
+
+```
+SAMPLE LIST
+1 kick mono 23990
+2 crash-long mono 96000
+3 empty
+...
+OK
+```
+
+Loading:
+
+```
+SAMPLE BEGIN 1 1 23990 cee3e54f kick     -> OK 47980
+<47980 raw bytes>                        -> OK
+```
+
+- `BEGIN`'s arguments: slot 1-8, channels 1 or 2, frames, the CRC-32
+  (zlib's) of the audio bytes in hex, and a name (1-23 printable ASCII,
+  no spaces). The slot reads empty from here on.
+- After `OK <bytes>`, the next `<bytes>` bytes on the interface are the
+  audio, not commands. Then the device reads the slot back from flash,
+  checks the CRC, writes the slot's header last and answers `OK`; or
+  `ERR crc` / `flash` / `size` and the slot stays empty. A sender silent
+  for 3 s mid-load gets `ERR timeout`. A power cut mid-load leaves the
+  slot empty, never half-filled.
+- Errors on `BEGIN`: `slot-1-8`, `missing-arg`, `bad-format` (channels,
+  length or name), `busy`, `no-storage`, and `playing`: loading erases
+  flash (tens of ms a sector), so it waits for the clock to stop and
+  TILES's own sound to be silent.
+- About 3 s for a full slot. `tools/tiles_control.py sample put` does the
+  conversion and the load.
+
 ### Content store
 
 Custom scales live in the **content store**: its own two-sector flash region
@@ -391,7 +436,9 @@ sequencer's autosave `seq.storage`, `seq.saved_bytes`, `seq.saves`,
 `drums.saved_bytes`, `drums.saves`, `drums.pending`; the play state (mode,
 scale, key, octave kept across power cycles) `state.storage`,
 `state.saved=mode:<n> scale:<n> octave:<n> key:<n>` (once something is
-saved), `state.saves`, `state.pending`. New keys may be added;
+saved), `state.saves`, `state.pending`; TILES's own sound `audio.*`
+(`firmware/src/audio/README.md`), with the drum sampler's `audio.drums`
+(ringing now) and `audio.drum_underruns`. New keys may be added;
 ignore ones you don't know.
 
 ## Persistence
