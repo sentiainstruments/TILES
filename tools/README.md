@@ -125,6 +125,25 @@ slots (pads 16-24), saved to flash before the `OK`:
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py content list    # every record, with its pack
 ```
 
+**Drum samples** (the sampler's 8 slots, drum 1-8 of drum mode's first
+bank). `sample put` converts a WAV the way the computer side of a hardware
+sampler does, then loads it: 48 kHz 16-bit (band-limited resampling,
+dithered), silence below -60 dBFS trimmed from both ends, a stereo file
+with identical sides stored as mono, and capped at 2 s mono / 1 s stereo
+with a 10 ms fade. Options: `--mono` (mix down, for up to 2 s),
+`--normalize` (peak to -0.3 dBFS), `--keep-silence`, `--name NAME`. The
+device checks the CRC against what flash holds before the slot counts.
+Stop playback first (it answers `playing` otherwise). About 3 s a full
+slot. The conversion is `tools/tiles_sample.py` (plain Python).
+
+```
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py sample put 1 kick.wav
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py sample put 8 crash.wav --mono
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py sample list
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py sample play 1 127
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py sample delete 1
+```
+
 **Recording a pad's sensor data** for tuning pitch bend on the computer:
 records one pad for a few seconds (about 8 at most) while you play it, and
 saves a CSV that `firmware/test/bend_replay.c` replays (gestures and file

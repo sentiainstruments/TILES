@@ -5,6 +5,8 @@
 #include "audio_engine.h"
 #include "audio_ring.h"
 #include "midi_out.h"
+#include "sample_stream.h"
+#include "sampler.h"
 
 #include "hardware/clocks.h"
 #include "hardware/structs/usb.h"
@@ -22,6 +24,7 @@
 #define WARMUP_PACKETS 8u
 #define AUDIO_RING_WORDS 1024u /* 512 stereo frames */
 #define MIDI_RING_WORDS 256u
+#define DRUM_RING_WORDS 64u
 
 TU_VERIFY_STATIC(2u * TARGET_FRAMES < AUDIO_RING_WORDS, "ring holds the target");
 TU_VERIFY_STATIC(TILES_AUDIO_EP_SIZE <= 1023u, "full-speed isochronous packet limit");
@@ -31,6 +34,8 @@ static uint32_t s_audio_words[AUDIO_RING_WORDS];
 static uint32_t s_midi_words[MIDI_RING_WORDS];
 static tiles_spsc_t s_audio_ring; /* core 1 -> core 0 */
 static tiles_spsc_t s_midi_ring;  /* core 0 -> core 1 */
+static uint32_t s_drum_words[DRUM_RING_WORDS];
+static tiles_spsc_t s_drum_ring; /* core 0 -> core 1: slot | velocity << 8 */
 static bool s_started;
 
 /* Core 0 (USB) side. */
@@ -45,6 +50,7 @@ static uint32_t s_midi_drops;
 
 /* Core 1 side. */
 static volatile uint8_t s_voices;
+static volatile uint8_t s_drum_voices;
 static volatile uint8_t s_load_pct;
 
 #if TILES_DSP_BENCH
@@ -99,6 +105,9 @@ static void core1_main(void) {
         while (tiles_spsc_pop(&s_midi_ring, &word, 1u) == 1u) {
             tiles_audio_engine_midi((uint8_t)word, (uint8_t)(word >> 8), (uint8_t)(word >> 16));
         }
+        while (tiles_spsc_pop(&s_drum_ring, &word, 1u) == 1u) {
+            tiles_sampler_hit((uint8_t)word, (uint8_t)(word >> 8));
+        }
         bool streaming = s_streaming;
         if (streaming) {
             uint32_t t0 = time_us_32();
@@ -108,7 +117,8 @@ static void core1_main(void) {
             }
             busy_us += time_us_32() - t0;
         }
-        s_voices = tiles_audio_engine_active_voices();
+        s_drum_voices = tiles_sampler_voices();
+        s_voices = (uint8_t)(tiles_audio_engine_active_voices() + s_drum_voices);
         uint32_t now = time_us_32();
         if (now - window_start >= 1000000u) {
             s_load_pct = (uint8_t)(busy_us / 10000u);
@@ -125,10 +135,22 @@ void tiles_usb_audio_init(void) {
     }
     tiles_spsc_init(&s_audio_ring, s_audio_words, AUDIO_RING_WORDS);
     tiles_spsc_init(&s_midi_ring, s_midi_words, MIDI_RING_WORDS);
+    tiles_spsc_init(&s_drum_ring, s_drum_words, DRUM_RING_WORDS);
     tiles_audio_engine_init((uint8_t)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES, clock_get_hz(clk_sys) / 1000000u,
                             engine_now_us);
+    tiles_sample_stream_init();
     multicore_launch_core1(core1_main);
     s_started = true;
+}
+
+void tiles_usb_audio_drum_hit(uint8_t slot, uint8_t velocity) {
+    if (!s_started) {
+        return;
+    }
+    uint32_t word = (uint32_t)slot | ((uint32_t)velocity << 8);
+    if (!tiles_spsc_push(&s_drum_ring, &word, 1u)) {
+        s_midi_drops++;
+    }
 }
 
 void tiles_usb_audio_midi(uint8_t status, uint8_t data1, uint8_t data2) {
@@ -155,6 +177,8 @@ tiles_usb_audio_info_t tiles_usb_audio_get_info(void) {
         .voices = s_voices,
         .load_pct = s_load_pct,
         .shed = tiles_audio_engine_shed_count(),
+        .drum_voices = s_drum_voices,
+        .drum_underruns = tiles_sampler_underruns(),
     };
     for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
         info.cost[t] = (uint16_t)tiles_audio_engine_track_cost(t);

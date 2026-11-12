@@ -13,7 +13,9 @@
 #include "lighting.h"
 #include "midi_channels.h"
 #include "midi_out.h"
+#include "sample_slot.h"
 #include "touch.h"
+#include "usb_audio.h"
 
 #include "pico/time.h"
 
@@ -139,6 +141,9 @@ static bool volca_channel(uint8_t note, uint8_t *channel) {
 /* On the Parts USB port either way (midi/midi_ports.h): Volca's channels
  * 1-16 would otherwise reach a DAW's MPE track on the MIDI port. */
 static void drum_midi_on(uint8_t note, uint8_t velocity) {
+    if (note >= TILES_DRUM_FIRST_NOTE && note - TILES_DRUM_FIRST_NOTE < TILES_SAMPLE_SLOT_COUNT) {
+        tiles_usb_audio_drum_hit((uint8_t)(note - TILES_DRUM_FIRST_NOTE), velocity); /* the sampler's slot */
+    }
     uint8_t channel;
     tiles_midi_out_parts_begin();
     tiles_midi_out_drums_begin();

@@ -69,6 +69,10 @@ add_executable(sentia_tiles_firmware
     profiles/settings_table.c
     usb_vendor/usb_vendor.c
     audio/audio_engine.c
+    audio/sample_slot.c
+    audio/sample_store.c
+    audio/sample_stream.c
+    audio/sampler.c
     audio/usb_audio.c
 )
 
@@ -103,6 +107,7 @@ target_link_libraries(sentia_tiles_firmware
     tinyusb_device
     pico_unique_id
     pico_multicore
+    hardware_dma
     pico_rand
     pico_usb_reset
     m

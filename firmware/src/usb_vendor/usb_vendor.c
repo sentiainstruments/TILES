@@ -11,11 +11,13 @@
 #include "hall.h"
 #include "haptics.h"
 #include "lighting.h"
+#include "midi_clock.h"
 #include "note_map.h"
 #include "op_mode.h"
 #include "play_state.h"
 #include "power.h"
 #include "product_identity.h"
+#include "sample_store.h"
 #include "settings.h"
 #include "settings_persist.h"
 #include "storage_flash.h"
@@ -47,6 +49,18 @@
 
 static char s_rx_line[USB_VENDOR_LINE_MAX];
 static size_t s_rx_len;
+
+/* SAMPLE BEGIN switches the input to raw audio bytes until the announced
+ * count has arrived (a failed load keeps taking them, so nothing is read
+ * as a command). Up to 4 KB per pass (16 page programs and one sector
+ * erase, ~55 ms), pumping USB for up to 6 ms to get it: one 64-byte packet
+ * per pass would take 9 s a slot. A sender silent this long is dropped. */
+#define USB_VENDOR_RAW_PER_PASS 4096u
+#define USB_VENDOR_RAW_PASS_US 6000u
+#define USB_VENDOR_RAW_TIMEOUT_MS 3000u
+static uint32_t s_raw_left;
+static uint32_t s_raw_last_ms;
+static tiles_sample_result_t s_raw_result;
 
 /* A partial line (no newline yet) is dropped once nothing has arrived for
  * this long while the device waits for input. A host that gave up
@@ -479,6 +493,120 @@ static bool take_tag(char **line) {
     return true;
 }
 
+/* SAMPLE LIST | BEGIN <slot> <channels> <frames> <crc32 hex> <name>, then
+ * the audio as raw bytes (16-bit LE, 48 kHz, stereo interleaved; replies
+ * OK <bytes>, then OK or ERR once they are in) | DELETE <slot> |
+ * PLAY <slot> [velocity]. Slots 1-8: the first bank's drums. */
+static void handle_sample(void) {
+    char *what = strtok(NULL, " ");
+    char text[USB_VENDOR_LINE_MAX];
+    if (what != NULL && strcmp(what, "LIST") == 0) {
+        for (uint8_t slot = 0; slot < TILES_SAMPLE_SLOT_COUNT; slot++) {
+            tiles_sample_info_t info;
+            if (tiles_sample_store_info(slot, &info)) {
+                snprintf(text, sizeof(text), "%u %s %s %lu", (unsigned)slot + 1u, info.name,
+                         info.channels == 2u ? "stereo" : "mono", (unsigned long)info.frames);
+            } else {
+                snprintf(text, sizeof(text), "%u empty", (unsigned)slot + 1u);
+            }
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+    char *slot_arg = strtok(NULL, " ");
+    int slot = slot_arg != NULL ? atoi(slot_arg) : 0;
+    if (slot < 1 || slot > (int)TILES_SAMPLE_SLOT_COUNT) {
+        reply_err("slot-1-8");
+        return;
+    }
+    if (what != NULL && strcmp(what, "PLAY") == 0) {
+        char *vel = strtok(NULL, " ");
+        int velocity = vel != NULL ? atoi(vel) : 100;
+        tiles_usb_audio_drum_hit((uint8_t)(slot - 1), (uint8_t)(velocity < 1 ? 1 : velocity > 127 ? 127 : velocity));
+        reply_ok();
+        return;
+    }
+    if (what != NULL && strcmp(what, "DELETE") == 0) {
+        tiles_sample_result_t r = tiles_sample_store_delete((uint8_t)(slot - 1));
+        r == TILES_SAMPLE_OK ? reply_ok() : reply_err(tiles_sample_result_name(r));
+        return;
+    }
+    if (what == NULL || strcmp(what, "BEGIN") != 0) {
+        reply_err("unknown-key");
+        return;
+    }
+    char *channels = strtok(NULL, " ");
+    char *frames = strtok(NULL, " ");
+    char *crc = strtok(NULL, " ");
+    char *name = strtok(NULL, " ");
+    if (channels == NULL || frames == NULL || crc == NULL || name == NULL) {
+        reply_err("missing-arg");
+        return;
+    }
+    /* Loading erases flash (tens of ms each sector): never while playing. */
+    if (tiles_midi_clock_is_running() || !tiles_usb_audio_is_quiet()) {
+        reply_err("playing");
+        return;
+    }
+    tiles_sample_info_t info;
+    memset(&info, 0, sizeof(info));
+    info.channels = (uint8_t)atoi(channels);
+    info.frames = (uint32_t)strtoul(frames, NULL, 10);
+    info.audio_crc = (uint32_t)strtoul(crc, NULL, 16);
+    strncpy(info.name, name, TILES_SAMPLE_NAME_MAX);
+    tiles_sample_result_t r = tiles_sample_store_begin((uint8_t)(slot - 1), &info);
+    if (r != TILES_SAMPLE_OK) {
+        reply_err(tiles_sample_result_name(r));
+        return;
+    }
+    s_raw_left = tiles_sample_store_remaining();
+    s_raw_result = TILES_SAMPLE_OK;
+    s_raw_last_ms = to_ms_since_boot(get_absolute_time());
+    snprintf(text, sizeof(text), "OK %lu", (unsigned long)s_raw_left);
+    reply(text);
+}
+
+/* The audio after SAMPLE BEGIN: into the store as it arrives, then the
+ * load's result. */
+static void receive_raw(uint32_t now_ms) {
+    uint32_t budget = USB_VENDOR_RAW_PER_PASS;
+    uint32_t start_us = time_us_32();
+    while (s_raw_left > 0u && budget > 0u && time_us_32() - start_us < USB_VENDOR_RAW_PASS_US) {
+        if (!tud_vendor_available()) {
+            tud_task(); /* re-arms the endpoint: the next packet */
+            continue;
+        }
+        uint8_t buf[256];
+        uint32_t want = s_raw_left < sizeof(buf) ? s_raw_left : sizeof(buf);
+        want = want < budget ? want : budget;
+        uint32_t got = tud_vendor_read(buf, want);
+        if (got == 0u) {
+            break;
+        }
+        s_raw_last_ms = now_ms;
+        s_raw_left -= got;
+        budget -= got;
+        if (s_raw_result == TILES_SAMPLE_OK) {
+            s_raw_result = tiles_sample_store_write(buf, got);
+        }
+    }
+    if (s_raw_left == 0u) {
+        if (s_raw_result == TILES_SAMPLE_OK) {
+            s_raw_result = tiles_sample_store_finish();
+        } else {
+            tiles_sample_store_abort();
+        }
+        s_raw_result == TILES_SAMPLE_OK ? reply_ok() : reply_err(tiles_sample_result_name(s_raw_result));
+        pump_out();
+    } else if (now_ms - s_raw_last_ms > USB_VENDOR_RAW_TIMEOUT_MS) {
+        tiles_sample_store_abort();
+        s_raw_left = 0u;
+        reply_err("timeout");
+        pump_out();
+    }
+}
+
 static void handle_line(char *line) {
     if (!take_tag(&line)) {
         reply_err("bad-tag");
@@ -509,6 +637,10 @@ static void handle_line(char *line) {
      * SCALE PUT-shaped line each; SCALE GET/PUT/DELETE edit one slot. */
     if (strcmp(cmd, "SCALES") == 0) {
         start_listing(LISTING_SCALES);
+        return;
+    }
+    if (strcmp(cmd, "SAMPLE") == 0) {
+        handle_sample();
         return;
     }
     /* Sensor capture (diagnostics/capture.h): START <pad> records one pad
@@ -762,6 +894,10 @@ static void handle_line(char *line) {
         reply(text);
         snprintf(text, sizeof(text), "audio.shed=%lu", (unsigned long)audio.shed);
         reply(text);
+        snprintf(text, sizeof(text), "audio.drums=%u", (unsigned)audio.drum_voices);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.drum_underruns=%lu", (unsigned long)audio.drum_underruns);
+        reply(text);
         snprintf(text, sizeof(text), "audio.cost=%u,%u,%u,%u", (unsigned)audio.cost[0], (unsigned)audio.cost[1],
                  (unsigned)audio.cost[2], (unsigned)audio.cost[3]);
         reply(text);
@@ -981,6 +1117,10 @@ void tiles_usb_vendor_scan(void) {
         s_out_sent = 0u;
         s_listing = LISTING_NONE;
         s_rx_len = 0u;
+        if (s_raw_left > 0u) {
+            tiles_sample_store_abort();
+            s_raw_left = 0u;
+        }
         return;
     }
     pump_out();
@@ -991,7 +1131,14 @@ void tiles_usb_vendor_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
     if (s_out_len > 0u || s_listing != LISTING_NONE) {
         s_rx_idle_since_ms = now_ms; /* not reading: no partial-line timeout */
+        if (s_raw_left > 0u) {
+            s_raw_last_ms = now_ms;
+        }
         return; /* still sending the previous reply: wait before the next command */
+    }
+    if (s_raw_left > 0u) {
+        receive_raw(now_ms);
+        return;
     }
     while (tud_vendor_available()) {
         uint8_t byte;

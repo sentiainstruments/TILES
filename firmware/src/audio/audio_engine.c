@@ -1,6 +1,7 @@
 #include "audio_engine.h"
 
 #include "midi_channels.h"
+#include "sampler.h"
 
 #include <math.h>
 #include <string.h>
@@ -20,6 +21,8 @@ static float s_sine[TABLE_SIZE + 1u];
 #define BLOCK_FRAMES 16u
 /* Four loud voices reach the soft clip's knee. */
 #define MIX_GAIN 0.22f
+/* A full-scale drum sample alone stays below the knee (about -6 dBFS). */
+#define DRUM_GAIN 0.5f
 /* 2^32 / 48000: Hz to phase increment. */
 #define HZ_TO_INC 89478.485f
 /* A track's cost before it has been measured (cycles per voice-sample). */
@@ -459,11 +462,15 @@ static void render_block(int32_t *out_lr, uint32_t n) {
     if (s_now_us != NULL) {
         guard(track_cycles, track_voices, n);
     }
+    float drums_l[BLOCK_FRAMES], drums_r[BLOCK_FRAMES];
+    memset(drums_l, 0, sizeof(drums_l));
+    memset(drums_r, 0, sizeof(drums_r));
+    tiles_sampler_render(drums_l, drums_r, n);
     for (uint32_t i = 0; i < n; i++) {
-        float y = soft_clip(mix[i] * MIX_GAIN);
-        int32_t sample = (int32_t)(y * 8388607.0f) * 256; /* 24 bits in the top of the subslot */
-        out_lr[2u * i] = sample;
-        out_lr[2u * i + 1u] = sample;
+        float yl = soft_clip(mix[i] * MIX_GAIN + drums_l[i] * DRUM_GAIN);
+        float yr = soft_clip(mix[i] * MIX_GAIN + drums_r[i] * DRUM_GAIN);
+        out_lr[2u * i] = (int32_t)(yl * 8388607.0f) * 256; /* 24 bits in the top of the subslot */
+        out_lr[2u * i + 1u] = (int32_t)(yr * 8388607.0f) * 256;
     }
 }
 

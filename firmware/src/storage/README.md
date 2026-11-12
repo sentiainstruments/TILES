@@ -43,6 +43,10 @@ data.
   - 2 sectors below that: content store, custom scales (`profiles/content.c`)
   - 2 sectors below that: drum mode's pattern (`services/drum_seq.c`, log_store)
   - 2 sectors below that: mode, scale, key, octave (`services/play_state.c`, log_store)
+  - the saved data keeps a 256 KB band at the top; below it, the drum
+    sampler's 8 slots, 192 KB each (1.5 MB, `audio/sample_store.c`): its
+    own format (a header programmed last over 16-bit audio), erased a
+    sector at a time as a load reaches it
 
 ## What uses it
 

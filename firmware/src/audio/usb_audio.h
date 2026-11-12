@@ -26,6 +26,10 @@ void tiles_usb_audio_init(void);
  * waits: a full queue drops the message and counts it. */
 void tiles_usb_audio_midi(uint8_t status, uint8_t data1, uint8_t data2);
 
+/* A drum hit for the sampler: slot 0-7 (drum 1-8 of the first bank),
+ * velocity 1-127. Queued for core 1 like the messages above. */
+void tiles_usb_audio_drum_hit(uint8_t slot, uint8_t velocity);
+
 typedef struct {
     bool streaming;       /* a host has the input open */
     uint32_t packets;     /* sent since boot */
@@ -36,6 +40,8 @@ typedef struct {
     uint8_t load_pct;     /* core 1 time spent rendering, last second */
     uint32_t shed;        /* voices the load guard ended */
     uint16_t cost[4];     /* each track's measured cycles per voice-sample */
+    uint8_t drum_voices;  /* drum samples ringing now */
+    uint32_t drum_underruns; /* blocks a drum voice ran out of streamed data */
 } tiles_usb_audio_info_t;
 
 tiles_usb_audio_info_t tiles_usb_audio_get_info(void);

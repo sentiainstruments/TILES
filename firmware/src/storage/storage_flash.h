@@ -19,6 +19,17 @@ bool tiles_flash_write_begin(uint32_t *irq_state);
 void tiles_flash_write_end(uint32_t irq_state);
 uint32_t tiles_flash_lockout_fails(void);
 
+/* Run inside every write, with core 1 paused: `before` stops the drum
+ * sampler's flash DMA (audio/sample_stream.c), `after` lets it go on. */
+void tiles_flash_set_write_hooks(void (*before)(void), void (*after)(void));
+
+/* The drum sample slots (flash_map.h): false if the image grew into them.
+ * Erase one 4 KB sector, or program one 256-byte page, at an offset from
+ * the region's start. */
+bool tiles_storage_sample_region_safe(void);
+bool tiles_storage_sample_erase(uint32_t offset);
+bool tiles_storage_sample_program(uint32_t offset, const uint8_t *page);
+
 /* False if the application image has grown into the settings region -- then
  * nothing here may write, or it would corrupt the running program. */
 bool tiles_storage_settings_region_safe(void);

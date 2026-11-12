@@ -45,6 +45,10 @@ Usage:
     python3 tools/tiles_control.py tune set bend.deadzone 0.03   # until power-off (the studio does this)
     python3 tools/tiles_control.py tune reset            # all keys back to their defaults (or: tune reset <key>)
     python3 tools/tiles_control.py bench                 # DSP stress test (a -DTILES_DSP_BENCH=ON build only)
+    python3 tools/tiles_control.py sample list           # the drum sampler's 8 slots
+    python3 tools/tiles_control.py sample put 1 kick.wav # load slot 1 (drum 1); --mono --normalize --keep-silence --name NAME
+    python3 tools/tiles_control.py sample play 1 100     # hear slot 1 at velocity 100 (TILES's own sound)
+    python3 tools/tiles_control.py sample delete 1
 
 Changes apply immediately and are saved to flash automatically a couple of
 seconds after the last one (only while no pad is being touched); `save` just
@@ -243,6 +247,58 @@ def bench(session):
         time.sleep(1.4)
 
 
+def sample_put(session, slot, path, options):
+    """Converts a WAV (tiles_sample.py), then loads it: SAMPLE BEGIN, the
+    audio as raw bytes, and the device's verdict once it has checked them."""
+    import tiles_sample
+
+    name = None
+    if "--name" in options:
+        at = options.index("--name")
+        if at + 1 >= len(options):
+            sys.exit("sample put: --name needs a name")
+        name = options[at + 1]
+    try:
+        channels, frames, data, name, notes = tiles_sample.prepare(
+            path, mono="--mono" in options, normalize="--normalize" in options,
+            keep_silence="--keep-silence" in options, name=name)
+    except (OSError, tiles_sample.SampleError) as exc:
+        sys.exit(f"sample put: {exc}")
+    crc = tiles_sample.crc32(data)
+    reply = session.command(f"SAMPLE BEGIN {slot} {channels} {frames} {crc:08x} {name}")
+    if not reply or not reply[0].startswith("OK "):
+        sys.exit(f"sample put: {' '.join(reply)}" + (" (stop playback first)" if reply == ["ERR playing"] else ""))
+    started = time.time()
+    for i in range(0, len(data), 4096):
+        session.ep_out.write(data[i:i + 4096], timeout=10000)
+    verdict = session.read_line("SAMPLE BEGIN")
+    if verdict != "OK":
+        sys.exit(f"sample put: {verdict}")
+    kind = "stereo" if channels == 2 else "mono"
+    print(f"slot {slot}: {name}, {kind}, {frames / tiles_sample.RATE:.3f} s, {len(data) // 1024} KB "
+          f"in {time.time() - started:.1f} s ({'; '.join(notes)})")
+
+
+def sample(session, args):
+    verb = args[0].lower() if args else ""
+    if verb == "list" and len(args) == 1:
+        for line in session.command("SAMPLE LIST", multi_line=True):
+            parts = line.split()
+            if len(parts) == 4:
+                print(f"{parts[0]}  {parts[1]:<24}{parts[2]:<8}{int(parts[3]) / 48000:.3f} s")
+            else:
+                print("  ".join(parts))
+    elif verb == "put" and len(args) >= 3:
+        sample_put(session, args[1], args[2], args[3:])
+    elif verb == "play" and len(args) in (2, 3):
+        print(" ".join(session.command(" ".join(["SAMPLE PLAY"] + args[1:]))))
+    elif verb == "delete" and len(args) == 2:
+        print(" ".join(session.command(f"SAMPLE DELETE {args[1]}")))
+    else:
+        print(__doc__)
+        sys.exit(1)
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -284,6 +340,9 @@ def main():
         request, multi = " ".join(["TUNE RESET"] + sys.argv[3:]), False
     elif command == "bench" and argc == 2:
         bench(session)
+        return
+    elif command == "sample":
+        sample(session, sys.argv[2:])
         return
     elif command == "capture" and argc == 5:
         capture(session, int(sys.argv[2]), float(sys.argv[3]), sys.argv[4])

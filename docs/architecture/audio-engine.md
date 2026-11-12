@@ -226,11 +226,45 @@ length). Loading erases and writes flash, which pauses core 1, so it
 only happens while nothing plays.
 
 **Playing:** a pad's new hit restarts its own sample; a hit with 5
-already ringing takes the oldest one's voice. Velocity sets the level;
-each slot has its own level, tune (interpolation only when tuned) and
-pan. Samples stream from flash into a small RAM buffer per voice by DMA
-(read straight from flash they cost ~2x and slow core 0, see Measured
-cost), and the flash-write helper pauses that DMA too.
+already ringing takes the oldest one's voice. Velocity sets the level
+(squared, so soft hits are clearly softer). A slot's first 1 KB waits in
+RAM, so a hit starts at once; the rest streams from flash into a 2 KB
+ring per voice by DMA from the XIP stream FIFO, which reads in flash
+idle cycles and leaves the cache to core 0 (read straight from flash
+samples cost ~2x and slow core 0, see Measured cost). The flash-write
+helper stops that DMA first. Next: per-slot level, tune (interpolation
+only when tuned), pan, start, length and reverse, as playback settings
+that never change the stored audio.
+
+**Built (firmware side, 2026-11-12):** `firmware/src/audio/` (sampler,
+sample_slot, sample_store, sample_stream), loading over the settings
+link (`SAMPLE` in `shared/protocol/README.md`) and `tools/tiles_control.py
+sample put|list|play|delete`. Tested on the computer, playback frame for
+frame and a power cut at every step of a load; on unit 2, loads
+(CRC-checked against flash), listing, slots kept through reflashing,
+hits reaching core 1 and the stream with no underruns. Not yet heard:
+the USB audio input stops on macOS (`firmware/src/audio/README.md`,
+"Known issue").
+
+**Data management, from what hardware samplers do:**
+
+- **The computer converts, the instrument stores** (Elektron's Transfer,
+  Korg's Librarian): rate, depth, channels and trimming happen before the
+  load, so the device never resamples or runs out of time mid-load.
+- **Store at the playback rate** (Digitakt: 48 kHz 16-bit): a hit at its
+  own pitch is a copy, no interpolation.
+- **Fixed slots, not a shared pool.** Volca Sample keeps 100 samples in
+  one 4 MB pool and owners clear space before loading or hit "memory
+  full"; a fixed slot can always be replaced, never fragments, and its
+  cap is plain.
+- **Playback settings change how a sample plays, not the sample**
+  (Volca Sample's start, length, hi-cut, speed, reverse per part): the
+  audio is written once, its settings anywhere.
+- **Fail-safe writes** (NOR flash practice): the only copy of a slot is
+  never half valid; the header is programmed last, after the CRC of what
+  flash holds matches the sender's.
+- **Don't waste the space:** silence trimmed at -60 dBFS, a stereo file
+  with identical sides stored mono, dither when reducing to 16 bits.
 
 **Cost, measured on unit 2:** 5 stereo samples ringing plus reverb,
 delay, chorus and master take 1,074 cycles a sample (mono: 1,052;
@@ -276,6 +310,7 @@ settling a voice count.
    built, with the test voice), the effects bus and per-sound sends,
    following the rules above.
 3. Port the engines one at a time, wavetable first.
-4. The drum sampler: the 8 slots (stereo or mono), DMA streaming,
-   loading from the companion app, checked with the soak.
+4. The drum sampler: built (firmware side and `sample put`). Left: per-slot
+   playback settings, loading from the companion app, and hearing it once
+   USB audio streams on macOS.
 5. v1 bring-up: I2S, the clock change, mute and headphone detect.
