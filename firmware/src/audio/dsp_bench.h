@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define TILES_DSP_BENCH_MAX_ITEMS 48u
+#define TILES_DSP_BENCH_MAX_ITEMS 56u
 
 typedef struct {
     char name[24];

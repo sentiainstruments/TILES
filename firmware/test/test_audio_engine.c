@@ -49,8 +49,8 @@ static double rms(uint32_t frames) {
     return sqrt(sum / frames);
 }
 
-/* 150 MHz: the voices' budget is 85 % of 3,125 cycles minus the 1,200
- * reserve, 1,456. */
+/* 150 MHz: the voices' budget is 85 % of 3,125 cycles minus the 1,100
+ * reserve, 1,556. */
 static void reset(void) {
     tiles_audio_engine_init(12u, 150u, NULL);
 }
@@ -251,24 +251,24 @@ static void test_voices(void) {
     reset();
     costs(100u);
     tiles_audio_engine_set_track_cost(1u, 300u);
-    for (uint8_t i = 0; i < 4u; i++) {
+    for (uint8_t i = 0; i < 5u; i++) {
         tiles_audio_engine_midi(ON(LANE1), (uint8_t)(40u + i), 100);
     }
     for (uint8_t i = 0; i < 3u; i++) {
         tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(60u + i), 100);
     }
-    tiles_audio_engine_midi(ON(MELODIC), 63, 100);
-    CHECK(tiles_audio_engine_track_voices(0u) == 2u && tiles_audio_engine_track_voices(1u) == 4u,
-          "a heavy note took %u light voices", 4u - tiles_audio_engine_track_voices(0u));
+    tiles_audio_engine_midi(ON(MELODIC), 63, 100); /* 1,700 > 1,556: two light voices give way */
+    CHECK(tiles_audio_engine_track_voices(0u) == 3u && tiles_audio_engine_track_voices(1u) == 4u,
+          "a heavy note took %u light voices", 5u - tiles_audio_engine_track_voices(0u));
 
     /* A note that can't fit is skipped and takes nothing. */
     reset();
     costs(300u);
-    for (uint8_t i = 0; i < 4u; i++) {
+    for (uint8_t i = 0; i < 5u; i++) {
         tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(60u + i), 100);
     }
     tiles_audio_engine_midi(ON(LANE1), 40, 100);
-    CHECK(tiles_audio_engine_track_voices(0u) == 0u && tiles_audio_engine_track_voices(1u) == 4u,
+    CHECK(tiles_audio_engine_track_voices(0u) == 0u && tiles_audio_engine_track_voices(1u) == 5u,
           "a lane note that couldn't fit took a voice");
 
     /* Drum hits wait for the drum engine. */

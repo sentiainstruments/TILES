@@ -15,16 +15,16 @@
 #define TILES_AUDIO_TRACK_DRUMS TILES_AUDIO_TRACKS /* the kit: no voices here yet */
 #define TILES_AUDIO_VOICES 32u      /* slots; the budget decides how many sound */
 #define TILES_AUDIO_TRACK_VOICES 8u /* one track's most */
-#define TILES_AUDIO_DRUM_VOICES 5u  /* drum hits ringing at once (the drum engine) */
+#define TILES_AUDIO_DRUM_VOICES 5u  /* drum samples ringing at once (the sampler) */
 
 /* The guardrails (docs/architecture/audio-engine.md, "Guardrails"): every
  * voice together stays under TARGET % of core 1, after the reserve for the
- * effects bus and 5 drums (measured on unit 2: 5 synthesized drums with
- * reverb, delay, chorus and master, ~1,200 cycles per sample); the live
- * guard ends voices above CEILING %. */
+ * effects bus and 5 drum samples (measured on unit 2: 5 stereo samples
+ * with reverb, delay, chorus and master, 1,074 cycles per sample); the
+ * live guard ends voices above CEILING %. */
 #define TILES_AUDIO_TARGET_PCT 85u
 #define TILES_AUDIO_CEILING_PCT 90u
-#define TILES_AUDIO_RESERVE_CYCLES 1200u
+#define TILES_AUDIO_RESERVE_CYCLES 1100u
 
 /* Builds the sine table; call once before anything else. bend_range is the
  * semitones a full pitch bend means (what TILES announces to receivers).

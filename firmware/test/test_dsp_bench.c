@@ -20,7 +20,7 @@ int main(void) {
     tiles_dsp_bench_run(&r, now_us, 1000u);
     int failures = 0;
     tiles_dsp_bench_soak(now_us, 30u, true);
-    if (r.count < 46u) {
+    if (r.count < 53u) {
         printf("FAIL only %u tests ran (arena too small?)\n", (unsigned)r.count);
         failures++;
     }

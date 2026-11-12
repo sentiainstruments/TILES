@@ -29,7 +29,7 @@ over a track and borrows its lane's voices.
 | 2 | lane 2 | melodic, Duet's melody, bass guitar, Song's tracks (the MPE channels) |
 | 3 | lane 3 | Prism, Duet's chord columns, the chord strip (channel 12) |
 | 4 | lane 4 | the physics modes, bouncing notes, games (channel 11) |
-| Drums | the drum lanes | drum mode and Volca mode: the kit (8 sounds, each synthesized or one sample slot), 5 ringing at once |
+| Drums | the drum lanes | drum mode and Volca mode: the sampler, 8 sample slots, 5 ringing at once |
 
 How many synth voices sound at once is set by what they cost, not by a
 count: see Guardrails. At most 8 on one track.
@@ -40,14 +40,13 @@ Every engine and effect pushed as far as the core allows, and the sound
 never breaks up.
 
 1. **Reserved first: the effects and 5 drums.** Reverb, delay, chorus and
-   the master, plus 5 drums ringing, are kept ~1,200 cycles a sample
-   (measured with synthesized drums; ~1,000 with sample drums). Voices
-   never take it, so the effects stay at full quality. The drum engine
-   rings 5 hits at most (`TILES_AUDIO_DRUM_VOICES`); a sixth takes the
-   oldest hit's voice.
+   the master, plus 5 drum samples ringing, are kept 1,100 cycles a
+   sample (measured: 1,074 with stereo samples). Voices never take it,
+   so the effects stay at full quality. The sampler rings 5 at most
+   (`TILES_AUDIO_DRUM_VOICES`).
 2. **Voices share the rest by cost.** Every voice counts its engine's
    cycles per sample, and all of them together stay under 85 % of core 1
-   (1,456 cycles for voices at 150 MHz). Each track's cost starts from
+   (1,556 cycles for voices at 150 MHz). Each track's cost starts from
    its engine's measured figure and then follows live timing: every
    block, core 1 times each track's voices. An engine people program
    needs no figure up front; it is measured as it plays.
@@ -73,25 +72,25 @@ Built in `firmware/src/audio/audio_engine.c` (with the test voice),
 tested in `test/test_audio_engine.c`.
 
 **What fits: measured on unit 2, 150 MHz**, voices dealt over the four
-tracks, 5 drums ringing, reverb + delay + chorus + master, at 85 %
-(`cap_*` in the stress test):
+tracks, 5 stereo drum samples ringing, reverb + delay + chorus + master,
+at 85 % (`cap_*` in the stress test; samples from RAM):
 
-| Every voice | With 5 synth drums | With 5 sample drums (RAM) |
+| Every voice | Voices at once | Each costs |
 |---|---|---|
-| FM, 6 operators | 6 | 7 |
-| Regular (analog, filter at control rate) | 7 | 8 |
-| Wavetable | 13 | 15 |
-| A third each of the three | 8 | 9 |
+| FM, 6 operators | 7 | ~215 |
+| Regular (analog, filter at control rate) | 8 | ~188 |
+| Wavetable | 14 | ~105 |
+| A third each of the three | 9 | ~169 |
 
-What raises it, roughly a voice per ~150-220 cycles freed:
+What raises it, roughly a voice per ~105-215 cycles freed:
 
-- **Sample drums** instead of synthesized: ~170 cycles (+1).
 - **Chorus off:** ~230 cycles (+1-2). It stays optional per sound.
 - **Faster FM** (fixed-point operators, envelopes at control rate):
   untested.
-- **Clock:** at 153.6 MHz (v1) +2 %; a qualified 200 MHz gives voices
-  ~2,340 cycles instead of 1,456, so about FM 10, regular 12, wavetable
-  21, mixed 13 (worked out from the cycle counts, not run).
+- **Clock:** 153.6 MHz (v1) gives voices 1,620 cycles (about FM 7,
+  regular 8, wavetable 15, mixed 9); a qualified 200 MHz gives 2,442
+  (about FM 11, regular 12, wavetable 23, mixed 14). Worked out from the
+  cycle counts, not run.
 
 ## Engines
 
@@ -181,8 +180,8 @@ this is less than their sum)
    the analog voice.
 3. **No per-sample divisions** (a division-free clip), and voice state
    in registers for the block (`restrict` buffers, locals): 5-20 %.
-4. **No six-oscillator metallic hats**: filtered noise, or a rendered
-   sample, at a quarter of the cost.
+4. **Drums are samples** (the sampler), not synthesized: five ringing
+   cost less than three synthesized hits did, a metallic hat alone ~460.
 5. A grain cloud is 12-16 grains (~900-1,200 cycles), not 24.
 6. **Samples stream from flash into RAM by DMA** (the XIP stream
    FIFO, in long sequential reads), and a slot at its own pitch plays
@@ -202,22 +201,46 @@ lighter on reverb).
 About 270 KB of RAM in all: this is why the capture buffer leaves
 release builds.
 
-## Drum samples
+## Drum sampler
+
+Drum mode is a sampler: every drum is a sample, played on the drum
+track, 5 ringing at once. Everything TILES plays comes out in stereo;
+a drum sample is stereo or mono (mono is panned per pad).
 
 **8 slots**, one per kit sound, fixed size so any slot can be replaced
-on its own: up to 2 s each (a crash's tail fades inside it), mono,
-16-bit, 48 kHz. 192 KB a slot (three 64 KB erase blocks), 1.5 MB in
-all, at a fixed place in flash below the saved data (`flash_map.h` gets
-the region when the player lands). Loading a slot from the companion app
-erases and writes flash, which pauses core 1, so it only happens while
-nothing plays.
+on its own: 192 KB each (three 64 KB erase blocks), 1.5 MB in all, at a
+fixed place in flash below the saved data (`flash_map.h` gets the
+region when the sampler lands). Stored as 16-bit at 48 kHz, so a sample
+at its own pitch plays without resampling.
 
-Typical one-shot lengths: kick 0.6 s, snare and clap 0.4 s, closed hat
-0.15 s, open hat 0.8 s, rim 0.15 s, tom 0.6 s, crash 2 s.
+| A slot holds | Length cap |
+|---|---|
+| a stereo sample | 1 s |
+| a mono sample | 2 s |
+
+A longer sample is trimmed at the cap with a short fade; a long crash or
+open hat fits best as mono. Typical one-shots: kick 0.6 s, snare and
+clap 0.4 s, closed hat 0.15 s, open hat 0.8 s, rim 0.15 s, tom 0.6 s,
+crash 2 s. The companion app converts what it loads (rate, depth,
+length). Loading erases and writes flash, which pauses core 1, so it
+only happens while nothing plays.
+
+**Playing:** a pad's new hit restarts its own sample; a hit with 5
+already ringing takes the oldest one's voice. Velocity sets the level;
+each slot has its own level, tune (interpolation only when tuned) and
+pan. Samples stream from flash into a small RAM buffer per voice by DMA
+(read straight from flash they cost ~2x and slow core 0, see Measured
+cost), and the flash-write helper pauses that DMA too.
+
+**Cost, measured on unit 2:** 5 stereo samples ringing plus reverb,
+delay, chorus and master take 1,074 cycles a sample (mono: 1,052;
+5 synthesized drums: 1,210). A stereo voice costs the same as a mono one
+(~65-70 cycles): one 32-bit read a frame.
 
 Patches are small next to this: ~512 bytes a synth patch (128 = 64 KB),
 ~100 bytes a kit, kept with the saved data.
 
+## The DSP stress test
 
 `cmake -DTILES_DSP_BENCH=ON` builds it in (never in a release: it holds
 180 KB of RAM); `tools/tiles_control.py bench` runs it on core 1 and
@@ -253,5 +276,6 @@ settling a voice count.
    built, with the test voice), the effects bus and per-sound sends,
    following the rules above.
 3. Port the engines one at a time, wavetable first.
-4. Sample player: the 8 slots, DMA streaming, checked with the soak.
+4. The drum sampler: the 8 slots (stereo or mono), DMA streaming,
+   loading from the companion app, checked with the soak.
 5. v1 bring-up: I2S, the clock change, mute and headphone detect.
