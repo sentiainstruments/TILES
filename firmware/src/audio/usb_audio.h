@@ -44,4 +44,6 @@ tiles_usb_audio_info_t tiles_usb_audio_get_info(void);
 void tiles_usb_audio_bench_start(void);
 /* NULL until the last run finished. */
 const tiles_dsp_bench_t *tiles_usb_audio_bench_result(void);
+/* Core 1 streams the 8 sample slots from flash for `ms` (dsp_bench.h). */
+void tiles_usb_audio_bench_soak(uint32_t ms, bool cached);
 #endif

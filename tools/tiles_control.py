@@ -226,8 +226,21 @@ def bench(session):
         lines = session.command("BENCH", multi_line=True)
         if lines and lines[0] != "running":
             print("\n".join(lines))
-            return
-    sys.exit("bench: no result after 60 s")
+            break
+    else:
+        sys.exit("bench: no result after 60 s")
+    # Core 0's loop while core 1 streams the 8 sample slots from flash in real time
+    # (loop.* is the last whole second).
+    def loop_now():
+        info = dict(line.split("=", 1) for line in session.command("INFO", multi_line=True) if "=" in line)
+        return f"avg {info.get('loop.avg_us')} us, max {info.get('loop.max_us')} us"
+    time.sleep(2.2)
+    print(f"core0_loop idle: {loop_now()}")
+    for cached, label in ((1, "cached"), (0, "uncached")):
+        session.command(f"BENCH SOAK 3500 {cached}")
+        time.sleep(2.6)
+        print(f"core0_loop streaming {label}: {loop_now()}")
+        time.sleep(1.4)
 
 
 def main():

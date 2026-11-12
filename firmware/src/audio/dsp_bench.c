@@ -411,6 +411,159 @@ static void HOT(fm_process)(fm_voice_t *v, float *restrict l, float *restrict r,
     }
 }
 
+/* ---- FM voice, 6 operators (DX7-style) ---- */
+
+/* Operator 1..6: an electric-piano-like patch. Level is a modulator's
+ * index or a carrier's mix level. */
+static const float k_fm6_ratio[6] = {1.0f, 14.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+static const float k_fm6_decay[6] = {1800.0f, 260.0f, 1500.0f, 900.0f, 1200.0f, 700.0f};
+static const float k_fm6_level[6] = {0.33f, 0.35f, 0.33f, 0.6f, 0.33f, 0.5f};
+
+typedef struct {
+    uint32_t ph[6], inc[6];
+    env_t env[6];
+    float level[6];
+    float fb1, fb2;
+    float gl, gr;
+} fm6_voice_t;
+
+static void fm6_init(fm6_voice_t *v, float note, float pan) {
+    float hz = note_hz(note);
+    for (uint32_t i = 0; i < 6u; i++) {
+        v->ph[i] = 0;
+        v->inc[i] = (uint32_t)(hz * k_fm6_ratio[i] * (i == 5u ? 1.003f : 1.0f) * HZ_TO_INC);
+        env_init(&v->env[i], 1.0f, k_fm6_decay[i], i == 1u ? 0.0f : 0.25f, 500.0f);
+        v->level[i] = k_fm6_level[i];
+    }
+    v->fb1 = v->fb2 = 0.0f;
+    pan_gains(pan, &v->gl, &v->gr);
+}
+
+/* Algorithm 5 written out (6->5, 4->3, 2->1, feedback on 6), every
+ * envelope ticked per sample: the 4-operator voice made bigger. */
+static void HOT(fm6_process)(fm6_voice_t *v, float *restrict l, float *restrict r, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        float e[6];
+        for (uint32_t k = 0; k < 6u; k++) {
+            e[k] = env_tick(&v->env[k]) * v->level[k];
+        }
+        float m6 = sin_lut(v->ph[5] + pm(0.5f * (v->fb1 + v->fb2), 0.2f)) * e[5];
+        v->fb2 = v->fb1;
+        v->fb1 = m6;
+        float c5 = sin_lut(v->ph[4] + pm(m6, 1.0f)) * e[4];
+        float m4 = sin_lut(v->ph[3]) * e[3];
+        float c3 = sin_lut(v->ph[2] + pm(m4, 1.0f)) * e[2];
+        float m2 = sin_lut(v->ph[1]) * e[1];
+        float c1 = sin_lut(v->ph[0] + pm(m2, 1.0f)) * e[0];
+        for (uint32_t k = 0; k < 6u; k++) {
+            v->ph[k] += v->inc[k];
+        }
+        float y = c1 + c3 + c5;
+        l[i] += y * v->gl;
+        r[i] += y * v->gr;
+    }
+}
+
+/* The way a full 32-algorithm engine runs: any algorithm as a routing
+ * table, one operator over the whole block at a time, envelopes once per
+ * block (1.5 kHz) with the gain ramped across it. */
+#define FM6_NO_IN 0xFFu
+typedef struct {
+    uint8_t in;  /* bus 0/1 it is modulated by, or FM6_NO_IN */
+    uint8_t out; /* bus 0/1, or 2: the voice's output */
+    uint8_t add; /* add to the bus instead of replacing it */
+} fm6_route_t;
+
+/* Processing order: operator 6 first, which carries the feedback. */
+static const fm6_route_t k_fm6_alg1[6] = {/* 6->5->4->3, 2->1 */
+                                          {FM6_NO_IN, 0, 0}, {0, 0, 0}, {0, 0, 0},
+                                          {0, 2, 0},         {FM6_NO_IN, 0, 0}, {0, 2, 1}};
+static const fm6_route_t k_fm6_alg5[6] = {/* 6->5, 4->3, 2->1 */
+                                          {FM6_NO_IN, 0, 0}, {0, 2, 0}, {FM6_NO_IN, 0, 0},
+                                          {0, 2, 1},         {FM6_NO_IN, 0, 0}, {0, 2, 1}};
+
+typedef struct {
+    fm6_route_t alg[6];     /* copied: the tables live in flash */
+    uint32_t ph[6], inc[6]; /* processing order */
+    env_t env[6];
+    float level[6], gain[6];
+    float fb1, fb2;
+    float gl, gr;
+} fm6b_voice_t;
+
+/* The same envelope ticked once per BLOCK samples. */
+static void env_to_block_rate(env_t *e) {
+    e->a = 1.0f - powf(1.0f - e->a, (float)BLOCK);
+    e->d = 1.0f - powf(1.0f - e->d, (float)BLOCK);
+    e->r = 1.0f - powf(1.0f - e->r, (float)BLOCK);
+}
+
+static void fm6b_init(fm6b_voice_t *v, float note, float pan, const fm6_route_t *alg) {
+    float hz = note_hz(note);
+    memcpy(v->alg, alg, sizeof(v->alg));
+    for (uint32_t k = 0; k < 6u; k++) {
+        uint32_t op = 5u - k;
+        v->ph[k] = 0;
+        v->inc[k] = (uint32_t)(hz * k_fm6_ratio[op] * (op == 5u ? 1.003f : 1.0f) * HZ_TO_INC);
+        env_init(&v->env[k], 1.0f, k_fm6_decay[op], op == 1u ? 0.0f : 0.25f, 500.0f);
+        env_to_block_rate(&v->env[k]);
+        v->level[k] = k_fm6_level[op];
+        v->gain[k] = 0.0f;
+    }
+    v->fb1 = v->fb2 = 0.0f;
+    pan_gains(pan, &v->gl, &v->gr);
+}
+
+static float s_fm6_bus[3][BLOCK];
+
+/* n <= BLOCK. */
+static void HOT(fm6b_process)(fm6b_voice_t *v, float *restrict l, float *restrict r, uint32_t n) {
+    float inv_n = 1.0f / (float)n;
+    for (uint32_t k = 0; k < 6u; k++) {
+        fm6_route_t rt = v->alg[k];
+        float g = v->gain[k];
+        float g1 = env_tick(&v->env[k]) * v->level[k];
+        float dg = (g1 - g) * inv_n;
+        v->gain[k] = g1;
+        uint32_t ph = v->ph[k], inc = v->inc[k];
+        float *dst = s_fm6_bus[rt.out];
+        if (k == 0u) {
+            float f1 = v->fb1, f2 = v->fb2;
+            for (uint32_t i = 0; i < n; i++) {
+                float y = sin_lut(ph + pm(0.5f * (f1 + f2), 0.2f)) * g;
+                f2 = f1;
+                f1 = y;
+                dst[i] = y;
+                ph += inc;
+                g += dg;
+            }
+            v->fb1 = f1;
+            v->fb2 = f2;
+        } else if (rt.in == FM6_NO_IN) {
+            float keep = rt.add ? 1.0f : 0.0f;
+            for (uint32_t i = 0; i < n; i++) {
+                dst[i] = keep * dst[i] + sin_lut(ph) * g;
+                ph += inc;
+                g += dg;
+            }
+        } else {
+            const float *src = s_fm6_bus[rt.in];
+            float keep = rt.add ? 1.0f : 0.0f;
+            for (uint32_t i = 0; i < n; i++) {
+                dst[i] = keep * dst[i] + sin_lut(ph + pm(src[i], 1.0f)) * g;
+                ph += inc;
+                g += dg;
+            }
+        }
+        v->ph[k] = ph;
+    }
+    const float *out = s_fm6_bus[2];
+    for (uint32_t i = 0; i < n; i++) {
+        l[i] += out[i] * v->gl;
+        r[i] += out[i] * v->gr;
+    }
+}
+
 /* ---- plucked string: Karplus-Strong with allpass tuning, loop filter, DC block ---- */
 
 #define PLUCK_LEN 1024u
@@ -742,6 +895,87 @@ static void HOT(clap_process)(clap_t *c, float *restrict l, float *restrict r, u
             c->t = 0;
         }
     }
+}
+
+/* ---- sample voice: 16-bit mono read straight from flash, linear
+ * interpolation for tuning ---- */
+
+#define SMP_VOICES 8u             /* the 8 drum sample slots */
+#define SMP_REGION_SAMPLES 12288u /* 24 KB each, more than one test reads */
+#define SMP_LOOP_SAMPLES (SMP_REGION_SAMPLES - 4u)
+
+#ifdef PICO_ON_DEVICE
+#include "hardware/regs/addressmap.h"
+/* Any flash past the image: only the read cost matters, not the sound. */
+#define SMP_FLASH_OFFSET (1024u * 1024u)
+static const uint32_t *smp_region(uint32_t voice, bool cached) {
+    uint32_t base = cached ? XIP_BASE : XIP_NOCACHE_NOALLOC_BASE;
+    return (const uint32_t *)(base + SMP_FLASH_OFFSET + voice * SMP_REGION_SAMPLES * 2u);
+}
+#else
+static uint32_t s_host_flash[SMP_VOICES * SMP_REGION_SAMPLES / 2u];
+static const uint32_t *smp_region(uint32_t voice, bool cached) {
+    (void)cached;
+    if (s_host_flash[0] == 0u) {
+        uint32_t rng = 0xD00Du;
+        for (uint32_t i = 0; i < SMP_VOICES * SMP_REGION_SAMPLES / 2u; i++) {
+            s_host_flash[i] = (uint32_t)(int32_t)(noise(&rng) * 2147483647.0f) & 0x3FFF3FFFu;
+        }
+    }
+    return s_host_flash + voice * SMP_REGION_SAMPLES / 2u;
+}
+#endif
+
+typedef struct {
+    const uint32_t *src; /* int16 pairs */
+    uint32_t pos, step;  /* 16.16, in samples */
+    uint32_t w, a, b;    /* the pair word under pos and the next one */
+    float gl, gr;
+} smp_voice_t;
+
+static const float k_smp_ratio[SMP_VOICES] = {1.0f, 1.0f, 1.0f, 1.0f, 1.06f, 0.94f, 1.0f, 1.12f};
+
+static void smp_init(smp_voice_t *v, const uint32_t *src, uint32_t slot) {
+    v->src = src;
+    v->pos = 0;
+    v->step = (uint32_t)(k_smp_ratio[slot] * 65536.0f);
+    v->w = 0;
+    v->a = src[0];
+    v->b = src[1];
+    pan_gains((float)slot / 4.0f - 1.0f, &v->gl, &v->gr);
+}
+
+static void HOT(smp_process)(smp_voice_t *v, float *restrict l, float *restrict r, uint32_t n) {
+    const uint32_t *src = v->src;
+    uint32_t pos = v->pos, step = v->step, w = v->w, a = v->a, b = v->b;
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t idx = pos >> 16, wi = idx >> 1;
+        if (wi != w) {
+            a = wi == w + 1u ? b : src[wi];
+            b = src[wi + 1u];
+            w = wi;
+        }
+        int32_t s0, s1;
+        if (idx & 1u) {
+            s0 = (int16_t)(a >> 16);
+            s1 = (int16_t)b;
+        } else {
+            s0 = (int16_t)a;
+            s1 = (int16_t)(a >> 16);
+        }
+        float fr = (float)(pos & 0xFFFFu) * (1.0f / 65536.0f);
+        float y = ((float)s0 + fr * (float)(s1 - s0)) * (1.0f / 32768.0f);
+        l[i] += y * v->gl;
+        r[i] += y * v->gr;
+        pos += step;
+        if ((pos >> 16) >= SMP_LOOP_SAMPLES) {
+            pos -= SMP_LOOP_SAMPLES << 16;
+        }
+    }
+    v->pos = pos;
+    v->w = w;
+    v->a = a;
+    v->b = b;
 }
 
 /* ---- effects ---- */
@@ -1096,6 +1330,32 @@ static void bench_voices(run_t *x) {
         watch(x);
     }
     finish(x, "fm4_voice", VOICES_EACH);
+    static fm6_voice_t fm6[VOICES_EACH];
+    for (uint32_t i = 0; i < VOICES_EACH; i++) {
+        fm6_init(&fm6[i], 52.0f + 4.0f * (float)i, (float)i / 4.0f - 1.0f);
+    }
+    begin(x);
+    for (uint32_t b = 0; b < BLOCKS; b++) {
+        clear(x);
+        for (uint32_t i = 0; i < VOICES_EACH; i++) {
+            fm6_process(&fm6[i], x->l, x->r, BLOCK);
+        }
+        watch(x);
+    }
+    finish(x, "fm6_voice", VOICES_EACH);
+    static fm6b_voice_t fm6b[VOICES_EACH];
+    for (uint32_t i = 0; i < VOICES_EACH; i++) {
+        fm6b_init(&fm6b[i], 52.0f + 4.0f * (float)i, (float)i / 4.0f - 1.0f, (i & 1u) ? k_fm6_alg1 : k_fm6_alg5);
+    }
+    begin(x);
+    for (uint32_t b = 0; b < BLOCKS; b++) {
+        clear(x);
+        for (uint32_t i = 0; i < VOICES_EACH; i++) {
+            fm6b_process(&fm6b[i], x->l, x->r, BLOCK);
+        }
+        watch(x);
+    }
+    finish(x, "fm6_voice_block", VOICES_EACH);
     /* Plucked string */
     s_arena_used = 0;
     static pluck_voice_t pl[VOICES_EACH];
@@ -1188,6 +1448,35 @@ static void bench_drums(run_t *x) {
         watch(x);
     }
     finish(x, "clap", 1);
+    /* 8 sample slots sounding at once: from RAM (the interpolation alone),
+     * from flash through the XIP cache, and from flash uncached. */
+    s_arena_used = 0;
+    uint32_t *ram = arena_alloc(SMP_REGION_SAMPLES * 2u);
+    static smp_voice_t sv[SMP_VOICES];
+    for (uint32_t pass = 0; pass < 3u; pass++) {
+        if (pass == 0u) {
+            if (!ram) {
+                continue;
+            }
+            uint32_t rng = 0xBEEFu;
+            for (uint32_t i = 0; i < SMP_REGION_SAMPLES / 2u; i++) {
+                ram[i] = (uint32_t)(int32_t)(noise(&rng) * 2147483647.0f) & 0x3FFF3FFFu;
+            }
+        }
+        for (uint32_t i = 0; i < SMP_VOICES; i++) {
+            smp_init(&sv[i], pass == 0u ? ram : smp_region(i, pass == 1u), i);
+        }
+        begin(x);
+        for (uint32_t b = 0; b < BLOCKS; b++) {
+            clear(x);
+            for (uint32_t i = 0; i < SMP_VOICES; i++) {
+                smp_process(&sv[i], x->l, x->r, BLOCK);
+            }
+            watch(x);
+        }
+        static const char *const names[3] = {"sample_ram", "sample_flash", "sample_flash_nocache"};
+        finish(x, names[pass], SMP_VOICES);
+    }
 }
 
 static float s_dry_l[BLOCK], s_dry_r[BLOCK];
@@ -1262,11 +1551,13 @@ static void bench_effects(run_t *x) {
     finish(x, "master_out_fast", 1);
 }
 
-/* Everything at once: `played` voices of one engine, 4 plucked sequencer
- * voices, kick + snare + hat ringing, reverb, delay, chorus, master. */
-enum { ENGINE_ANALOG, ENGINE_FM, ENGINE_WAVETABLE, ENGINE_ANALOG_FAST };
+/* Everything at once: `played` voices of one engine, `seq` plucked
+ * sequencer voices, drums (kick + snare + hat ringing, or the 8 sample
+ * slots from flash), reverb, delay, chorus, master. */
+enum { ENGINE_ANALOG, ENGINE_FM, ENGINE_WAVETABLE, ENGINE_ANALOG_FAST, ENGINE_FM6 };
+enum { DRUMS_NONE, DRUMS_SYNTH, DRUMS_SAMPLES };
 
-static void bench_scene(run_t *x, int engine, uint32_t played, uint32_t seq, const char *name) {
+static void bench_scene(run_t *x, int engine, uint32_t played, uint32_t seq, int drums, const char *name) {
     s_arena_used = 0;
     static reverb_t rvb;
     static delay_t dl;
@@ -1275,11 +1566,14 @@ static void bench_scene(run_t *x, int engine, uint32_t played, uint32_t seq, con
     static va_voice_t va[12];
     static fm_voice_t fm[12];
     static wt_voice_t wt[12];
+    static fm6b_voice_t fm6[12];
+    static smp_voice_t sd[SMP_VOICES];
     static kick_t k;
     static snare_t s;
     static hat_t h;
     static nhat_t nh;
     bool fast = engine == ENGINE_ANALOG_FAST;
+    bool lean = fast || engine == ENGINE_FM6; /* noise hat, fast master */
     if (!reverb_init(&rvb) || !delay_init(&dl) || !chorus_init(&ch)) {
         return;
     }
@@ -1297,6 +1591,8 @@ static void bench_scene(run_t *x, int engine, uint32_t played, uint32_t seq, con
             va_init(&va[i], note, pan);
         } else if (engine == ENGINE_FM) {
             fm_init(&fm[i], note, pan);
+        } else if (engine == ENGINE_FM6) {
+            fm6b_init(&fm6[i], note, pan, (i & 1u) ? k_fm6_alg1 : k_fm6_alg5);
         } else {
             wt_init(&wt[i], note, pan);
         }
@@ -1305,6 +1601,9 @@ static void bench_scene(run_t *x, int engine, uint32_t played, uint32_t seq, con
     snare_init(&s);
     hat_init(&h);
     nhat_init(&nh);
+    for (uint32_t i = 0; i < SMP_VOICES; i++) {
+        smp_init(&sd[i], smp_region(i, true), i);
+    }
     static float send_l[BLOCK], send_r[BLOCK];
     begin(x);
     for (uint32_t b = 0; b < BLOCKS; b++) {
@@ -1316,6 +1615,8 @@ static void bench_scene(run_t *x, int engine, uint32_t played, uint32_t seq, con
                 va_fast_process(&va[i], x->l, x->r, BLOCK);
             } else if (engine == ENGINE_FM) {
                 fm_process(&fm[i], x->l, x->r, BLOCK);
+            } else if (engine == ENGINE_FM6) {
+                fm6b_process(&fm6[i], x->l, x->r, BLOCK);
             } else {
                 wt_process(&wt[i], x->l, x->r, BLOCK);
             }
@@ -1323,12 +1624,18 @@ static void bench_scene(run_t *x, int engine, uint32_t played, uint32_t seq, con
         for (uint32_t i = 0; i < seq; i++) {
             pluck_process(&pl[i], x->l, x->r, BLOCK);
         }
-        kick_process(&k, x->l, x->r, BLOCK);
-        snare_process(&s, x->l, x->r, BLOCK);
-        if (fast) {
-            nhat_process(&nh, x->l, x->r, BLOCK);
-        } else {
-            hat_process(&h, x->l, x->r, BLOCK);
+        if (drums == DRUMS_SYNTH) {
+            kick_process(&k, x->l, x->r, BLOCK);
+            snare_process(&s, x->l, x->r, BLOCK);
+            if (lean) {
+                nhat_process(&nh, x->l, x->r, BLOCK);
+            } else {
+                hat_process(&h, x->l, x->r, BLOCK);
+            }
+        } else if (drums == DRUMS_SAMPLES) {
+            for (uint32_t i = 0; i < SMP_VOICES; i++) {
+                smp_process(&sd[i], x->l, x->r, BLOCK);
+            }
         }
         for (uint32_t i = 0; i < BLOCK; i++) { /* one send level for the whole mix */
             send_l[i] = 0.3f * x->l[i];
@@ -1337,7 +1644,7 @@ static void bench_scene(run_t *x, int engine, uint32_t played, uint32_t seq, con
         chorus_process(&ch, send_l, send_r, x->l, x->r, BLOCK);
         delay_process(&dl, send_l, send_r, x->l, x->r, BLOCK);
         reverb_process(&rvb, send_l, send_r, x->l, x->r, BLOCK);
-        if (fast) {
+        if (lean) {
             master_fast_process(x->l, x->r, s_out, BLOCK);
         } else {
             master_process(x->l, x->r, s_out, BLOCK);
@@ -1368,13 +1675,39 @@ void tiles_dsp_bench_run(tiles_dsp_bench_t *out, uint32_t (*now_us)(void), uint3
     bench_voices(&x);
     bench_drums(&x);
     bench_effects(&x);
-    bench_scene(&x, ENGINE_WAVETABLE, 0, 0, "scene_drums_fx_only");
-    bench_scene(&x, ENGINE_WAVETABLE, 8, 0, "scene_wavetable_8");
-    bench_scene(&x, ENGINE_ANALOG, 8, 4, "scene_analog_8+4");
-    bench_scene(&x, ENGINE_FM, 8, 4, "scene_fm_8+4");
-    bench_scene(&x, ENGINE_WAVETABLE, 8, 4, "scene_wavetable_8+4");
-    bench_scene(&x, ENGINE_ANALOG, 12, 0, "scene_analog_12");
-    bench_scene(&x, ENGINE_ANALOG, 12, 4, "scene_analog_12+4");
-    bench_scene(&x, ENGINE_ANALOG_FAST, 8, 4, "scene_analog_fast_8+4");
-    bench_scene(&x, ENGINE_ANALOG_FAST, 12, 4, "scene_analog_fast_12+4");
+    bench_scene(&x, ENGINE_WAVETABLE, 0, 0, DRUMS_SYNTH, "scene_drums_fx_only");
+    bench_scene(&x, ENGINE_WAVETABLE, 8, 0, DRUMS_SYNTH, "scene_wavetable_8");
+    bench_scene(&x, ENGINE_ANALOG, 8, 4, DRUMS_SYNTH, "scene_analog_8+4");
+    bench_scene(&x, ENGINE_FM, 8, 4, DRUMS_SYNTH, "scene_fm_8+4");
+    bench_scene(&x, ENGINE_WAVETABLE, 8, 4, DRUMS_SYNTH, "scene_wavetable_8+4");
+    bench_scene(&x, ENGINE_ANALOG, 12, 0, DRUMS_SYNTH, "scene_analog_12");
+    bench_scene(&x, ENGINE_ANALOG, 12, 4, DRUMS_SYNTH, "scene_analog_12+4");
+    bench_scene(&x, ENGINE_ANALOG_FAST, 8, 4, DRUMS_SYNTH, "scene_analog_fast_8+4");
+    bench_scene(&x, ENGINE_ANALOG_FAST, 12, 4, DRUMS_SYNTH, "scene_analog_fast_12+4");
+    bench_scene(&x, ENGINE_FM6, 12, 0, DRUMS_NONE, "scene_fm6_12_fx");
+    bench_scene(&x, ENGINE_FM6, 8, 4, DRUMS_SYNTH, "scene_fm6_8+4");
+    bench_scene(&x, ENGINE_FM6, 8, 4, DRUMS_SAMPLES, "scene_fm6_8+4_smp");
+    bench_scene(&x, ENGINE_ANALOG_FAST, 8, 4, DRUMS_SAMPLES, "scene_analog_fast_8+4_smp");
+}
+
+void tiles_dsp_bench_soak(uint32_t (*now_us)(void), uint32_t ms, bool cached) {
+    static smp_voice_t v[SMP_VOICES];
+    static float l[BLOCK], r[BLOCK];
+    for (uint32_t i = 0; i < SMP_VOICES; i++) {
+        smp_init(&v[i], smp_region(i, cached), i);
+    }
+    uint32_t start = now_us();
+    uint32_t blocks = 0;
+    while (now_us() - start < ms * 1000u) {
+        memset(l, 0, sizeof(l));
+        memset(r, 0, sizeof(r));
+        for (uint32_t i = 0; i < SMP_VOICES; i++) {
+            smp_process(&v[i], l, r, BLOCK);
+        }
+        s_sink += l[0] + r[BLOCK - 1u];
+        blocks++;
+        uint32_t due = start + (uint32_t)((uint64_t)blocks * BLOCK * 1000000u / 48000u);
+        while ((int32_t)(now_us() - due) < 0) {
+        }
+    }
 }

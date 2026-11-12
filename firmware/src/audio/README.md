@@ -33,8 +33,11 @@ real engines replace the voice code, not the plumbing.
   programmed, so no core may run from flash. Every write goes through
   `tiles_flash_write_begin()/end()` (`storage/storage_flash.h`), which
   locks core 1 out (`multicore_lockout`) and masks interrupts; the USB
-  stream stops for that time too (an erase is tens of ms). Saves already
-  wait for idle pads or a stopped clock, so this lands on silence.
+  stream stops for that time too (an erase is tens of ms). Saves wait
+  for idle pads or a stopped clock, except the sequencer's autosave
+  while playing: it writes pre-erased flash right after a step (a few
+  ms, no erase), which will gap the built-in sound. To fix before the
+  engines ship (for example, hold it in RAM until the clock stops).
 - **Latency** added by TILES: the 3 ms ring plus one packet, about 4 ms,
   on top of the host's own input buffer.
 

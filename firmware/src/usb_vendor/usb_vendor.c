@@ -650,11 +650,24 @@ static void handle_line(char *line) {
     /* Unit, firmware version, then flash-store status (for "did it save?"). */
 #if TILES_DSP_BENCH
     /* BENCH START runs the DSP stress test on core 1; BENCH reports it
-     * (one line per kernel: cycles per sample per voice), or "running". */
+     * (one line per kernel: cycles per sample per voice), or "running".
+     * BENCH SOAK <ms> <cached 0|1> streams the sample slots from flash. */
     if (strcmp(cmd, "BENCH") == 0) {
         char *what = strtok(NULL, " ");
         if (what != NULL && strcmp(what, "START") == 0) {
             tiles_usb_audio_bench_start();
+            reply_ok();
+            return;
+        }
+        if (what != NULL && strcmp(what, "SOAK") == 0) {
+            char *ms = strtok(NULL, " ");
+            char *cached = strtok(NULL, " ");
+            if (ms == NULL || cached == NULL) {
+                reply_err("missing-arg");
+                return;
+            }
+            uint32_t soak_ms = (uint32_t)strtoul(ms, NULL, 10);
+            tiles_usb_audio_bench_soak(soak_ms > 60000u ? 60000u : soak_ms, cached[0] == '1');
             reply_ok();
             return;
         }

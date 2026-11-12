@@ -6,9 +6,10 @@
  * computer to check every kernel makes finite, non-silent sound.
  * docs/architecture/audio-engine.md has the plan these numbers check. */
 
+#include <stdbool.h>
 #include <stdint.h>
 
-#define TILES_DSP_BENCH_MAX_ITEMS 32u
+#define TILES_DSP_BENCH_MAX_ITEMS 40u
 
 typedef struct {
     char name[24];
@@ -26,3 +27,8 @@ typedef struct {
 /* Runs every test (a few seconds). now_us: a free-running microsecond
  * clock; clk_mhz: the CPU clock the cycles are counted in. */
 void tiles_dsp_bench_run(tiles_dsp_bench_t *out, uint32_t (*now_us)(void), uint32_t clk_mhz);
+
+/* Plays the 8 sample slots from flash in real time for `ms`, through the
+ * XIP cache core 0 shares or around it, to see what that does to core 0's
+ * loop. */
+void tiles_dsp_bench_soak(uint32_t (*now_us)(void), uint32_t ms, bool cached);

@@ -50,6 +50,8 @@ static volatile uint8_t s_load_pct;
 static volatile bool s_bench_request;
 static volatile bool s_bench_done;
 static tiles_dsp_bench_t s_bench;
+static volatile uint32_t s_soak_ms;
+static volatile bool s_soak_cached;
 
 static uint32_t bench_now_us(void) {
     return time_us_32();
@@ -62,6 +64,11 @@ void tiles_usb_audio_bench_start(void) {
 
 const tiles_dsp_bench_t *tiles_usb_audio_bench_result(void) {
     return s_bench_done ? &s_bench : NULL;
+}
+
+void tiles_usb_audio_bench_soak(uint32_t ms, bool cached) {
+    s_soak_cached = cached;
+    s_soak_ms = ms;
 }
 #endif
 
@@ -77,6 +84,10 @@ static void core1_main(void) {
             s_bench_request = false;
             tiles_dsp_bench_run(&s_bench, bench_now_us, clock_get_hz(clk_sys) / 1000000u);
             s_bench_done = true;
+        }
+        if (s_soak_ms != 0u) {
+            tiles_dsp_bench_soak(bench_now_us, s_soak_ms, s_soak_cached);
+            s_soak_ms = 0u;
         }
 #endif
         uint32_t word;
