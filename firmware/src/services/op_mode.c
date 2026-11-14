@@ -5,6 +5,7 @@
 #include "buttons.h"
 #include "cv_gate.h"
 #include "debug_mode.h"
+#include "device_mode.h"
 #include "drum_seq.h"
 #include "harmony.h"
 #include "bounce.h"
@@ -1311,12 +1312,26 @@ static const menu_slot_t *slot_for(tiles_op_mode_t mode, bool volca) {
     return NULL;
 }
 
+/* A mode's underglow: its menu colour, except melodic's, which is the
+ * device mode's (controller or standalone). */
+static void slot_underglow(const menu_slot_t *slot, float *r, float *g, float *b) {
+    if (slot == NULL) {
+        *r = *g = *b = 1.0f;
+    } else if (slot->mode == OP_MODE_MELODIC) {
+        tiles_device_mode_color(tiles_device_mode(), r, g, b);
+    } else {
+        *r = slot->r;
+        *g = slot->g;
+        *b = slot->b;
+    }
+}
+
 /* The active mode's colour on the underglow, for the views that draw it
  * (sequencer, Song); the others draw it themselves, and lighting.c shows it
  * outside standby (set in set_active_mode()). */
 static void mode_underglow(void) {
-    const menu_slot_t *slot = slot_for(s_active_mode, s_volca_mode);
-    float r = slot != NULL ? slot->r : 1.0f, g = slot != NULL ? slot->g : 1.0f, b = slot != NULL ? slot->b : 1.0f;
+    float r, g, b;
+    slot_underglow(slot_for(s_active_mode, s_volca_mode), &r, &g, &b);
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
         tiles_lighting_set_standby_underglow_rgb(i, r, g, b);
     }
@@ -2207,7 +2222,9 @@ static void set_active_mode(tiles_op_mode_t mode) {
      * guitar); the modes drawing through standby draw the same colour. */
     const menu_slot_t *slot = slot_for(mode, s_volca_mode);
     if (slot != NULL) {
-        tiles_lighting_set_mode_underglow(slot->r, slot->g, slot->b);
+        float ur, ug, ub;
+        slot_underglow(slot, &ur, &ug, &ub);
+        tiles_lighting_set_mode_underglow(ur, ug, ub);
     }
     printf("[op_mode] active mode -> %d\n", (int)mode);
 }
@@ -3243,7 +3260,9 @@ void tiles_op_mode_init(bool crash_recovered) {
      * after). */
     const menu_slot_t *boot_slot = slot_for(s_active_mode, s_volca_mode);
     if (boot_slot != NULL) {
-        tiles_lighting_set_mode_underglow(boot_slot->r, boot_slot->g, boot_slot->b);
+        float ur, ug, ub;
+        slot_underglow(boot_slot, &ur, &ug, &ub);
+        tiles_lighting_set_mode_underglow(ur, ug, ub);
     }
 }
 

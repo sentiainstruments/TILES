@@ -67,7 +67,7 @@ row 1, each mode in its menu colour (`MENU_SLOTS` in `op_mode.c`).
 
 | Column | Modes |
 |---|---|
-| 1 | Melodic (magenta, default), Duet (pink: chords on columns 1-2, melody on 3-6), Bass guitar (lilac: rows = strings, columns = frets, "-"/"+" shift the frets) |
+| 1 | Melodic (magenta, default; its underglow is the device mode's colour), Duet (pink: chords on columns 1-2, melody on 3-6), Bass guitar (lilac: rows = strings, columns = frets, "-"/"+" shift the frets) |
 | 2 | Sequencer (scarlet), Drums (orange steps, amber drum pads: 16/32 steps on channel 10, Drum Rack order), Song (amber, beta: 24-slot looper, 128 steps per pattern) |
 | 3 | Prism (blue: chord machine, `harmony`) |
 | 4 | Ableton (teal: Session View clip grid), Volca (cyan: a drum per channel) |
@@ -153,10 +153,12 @@ crash reboot (`__uninitialized_ram`, `tiles_op_mode_init()`).
 | For | playing a computer or synth over MIDI/MPE | TILES's own sound (synths, drum sampler) |
 | USB | MIDI, settings, console | the same plus a stereo 48 kHz audio input |
 | Core 1 | off | the sound, and USB (`../audio/README.md`) |
-| Boot pulse | deep blue | Sentia magenta |
+| Colour (boot pulse, melodic underglow) | deep blue | Sentia magenta |
 
 Tap or hold triangle during the boot animation to switch; the pulse turns
-the new mode's colour at once. Or the setting `device.mode`
+the new mode's colour at once. While playing, hold triangle alone for 10 s:
+the pads and underglow flash the new mode's colour and TILES restarts into
+it. Or the setting `device.mode`
 (`controller` / `standalone`; `tools/tiles_control.py mode standalone`).
 The USB descriptor differs, so a switch saves and restarts TILES; that
 restart skips the animation (a flag in RAM a power cut clears). The mode

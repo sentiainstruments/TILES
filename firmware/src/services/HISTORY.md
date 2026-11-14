@@ -10622,3 +10622,22 @@ channel, so the search went to what drives the motors. Three faults:
 
 `TEST MOTOR <pad> [duty%]` runs one motor for 1 s, to tell a dead motor
 from a firmware fault. Not yet run on a board (unit 2 was unplugged).
+
+## 2026-11-14: mode colours, triangle switch, Feel menu on a hold
+
+Asked: "make the underglow of melodic mode match the boot mode color and
+make it so that holding triangle when on for 10 seconds changes the mode
+even when on. also remove the quick view of expression button, and now
+that menu opens with 2 seconds of hold not more."
+
+- Controller mode's colour went from periwinkle (#94abf9, near white on
+  the LEDs: "the blue is not blue enough") to a deep blue (0, 0.08, 1).
+  `tiles_device_mode_color()` holds both modes' colours; the boot pulse
+  and melodic mode's underglow use it.
+- Triangle held alone for 10 s while playing switches controller and
+  standalone: the new mode's colour rises on the pads and underglow
+  (0.6 s), then the save and restart. Any other button ends the hold; a
+  press carried over from the boot animation doesn't count.
+- Square no longer shows the Feel menu while held. A 2 s hold opens it
+  and it stays open until a click or a key press; "-"/"+" with square
+  held still step haptics.

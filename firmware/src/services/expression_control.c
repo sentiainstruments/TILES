@@ -28,8 +28,7 @@
 /* Circle + square hold toggles MPE, edge-latched (fires once per hold). */
 #define EXPRESSION_MPE_TOGGLE_HOLD_MS 2000u
 
-/* Square held ALONE this long locks the menu open (sticky); the menu
- * itself shows from the first instant. Own timer and latch
+/* Square held ALONE this long opens the menu. Own timer and latch
  * (s_submenu_toggle_fired), separate from the MPE combo. */
 #define EXPRESSION_SUBMENU_TOGGLE_HOLD_MS 2000u
 
@@ -88,9 +87,8 @@ static const uint8_t LED_INTENSITY_BY_COLUMN[EXPRESSION_SUBMENU_MAX_COLUMN] = {0
  * LED intensity is saved, so its row shows the nearest column instead. */
 static uint8_t s_row_column[EXPRESSION_SUBMENU_NUM_ROWS];
 
-/* s_submenu_sticky survives a square release once locked; s_submenu_visible
- * is whether it shows this tick (square held alone OR sticky), which is
- * what owns_pad_grid() reports. */
+/* s_submenu_sticky: the menu is open (a 2 s hold until a click);
+ * s_submenu_visible: it shows this tick, what owns_pad_grid() reports. */
 static bool s_submenu_sticky;
 static bool s_submenu_visible;
 static bool s_prev_pad_touched[TILES_NUM_PADS];
@@ -734,8 +732,8 @@ void tiles_expression_control_scan(void) {
         }
     }
 
-    /* Sticky lock and haptics shift: square held ALONE. The streak restarts if
-     * circle joins. */
+    /* Opening the menu and haptics shift: square held ALONE. The streak
+     * restarts if circle joins. */
     if (square_alone_held && !s_square_alone_was_held) {
         s_square_alone_hold_start_ms = now_ms;
         s_submenu_toggle_fired = false;
@@ -744,8 +742,8 @@ void tiles_expression_control_scan(void) {
         if (!s_submenu_toggle_fired && (now_ms - s_square_alone_hold_start_ms) >= EXPRESSION_SUBMENU_TOGGLE_HOLD_MS) {
             s_submenu_toggle_fired = true;
             s_square_press_had_long_action = true;
-            s_submenu_sticky = !s_submenu_sticky;
-            printf("[expression_control] sub-menu sticky=%d\n", (int)s_submenu_sticky);
+            s_submenu_sticky = true;
+            printf("[expression_control] sub-menu open\n");
         }
         handle_square_shift_input();
     }
@@ -774,7 +772,7 @@ void tiles_expression_control_scan(void) {
         s_submenu_sticky = false;
     }
 
-    bool submenu_should_be_visible = square_alone_held || s_submenu_sticky;
+    bool submenu_should_be_visible = s_submenu_sticky;
     if (submenu_should_be_visible != s_submenu_visible) {
         set_submenu_visible(submenu_should_be_visible);
     }

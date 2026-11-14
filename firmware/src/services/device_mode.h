@@ -5,8 +5,10 @@
  * sound core off. Standalone: TILES's own sound too, a stereo USB audio
  * input, with USB run on core 1 so every 1 ms packet goes out on time.
  * The setting device.mode picks it; a tap or hold of triangle during the
- * boot animation switches to the other one. Its final pulse shows which:
- * Sentia magenta for standalone, deep blue for controller only.
+ * boot animation switches to the other one, and so does triangle held
+ * alone for 10 s while playing. Each mode has a colour: Sentia magenta for
+ * standalone, deep blue for controller only (the boot pulse, melodic
+ * mode's underglow, the flash before a switch).
  * The USB descriptor differs, so a change restarts TILES; a restart for a
  * switch skips the animation. */
 
@@ -26,6 +28,8 @@ void tiles_device_mode_boot(void);
 tiles_device_mode_t tiles_device_mode(void);
 bool tiles_device_mode_is_standalone(void);
 
+void tiles_device_mode_color(tiles_device_mode_t mode, float *r, float *g, float *b);
+
 /* True if this boot is the restart into a mode just switched to: the boot
  * animation was already seen, so it is skipped. */
 bool tiles_device_mode_quick_restart(void);
@@ -44,5 +48,6 @@ void tiles_device_mode_setting_set(uint32_t value);
  * carried out, and from now on a change is a request. */
 void tiles_device_mode_settings_loaded(void);
 
-/* Main loop: carries out a requested change (after the reply has gone). */
+/* Main loop: the 10 s triangle hold, and carries out a requested change
+ * (after the reply has gone). */
 void tiles_device_mode_service(uint32_t now_ms);

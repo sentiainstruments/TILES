@@ -102,19 +102,13 @@ static float fade_level(uint32_t elapsed_ms) {
 /* ---- Phase 3: one slow pulse in the mode's colour ---- */
 
 /* Pads + underglow only (buttons are monochrome). Smoothstep rise and fall.
- * Sentia magenta in standalone mode, deep blue in controller mode (the
- * periwinkle reads near white on the LEDs); it follows a switch at once. */
+ * The mode's colour (tiles_device_mode_color()); it follows a switch at
+ * once. */
 #define PULSE_RISE_MS 630u
 #define PULSE_HOLD_MS 450u
 #define PULSE_FALL_MS 1080u
 #define PULSE_TOTAL_MS (PULSE_RISE_MS + PULSE_HOLD_MS + PULSE_FALL_MS)
 
-#define MAGENTA_R 1.0f
-#define MAGENTA_G 0.0f
-#define MAGENTA_B 1.0f
-#define BLUE_R 0.0f
-#define BLUE_G 0.08f
-#define BLUE_B 1.0f
 
 static float pulse_envelope(uint32_t elapsed_ms) {
     if (elapsed_ms < PULSE_RISE_MS) {
@@ -210,10 +204,11 @@ static void run_phase3_pulse(void) {
             elapsed = PULSE_TOTAL_MS;
         }
         float env = pulse_envelope(elapsed);
-        bool standalone = tiles_device_mode_boot_choice() == TILES_DEVICE_STANDALONE;
-        float pr = (standalone ? MAGENTA_R : BLUE_R) * env;
-        float pg = (standalone ? MAGENTA_G : BLUE_G) * env;
-        float pb = (standalone ? MAGENTA_B : BLUE_B) * env;
+        float pr, pg, pb;
+        tiles_device_mode_color(tiles_device_mode_boot_choice(), &pr, &pg, &pb);
+        pr *= env;
+        pg *= env;
+        pb *= env;
 
         /* Buttons stay dark for the whole pulse. */
         for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
