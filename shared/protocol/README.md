@@ -434,7 +434,8 @@ second) and `loop.max_ever_us`; sensor health `hall.rezeros`,
 `tune.changed` (live tuning values away from their defaults); the
 sequencer's autosave `seq.storage`, `seq.saved_bytes`, `seq.saves`,
 `seq.pending`, `seq.truncated`; boot timing `boot.ms` (power-on to the main loop) and
-`boot.sensors_ms`; drum mode's store `drums.storage`,
+`boot.sensors_ms`; `boot.hang`, the init step a watchdog reset cut short on
+the last boot (`none` when it booted cleanly); drum mode's store `drums.storage`,
 `drums.saved_bytes`, `drums.saves`, `drums.pending`; the play state (mode,
 scale, key, octave kept across power cycles) `state.storage`,
 `state.saved=mode:<n> scale:<n> octave:<n> key:<n>` (once something is
