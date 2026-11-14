@@ -918,6 +918,9 @@ void tiles_lighting_set_pad_press(uint8_t logical_pad, float press_0_to_1) {
     if (s_standby_active) {
         return;
     }
+    if (!tiles_note_map_pad_has_note(logical_pad)) {
+        press_0_to_1 = 0.0f; /* a layout's gap (Keys) stays dark under a finger */
+    }
     set_pad_press_internal(logical_pad, press_0_to_1);
 }
 
