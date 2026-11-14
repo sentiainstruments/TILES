@@ -61,6 +61,7 @@ SAMPLE DELETE <slot>\n    empty a slot: OK (also when already empty)
 SAMPLE PLAY <slot> [velocity]\n  hit a slot in TILES's own sound: OK
 TEST LEDS <0-100>\n       bench only: every LED white at that % (current measurement)
 TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
+TEST MOTOR <pad> [duty%]\n bench only: one pad's motor (1-24) for 1 s
 TEST MODE <name>\n        bench only: switch mode (melodic duet sequencer bass song ableton drums volca prism bounce ripples sand orbits cradle)
 TEST OFF\n                bench only: back to normal
 CAPTURE START <pad>\n     record pad 1-24's raw Hall readings, one per pass (~8 s max): OK
@@ -235,6 +236,7 @@ refused, not clamped); the default is whatever the owning module boots with --
 | 0x080C | `modes.orbits` | bool | | `1` | yes |
 | 0x0900 | `layout.melodic` | enum | `rows` (the default), `columns`, `fourths`, `keys`, `fifths`, `tonnetz`, `quarter_tones` (melodic mode's note layout; Feel menu, circle + triangle; firmware/src/services/note_map.h) | `rows` | yes |
 | 0x0A00 | `seq.lock` | enum | `off`, `bar`: a sequencer lane or the drums started while others play joins on the next step at the step it would be on had it played from the song's top, and stays there (16-step patterns share the bar line). No hardware gesture (firmware/src/services/op_mode.h) | `off` | yes |
+| 0x0B00 | `device.mode` | enum | `controller` (MIDI/MPE, settings, console; TILES's own sound off), `standalone` (adds TILES's own sound and a stereo USB audio input). A change saves the settings and restarts TILES (the USB descriptor differs); tapping triangle during the boot animation switches it too. Read from flash before USB starts, so the id must never change (firmware/src/services/device_mode.h) | `controller` | yes |
 
 Ids `0x0401`-`0x0404` (`look.natural_pad_percent`, `look.root_pad_percent`,
 `look.fifth_pad_percent`, `look.fifth_red_tint_percent`) were retired in
@@ -436,7 +438,10 @@ sequencer's autosave `seq.storage`, `seq.saved_bytes`, `seq.saves`,
 `drums.saved_bytes`, `drums.saves`, `drums.pending`; the play state (mode,
 scale, key, octave kept across power cycles) `state.storage`,
 `state.saved=mode:<n> scale:<n> octave:<n> key:<n>` (once something is
-saved), `state.saves`, `state.pending`; TILES's own sound `audio.*`
+saved), `state.saves`, `state.pending`; `device.mode=controller|standalone`;
+the motor chips' health `pca.mode1=<0x40>,<0x41>` (hex, `00` when
+awake), `pca.resets` (chips found asleep after losing power and set up
+again) and `pca.read_fails`; TILES's own sound `audio.*`
 (`firmware/src/audio/README.md`), with the drum sampler's `audio.drums`
 (ringing now) and `audio.drum_underruns`. New keys may be added;
 ignore ones you don't know.
