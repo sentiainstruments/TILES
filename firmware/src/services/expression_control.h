@@ -2,8 +2,8 @@
 
 /* Square (SW5): pitch bend toggle, the Feel menu, and MPE on/off.
  *   - Click: toggle pitch bend (while the menu is locked: close it).
- *   - Hold: "-"/"+" step haptics. Held 1 s, the Feel menu opens and stays
- *     open until a click or a fresh key press.
+ *   - Hold: "-"/"+" step haptics. Held 1 s, the Feel menu opens; it stays
+ *     open until another 1 s hold, a click, or a fresh key press.
  *   - Circle + square held 2 s: MPE on/off (square's LED pulses while off).
  * Feel menu rows, top to bottom: haptics, bend sensitivity, pressure
  * sensitivity, LED intensity; a tap selects a column (4 = default, 6 for

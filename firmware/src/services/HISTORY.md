@@ -10644,3 +10644,13 @@ that menu opens with 2 seconds of hold not more."
 - Then: "reduce the hold for the feel menu to 1s". The hold that opens it
   is now 1 s (`EXPRESSION_SUBMENU_TOGGLE_HOLD_MS`); circle + square for
   MPE stays at 2 s.
+- Then: "to exit it should trigger as well with the one second hold. in
+  the animations menu the preview feels too fast and not previewing well.
+  it should be something like touch the pad and the preview happens on
+  all the pads like a demo of what it would look like." A 1 s hold now
+  closes the Feel menu too. The Light effects preview struck only the
+  touched pad, eight hits in 1.8 s, so it stayed around the finger and
+  the fades overlapped. It now plays a 6 s phrase over the grid: single
+  hits soft to hard at ~0.55 s spacing, a held note, two pads together,
+  then a 2 s rest for the fades and cooling; held pads show the pressed
+  look as in play.
