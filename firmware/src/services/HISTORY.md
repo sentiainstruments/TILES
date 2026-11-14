@@ -10641,3 +10641,6 @@ that menu opens with 2 seconds of hold not more."
 - Square no longer shows the Feel menu while held. A 2 s hold opens it
   and it stays open until a click or a key press; "-"/"+" with square
   held still step haptics.
+- Then: "reduce the hold for the feel menu to 1s". The hold that opens it
+  is now 1 s (`EXPRESSION_SUBMENU_TOGGLE_HOLD_MS`); circle + square for
+  MPE stays at 2 s.

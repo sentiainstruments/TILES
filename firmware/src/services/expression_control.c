@@ -30,7 +30,7 @@
 
 /* Square held ALONE this long opens the menu. Own timer and latch
  * (s_submenu_toggle_fired), separate from the MPE combo. */
-#define EXPRESSION_SUBMENU_TOGGLE_HOLD_MS 2000u
+#define EXPRESSION_SUBMENU_TOGGLE_HOLD_MS 1000u
 
 /* Soft pulse on square while MPE is off (the non-default mode). Same
  * breathing shape as standby's deep-sleep pulse, kept as a separate copy.
@@ -87,7 +87,7 @@ static const uint8_t LED_INTENSITY_BY_COLUMN[EXPRESSION_SUBMENU_MAX_COLUMN] = {0
  * LED intensity is saved, so its row shows the nearest column instead. */
 static uint8_t s_row_column[EXPRESSION_SUBMENU_NUM_ROWS];
 
-/* s_submenu_sticky: the menu is open (a 2 s hold until a click);
+/* s_submenu_sticky: the menu is open (a 1 s hold until a click);
  * s_submenu_visible: it shows this tick, what owns_pad_grid() reports. */
 static bool s_submenu_sticky;
 static bool s_submenu_visible;
