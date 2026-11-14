@@ -972,6 +972,44 @@ static void handle_line(char *line) {
         return;
     }
 
+    /* TOUCH: every pad's electrode: touched, filtered reading, baseline and
+     * how far below the baseline it is (a touch needs more than 12). */
+    if (strcmp(cmd, "TOUCH") == 0) {
+        for (uint8_t pad = 1u; pad <= 24u; pad++) {
+            uint16_t filtered = 0, baseline = 0;
+            bool ok = tiles_touch_read_electrode(pad, &filtered, &baseline);
+            snprintf(text, sizeof(text), "pad=%u touched=%d filtered=%u baseline=%u delta=%d%s", (unsigned)pad,
+                     tiles_touch_is_touched(pad) ? 1 : 0, (unsigned)filtered, (unsigned)baseline,
+                     (int)baseline - (int)filtered, ok ? "" : " read=fail");
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+
+    /* HAPTICS: per-pad counts (haptics.h) and the global state; HAPTICS
+     * RESET clears the counts. */
+    if (strcmp(cmd, "HAPTICS") == 0) {
+        char *what = strtok(NULL, " ");
+        if (what != NULL && strcmp(what, "RESET") == 0) {
+            tiles_haptics_reset_stats();
+            reply_ok();
+            return;
+        }
+        snprintf(text, sizeof(text), "intensity=%.2f silenced=%d voices=%u", (double)tiles_haptics_get_intensity(),
+                 tiles_haptics_is_silenced() ? 1 : 0, (unsigned)tiles_power_get_state().max_haptic_voices);
+        reply(text);
+        for (uint8_t pad = 1u; pad <= 24u; pad++) {
+            tiles_haptics_pad_stats_t st = tiles_haptics_pad_stats(pad);
+            snprintf(text, sizeof(text), "pad=%u asked=%u started=%u pulses=%u stops=%u cancelled=%u stolen=%u dropped=%u phase=%u",
+                     (unsigned)pad, (unsigned)st.asked, (unsigned)st.started, (unsigned)st.pulses, (unsigned)st.stops,
+                     (unsigned)st.cancelled, (unsigned)st.stolen, (unsigned)st.dropped, (unsigned)st.phase);
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+
     /* Bench tests for measuring current (tools/README.md "Current tests"):
      *   TEST LEDS <0-100>         every LED white at that % of full scale
      *   TEST MOTORS <n> [duty%]   pads 1..n's motors (capped at the power

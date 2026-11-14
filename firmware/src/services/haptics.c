@@ -81,6 +81,22 @@ typedef struct {
 } haptic_pad_state_t;
 
 static haptic_pad_state_t s_pads[TILES_NUM_PADS];
+static tiles_haptics_pad_stats_t s_stats[TILES_NUM_PADS];
+
+tiles_haptics_pad_stats_t tiles_haptics_pad_stats(uint8_t logical_pad) {
+    tiles_haptics_pad_stats_t st = {0};
+    if (logical_pad >= 1u && logical_pad <= TILES_NUM_PADS) {
+        st = s_stats[logical_pad - 1u];
+        st.phase = (uint8_t)s_pads[logical_pad - 1u].phase;
+    }
+    return st;
+}
+
+void tiles_haptics_reset_stats(void) {
+    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
+        s_stats[i] = (tiles_haptics_pad_stats_t){0};
+    }
+}
 
 /* Increasing; the active pad with the smallest voice_seq is the oldest
  * and is stolen first. */
@@ -115,6 +131,10 @@ float tiles_haptics_get_intensity(void) {
 static bool s_haptic_sleep_silenced;
 
 static bool haptics_should_be_silent(void) {
+    return s_haptic_sleep_silenced;
+}
+
+bool tiles_haptics_is_silenced(void) {
     return s_haptic_sleep_silenced;
 }
 
@@ -286,6 +306,7 @@ static bool steal_oldest_voice(void) {
     }
 
     uint8_t logical_pad = (uint8_t)(oldest_idx + 1);
+    s_stats[oldest_idx].stolen++;
     s_pads[oldest_idx].phase = HAPTIC_PHASE_IDLE;
     const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
     if (cfg != NULL) {
@@ -307,6 +328,7 @@ void tiles_haptics_init(void) {
  * tiles_haptics_trigger_kick() or, for a staggered kick, from scan. */
 static void start_kick_now(uint8_t idx, const tiles_pad_config_t *cfg, uint8_t velocity_0_127,
                             uint32_t now_ms) {
+    s_stats[idx].started++;
     s_pads[idx].phase = HAPTIC_PHASE_KICK;
     s_pads[idx].phase_start_ms = now_ms;
     s_pads[idx].kick_velocity_0_127 = velocity_0_127;
@@ -319,19 +341,22 @@ static void start_kick_now(uint8_t idx, const tiles_pad_config_t *cfg, uint8_t v
 }
 
 void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
-    if (haptics_should_be_silent()) {
-        return;
-    }
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
         return;
     }
     uint8_t idx = (uint8_t)(logical_pad - 1u);
+    s_stats[idx].asked++;
+    if (haptics_should_be_silent()) {
+        s_stats[idx].dropped++;
+        return;
+    }
 
     /* The ceiling applies to new voices; at it, steal the oldest. Haptics gone
      * missing? Check for power FAULT first. */
     if (s_pads[idx].phase == HAPTIC_PHASE_IDLE &&
         active_voice_count() >= tiles_power_get_state().max_haptic_voices) {
         if (!steal_oldest_voice()) {
+            s_stats[idx].dropped++;
             return;
         }
     }
@@ -388,6 +413,7 @@ void tiles_haptics_trigger_touch_pulse(uint8_t logical_pad) {
     if (cfg == NULL) {
         return;
     }
+    s_stats[idx].pulses++;
     s_pads[idx].phase = HAPTIC_PHASE_TOUCH_PULSE;
     s_pads[idx].phase_start_ms = to_ms_since_boot(get_absolute_time());
     set_motor_level(cfg, TOUCH_PULSE_DUTY);
@@ -412,6 +438,10 @@ void tiles_haptics_stop(uint8_t logical_pad) {
     uint8_t idx = (uint8_t)(logical_pad - 1u);
     if (s_pads[idx].phase == HAPTIC_PHASE_IDLE) {
         return;
+    }
+    s_stats[idx].stops++;
+    if (s_pads[idx].phase == HAPTIC_PHASE_PENDING) {
+        s_stats[idx].cancelled++;
     }
     s_pads[idx].phase = HAPTIC_PHASE_IDLE;
 

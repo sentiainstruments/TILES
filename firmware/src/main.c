@@ -67,6 +67,8 @@ static void timing_tick(void) {
     tiles_op_mode_playback_tick();
 }
 
+#define BOOT_WATCHDOG_MS 8000u
+
 int main(void) {
     /* Read once, first: a crash-recovery boot skips the boot prints (each can
      * block on the stdio timeout) and the animation. */
@@ -75,6 +77,11 @@ int main(void) {
     /* Before ANYTHING else: every init below writes crash-recorder traces into
      * the same ring buffer this snapshots (see debug_mode.h). */
     tiles_debug_mode_capture_crash_snapshot(crash_recovered);
+
+    /* A watchdog from here, not only from debug mode's 1 s one before the
+     * loop: a hang during boot froze the board for good (no reset, USB
+     * already enumerated). 8 s covers the ~4.2 s animation, which feeds it. */
+    watchdog_enable(BOOT_WATCHDOG_MS, true);
 
     /* Before stdio_init_all(): with tinyusb_device linked, pico_stdio_usb
      * expects tusb_init() already done with our descriptors

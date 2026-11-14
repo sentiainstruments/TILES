@@ -33,6 +33,8 @@ Usage:
     python3 tools/tiles_control.py test leds 50          # bench: every LED white at 50% (current tests)
     python3 tools/tiles_control.py test motors 4 100     # bench: pads 1-4's motors at 100% for 8 s
     python3 tools/tiles_control.py test motor 17 80      # one pad's motor (17) at 80% for 1 s
+    python3 tools/tiles_control.py haptics               # per-pad haptic counts: asked, started, stopped... (haptics reset clears)
+    python3 tools/tiles_control.py touch                 # every pad's touch electrode: reading, baseline, delta (a touch needs > 12)
     python3 tools/tiles_control.py test mode drums       # bench: switch mode (loop.* timing per mode)
     python3 tools/tiles_control.py test off              # bench: back to normal
     python3 tools/tiles_control.py scales                # custom scales on the device (picker pads 16-24)
@@ -325,6 +327,11 @@ def main():
         # Bench tests: test leds 37 | test motors 4 [duty%] | test mode drums | test off. The mode
         # name stays lowercase (the device matches it as written).
         request, multi = " ".join(["TEST", sys.argv[2].upper()] + sys.argv[3:]), sys.argv[2].lower() == "motors"
+    elif command == "touch" and argc == 2:
+        request, multi = "TOUCH", True
+    elif command == "haptics" and argc in (2, 3):
+        request = "HAPTICS RESET" if argc == 3 and sys.argv[2].lower() == "reset" else "HAPTICS"
+        multi = request == "HAPTICS"
     elif command == "scales" and argc == 2:
         request, multi = "SCALES", True
     elif command == "scale" and argc >= 4 and sys.argv[2].lower() in ("get", "put", "delete"):

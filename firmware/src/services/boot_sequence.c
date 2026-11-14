@@ -6,6 +6,7 @@
 #include "hall.h"
 #include "lighting.h"
 
+#include "hardware/watchdog.h"
 #include "pico/time.h"
 
 #include "tusb.h"
@@ -18,6 +19,7 @@
  * (nothing services USB in the background in this build; a plain sleep
  * here once left enumeration unserviced for the whole animation). */
 static void boot_frame_delay(void) {
+    watchdog_update(); /* main.c's boot watchdog */
     absolute_time_t deadline = make_timeout_time_ms(BOOT_FRAME_INTERVAL_MS);
     do {
         tud_task();
