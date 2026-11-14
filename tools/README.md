@@ -211,6 +211,7 @@ alone while it runs. The bench tests themselves (firmware 0.2.6+):
 ```
 tiles_control.py test leds 50        # every LED white at 50% of full scale
 tiles_control.py test motors 4 100   # pads 1-4's motors at 100% for 8 s (capped at the power mode's voices)
+tiles_control.py test motor 17 80    # pad 17's motor alone at 80% for 1 s: a dead motor or a firmware fault?
 tiles_control.py test off            # back to normal
 ```
 

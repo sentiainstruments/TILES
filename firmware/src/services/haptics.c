@@ -49,6 +49,9 @@
 /* Minimum spacing between kick starts (handoff: >= 15 ms) against
  * simultaneous inrush; only a near-simultaneous second kick waits. */
 #define KICK_STAGGER_MIN_GAP_MS 15u
+/* No kick waits longer: unbounded, a busy sequencer or physics mode queued
+ * a strike past the tap that made it, which then never buzzed. */
+#define KICK_STAGGER_MAX_WAIT_MS 30u
 
 /* TOUCH_PULSE (see haptics.h). 0.6 duty and 25 ms: at the 0.35 first
  * used, it was too weak to feel, like the original kick (and there's no
@@ -74,6 +77,7 @@ typedef struct {
     float sustain_current_duty;    /* applied (slewed) sustain duty */
     uint32_t sustain_last_update_ms; /* for time-based slew steps */
     uint32_t voice_seq; /* set when the pad becomes active; see steal_oldest_voice() */
+    bool one_shot;      /* a click: idle after its kick, no sustain */
 } haptic_pad_state_t;
 
 static haptic_pad_state_t s_pads[TILES_NUM_PADS];
@@ -167,8 +171,9 @@ static void set_motor_level(const tiles_pad_config_t *cfg, float level_0_to_1) {
 }
 
 /* Bench test state (tiles_haptics_test_motors()): pads 1..s_test_count run
- * until s_test_until_ms. */
+ * until s_test_until_ms; or just s_test_pad (TEST MOTOR). */
 static uint8_t s_test_count;
+static uint8_t s_test_pad;
 static uint32_t s_test_until_ms;
 
 void tiles_haptics_test_stop(void) {
@@ -178,7 +183,27 @@ void tiles_haptics_test_stop(void) {
             set_motor_level_raw(cfg, 0.0f);
         }
     }
+    if (s_test_pad != 0u) {
+        const tiles_pad_config_t *cfg = board_pad_config(s_test_pad);
+        if (cfg != NULL) {
+            set_motor_level_raw(cfg, 0.0f);
+        }
+    }
     s_test_count = 0u;
+    s_test_pad = 0u;
+}
+
+#define TEST_MOTOR_MS 1000u
+
+void tiles_haptics_test_motor(uint8_t logical_pad, float duty_0_to_1) {
+    tiles_haptics_test_stop();
+    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
+    if (cfg == NULL) {
+        return;
+    }
+    set_motor_level_raw(cfg, duty_0_to_1);
+    s_test_pad = logical_pad;
+    s_test_until_ms = to_ms_since_boot(get_absolute_time()) + TEST_MOTOR_MS;
 }
 
 uint8_t tiles_haptics_test_motors(uint8_t count, float duty_0_to_1) {
@@ -317,9 +342,13 @@ void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
     }
 
     s_pads[idx].voice_seq = s_next_voice_seq++;
+    s_pads[idx].one_shot = false;
 
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-    uint32_t earliest = (s_next_kick_slot_ms > now_ms) ? s_next_kick_slot_ms : now_ms;
+    uint32_t earliest = (int32_t)(s_next_kick_slot_ms - now_ms) > 0 ? s_next_kick_slot_ms : now_ms;
+    if (earliest - now_ms > KICK_STAGGER_MAX_WAIT_MS) {
+        earliest = now_ms + KICK_STAGGER_MAX_WAIT_MS;
+    }
 
     if (earliest <= now_ms) {
         start_kick_now(idx, cfg, velocity_0_127, now_ms);
@@ -331,6 +360,13 @@ void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127) {
         s_pads[idx].phase_start_ms = earliest;
         s_pads[idx].kick_velocity_0_127 = velocity_0_127;
         s_next_kick_slot_ms = earliest + KICK_STAGGER_MIN_GAP_MS;
+    }
+}
+
+void tiles_haptics_trigger_click(uint8_t logical_pad, uint8_t velocity_0_127) {
+    tiles_haptics_trigger_kick(logical_pad, velocity_0_127);
+    if (logical_pad >= 1u && logical_pad <= TILES_NUM_PADS && s_pads[logical_pad - 1u].phase != HAPTIC_PHASE_IDLE) {
+        s_pads[logical_pad - 1u].one_shot = true;
     }
 }
 
@@ -419,7 +455,7 @@ void tiles_haptics_resync_hardware(void) {
 void tiles_haptics_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
-    if (s_test_count != 0u && (int32_t)(now_ms - s_test_until_ms) >= 0) {
+    if ((s_test_count != 0u || s_test_pad != 0u) && (int32_t)(now_ms - s_test_until_ms) >= 0) {
         tiles_haptics_test_stop(); /* bench test timed out */
     }
 
@@ -462,6 +498,8 @@ void tiles_haptics_scan(void) {
                     set_motor_level(cfg, 0.0f);
                 }
             }
+        } else if (s->phase == HAPTIC_PHASE_GAP && (now_ms - s->phase_start_ms) >= KICK_GAP_MS && s->one_shot) {
+            s->phase = HAPTIC_PHASE_IDLE; /* a click: the motor is already 0 */
         } else if (s->phase == HAPTIC_PHASE_GAP && (now_ms - s->phase_start_ms) >= KICK_GAP_MS) {
 #if TILES_HAPTICS_SUSTAIN_ENABLED
             s->phase = HAPTIC_PHASE_SUSTAIN;

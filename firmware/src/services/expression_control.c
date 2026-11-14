@@ -441,7 +441,7 @@ static void deep_pick(uint8_t pad) {
     } else {
         tiles_note_map_set_layout((tiles_melodic_layout_t)(pad - 1u));
     }
-    tiles_haptics_trigger_kick(pad, 100u);
+    tiles_haptics_trigger_click(pad, 100u);
     s_preview_pad = 0u;
     s_preview_on = false;
     close_deep();

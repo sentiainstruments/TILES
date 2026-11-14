@@ -104,3 +104,8 @@ bool tiles_pca9685_set_pwm(tiles_pca9685_t *dev, uint8_t channel, uint16_t on_co
 
     return true;
 }
+
+bool tiles_pca9685_read_mode1(tiles_pca9685_t *dev, uint8_t *mode1) {
+    uint8_t reg = REG_MODE1;
+    return tiles_i2c_write(dev->bus, dev->addr, &reg, 1, true) && tiles_i2c_read(dev->bus, dev->addr, mode1, 1, false);
+}

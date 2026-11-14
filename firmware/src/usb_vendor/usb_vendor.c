@@ -3,6 +3,7 @@
 #include "bend_core.h"
 #include "board/unit_id.h"
 #include "board_pins.h"
+#include "buttons.h"
 #include "content.h"
 #include "diagnostics/capture.h"
 #include "diagnostics/loop_stats.h"
@@ -901,6 +902,13 @@ static void handle_line(char *line) {
         snprintf(text, sizeof(text), "audio.cost=%u,%u,%u,%u", (unsigned)audio.cost[0], (unsigned)audio.cost[1],
                  (unsigned)audio.cost[2], (unsigned)audio.cost[3]);
         reply(text);
+        tiles_buttons_pca_health_t pca = tiles_buttons_pca_health();
+        snprintf(text, sizeof(text), "pca.mode1=%02x,%02x", (unsigned)pca.mode1[0], (unsigned)pca.mode1[1]);
+        reply(text);
+        snprintf(text, sizeof(text), "pca.resets=%lu", (unsigned long)pca.resets);
+        reply(text);
+        snprintf(text, sizeof(text), "pca.read_fails=%lu", (unsigned long)pca.read_fails);
+        reply(text);
         snprintf(text, sizeof(text), "flash.lockout_fails=%lu", (unsigned long)tiles_flash_lockout_fails());
         reply(text);
         tiles_loop_stats_t loop = tiles_loop_stats_get();
@@ -968,6 +976,7 @@ static void handle_line(char *line) {
      *   TEST LEDS <0-100>         every LED white at that % of full scale
      *   TEST MOTORS <n> [duty%]   pads 1..n's motors (capped at the power
      *                             mode's voices) for 8 s; duty default 100
+     *   TEST MOTOR <pad> [duty%]  one pad's motor for 1 s
      *   TEST OFF                  both off, normal rendering back */
     if (strcmp(cmd, "TEST") == 0) {
         char *what = strtok(NULL, " ");
@@ -993,6 +1002,17 @@ static void handle_line(char *line) {
             uint8_t started = tiles_haptics_test_motors((uint8_t)count, (float)duty / 100.0f);
             snprintf(text, sizeof(text), "motors=%u", (unsigned)started);
             reply(text);
+            reply_ok();
+            return;
+        }
+        if (what != NULL && strcmp(what, "MOTOR") == 0 && arg != NULL) {
+            int pad = atoi(arg);
+            int duty = arg2 != NULL ? atoi(arg2) : 100;
+            if (pad < 1 || pad > 24 || duty < 0 || duty > 100) {
+                reply_err("pad-1-24-duty-0-100");
+                return;
+            }
+            tiles_haptics_test_motor((uint8_t)pad, (float)duty / 100.0f);
             reply_ok();
             return;
         }

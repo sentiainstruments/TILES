@@ -10593,3 +10593,32 @@ change. Search it by file or feature name.
   taken the LEDs back. SysEx rather than the USB settings protocol: the
   show is live music data at ~30 Hz, and every host can send MIDI
   without a USB driver. Built and host-tested; not yet run on a board.
+
+## 2026-11-13: pads without haptics
+
+Real feedback: "there's a glitch somewhere that's making some pads not
+give haptics when pressing them." The pad-to-motor table matched the
+board's routing table for all 24 pads, and no button LED shares a motor
+channel, so the search went to what drives the motors. Three faults:
+
+- **A motor chip that lost power stayed asleep.** One PCA9685 drives
+  every motor in columns 1-3 (0x40), the other columns 4-6 (0x41). A
+  rail dip (motor inrush, a cable) can reset one without the RP2350:
+  it comes back asleep, its 12 motors stopped, until a power-mode change
+  set it up again (the earlier "pulling the plug killed haptics" fix only
+  ran then). `buttons.c` now reads both chips' MODE1 every 250 ms and
+  sets a sleeping one up again, then `haptics.c` rewrites the motors;
+  INFO counts it (`pca.resets`, `pca.read_fails`, `pca.mode1`).
+- **The kick queue had no end.** Kick starts are 15 ms apart against
+  inrush, chained on one global slot; with the sequencer, drum steps or
+  a physics mode kicking, a player's strike could be queued past the
+  tap that made it, and the tap's note-off cancelled it unfelt. No kick
+  now waits more than 30 ms.
+- **Kicks no note-off ends.** Game mode's menu, playback and feedback
+  kicks and the Feel menu's pick used the full kick, whose sustain never
+  ends without a stop: the motor stayed at ~13 % and held one of the
+  four USB voices (the same class as the menu fix above). They are now
+  `tiles_haptics_trigger_click()`: the kick, then idle.
+
+`TEST MOTOR <pad> [duty%]` runs one motor for 1 s, to tell a dead motor
+from a firmware fault. Not yet run on a board (unit 2 was unplugged).

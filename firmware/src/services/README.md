@@ -18,7 +18,7 @@ before re-tuning a constant or reviving an approach that was dropped.
 |---|---|
 | `touch` | Both MPR121s → per-pad touched state. Sets a controller up again if it resets. |
 | `hall` | 24 TMAG5273s through the muxes → per-pad X/Y/Z and depth. Touched pads are read every pass (X/Y/Z); the rest round-robin (Z only). One mux channel left open between reads. Rest baseline kept true by `rest_guard`; sensors that fail or reset are set up again while no pad is touched. |
-| `buttons` | 6 function buttons (debounced) and their LEDs. Owns both PCA9685s (shared with haptics). |
+| `buttons` | 6 function buttons (debounced) and their LEDs. Owns both PCA9685s (shared with haptics), and checks them every 250 ms: one found asleep (it lost power on its own) is set up again and the motors rewritten. |
 | `pedal` | 1/4" jack: sustain (CC64) or expression (CC11); sustain style SYNTH (CC64) or HOLD (TILES holds notes). |
 | `power` | Power mode from the TPS2121 status pin + USB → budgets, LED ceiling, haptic voices, CV permission. |
 
@@ -34,7 +34,7 @@ before re-tuning a constant or reviving an approach that was dropped.
 | `midi_channels` | The 16-channel map: fixed parts (drums 10, game 11, chord 12, sequencer 13-16), pool 2-9 shared by Song and the live MPE zone. Tested. |
 | `midi_clock` | External MIDI clock or tap tempo → one pulse counter. |
 | `cv_gate` | Monophonic MIDI-to-CV (1 V/oct, pressure, gate). Off unless external power and explicitly enabled. |
-| `haptics` | Per-pad motor envelopes: kick, gap, sustain; touch pulse; voice ceiling. |
+| `haptics` | Per-pad motor envelopes: kick, gap, sustain; a click (kick only, for picks and signals no note-off ends); touch pulse; voice ceiling; kick starts 15 ms apart, never more than 30 ms late. |
 
 **Modes, menus, display**
 

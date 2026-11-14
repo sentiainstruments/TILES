@@ -24,6 +24,10 @@ void tiles_haptics_scan(void);
  * oldest active pad's voice (see header). MIDI is unaffected. */
 void tiles_haptics_trigger_kick(uint8_t logical_pad, uint8_t velocity_0_127);
 
+/* A kick that ends by itself (no sustain, no stop needed): a menu pick or
+ * a game's signal, which no note-off will ever end. */
+void tiles_haptics_trigger_click(uint8_t logical_pad, uint8_t velocity_0_127);
+
 /* When capacitive touch first starts (IDLE -> AWAITING_STRIKE). A soft
  * tick that never blocks a kick. */
 void tiles_haptics_trigger_touch_pulse(uint8_t logical_pad);
@@ -58,4 +62,6 @@ void tiles_haptics_resync_hardware(void);
  * Returns the count started. */
 #define TILES_HAPTICS_TEST_MAX_MS 8000u
 uint8_t tiles_haptics_test_motors(uint8_t count, float duty_0_to_1);
+/* One pad's motor alone (TEST MOTOR), to tell a dead motor from firmware. */
+void tiles_haptics_test_motor(uint8_t logical_pad, float duty_0_to_1);
 void tiles_haptics_test_stop(void);

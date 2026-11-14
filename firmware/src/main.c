@@ -302,6 +302,11 @@ int main(void) {
         }
         tiles_debug_trace('B');
         tiles_buttons_scan();
+        /* A motor chip that lost power on its own comes back asleep: set it
+         * up again and put the motors back (buttons.h). */
+        if (tiles_buttons_check_pca9685(to_ms_since_boot(get_absolute_time()))) {
+            tiles_haptics_resync_hardware();
+        }
         /* Needs fresh button state. */
         tiles_debug_mode_scan();
         /* Needs fresh buttons; before lighting, so a dismiss shows this frame. */
