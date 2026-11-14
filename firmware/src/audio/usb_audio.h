@@ -13,15 +13,14 @@
 #define TILES_AUDIO_CHANNELS 2u
 #define TILES_AUDIO_BYTES_PER_SAMPLE 4u /* 24 bits in a 4-byte subslot */
 #define TILES_AUDIO_BITS_PER_SAMPLE 24u
-/* Packets are 48 frames; the endpoint allows the 49 an asynchronous
- * 48 kHz endpoint may send. */
-#define TILES_AUDIO_MAX_PACKET_FRAMES 49u
+/* A packet carries up to two frames' audio, so one missed frame is made
+ * up in the next instead of dropped. */
+#define TILES_AUDIO_MAX_PACKET_FRAMES 96u
 #define TILES_AUDIO_EP_SIZE (TILES_AUDIO_MAX_PACKET_FRAMES * TILES_AUDIO_CHANNELS * TILES_AUDIO_BYTES_PER_SAMPLE)
 
-/* Standalone mode, first thing at boot (services/device_mode.h): starts core
- * 1, which brings up USB with the audio input and runs tud_task() every
- * pass (~0.2 ms) next to the engine. Returns once USB is up. */
-void tiles_usb_audio_start(void);
+/* Starts core 1 (the engine) after USB is up; call once, before the main
+ * loop. */
+void tiles_usb_audio_init(void);
 
 /* A channel message TILES sends (midi_out.c), queued for core 1. Never
  * waits: a full queue drops the message and counts it. */
@@ -34,7 +33,7 @@ void tiles_usb_audio_drum_hit(uint8_t slot, uint8_t velocity);
 typedef struct {
     bool streaming;       /* a host has the input open */
     uint32_t packets;     /* sent since boot */
-    uint32_t late_frames; /* USB frames with no packet (their audio is lost) */
+    uint32_t late_frames; /* USB frames with no packet, made up in the next */
     uint32_t underruns;   /* packets padded with silence: core 1 behind */
     uint32_t midi_drops;  /* messages lost to a full queue */
     uint8_t voices;       /* sounding now */

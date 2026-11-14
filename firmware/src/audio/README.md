@@ -33,17 +33,12 @@ real engines replace the voice code, not the plumbing.
   queue of its own to core 1. Slots are loaded over the settings link
   (`SAMPLE BEGIN`, `shared/protocol/README.md`; `tools/tiles_control.py
   sample put`). The engine mixes the drums in stereo next to the voices.
-- **USB runs on core 1.** TinyUSB re-arms the isochronous endpoint only
-  inside `tud_task()`, and the 1 ms frame won't wait for core 0's ~2 ms
-  pass. So in standalone mode core 1 starts USB (the RP2350 driver wants
-  its interrupt and `tud_task()` on one core) and runs `tud_task()` every
-  ~0.2 ms, between render blocks too. TinyUSB's pico OS layer
-  (`CFG_TUSB_OS OPT_OS_PICO`) locks its queue and the class FIFOs, so
-  core 0 still writes MIDI and talks on the settings interface; its own
-  calls go through `tiles_usb_task()`, which does nothing then, and the
-  console is a small stdio driver without pico_stdio_usb's `tud_task()`.
-- **Every packet is 48 frames.** A frame with no packet loses its audio
-  (`audio.late_frames`); packets of 96 to make one up stopped macOS.
+- **USB takes 48 frames a millisecond.** TinyUSB re-arms the isochronous
+  endpoint only inside `tud_task()`, which the main loop calls a few
+  times a pass. Each packet therefore carries 48 frames per USB frame
+  since the last one: if a frame was missed, the next packet carries two
+  frames' audio (up to 96 frames, the endpoint's size) and nothing is
+  lost from the recording. `audio.late_frames` counts how often.
 - **Flash writes pause core 1.** XIP is off while flash is erased or
   programmed, so no core may run from flash. Every write goes through
   `tiles_flash_write_begin()/end()` (`storage/storage_flash.h`), which
@@ -59,14 +54,19 @@ real engines replace the voice code, not the plumbing.
 - **Latency** added by TILES: the 3 ms ring plus one packet, about 4 ms,
   on top of the host's own input buffer.
 
-## Only in standalone mode
+## Known issue: macOS closes the stream
 
-All of this runs in standalone mode only (`services/device_mode.h`); in
-controller mode USB has no audio input and core 1 isn't started. The
-first build, with USB serviced from core 0's ~2 ms loop, was found on
-2026-11-12 (unit 2, ffmpeg on macOS) to lose a third of its frames and
-have macOS stop the stream within 0.2 s. Not yet checked on a board:
-standalone mode with USB on core 1.
+Found 2026-11-12 recording the input with ffmpeg on macOS (unit 2):
+the Mac opens "SENTIA TILES 2", takes 40-130 packets (under 0.2 s,
+silent) and stops; `audio.late_frames` was a third of the packets.
+One `tud_task()` a ~2 ms pass misses the 1 ms deadline to re-arm the
+isochronous endpoint about every other frame, and the catch-up packets
+of 96 frames don't keep macOS streaming. Calling `tud_task()` between
+I2C transactions as well didn't lower the late frames. Next: run USB
+(`tud_task()`) on core 1, which loops every 200 us, with the classes'
+FIFOs made safe across the cores; until then the sound can't be heard
+or recorded, and the sampler is checked on the computer
+(`test/test_sampler.c`) and on the board by its counters.
 
 ## Checking it
 

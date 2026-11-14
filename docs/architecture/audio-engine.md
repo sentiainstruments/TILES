@@ -1,9 +1,7 @@
 # TILES's own sound
 
 The plan for the sound TILES makes itself, on the chip it already has
-(RP2350 on the Pico 2). It runs in standalone mode only; controller mode
-leaves core 1 off and USB without audio (`firmware/src/services/README.md`,
-"Controller and standalone mode"). Built so far: the plumbing and a placeholder
+(RP2350 on the Pico 2). Built so far: the plumbing and a placeholder
 test voice streamed as a USB audio input (Alpha 7,
 `firmware/src/audio/README.md`). TILES v1 (First Edition) adds a stereo
 DAC and one phones/line jack (`../hardware/audio-output.md`).

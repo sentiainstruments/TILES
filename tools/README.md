@@ -125,15 +125,6 @@ slots (pads 16-24), saved to flash before the `OK`:
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py content list    # every record, with its pack
 ```
 
-**Controller or standalone mode** (`firmware/src/services/README.md`):
-`mode` shows it, `mode standalone` / `mode controller` switches; TILES
-saves it and restarts into it (a few seconds). Tapping triangle during
-the boot animation does the same on the device.
-
-```
-~/.venvs/tiles-tools/bin/python tools/tiles_control.py mode standalone
-```
-
 **Drum samples** (the sampler's 8 slots, drum 1-8 of drum mode's first
 bank). `sample put` converts a WAV the way the computer side of a hardware
 sampler does, then loads it: 48 kHz 16-bit (band-limited resampling,

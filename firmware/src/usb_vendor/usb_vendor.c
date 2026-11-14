@@ -5,7 +5,6 @@
 #include "board_pins.h"
 #include "buttons.h"
 #include "content.h"
-#include "device_mode.h"
 #include "diagnostics/capture.h"
 #include "diagnostics/loop_stats.h"
 #include "drum_seq.h"
@@ -25,7 +24,6 @@
 #include "storage_flash.h"
 #include "touch.h"
 #include "usb_audio.h"
-#include "usb_device.h"
 #include "tune.h"
 
 #include "tusb.h"
@@ -577,7 +575,7 @@ static void receive_raw(uint32_t now_ms) {
     uint32_t start_us = time_us_32();
     while (s_raw_left > 0u && budget > 0u && time_us_32() - start_us < USB_VENDOR_RAW_PASS_US) {
         if (!tud_vendor_available()) {
-            tiles_usb_task(); /* re-arms the endpoint: the next packet */
+            tud_task(); /* re-arms the endpoint: the next packet */
             continue;
         }
         uint8_t buf[256];
@@ -881,8 +879,6 @@ static void handle_line(char *line) {
         snprintf(text, sizeof(text), "content.last_result=%s", kv_result_name(content.kv.last_result));
         reply(text);
         tiles_usb_audio_info_t audio = tiles_usb_audio_get_info();
-        snprintf(text, sizeof(text), "device.mode=%s", tiles_device_mode_is_standalone() ? "standalone" : "controller");
-        reply(text);
         snprintf(text, sizeof(text), "audio.streaming=%d", audio.streaming ? 1 : 0);
         reply(text);
         snprintf(text, sizeof(text), "audio.packets=%lu", (unsigned long)audio.packets);
@@ -1062,7 +1058,7 @@ static void handle_line(char *line) {
             reply_ok();
             uint32_t deadline_ms = to_ms_since_boot(get_absolute_time()) + 50u;
             while (to_ms_since_boot(get_absolute_time()) < deadline_ms) {
-                tiles_usb_task();
+                tud_task();
                 pump_out();
             }
             if (bootsel) {

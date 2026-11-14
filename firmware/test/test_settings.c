@@ -201,15 +201,6 @@ int main(void) {
     assert(tiles_settings_persist_save_now() == TILES_KV_OK && g_erases == e + 1);
     boot_registry(); tiles_settings_persist_init(&OPS, idle_fn); assert(m_look_natural == 50);
 
-    /* peek: one saved value straight from flash before anything boots (the
-     * device mode); an id never saved isn't found */
-    uint32_t peeked = 0;
-    assert(tiles_settings_persist_peek(&OPS, 1025, &peeked) && peeked == 50);
-    assert(tiles_settings_persist_peek(&OPS, 256, &peeked) && peeked == 1);
-    assert(!tiles_settings_persist_peek(&OPS, 0x0B00, &peeked));
-    assert(!tiles_settings_persist_peek(NULL, 1025, &peeked));
-    boot_registry(); tiles_settings_persist_init(&OPS, idle_fn); assert(m_look_natural == 50); /* peek left it intact */
-
     /* RESET ALL persists an empty snapshot (defaults win after a reboot) */
     tiles_settings_reset(NULL); assert(tiles_settings_persist_save_now() == TILES_KV_OK);
     boot_registry(); tiles_settings_persist_init(&OPS, idle_fn);

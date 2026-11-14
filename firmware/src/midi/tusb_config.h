@@ -6,11 +6,6 @@
 
 #define CFG_TUSB_RHPORT0_MODE (OPT_MODE_DEVICE)
 
-/* pico-sdk's OS layer: the event queue and class FIFOs locked across the
- * cores, so in standalone mode core 1 can run tud_task() while core 0 writes
- * MIDI and reads the settings interface (services/device_mode.h). */
-#define CFG_TUSB_OS OPT_OS_PICO
-
 #define CFG_TUD_CDC 1
 #define CFG_TUD_MIDI 1
 #define CFG_TUD_MSC 0
@@ -53,8 +48,8 @@
 #define CFG_TUD_AUDIO_ENABLE_EP_IN 1
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX 4
 #define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX 2
-#define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX 392
-#define CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ (2 * 392)
+#define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX 768
+#define CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ (2 * 768)
 #define CFG_TUD_AUDIO_EP_IN_FLOW_CONTROL 0
 
 /* pico-sdk's USB reset interface, so picotool can reboot into BOOTSEL

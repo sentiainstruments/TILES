@@ -48,26 +48,6 @@ void tiles_settings_persist_init(const tiles_kv_ops_t *ops, tiles_settings_idle_
     s_ready = true;
 }
 
-bool tiles_settings_persist_peek(const tiles_kv_ops_t *ops, uint16_t id, uint32_t *value) {
-    tiles_kv_t kv;
-    tiles_kv_init(&kv, ops);
-    uint16_t len = 0u;
-    uint16_t version = 0u;
-    /* s_saved is free before persist_init, which fills it again. */
-    if (ops == NULL || !tiles_kv_read(&kv, s_saved, sizeof(s_saved), &len, &version) ||
-        version != TILES_SETTINGS_BLOB_VERSION) {
-        return false;
-    }
-    for (uint16_t at = 0u; at + 7u <= len; at += 7u) {
-        if ((uint16_t)(s_saved[at] | (s_saved[at + 1u] << 8)) == id) {
-            *value = (uint32_t)s_saved[at + 3u] | ((uint32_t)s_saved[at + 4u] << 8) |
-                     ((uint32_t)s_saved[at + 5u] << 16) | ((uint32_t)s_saved[at + 6u] << 24);
-            return true;
-        }
-    }
-    return false;
-}
-
 static bool same(const uint8_t *a, uint16_t alen, const uint8_t *b, uint16_t blen) {
     return alen == blen && (alen == 0u || memcmp(a, b, alen) == 0);
 }

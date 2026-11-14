@@ -2,7 +2,6 @@
 
 #include "board_layout.h"
 #include "buttons.h"
-#include "usb_device.h"
 
 #include "hardware/watchdog.h"
 #include "pico/platform/sections.h"
@@ -112,7 +111,7 @@ static bool cdc_write_paced(const char *s, absolute_time_t deadline) {
     uint32_t len = (uint32_t)strlen(s);
     uint32_t sent = 0u;
     while (sent < len) {
-        tiles_usb_task();
+        tud_task();
         watchdog_update();
         if (time_reached(deadline)) {
             return false;

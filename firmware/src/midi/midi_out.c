@@ -2,7 +2,6 @@
 
 #include "din_midi.h"
 #include "usb_audio.h"
-#include "usb_device.h"
 #include "usb_midi_packet.h"
 
 #include "tusb.h"
@@ -57,7 +56,7 @@ static void batch_flush(void) {
             s_stream_dirty = !on_boundary;
             break;
         }
-        tiles_usb_task();
+        tud_task();
     }
     s_batch_count = 0u;
 }
@@ -166,7 +165,7 @@ static void usb_write(uint8_t cable, const char *what, const uint8_t *msg, uint3
                        (unsigned)i, (unsigned)count, (unsigned)MIDI_SEND_RETRY_TIMEOUT_MS);
                 return;
             }
-            tiles_usb_task();
+            tud_task();
         }
     }
 }

@@ -46,8 +46,6 @@ Usage:
     python3 tools/tiles_control.py tune set bend.deadzone 0.03   # until power-off (the studio does this)
     python3 tools/tiles_control.py tune reset            # all keys back to their defaults (or: tune reset <key>)
     python3 tools/tiles_control.py bench                 # DSP stress test (a -DTILES_DSP_BENCH=ON build only)
-    python3 tools/tiles_control.py mode                  # controller or standalone mode (TILES's own sound)
-    python3 tools/tiles_control.py mode standalone       # switch: TILES restarts into it (or tap triangle during the boot animation)
     python3 tools/tiles_control.py sample list           # the drum sampler's 8 slots
     python3 tools/tiles_control.py sample put 1 kick.wav # load slot 1 (drum 1); --mono --normalize --keep-silence --name NAME
     python3 tools/tiles_control.py sample play 1 100     # hear slot 1 at velocity 100 (TILES's own sound)
@@ -302,20 +300,6 @@ def sample(session, args):
         sys.exit(1)
 
 
-def mode(session, want):
-    """Shows or switches controller/standalone mode (firmware services/device_mode.h).
-    A switch restarts TILES, which comes back in the other mode."""
-    info = dict(line.split("=", 1) for line in session.command("INFO", multi_line=True) if "=" in line)
-    now = info.get("device.mode", "controller")
-    if want is None or want == now:
-        print(f"{now} mode")
-        return
-    reply = session.command(f"SET device.mode {want}")
-    if reply != ["OK"]:
-        sys.exit(f"mode: {' '.join(reply)}")
-    print(f"switching to {want} mode: TILES restarts (give it a few seconds)")
-
-
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -357,12 +341,6 @@ def main():
         request, multi = " ".join(["TUNE RESET"] + sys.argv[3:]), False
     elif command == "bench" and argc == 2:
         bench(session)
-        return
-    elif command == "mode" and argc in (2, 3):
-        want = sys.argv[2].lower() if argc == 3 else None
-        if want not in (None, "standalone", "controller"):
-            sys.exit("mode: standalone or controller")
-        mode(session, want)
         return
     elif command == "sample":
         sample(session, sys.argv[2:])

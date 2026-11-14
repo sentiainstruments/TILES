@@ -5,8 +5,8 @@
 #include "audio_engine.h"
 #include "audio_ring.h"
 #include "midi_out.h"
+#include "sample_stream.h"
 #include "sampler.h"
-#include "usb_device.h"
 
 #include "hardware/clocks.h"
 #include "hardware/structs/usb.h"
@@ -37,8 +37,6 @@ static tiles_spsc_t s_midi_ring;  /* core 0 -> core 1 */
 static uint32_t s_drum_words[DRUM_RING_WORDS];
 static tiles_spsc_t s_drum_ring; /* core 0 -> core 1: slot | velocity << 8 */
 static bool s_started;
-static bool s_usb_on_core1;
-static volatile bool s_usb_up;
 
 /* Core 0 (USB) side. */
 static volatile bool s_streaming;
@@ -88,10 +86,6 @@ static uint32_t engine_now_us(void) {
 static void core1_main(void) {
     /* Flash writes on core 0 pause this core (storage_flash.h). */
     multicore_lockout_victim_init();
-    if (s_usb_on_core1) {
-        tiles_usb_device_init(true); /* its interrupt on this core too */
-    }
-    s_usb_up = true;
     int32_t block[2u * RENDER_FRAMES];
     uint32_t window_start = time_us_32();
     uint32_t busy_us = 0;
@@ -107,9 +101,6 @@ static void core1_main(void) {
             s_soak_ms = 0u;
         }
 #endif
-        if (s_usb_on_core1) {
-            tud_task();
-        }
         uint32_t word;
         while (tiles_spsc_pop(&s_midi_ring, &word, 1u) == 1u) {
             tiles_audio_engine_midi((uint8_t)word, (uint8_t)(word >> 8), (uint8_t)(word >> 16));
@@ -123,9 +114,6 @@ static void core1_main(void) {
             while (AUDIO_RING_WORDS - tiles_spsc_space(&s_audio_ring) < 2u * TARGET_FRAMES) {
                 tiles_audio_engine_render(block, RENDER_FRAMES);
                 (void)tiles_spsc_push(&s_audio_ring, (const uint32_t *)block, 2u * RENDER_FRAMES);
-                if (s_usb_on_core1) {
-                    tud_task(); /* a block takes up to ~0.3 ms: never a frame without */
-                }
             }
             busy_us += time_us_32() - t0;
         }
@@ -137,11 +125,11 @@ static void core1_main(void) {
             busy_us = 0;
             window_start = now;
         }
-        sleep_us(streaming || s_usb_on_core1 ? 200u : 1000u);
+        sleep_us(streaming ? 200u : 1000u);
     }
 }
 
-void tiles_usb_audio_start(void) {
+void tiles_usb_audio_init(void) {
     if (s_started) {
         return;
     }
@@ -150,23 +138,8 @@ void tiles_usb_audio_start(void) {
     tiles_spsc_init(&s_drum_ring, s_drum_words, DRUM_RING_WORDS);
     tiles_audio_engine_init((uint8_t)TILES_MIDI_MPE_PITCH_BEND_RANGE_SEMITONES, clock_get_hz(clk_sys) / 1000000u,
                             engine_now_us);
-    /* The stress test holds core 1 for seconds, so its builds keep USB on
-     * core 0. */
-#if TILES_DSP_BENCH
-    s_usb_on_core1 = false;
-#else
-    s_usb_on_core1 = true;
-#endif
-    if (s_usb_on_core1) {
-        tiles_usb_task_on_core1();
-    } else {
-        tiles_usb_device_init(true);
-    }
+    tiles_sample_stream_init();
     multicore_launch_core1(core1_main);
-    uint32_t t0 = time_us_32();
-    while (!s_usb_up && time_us_32() - t0 < 100000u) {
-        tight_loop_contents();
-    }
     s_started = true;
 }
 
@@ -216,10 +189,9 @@ tiles_usb_audio_info_t tiles_usb_audio_get_info(void) {
 /* ---- TinyUSB audio callbacks (core 0, from tud_task()) ---- */
 
 /* Called when the last packet went out; what's written here goes in the
- * next: always 48 frames, what the 48 kHz clock gives per 1 ms frame
- * (macOS stopped streaming on packets of 96 to make up a missed frame).
- * A frame without a packet loses its audio; audio.late_frames counts
- * them. The first call of a stream comes before tud_audio_set_itf_cb(). */
+ * next. Each packet carries 48 frames per USB frame since the last one, so
+ * a frame tud_task() was too late for is made up, not lost. The first call
+ * of a stream comes before tud_audio_set_itf_cb(). */
 bool tud_audio_tx_done_pre_load_cb(uint8_t rhport, uint8_t func_id, uint8_t ep_in, uint8_t cur_alt_setting) {
     (void)rhport;
     (void)func_id;
@@ -234,18 +206,26 @@ bool tud_audio_tx_done_pre_load_cb(uint8_t rhport, uint8_t func_id, uint8_t ep_i
         s_streaming = true;
     }
     uint16_t sof = (uint16_t)(usb_hw->sof_rd & USB_SOF_RD_BITS);
+    uint32_t elapsed = 1u;
     if (s_have_sof) {
-        uint32_t elapsed = (uint32_t)((uint16_t)(sof - s_last_sof) & USB_SOF_RD_BITS);
-        if (elapsed > 1u) {
-            s_late_frames += elapsed - 1u;
+        elapsed = (uint32_t)((uint16_t)(sof - s_last_sof) & USB_SOF_RD_BITS);
+        if (elapsed == 0u) {
+            elapsed = 1u;
         }
     }
     s_have_sof = true;
     s_last_sof = sof;
-    static int32_t packet[2u * FRAMES_PER_MS];
-    uint32_t got = tiles_spsc_pop(&s_audio_ring, (uint32_t *)packet, 2u * FRAMES_PER_MS) / 2u;
-    if (got < FRAMES_PER_MS) {
-        memset(&packet[2u * got], 0, (FRAMES_PER_MS - got) * 2u * sizeof(int32_t));
+    if (elapsed > 1u) {
+        s_late_frames += elapsed - 1u;
+    }
+    uint32_t frames = elapsed * FRAMES_PER_MS;
+    if (frames > TILES_AUDIO_MAX_PACKET_FRAMES) {
+        frames = TILES_AUDIO_MAX_PACKET_FRAMES;
+    }
+    static int32_t packet[2u * TILES_AUDIO_MAX_PACKET_FRAMES];
+    uint32_t got = tiles_spsc_pop(&s_audio_ring, (uint32_t *)packet, 2u * frames) / 2u;
+    if (got < frames) {
+        memset(&packet[2u * got], 0, (frames - got) * 2u * sizeof(int32_t));
         if (s_warmup == 0u) {
             s_underruns++;
         }
@@ -253,7 +233,7 @@ bool tud_audio_tx_done_pre_load_cb(uint8_t rhport, uint8_t func_id, uint8_t ep_i
     if (s_warmup > 0u) {
         s_warmup--;
     }
-    (void)tud_audio_write(packet, (uint16_t)(FRAMES_PER_MS * 2u * sizeof(int32_t)));
+    (void)tud_audio_write(packet, (uint16_t)(frames * 2u * sizeof(int32_t)));
     s_packets++;
     return true;
 }
