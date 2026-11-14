@@ -13,6 +13,7 @@
 #include "product_identity.h"
 #include "tusb.h"
 #include "usb_audio.h"
+#include "usb_device.h"
 
 /* Full speed only: the RP2350 has no high-speed PHY. */
 
@@ -114,67 +115,80 @@ TU_VERIFY_STATIC(CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX == TILES_AUDIO_CHANNELS, "ch
 /* UAC2 terminal type "Synthesizer" (embedded function); TinyUSB has no name for it. */
 #define AUDIO_TERM_TYPE_SYNTHESIZER 0x0713u
 
-uint8_t const desc_fs_configuration[] = {
-    /* config number, interface count, string index, total length, attributes, mA */
-    /* 500 mA, the USB 2.0 maximum: TILES draws ~0.15 A idle and up to
-     * ~0.42 A on USB (docs/hardware/current-measurements.md), so the old
-     * 100 mA undersold it to hubs and hosts. */
+/* Everything but the audio input: what controller mode presents. */
+#define TILES_COMMON_FUNCTIONS \
+    /* interface, string, notification EP + size, data EPs (out, in) + size */ \
+    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, STRID_CDC, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT, EPNUM_CDC_IN, 64), \
+ \
+    /* MIDI: cable 0 = MAIN ("MIDI"), cable 1 = DAW ("DAW"), cable 2 = PARTS \
+     * ("Parts"). TinyUSB's jack macros count cables from 1. */ \
+    TUD_MIDI_DESC_HEAD(ITF_NUM_MIDI, STRID_MIDI, MIDI_NUM_CABLES), \
+    TUD_MIDI_DESC_JACK_DESC(1, STRID_MIDI_PORT_MAIN), \
+    TUD_MIDI_DESC_JACK_DESC(2, STRID_MIDI_PORT_DAW), \
+    TUD_MIDI_DESC_JACK_DESC(3, STRID_MIDI_PORT_PARTS), \
+    TUD_MIDI_DESC_EP(EPNUM_MIDI_OUT, 64, MIDI_NUM_CABLES), \
+    TUD_MIDI_JACKID_IN_EMB(1), \
+    TUD_MIDI_JACKID_IN_EMB(2), \
+    TUD_MIDI_JACKID_IN_EMB(3), \
+    TUD_MIDI_DESC_EP(EPNUM_MIDI_IN, 64, MIDI_NUM_CABLES), \
+    TUD_MIDI_JACKID_OUT_EMB(1), \
+    TUD_MIDI_JACKID_OUT_EMB(2), \
+    TUD_MIDI_JACKID_OUT_EMB(3), \
+ \
+    /* interface, string, EP out & in, EP size */ \
+    TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, STRID_VENDOR, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64), \
+ \
+    /* Control transfers only (no endpoints, no string); see tusb_config.h. */ \
+    TUD_RPI_RESET_DESCRIPTOR(ITF_NUM_RESET, 0)
+
+#define TILES_AUDIO_FUNCTION \
+    /* USB audio (UAC2): the test voice -> USB streaming, on a fixed 48 kHz \
+     * clock. Alt 1 streams stereo 24-bit in 4-byte subslots. */ \
+    TUD_AUDIO_DESC_IAD(ITF_NUM_AUDIO_CONTROL, 2, 0), \
+    TUD_AUDIO_DESC_STD_AC(ITF_NUM_AUDIO_CONTROL, 0, 0), \
+    TUD_AUDIO_DESC_CS_AC(0x0200, AUDIO_FUNC_MUSICAL_INSTRUMENT, \
+                         TUD_AUDIO_DESC_CLK_SRC_LEN + TUD_AUDIO_DESC_INPUT_TERM_LEN + TUD_AUDIO_DESC_OUTPUT_TERM_LEN, 0), \
+    TUD_AUDIO_DESC_CLK_SRC(TILES_AUDIO_ENTITY_CLOCK, AUDIO_CLOCK_SOURCE_ATT_INT_FIX_CLK, \
+                           (AUDIO_CTRL_R << AUDIO_CLOCK_SOURCE_CTRL_CLK_FRQ_POS) | \
+                               (AUDIO_CTRL_R << AUDIO_CLOCK_SOURCE_CTRL_CLK_VAL_POS), \
+                           0, 0), \
+    TUD_AUDIO_DESC_INPUT_TERM(TILES_AUDIO_ENTITY_INPUT, AUDIO_TERM_TYPE_SYNTHESIZER, 0, TILES_AUDIO_ENTITY_CLOCK, \
+                              TILES_AUDIO_CHANNELS, AUDIO_STEREO, 0, 0, 0), \
+    TUD_AUDIO_DESC_OUTPUT_TERM(TILES_AUDIO_ENTITY_OUTPUT, AUDIO_TERM_TYPE_USB_STREAMING, 0, TILES_AUDIO_ENTITY_INPUT, \
+                               TILES_AUDIO_ENTITY_CLOCK, 0, 0), \
+    TUD_AUDIO_DESC_STD_AS_INT(ITF_NUM_AUDIO_STREAMING, 0, 0, 0), \
+    TUD_AUDIO_DESC_STD_AS_INT(ITF_NUM_AUDIO_STREAMING, 1, 1, 0), \
+    TUD_AUDIO_DESC_CS_AS_INT(TILES_AUDIO_ENTITY_OUTPUT, AUDIO_CTRL_NONE, AUDIO_FORMAT_TYPE_I, \
+                             AUDIO_DATA_FORMAT_TYPE_I_PCM, TILES_AUDIO_CHANNELS, AUDIO_STEREO, 0), \
+    TUD_AUDIO_DESC_TYPE_I_FORMAT(TILES_AUDIO_BYTES_PER_SAMPLE, TILES_AUDIO_BITS_PER_SAMPLE), \
+    TUD_AUDIO_DESC_STD_AS_ISO_EP(EPNUM_AUDIO_IN, \
+                                 (uint8_t)(TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS | TUSB_ISO_EP_ATT_DATA), \
+                                 TILES_AUDIO_EP_SIZE, 1), \
+    TUD_AUDIO_DESC_CS_AS_ISO_EP(AUDIO_CS_AS_ISO_DATA_EP_ATT_NON_MAX_PACKETS_OK, AUDIO_CTRL_NONE, \
+                                AUDIO_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_UNDEFINED, 0)
+
+/* config number, interface count, string index, total length, attributes,
+ * mA. 500 mA, the USB 2.0 maximum: TILES draws ~0.15 A idle and up to
+ * ~0.42 A on USB (docs/hardware/current-measurements.md), so the old
+ * 100 mA undersold it to hubs and hosts. */
+static uint8_t const desc_fs_audio[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 500),
-
-    /* interface, string, notification EP + size, data EPs (out, in) + size */
-    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, STRID_CDC, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
-
-    /* MIDI: cable 0 = MAIN ("MIDI"), cable 1 = DAW ("DAW"), cable 2 = PARTS
-     * ("Parts"). TinyUSB's jack macros count cables from 1. */
-    TUD_MIDI_DESC_HEAD(ITF_NUM_MIDI, STRID_MIDI, MIDI_NUM_CABLES),
-    TUD_MIDI_DESC_JACK_DESC(1, STRID_MIDI_PORT_MAIN),
-    TUD_MIDI_DESC_JACK_DESC(2, STRID_MIDI_PORT_DAW),
-    TUD_MIDI_DESC_JACK_DESC(3, STRID_MIDI_PORT_PARTS),
-    TUD_MIDI_DESC_EP(EPNUM_MIDI_OUT, 64, MIDI_NUM_CABLES),
-    TUD_MIDI_JACKID_IN_EMB(1),
-    TUD_MIDI_JACKID_IN_EMB(2),
-    TUD_MIDI_JACKID_IN_EMB(3),
-    TUD_MIDI_DESC_EP(EPNUM_MIDI_IN, 64, MIDI_NUM_CABLES),
-    TUD_MIDI_JACKID_OUT_EMB(1),
-    TUD_MIDI_JACKID_OUT_EMB(2),
-    TUD_MIDI_JACKID_OUT_EMB(3),
-
-    /* interface, string, EP out & in, EP size */
-    TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, STRID_VENDOR, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64),
-
-    /* Control transfers only (no endpoints, no string); see tusb_config.h. */
-    TUD_RPI_RESET_DESCRIPTOR(ITF_NUM_RESET, 0),
-
-    /* USB audio (UAC2): the test voice -> USB streaming, on a fixed 48 kHz
-     * clock. Alt 1 streams stereo 24-bit in 4-byte subslots. */
-    TUD_AUDIO_DESC_IAD(ITF_NUM_AUDIO_CONTROL, 2, 0),
-    TUD_AUDIO_DESC_STD_AC(ITF_NUM_AUDIO_CONTROL, 0, 0),
-    TUD_AUDIO_DESC_CS_AC(0x0200, AUDIO_FUNC_MUSICAL_INSTRUMENT,
-                         TUD_AUDIO_DESC_CLK_SRC_LEN + TUD_AUDIO_DESC_INPUT_TERM_LEN + TUD_AUDIO_DESC_OUTPUT_TERM_LEN, 0),
-    TUD_AUDIO_DESC_CLK_SRC(TILES_AUDIO_ENTITY_CLOCK, AUDIO_CLOCK_SOURCE_ATT_INT_FIX_CLK,
-                           (AUDIO_CTRL_R << AUDIO_CLOCK_SOURCE_CTRL_CLK_FRQ_POS) |
-                               (AUDIO_CTRL_R << AUDIO_CLOCK_SOURCE_CTRL_CLK_VAL_POS),
-                           0, 0),
-    TUD_AUDIO_DESC_INPUT_TERM(TILES_AUDIO_ENTITY_INPUT, AUDIO_TERM_TYPE_SYNTHESIZER, 0, TILES_AUDIO_ENTITY_CLOCK,
-                              TILES_AUDIO_CHANNELS, AUDIO_STEREO, 0, 0, 0),
-    TUD_AUDIO_DESC_OUTPUT_TERM(TILES_AUDIO_ENTITY_OUTPUT, AUDIO_TERM_TYPE_USB_STREAMING, 0, TILES_AUDIO_ENTITY_INPUT,
-                               TILES_AUDIO_ENTITY_CLOCK, 0, 0),
-    TUD_AUDIO_DESC_STD_AS_INT(ITF_NUM_AUDIO_STREAMING, 0, 0, 0),
-    TUD_AUDIO_DESC_STD_AS_INT(ITF_NUM_AUDIO_STREAMING, 1, 1, 0),
-    TUD_AUDIO_DESC_CS_AS_INT(TILES_AUDIO_ENTITY_OUTPUT, AUDIO_CTRL_NONE, AUDIO_FORMAT_TYPE_I,
-                             AUDIO_DATA_FORMAT_TYPE_I_PCM, TILES_AUDIO_CHANNELS, AUDIO_STEREO, 0),
-    TUD_AUDIO_DESC_TYPE_I_FORMAT(TILES_AUDIO_BYTES_PER_SAMPLE, TILES_AUDIO_BITS_PER_SAMPLE),
-    TUD_AUDIO_DESC_STD_AS_ISO_EP(EPNUM_AUDIO_IN,
-                                 (uint8_t)(TUSB_XFER_ISOCHRONOUS | TUSB_ISO_EP_ATT_ASYNCHRONOUS | TUSB_ISO_EP_ATT_DATA),
-                                 TILES_AUDIO_EP_SIZE, 1),
-    TUD_AUDIO_DESC_CS_AS_ISO_EP(AUDIO_CS_AS_ISO_DATA_EP_ATT_NON_MAX_PACKETS_OK, AUDIO_CTRL_NONE,
-                                AUDIO_CS_AS_ISO_DATA_EP_LOCK_DELAY_UNIT_UNDEFINED, 0),
+    TILES_COMMON_FUNCTIONS,
+    TILES_AUDIO_FUNCTION,
 };
-TU_VERIFY_STATIC(sizeof(desc_fs_configuration) == CONFIG_TOTAL_LEN, "configuration descriptor length");
+TU_VERIFY_STATIC(sizeof(desc_fs_audio) == CONFIG_TOTAL_LEN, "configuration descriptor length");
+
+/* Controller mode: the same without the audio input (its interfaces are
+ * the last two, so the others keep their numbers). */
+static uint8_t const desc_fs_controller[] = {
+    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_AUDIO_CONTROL, 0, CONFIG_TOTAL_LEN - TILES_AUDIO_FUNC_DESC_LEN, 0x00, 500),
+    TILES_COMMON_FUNCTIONS,
+};
+TU_VERIFY_STATIC(sizeof(desc_fs_controller) == CONFIG_TOTAL_LEN - TILES_AUDIO_FUNC_DESC_LEN, "controller descriptor length");
 
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void)index;
-    return desc_fs_configuration;
+    return tiles_usb_device_has_audio() ? desc_fs_audio : desc_fs_controller;
 }
 
 /* ---- BOS + Microsoft OS 2.0 descriptors (Windows driverless access) ---- */

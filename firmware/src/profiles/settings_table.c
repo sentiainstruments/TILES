@@ -6,6 +6,7 @@
 #include "bend_core.h"
 #include "board_pins.h"
 #include "cv_gate.h"
+#include "device_mode.h"
 #include "din_midi.h"
 #include "expression.h"
 #include "light_effects.h"
@@ -52,6 +53,8 @@ static void set_clock_lead(tiles_setting_value_t v) { tiles_midi_clock_set_lead_
 static tiles_setting_value_t get_parts_port(void) { return U(tiles_midi_out_get_parts_separate() ? 0u : 1u); }
 static void set_parts_port(tiles_setting_value_t v) { tiles_midi_out_set_parts_separate(v.u == 0u); }
 static tiles_setting_value_t get_seq_lock(void) { return U(tiles_op_mode_get_phase_lock() ? 1u : 0u); }
+static tiles_setting_value_t get_device_mode(void) { return U(tiles_device_mode_setting_get()); }
+static void set_device_mode(tiles_setting_value_t v) { tiles_device_mode_setting_set(v.u); }
 static void set_seq_lock(tiles_setting_value_t v) { tiles_op_mode_set_phase_lock(v.u != 0u); }
 /* ---- pedal ---- */
 static tiles_setting_value_t get_pedal_mode(void) { return U((uint32_t)tiles_pedal_get_mode()); }
@@ -183,6 +186,7 @@ static const char *const PEDAL_SUSTAIN_STYLE_NAMES[] = {"synth", "hold"};
 static const char *const DIN_TYPE_NAMES[] = {"a", "b"};
 static const char *const PARTS_PORT_NAMES[] = {"parts", "main"};
 static const char *const SEQ_LOCK_NAMES[] = {"off", "bar"};
+static const char *const DEVICE_MODE_NAMES[] = {"controller", "standalone"};
 /* In light_effects.h order (the Light effects menu's pads 1-12). */
 static const char *const PLAY_EFFECT_NAMES[] = {"off",          "afterglow",    "ripple",  "cross",
                                                 "halo",         "warmth",       "prism_ripple", "touch_colour",
@@ -317,6 +321,10 @@ static const tiles_setting_def_t TABLE[] = {
      * hardware gesture. */
     TILES_SETTING(0x0A00, "seq.lock", TILES_SETTING_ENUM, {.u = 0}, {.u = 1}, SEQ_LOCK_NAMES, get_seq_lock,
                   set_seq_lock),
+    /* Controller or standalone mode (services/device_mode.h): a change restarts
+     * TILES; also read straight from flash at boot, so the id stays. */
+    TILES_SETTING(TILES_DEVICE_MODE_SETTING_ID, "device.mode", TILES_SETTING_ENUM, {.u = 0}, {.u = 1},
+                  DEVICE_MODE_NAMES, get_device_mode, set_device_mode),
     TILES_SETTING(0x0705, "color.custom_pads", TILES_SETTING_BOOL, {.u = 0}, {.u = 1}, NULL, get_custom_pads,
                   set_custom_pads),
     PAD_COLOR_LIST(PAD_COLOR_ROW_COMMA)
@@ -347,6 +355,7 @@ void tiles_settings_boot(void) {
         return;
     }
     tiles_settings_persist_init(tiles_storage_settings_ops(), pads_idle);
+    tiles_device_mode_settings_loaded();
     tiles_settings_persist_info_t info = tiles_settings_persist_get_info();
     printf("[settings] %u settings; %s\n", (unsigned)TABLE_COUNT,
            info.loaded ? "saved snapshot restored" : "no saved snapshot (defaults)");

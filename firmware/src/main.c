@@ -27,6 +27,7 @@
 #include "services/crash_indicator.h"
 #include "services/cv_gate.h"
 #include "services/debug_mode.h"
+#include "services/device_mode.h"
 #include "services/expression.h"
 #include "services/expression_control.h"
 #include "services/game_mode.h"
@@ -46,6 +47,7 @@
 #include "services/touch.h"
 #include "storage/storage_flash.h"
 #include "usb_vendor/usb_vendor.h"
+#include "audio/sample_stream.h"
 #include "audio/usb_audio.h"
 
 /* A power switch can reset the PCA9685s without the MCU: re-assert OE,
@@ -61,7 +63,7 @@ static void tiles_power_recover_haptics_and_buttons(tiles_power_state_t new_stat
 /* See the main loop. */
 static void timing_tick(void) {
     tiles_debug_trace('t');
-    tud_task();
+    tiles_usb_task();
     tiles_midi_in_scan();
     tiles_midi_clock_scan();
     tiles_op_mode_playback_tick();
@@ -76,12 +78,25 @@ int main(void) {
      * the same ring buffer this snapshots (see debug_mode.h). */
     tiles_debug_mode_capture_crash_snapshot(crash_recovered);
 
+    /* Controller or standalone mode: before USB, whose descriptor depends
+     * on it (services/device_mode.h). The sampler's slots in both: they can
+     * be loaded in either, and only sound in standalone mode. */
+    tiles_device_mode_boot();
+    tiles_sample_stream_init();
+
     /* Before stdio_init_all(): with tinyusb_device linked, pico_stdio_usb
      * expects tusb_init() already done with our descriptors
-     * (midi/usb_device.h). */
-    tiles_usb_device_init();
+     * (midi/usb_device.h). In standalone mode core 1 does it. */
+    if (tiles_device_mode_is_standalone()) {
+        tiles_usb_audio_start();
+    } else {
+        tiles_usb_device_init(false);
+    }
 
     stdio_init_all();
+    if (tiles_device_mode_is_standalone()) {
+        tiles_usb_console_without_task();
+    }
 
     if (!crash_recovered) {
         printf("[main] SENTIA TILES unit %u/%u\n", (unsigned)TILES_UNIT_NUMBER, (unsigned)TILES_UNIT_COUNT);
@@ -160,6 +175,8 @@ int main(void) {
      * at init is already valid. */
     if (crash_recovered) {
         printf("[boot_sequence] skipped -- crash-recovery reboot, not a fresh power-on\n");
+    } else if (tiles_device_mode_quick_restart()) {
+        printf("[boot_sequence] skipped -- restarted into the mode just chosen\n");
     } else if (!tiles_boot_sequence_run()) {
         printf("[boot_sequence] post-animation Hall baseline re-capture failed for at least one pad\n");
     }
@@ -235,7 +252,6 @@ int main(void) {
 
     /* Core 1: TILES's own sound for USB audio. Last before the loop, so no
      * boot-time flash write runs before it can be paused. */
-    tiles_usb_audio_init();
 
     /* Between the slower services: USB, MIDI in, clock and playback again, so a
      * Clock arriving mid-pass is stepped within a fraction of a pass. */
@@ -251,7 +267,8 @@ int main(void) {
         /* Must run every pass: it is the USB stack (pico_stdio_usb's background
          * servicing is compiled out with tinyusb_device linked directly). */
         tiles_debug_trace('T');
-        tud_task();
+        tiles_usb_task();
+        tiles_device_mode_service(to_ms_since_boot(get_absolute_time()));
 
         /* Re-declare the MPE zone each time USB MIDI (re)mounts: sends before
          * enumeration are dropped, and a new host needs it again. */

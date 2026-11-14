@@ -48,10 +48,13 @@ channel map is `../services/midi_channels.h` and per-note allocation is
 
 ## USB details worth knowing
 
-- `main.c` must call `tud_task()` every loop pass (linking
-  `tinyusb_device` turns off the SDK's background task).
-- USB writes wait for FIFO room for up to 5 ms, pumping `tud_task()`, then
-  give up and log. They never block indefinitely.
+- `tud_task()` must run every pass (linking `tinyusb_device` turns off
+  the SDK's background task): core 0 calls `tiles_usb_task()`, which runs
+  it in controller mode; in standalone mode core 1 owns it
+  (`../audio/README.md`) and the call does nothing. Never call
+  `tud_task()` directly on core 0.
+- USB writes wait for FIFO room for up to 5 ms, pumping `tiles_usb_task()`,
+  then give up and log. They never block indefinitely.
 - On macOS, a device that once enumerated with a different port layout can
   leave stale entries in CoreMIDI; the cleanup is in
   `../../../daw-integration/README.md`.
