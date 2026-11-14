@@ -5,6 +5,7 @@ add_executable(sentia_tiles_firmware
     diagnostics/i2c_scan.c
     diagnostics/capture.c
     diagnostics/calibration.c
+    diagnostics/boot_stage.c
     diagnostics/loop_stats.c
     drivers/sk6805.c
     drivers/tca9554.c
@@ -31,6 +32,7 @@ add_executable(sentia_tiles_firmware
     services/octave_control.c
     services/game_mode.c
     services/midi_channels.c
+    services/device_mode.c
     services/mpe_alloc.c
     services/expression_control.c
     services/midi_clock.c

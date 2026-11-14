@@ -54,7 +54,8 @@ before re-tuning a constant or reviving an approach that was dropped.
 | `lighting` | Pad LEDs and underglow; power-derived brightness ceiling; idle colors by note role; indicator priority on the underglow; on touched pads, every mode: hue turns toward Sentia blue with pressure, brightness swells down with bend; LED intensity (Feel menu row 4) scales pads, underglow and button LEDs. |
 | `standby` | Screensaver animations and deep sleep; circle holds. |
 | `show_link` | Show takeover: a computer's light show (Show Control) streams the music as SysEx and, while it does, owns every LED (see "Show link"). |
-| `boot_sequence` | Power-on animation (+ a Hall baseline recapture). |
+| `boot_sequence` | Power-on animation (+ a Hall baseline recapture); its last pulse shows the device mode, and triangle during it switches it. |
+| `device_mode` | Controller or standalone mode (below): read before USB starts; a switch saves and restarts. |
 | `game_mode` | Snake, Tile Breaker, Tile Drop, Paddle, Echo. |
 | `pixel_font` | 4x4 font for the marquee and the transpose display. |
 | `debug_mode`, `crash_indicator` | Crash recorder and watchdog; red underglow after a crash reboot. |
@@ -144,6 +145,23 @@ crash reboot (`__uninitialized_ram`, `tiles_op_mode_init()`).
 - **Unmeasured constants.** Most timing and feel constants are marked
   as first guesses in their comments; the measured ones say what
   capture they came from. Re-measure before retuning.
+
+## Controller and standalone mode
+
+| | Controller (default) | Standalone |
+|---|---|---|
+| For | playing a computer or synth over MIDI/MPE | TILES's own sound (synths, drum sampler) |
+| USB | MIDI, settings, console | the same plus a stereo 48 kHz audio input |
+| Core 1 | off | the sound, and USB (`../audio/README.md`) |
+| Boot pulse | deep blue | Sentia magenta |
+
+Tap or hold triangle during the boot animation to switch; the pulse turns
+the new mode's colour at once. Or the setting `device.mode`
+(`controller` / `standalone`; `tools/tiles_control.py mode standalone`).
+The USB descriptor differs, so a switch saves and restarts TILES; that
+restart skips the animation (a flag in RAM a power cut clears). The mode
+is read from the settings in flash before USB starts
+(`tiles_settings_persist_peek()`), since the settings load later.
 
 ## Show link
 

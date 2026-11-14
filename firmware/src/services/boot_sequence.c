@@ -3,9 +3,12 @@
 #include "board_layout.h"
 #include "board_pins.h"
 #include "buttons.h"
+#include "device_mode.h"
 #include "hall.h"
 #include "lighting.h"
+#include "usb_device.h"
 
+#include "hardware/gpio.h"
 #include "hardware/watchdog.h"
 #include "pico/time.h"
 
@@ -15,14 +18,28 @@
 
 #define BOOT_FRAME_INTERVAL_MS 30u
 
+/* Triangle during the animation switches controller/standalone mode
+ * (device_mode.h): each press, read once a frame (30 ms debounces it). A
+ * triangle held from power-up is a press on the first frame. */
+static bool s_triangle_was_down;
+
+static void watch_triangle(void) {
+    bool down = !gpio_get(TILES_GPIO_SW3_TRIANGLE); /* active low */
+    if (down && !s_triangle_was_down) {
+        tiles_device_mode_boot_toggle();
+    }
+    s_triangle_was_down = down;
+}
+
 /* Frame pacing that keeps USB alive: tud_task() runs throughout the wait
  * (nothing services USB in the background in this build; a plain sleep
  * here once left enumeration unserviced for the whole animation). */
 static void boot_frame_delay(void) {
     watchdog_update(); /* main.c's boot watchdog */
+    watch_triangle();
     absolute_time_t deadline = make_timeout_time_ms(BOOT_FRAME_INTERVAL_MS);
     do {
-        tud_task();
+        tiles_usb_task();
     } while (!time_reached(deadline));
 }
 
@@ -82,9 +99,11 @@ static float fade_level(uint32_t elapsed_ms) {
     return RAIN_STEADY_LEVEL * (1.0f - t);
 }
 
-/* ---- Phase 3: one slow Sentia magenta pulse ---- */
+/* ---- Phase 3: one slow pulse in the mode's colour ---- */
 
-/* Pads + underglow only (buttons are monochrome). Smoothstep rise and fall. */
+/* Pads + underglow only (buttons are monochrome). Smoothstep rise and fall.
+ * Sentia magenta in standalone mode, deep blue in controller mode (the
+ * periwinkle reads near white on the LEDs); it follows a switch at once. */
 #define PULSE_RISE_MS 630u
 #define PULSE_HOLD_MS 450u
 #define PULSE_FALL_MS 1080u
@@ -93,6 +112,9 @@ static float fade_level(uint32_t elapsed_ms) {
 #define MAGENTA_R 1.0f
 #define MAGENTA_G 0.0f
 #define MAGENTA_B 1.0f
+#define BLUE_R 0.0f
+#define BLUE_G 0.08f
+#define BLUE_B 1.0f
 
 static float pulse_envelope(uint32_t elapsed_ms) {
     if (elapsed_ms < PULSE_RISE_MS) {
@@ -173,7 +195,7 @@ static void run_phase2_fade(void) {
     }
 }
 
-static void run_phase3_magenta_pulse(void) {
+static void run_phase3_pulse(void) {
     /* Buttons can't show magenta: force them dark (the fade should already
      * have) and leave them alone for this phase. */
     for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
@@ -188,16 +210,19 @@ static void run_phase3_magenta_pulse(void) {
             elapsed = PULSE_TOTAL_MS;
         }
         float env = pulse_envelope(elapsed);
+        bool standalone = tiles_device_mode_boot_choice() == TILES_DEVICE_STANDALONE;
+        float pr = (standalone ? MAGENTA_R : BLUE_R) * env;
+        float pg = (standalone ? MAGENTA_G : BLUE_G) * env;
+        float pb = (standalone ? MAGENTA_B : BLUE_B) * env;
 
         /* Buttons stay dark for the whole pulse. */
         for (uint8_t row = 1u; row <= TILES_GRID_MAX_ROW; row++) {
             for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-                tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), MAGENTA_R * env,
-                                                    MAGENTA_G * env, MAGENTA_B * env);
+                tiles_lighting_set_standby_pad_rgb(board_pad_for_row_col(row, col), pr, pg, pb);
             }
         }
         for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
-            tiles_lighting_set_standby_underglow_rgb(i, MAGENTA_R * env, MAGENTA_G * env, MAGENTA_B * env);
+            tiles_lighting_set_standby_underglow_rgb(i, pr, pg, pb);
         }
         tiles_lighting_flush_standby();
 
@@ -214,7 +239,7 @@ bool tiles_boot_sequence_run(void) {
 
     run_phase1_rain();
     run_phase2_fade();
-    run_phase3_magenta_pulse();
+    run_phase3_pulse();
 
     tiles_lighting_set_standby_active(false);
     tiles_buttons_set_standby_active(false);

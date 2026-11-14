@@ -1,7 +1,9 @@
 #pragma once
 
 /* Power-on animation (~4.2 s, blocking): white rain from the keys down the
- * pads, a fade to dark, one slow magenta pulse. Ends with a second Hall
+ * pads, a fade to dark, one slow pulse in the mode's colour (Sentia
+ * magenta: standalone; deep blue: controller only). Triangle during
+ * it switches the mode (device_mode.h). Ends with a second Hall
  * baseline capture. Frame waits pump tud_task() so USB enumerates. */
 
 #include <stdbool.h>
