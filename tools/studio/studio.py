@@ -291,6 +291,7 @@ class DeviceSource:
         if self.session is not None:
             try:
                 self._command("CAPTURE STOP")
+                self._command("CAPTURE RELEASE")  # TILES's reverb and delay get their memory back
             except DeviceError:
                 pass
 

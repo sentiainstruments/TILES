@@ -21,6 +21,7 @@ synth_patch_t g_synth_patches[] = {
         .amp = {1.0f, 500.0f, 0.65f, 30.0f}, .mod = {1.0f, 230.0f, 0.0f, 60.0f},
         .voice_mode = SYNTH_LEGATO, .glide_ms = 60.0f,
         .level = 0.9f, .velocity_level = 0.4f, .pressure_level = 0.2f,
+        .fx = {.reverb = 0.1f, .delay = 0.25f, .drive = 0.35f, .dark = 0.2f},
     },
     {
         .name = "pluck",
@@ -32,6 +33,7 @@ synth_patch_t g_synth_patches[] = {
         .amp = {1.0f, 900.0f, 0.3f, 250.0f}, .mod = {1.0f, 180.0f, 0.0f, 200.0f},
         .voice_mode = SYNTH_POLY,
         .level = 0.8f, .velocity_level = 0.5f, .pressure_level = 0.3f,
+        .fx = {.reverb = 0.3f, .delay = 0.35f, .chorus = 0.15f},
     },
     {
         .name = "haze",
@@ -44,6 +46,7 @@ synth_patch_t g_synth_patches[] = {
         .lfo = {SYNTH_LFO_SINE, false, 0.25f, false, 0.0f},
         .voice_mode = SYNTH_POLY,
         .level = 0.55f, .velocity_level = 0.3f, .pressure_level = 0.35f,
+        .fx = {.reverb = 0.45f, .delay = 0.1f, .chorus = 0.5f, .pump = 0.4f},
     },
     {
         .name = "glass",
@@ -55,6 +58,7 @@ synth_patch_t g_synth_patches[] = {
         .amp = {1.0f, 2500.0f, 0.0f, 1500.0f}, .mod = {1.0f, 600.0f, 0.0f, 600.0f},
         .voice_mode = SYNTH_POLY,
         .level = 0.8f, .velocity_level = 0.6f, .pressure_level = 0.3f,
+        .fx = {.reverb = 0.4f, .delay = 0.2f, .chorus = 0.1f},
     },
     {
         .name = "reese",
@@ -68,6 +72,7 @@ synth_patch_t g_synth_patches[] = {
         .lfo = {SYNTH_LFO_SINE, false, 0.3f, false, 0.0f},
         .voice_mode = SYNTH_LEGATO, .glide_ms = 40.0f,
         .level = 0.75f, .velocity_level = 0.3f, .pressure_level = 0.2f,
+        .fx = {.reverb = 0.1f, .chorus = 0.3f, .drive = 0.25f, .dark = 0.3f, .pump = 0.25f},
     },
     {
         .name = "hoover",
@@ -82,6 +87,7 @@ synth_patch_t g_synth_patches[] = {
         .pitch_env_semis = -12.0f, .pitch_env_ms = 90.0f,
         .voice_mode = SYNTH_LEGATO, .glide_ms = 80.0f,
         .level = 0.6f, .velocity_level = 0.3f, .pressure_level = 0.25f,
+        .fx = {.reverb = 0.25f, .chorus = 0.4f, .drive = 0.2f, .dark = 0.2f},
     },
     {
         .name = "stab",
@@ -94,6 +100,7 @@ synth_patch_t g_synth_patches[] = {
         .amp = {1.0f, 350.0f, 0.0f, 120.0f}, .mod = {1.0f, 150.0f, 0.0f, 120.0f},
         .voice_mode = SYNTH_POLY,
         .level = 0.7f, .velocity_level = 0.5f, .pressure_level = 0.2f,
+        .fx = {.reverb = 0.35f, .delay = 0.2f, .drive = 0.1f, .pump = 0.3f},
     },
     {
         .name = "wobble",
@@ -107,6 +114,7 @@ synth_patch_t g_synth_patches[] = {
         .lfo = {SYNTH_LFO_SINE, true, 0.5f, true, 0.0f}, /* 1/8 notes */
         .voice_mode = SYNTH_LEGATO, .glide_ms = 30.0f,
         .level = 0.7f, .velocity_level = 0.2f, .pressure_level = 0.2f,
+        .fx = {.reverb = 0.05f, .drive = 0.5f, .dark = 0.25f, .crush = 0.15f, .pump = 0.2f},
     },
     {
         .name = "air",
@@ -120,6 +128,7 @@ synth_patch_t g_synth_patches[] = {
         .vibrato_cents = 6.0f,
         .voice_mode = SYNTH_POLY,
         .level = 0.6f, .velocity_level = 0.3f, .pressure_level = 0.4f,
+        .fx = {.reverb = 0.6f, .delay = 0.15f, .chorus = 0.4f, .pump = 0.3f},
     },
     {
         .name = "choir",
@@ -133,6 +142,7 @@ synth_patch_t g_synth_patches[] = {
         .vibrato_cents = 8.0f,
         .voice_mode = SYNTH_POLY,
         .level = 0.6f, .velocity_level = 0.3f, .pressure_level = 0.4f,
+        .fx = {.reverb = 0.5f, .chorus = 0.35f, .pump = 0.2f},
     },
     {
         .name = "sub",
@@ -144,6 +154,7 @@ synth_patch_t g_synth_patches[] = {
         .amp = {2.0f, 200.0f, 1.0f, 120.0f}, .mod = {1.0f, 100.0f, 1.0f, 100.0f},
         .voice_mode = SYNTH_LEGATO, .glide_ms = 25.0f,
         .level = 1.0f, .velocity_level = 0.3f, .pressure_level = 0.15f,
+        .fx = {.pump = 0.5f},
     },
     {
         .name = "lead",
@@ -157,6 +168,7 @@ synth_patch_t g_synth_patches[] = {
         .vibrato_cents = 15.0f,
         .voice_mode = SYNTH_POLY,
         .level = 0.7f, .velocity_level = 0.4f, .pressure_level = 0.3f,
+        .fx = {.reverb = 0.25f, .delay = 0.3f, .chorus = 0.2f},
     },
     {
         .name = "pure",
@@ -167,6 +179,7 @@ synth_patch_t g_synth_patches[] = {
         .amp = {4.0f, 100.0f, 1.0f, 300.0f}, .mod = {1.0f, 100.0f, 1.0f, 100.0f},
         .voice_mode = SYNTH_POLY,
         .level = 0.8f, .velocity_level = 0.6f, .pressure_level = 0.5f,
+        .fx = {.reverb = 0.2f},
     },
 };
 

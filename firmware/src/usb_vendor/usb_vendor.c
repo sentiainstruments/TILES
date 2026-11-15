@@ -27,6 +27,7 @@
 #include "storage_flash.h"
 #include "touch.h"
 #include "audio_engine.h"
+#include "fx.h"
 #include "usb_audio.h"
 #include "usb_device.h"
 #include "tune.h"
@@ -619,10 +620,66 @@ static uint32_t bench_cycles(void) {
     return m33_hw->dwt_cyccnt;
 }
 
+/* SYNTH FX names, in audio_engine.h's TILES_FX_* order. Values are typed
+ * as 0-100, except the bus's predelay (ms) and time (sixteenths). */
+static const char *const k_fx_track_names[TILES_FX_TRACK_PARAMS] = {"reverb", "delay", "chorus", "drive",
+                                                                     "dark",   "crush", "pump"};
+static const char *const k_fx_bus_names[TILES_FX_BUS_PARAMS] = {
+    "decay", "damping", "predelay", "mod", "time", "feedback", "tone", "echo-verb", "chorus-rate",
+    "chorus-depth", "pump-release"};
+
+static float fx_unit(uint8_t target, uint8_t param) {
+    bool literal = target == TILES_FX_TARGET_BUS &&
+                   (param == TILES_FX_BUS_PREDELAY_MS || param == TILES_FX_BUS_SIXTEENTHS);
+    return literal ? 1.0f : 0.01f;
+}
+
+/* SYNTH FX: every track's effects, then the shared ones' settings. SYNTH FX
+ * <track 1-4|BUS> <name> <value>: sets one. */
+static void handle_synth_fx(void) {
+    char text[USB_VENDOR_LINE_MAX];
+    char *target_arg = strtok(NULL, " ");
+    if (target_arg == NULL) {
+        for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
+            int n = snprintf(text, sizeof(text), "track %u", (unsigned)t + 1u);
+            for (uint8_t p = 0; p < TILES_FX_TRACK_PARAMS && n < (int)sizeof(text); p++) {
+                n += snprintf(text + n, sizeof(text) - (size_t)n, " %s=%d", k_fx_track_names[p],
+                              (int)(tiles_audio_engine_fx(t, p) / fx_unit(t, p) + 0.5f));
+            }
+            reply(text);
+        }
+        for (uint8_t p = 0; p < TILES_FX_BUS_PARAMS; p++) {
+            float v = tiles_audio_engine_fx(TILES_FX_TARGET_BUS, p) / fx_unit(TILES_FX_TARGET_BUS, p);
+            snprintf(text, sizeof(text), "bus %s=%d", k_fx_bus_names[p], (int)(v + 0.5f));
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+    char *name = strtok(NULL, " ");
+    char *value_arg = strtok(NULL, " ");
+    uint8_t target = strcmp(target_arg, "BUS") == 0 ? TILES_FX_TARGET_BUS : (uint8_t)(atoi(target_arg) - 1);
+    if (target > TILES_FX_TARGET_BUS || name == NULL || value_arg == NULL) {
+        reply_err("fx-<1-4|BUS>-<name>-<value>");
+        return;
+    }
+    const char *const *names = target == TILES_FX_TARGET_BUS ? k_fx_bus_names : k_fx_track_names;
+    uint8_t count = target == TILES_FX_TARGET_BUS ? TILES_FX_BUS_PARAMS : TILES_FX_TRACK_PARAMS;
+    for (uint8_t p = 0; p < count; p++) {
+        if (strcmp(name, names[p]) == 0) {
+            float v = (float)atof(value_arg) * fx_unit(target, p);
+            tiles_usb_audio_set_fx(target, p, v) ? reply_ok() : reply_err("busy");
+            return;
+        }
+    }
+    reply_err("unknown-fx");
+}
+
 /* SYNTH LIST (the sounds, then each track's) | PATCH <track 1-4>
  * <number|name> | MIDI <status hex> <data1> <data2>: a message to the
- * engine only (not sent out), to play it from the computer | BENCH: each
- * sound's cycles per sample for one voice. Standalone mode only. */
+ * engine only (not sent out), to play it from the computer | FX (above) |
+ * BENCH: each sound's cycles per sample for one voice. Standalone mode
+ * only. */
 static void handle_synth(void) {
     char *what = strtok(NULL, " ");
     char text[USB_VENDOR_LINE_MAX];
@@ -667,6 +724,10 @@ static void handle_synth(void) {
         tiles_usb_audio_set_patch((uint8_t)(track - 1), (uint8_t)patch) ? reply_ok() : reply_err("busy");
         return;
     }
+    if (what != NULL && strcmp(what, "FX") == 0) {
+        handle_synth_fx();
+        return;
+    }
     if (what != NULL && strcmp(what, "BENCH") == 0) {
         /* On core 0 with its interrupts off, ~5 ms a sound. */
         m33_hw->demcr |= M33_DEMCR_TRCENA_BITS;
@@ -676,6 +737,16 @@ static void handle_synth(void) {
             uint32_t c = tiles_audio_engine_bench(p, 2400u, bench_cycles);
             restore_interrupts(irq);
             snprintf(text, sizeof(text), "%s %lu", tiles_audio_engine_patch_name(p), (unsigned long)c);
+            reply(text);
+        }
+        /* The effects share core 1's state: only while it isn't rendering. */
+        static const char *const k_fx_bench_names[TILES_FX_BENCH_COUNT] = {"chorus", "delay", "reverb",
+                                                                          "drive",  "crush", "pump"};
+        for (uint32_t f = 0; f < TILES_FX_BENCH_COUNT && !tiles_usb_audio_get_info().streaming; f++) {
+            uint32_t irq = save_and_disable_interrupts();
+            uint32_t c = tiles_fx_bench(f, 2400u, bench_cycles);
+            restore_interrupts(irq);
+            snprintf(text, sizeof(text), "fx-%s %lu", k_fx_bench_names[f], (unsigned long)c);
             reply(text);
         }
         reply_ok();
@@ -738,9 +809,10 @@ static void handle_line(char *line) {
         return;
     }
     /* Sensor capture (diagnostics/capture.h): START <pad> records one pad
-     * (~8 s), WATCH <pad> keeps recording (the studio), STOP ends it, STATUS
-     * reports, READ streams every record held, READ <from> the live rows
-     * from that sequence number on. */
+     * (~8 s), WATCH <pad> keeps recording (the studio), STOP ends it,
+     * RELEASE gives its memory back to the effects (quiet until then),
+     * STATUS reports, READ streams every record held, READ <from> the live
+     * rows from that sequence number on. */
     if (strcmp(cmd, "CAPTURE") == 0) {
         char *what = strtok(NULL, " ");
         char *arg = strtok(NULL, " ");
@@ -755,14 +827,13 @@ static void handle_line(char *line) {
             s_capture_setup.sensitivity = tiles_expression_get_pitch_bend_sensitivity();
             tiles_expression_get_press_path((uint8_t)pad, &s_capture_setup.bx, &s_capture_setup.by,
                                             &s_capture_setup.strokes);
-            if (watch) {
-                tiles_capture_watch((uint8_t)pad);
-            } else {
-                tiles_capture_start((uint8_t)pad);
-            }
-            reply_ok();
+            bool started = watch ? tiles_capture_watch((uint8_t)pad) : tiles_capture_start((uint8_t)pad);
+            started ? reply_ok() : reply_err("memory-busy");
         } else if (what != NULL && strcmp(what, "STOP") == 0) {
             tiles_capture_stop();
+            reply_ok();
+        } else if (what != NULL && strcmp(what, "RELEASE") == 0) {
+            tiles_capture_release();
             reply_ok();
         } else if (what != NULL && strcmp(what, "STATUS") == 0) {
             snprintf(text, sizeof(text), "pad=%u running=%u count=%u max=%u watching=%u total=%lu",
@@ -794,7 +865,7 @@ static void handle_line(char *line) {
             s_listing_next = from;
             fill_listing();
         } else {
-            reply_err("capture-start|watch|stop|status|read");
+            reply_err("capture-start|watch|stop|release|status|read");
         }
         return;
     }
@@ -983,6 +1054,10 @@ static void handle_line(char *line) {
         snprintf(text, sizeof(text), "audio.underruns=%lu", (unsigned long)audio.underruns);
         reply(text);
         snprintf(text, sizeof(text), "audio.usb_gap_us=%lu", (unsigned long)audio.usb_gap_us);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.fx=%s", audio.fx_lent ? "lent" : "on");
+        reply(text);
+        snprintf(text, sizeof(text), "audio.fx_cost=%lu", (unsigned long)audio.fx_cost);
         reply(text);
         snprintf(text, sizeof(text), "audio.midi_drops=%lu", (unsigned long)audio.midi_drops);
         reply(text);

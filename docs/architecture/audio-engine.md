@@ -41,14 +41,15 @@ count: see Guardrails. At most 8 on one track.
 Every engine and effect pushed as far as the core allows, and the sound
 never breaks up.
 
-1. **Reserved first: the effects and 5 drums.** Reverb, delay, chorus and
-   the master, plus 5 drum samples ringing, are kept 1,100 cycles a
-   sample (measured: 1,074 with stereo samples). Voices never take it,
+1. **Reserved first: the effects and 5 drums.** Reverb, delay, chorus,
+   the inserts and the master, plus 5 drum samples ringing, are kept
+   1,200 cycles a sample (the built effects measure ~700 shared plus
+   ~120 a driven track; drum samples ~65 each). Voices never take it,
    so the effects stay at full quality. The sampler rings 5 at most
    (`TILES_AUDIO_DRUM_VOICES`).
 2. **Voices share the rest by cost.** Every voice counts its engine's
    cycles per sample, and all of them together stay under 85 % of core 1
-   (1,556 cycles for voices at 150 MHz). Each track's cost starts from
+   (1,456 cycles for voices at 150 MHz). Each track's cost starts from
    its engine's measured figure and then follows live timing: every
    block, core 1 times each track's voices. An engine people program
    needs no figure up front; it is measured as it plays.
@@ -134,9 +135,11 @@ registers), snare ~160, clap ~125; hat from six anti-aliased squares
 16-bit mono, tuned by linear interpolation): ~65 from RAM, ~113 read
 straight from flash through the XIP cache, ~126 from flash uncached.
 
-**Effects** (per 48 kHz sample): plate reverb run at 24 kHz ~400,
-ping-pong delay at 24 kHz ~160, chorus ~210, master (clip and 24-bit
-output) ~100-130.
+**Effects** (per 48 kHz sample): the prototypes, plate reverb run at
+24 kHz ~400, ping-pong delay at 24 kHz ~160, chorus ~210, master (clip
+and 24-bit output) ~100-130. The built effects (`synth-engines.md`,
+"Effects"): plate at 48 kHz 473, delay 118, ensemble 103, overdrive 122
+a driven track.
 
 **Everything at once** (the real test; the parts overlap a little, so
 this is less than their sum)

@@ -1,6 +1,8 @@
 #include "audio_engine.h"
 
 #include "audio_hot.h"
+#include "fx.h"
+#include "fx_memory.h"
 #include "midi_channels.h"
 #include "sampler.h"
 #include "synth_voice.h"
@@ -59,12 +61,20 @@ static uint8_t s_track_patch[TILES_AUDIO_TRACKS];
 static held_note_t s_mono_held[TILES_AUDIO_TRACKS][MONO_STACK];
 static uint8_t s_mono_count[TILES_AUDIO_TRACKS];
 
-/* The wavetables, built once at init (TILES_WT_BANK_*), and the working
- * space for building them. */
+/* The wavetables, built once at init (TILES_WT_BANK_*) with the effects'
+ * memory as working space. */
 static tiles_wt_bank_t s_banks[TILES_WT_BANK_COUNT];
-static tiles_wt_spectrum_t s_build_spectrum;
-static float s_build_scratch[TILES_WT_SCRATCH_FLOATS];
+static float *s_build_scratch;
 static synth_context_t s_ctx;
+_Static_assert(TILES_WT_SCRATCH_FLOATS * sizeof(float) + sizeof(tiles_wt_spectrum_t) <= TILES_FX_MEMORY_BYTES,
+               "the wavetable build fits the effects' memory");
+
+/* Each track's effects (its sound's, changed by a track setting), their
+ * insert state, and its block before it is mixed. */
+static tiles_fx_amounts_t s_track_fx[TILES_AUDIO_TRACKS];
+static tiles_fx_insert_t s_insert[TILES_AUDIO_TRACKS];
+static float s_track_l[TILES_AUDIO_TRACKS][BLOCK_FRAMES], s_track_r[TILES_AUDIO_TRACKS][BLOCK_FRAMES];
+static float s_fx_cost;
 
 /* The budget, in cycles per output sample. */
 static uint32_t (*s_now_us)(void);
@@ -81,13 +91,13 @@ typedef struct {
     uint32_t bank;
 } design_ctx_t;
 
-static void design(void *ctx, uint32_t frame, tiles_wt_spectrum_t *spectrum) {
+TILES_AUDIO_COLD static void design(void *ctx, uint32_t frame, tiles_wt_spectrum_t *spectrum) {
     tiles_wt_design(((const design_ctx_t *)ctx)->bank, frame, spectrum, s_build_scratch);
 }
 
 /* A patch's cost before it has been measured, cycles per voice-sample,
  * from SYNTH BENCH on unit 2 (2026-11-14), then learned live. */
-static float patch_cost(const synth_patch_t *p) {
+TILES_AUDIO_COLD static float patch_cost(const synth_patch_t *p) {
     float copies = (float)(p->unison < 1u ? 1u : p->unison);
     bool stereo = p->unison > 1u && p->width > 0.0f;
     float channels = stereo ? 2.0f : 1.0f;
@@ -96,16 +106,20 @@ static float patch_cost(const synth_patch_t *p) {
     return 45.0f + 38.0f * copies + (stereo ? 10.0f : 0.0f) + filter + shaped * channels;
 }
 
-void tiles_audio_engine_init(uint8_t bend_range_semitones, uint32_t clk_mhz, uint32_t (*now_us)(void)) {
+TILES_AUDIO_COLD void tiles_audio_engine_init(uint8_t bend_range_semitones, uint32_t clk_mhz, uint32_t (*now_us)(void)) {
     static bool built;
     if (!built) {
+        s_build_scratch = (float *)tiles_fx_memory();
+        tiles_wt_spectrum_t *spectrum = (tiles_wt_spectrum_t *)(s_build_scratch + TILES_WT_SCRATCH_FLOATS);
         for (uint32_t b = 0; b < TILES_WT_BANK_COUNT; b++) {
             design_ctx_t ctx = {b};
-            tiles_wt_build(&s_banks[b], design, &ctx, &s_build_spectrum, s_build_scratch);
+            tiles_wt_build(&s_banks[b], design, &ctx, spectrum, s_build_scratch);
             s_ctx.banks[b] = &s_banks[b];
         }
         built = true;
     }
+    tiles_fx_init(tiles_fx_memory());
+    s_fx_cost = 0.0f;
     s_ctx.beats_per_second = 2.0f; /* 120 BPM until told */
     memset(s_voice, 0, sizeof(s_voice));
     memset(s_bend, 0, sizeof(s_bend));
@@ -123,13 +137,15 @@ void tiles_audio_engine_init(uint8_t bend_range_semitones, uint32_t clk_mhz, uin
     for (uint32_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
         s_track_patch[t] = g_synth_track_default[t];
         s_cost[t] = patch_cost(&g_synth_patches[s_track_patch[t]]);
+        s_track_fx[t] = g_synth_patches[s_track_patch[t]].fx;
+        tiles_fx_insert_reset(&s_insert[t]);
     }
     s_over_blocks = 0;
     s_load = 0.0f;
     s_shed = 0;
 }
 
-void tiles_audio_engine_set_track_cost(uint8_t track, uint32_t cycles) {
+TILES_AUDIO_COLD void tiles_audio_engine_set_track_cost(uint8_t track, uint32_t cycles) {
     if (track < TILES_AUDIO_TRACKS) {
         s_cost[track] = (float)cycles;
     }
@@ -143,7 +159,7 @@ uint32_t tiles_audio_engine_shed_count(void) {
     return s_shed;
 }
 
-void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch) {
+TILES_AUDIO_COLD void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch) {
     if (track >= TILES_AUDIO_TRACKS || patch >= g_synth_patch_count || s_track_patch[track] == patch) {
         return;
     }
@@ -156,13 +172,97 @@ void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch) {
     s_track_patch[track] = patch;
     s_mono_count[track] = 0u;
     s_cost[track] = patch_cost(&g_synth_patches[patch]);
+    s_track_fx[track] = g_synth_patches[patch].fx;
+}
+
+TILES_AUDIO_COLD static float *track_fx_field(tiles_fx_amounts_t *fx, uint8_t param) {
+    switch (param) {
+    case TILES_FX_TRACK_REVERB:
+        return &fx->reverb;
+    case TILES_FX_TRACK_DELAY:
+        return &fx->delay;
+    case TILES_FX_TRACK_CHORUS:
+        return &fx->chorus;
+    case TILES_FX_TRACK_DRIVE:
+        return &fx->drive;
+    case TILES_FX_TRACK_DARK:
+        return &fx->dark;
+    case TILES_FX_TRACK_CRUSH:
+        return &fx->crush;
+    case TILES_FX_TRACK_PUMP:
+        return &fx->pump;
+    default:
+        return NULL;
+    }
+}
+
+TILES_AUDIO_COLD static float *bus_field(tiles_fx_bus_t *b, uint8_t param) {
+    switch (param) {
+    case TILES_FX_BUS_DECAY:
+        return &b->reverb_decay;
+    case TILES_FX_BUS_DAMPING:
+        return &b->reverb_damping;
+    case TILES_FX_BUS_PREDELAY_MS:
+        return &b->reverb_predelay_ms;
+    case TILES_FX_BUS_MOD:
+        return &b->reverb_mod;
+    case TILES_FX_BUS_SIXTEENTHS:
+        return &b->delay_sixteenths;
+    case TILES_FX_BUS_FEEDBACK:
+        return &b->delay_feedback;
+    case TILES_FX_BUS_TONE:
+        return &b->delay_tone;
+    case TILES_FX_BUS_TO_REVERB:
+        return &b->delay_to_reverb;
+    case TILES_FX_BUS_CHORUS_RATE:
+        return &b->chorus_rate;
+    case TILES_FX_BUS_CHORUS_DEPTH:
+        return &b->chorus_depth;
+    case TILES_FX_BUS_PUMP_RELEASE:
+        return &b->pump_release;
+    default:
+        return NULL;
+    }
+}
+
+TILES_AUDIO_COLD void tiles_audio_engine_set_fx(uint8_t target, uint8_t param, float value) {
+    if (target < TILES_AUDIO_TRACKS) {
+        float *f = track_fx_field(&s_track_fx[target], param);
+        if (f != NULL) {
+            *f = synth_clamp(value, 0.0f, 1.0f);
+        }
+    } else if (target == TILES_FX_TARGET_BUS) {
+        tiles_fx_bus_t bus = *tiles_fx_bus();
+        float *f = bus_field(&bus, param);
+        if (f != NULL) {
+            *f = value;
+            tiles_fx_set_bus(&bus);
+        }
+    }
+}
+
+TILES_AUDIO_COLD float tiles_audio_engine_fx(uint8_t target, uint8_t param) {
+    if (target < TILES_AUDIO_TRACKS) {
+        float *f = track_fx_field(&s_track_fx[target], param);
+        return f != NULL ? *f : 0.0f;
+    }
+    if (target == TILES_FX_TARGET_BUS) {
+        tiles_fx_bus_t bus = *tiles_fx_bus();
+        float *f = bus_field(&bus, param);
+        return f != NULL ? *f : 0.0f;
+    }
+    return 0.0f;
+}
+
+uint32_t tiles_audio_engine_fx_cost(void) {
+    return (uint32_t)(s_fx_cost + 0.5f);
 }
 
 uint8_t tiles_audio_engine_patch(uint8_t track) {
     return track < TILES_AUDIO_TRACKS ? s_track_patch[track] : 0u;
 }
 
-const char *tiles_audio_engine_patch_name(uint8_t patch) {
+TILES_AUDIO_COLD const char *tiles_audio_engine_patch_name(uint8_t patch) {
     return patch < g_synth_patch_count ? g_synth_patches[patch].name : "";
 }
 
@@ -176,7 +276,7 @@ void tiles_audio_engine_set_tempo(float beats_per_minute) {
     }
 }
 
-uint32_t tiles_audio_engine_bench(uint8_t patch, uint32_t frames, uint32_t (*cycles)(void)) {
+TILES_AUDIO_COLD uint32_t tiles_audio_engine_bench(uint8_t patch, uint32_t frames, uint32_t (*cycles)(void)) {
     if (patch >= g_synth_patch_count || frames == 0u) {
         return 0u;
     }
@@ -580,20 +680,23 @@ static void TILES_AUDIO_HOT(guard)(const float *track_cycles, const uint32_t *tr
     }
 }
 
+/* Voices into each track's block; then per track (at the mix level) its
+ * inserts and pump, into the mix and the sends; the shared effects; the
+ * drums; the master's soft clip. */
 static void TILES_AUDIO_HOT(render_block)(int32_t *out_lr, uint32_t n) {
-    float mix_l[BLOCK_FRAMES], mix_r[BLOCK_FRAMES];
-    memset(mix_l, 0, sizeof(mix_l));
-    memset(mix_r, 0, sizeof(mix_r));
     float track_cycles[TILES_AUDIO_TRACKS] = {0};
     uint32_t track_voices[TILES_AUDIO_TRACKS] = {0};
     uint32_t track_fading[TILES_AUDIO_TRACKS] = {0};
     for (uint32_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
+        float *tl = s_track_l[t], *tr = s_track_r[t];
+        memset(tl, 0, n * sizeof(float));
+        memset(tr, 0, n * sizeof(float));
         uint32_t t0 = s_now_us != NULL ? s_now_us() : 0u;
         for (uint32_t vi = 0; vi < TILES_AUDIO_VOICES; vi++) {
             voice_t *v = &s_voice[vi];
             if (v->state != VOICE_OFF && v->track == t) {
                 track_fading[t] += v->fast ? 1u : 0u;
-                render_voice(v, mix_l, mix_r, n);
+                render_voice(v, tl, tr, n);
                 track_voices[t]++;
             }
         }
@@ -604,13 +707,49 @@ static void TILES_AUDIO_HOT(render_block)(int32_t *out_lr, uint32_t n) {
     if (s_now_us != NULL) {
         guard(track_cycles, track_voices, track_fading, n);
     }
+
+    uint32_t fx_t0 = s_now_us != NULL ? s_now_us() : 0u;
+    float mix_l[BLOCK_FRAMES], mix_r[BLOCK_FRAMES];
+    float chorus_in[BLOCK_FRAMES], delay_in[BLOCK_FRAMES], reverb_in[BLOCK_FRAMES];
+    memset(mix_l, 0, sizeof(mix_l));
+    memset(mix_r, 0, sizeof(mix_r));
+    memset(chorus_in, 0, sizeof(chorus_in));
+    memset(delay_in, 0, sizeof(delay_in));
+    memset(reverb_in, 0, sizeof(reverb_in));
+    tiles_fx_block_begin(n, s_ctx.beats_per_second);
+    for (uint32_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
+        if (track_voices[t] == 0u) {
+            continue;
+        }
+        float *tl = s_track_l[t], *tr = s_track_r[t];
+        for (uint32_t i = 0; i < n; i++) {
+            tl[i] *= MIX_GAIN;
+            tr[i] *= MIX_GAIN;
+        }
+        const tiles_fx_amounts_t *fx = &s_track_fx[t];
+        tiles_fx_insert(&s_insert[t], fx, tl, tr, n);
+        for (uint32_t i = 0; i < n; i++) {
+            mix_l[i] += tl[i];
+            mix_r[i] += tr[i];
+            float m = 0.5f * (tl[i] + tr[i]);
+            chorus_in[i] += m * fx->chorus;
+            delay_in[i] += m * fx->delay;
+            reverb_in[i] += m * fx->reverb;
+        }
+    }
+    tiles_fx_busses(chorus_in, delay_in, reverb_in, mix_l, mix_r, n, s_ctx.beats_per_second);
+    if (s_now_us != NULL) {
+        float per_sample = (float)(s_now_us() - fx_t0) * s_clk_mhz / (float)n;
+        s_fx_cost += (per_sample - s_fx_cost) * COST_SMOOTHING;
+    }
+
     float drums_l[BLOCK_FRAMES], drums_r[BLOCK_FRAMES];
     memset(drums_l, 0, sizeof(drums_l));
     memset(drums_r, 0, sizeof(drums_r));
     tiles_sampler_render(drums_l, drums_r, n);
     for (uint32_t i = 0; i < n; i++) {
-        float yl = synth_sat(mix_l[i] * MIX_GAIN + drums_l[i] * DRUM_GAIN); /* flat at +-1 */
-        float yr = synth_sat(mix_r[i] * MIX_GAIN + drums_r[i] * DRUM_GAIN);
+        float yl = synth_sat(mix_l[i] + drums_l[i] * DRUM_GAIN); /* flat at +-1 */
+        float yr = synth_sat(mix_r[i] + drums_r[i] * DRUM_GAIN);
         out_lr[2u * i] = (int32_t)(yl * 8388607.0f) * 256; /* 24 bits in the top of the subslot */
         out_lr[2u * i + 1u] = (int32_t)(yr * 8388607.0f) * 256;
     }

@@ -12,8 +12,10 @@ sounds, a sound per track); how it is built and what it measures:
 | `audio_engine.c/.h` | The four tracks, a sound (patch) each, with the guardrails: voices admitted by measured cost, at most 8 a track, the stealing order and the live load guard (`../../../docs/architecture/audio-engine.md`, "Guardrails"); MPE, mono/legato note stacks, the stereo mix. Plain C, no Pico code, tested on the computer (`test/test_audio_engine.c`). |
 | `synth_voice.c/.h`, `synth_patches.c` | The wavetable voice (up to 3 unison copies, drive/fold, SVF or ladder, two envelopes, LFO, glide) and the factory sounds. Tested on the computer (`test/test_synth.c`). |
 | `synth_dsp.h` | The building blocks: filters, envelope, LFO, shapers, fast maths. |
+| `fx.c/.h` | The effects (`../../../docs/architecture/synth-engines.md`, "Effects"): per track overdrive (anti-aliased), bit-crush and the sidechain pump; shared plate reverb, ping-pong delay and ensemble fed by sends. Plain C, tested on the computer (`test/test_fx.c`). |
+| `fx_memory.c/.h` | The effects' 182 KB, also the boot-time wavetable build's working space and lent to the pad capture (`diagnostics/capture.c`): core 1 lets go between two blocks and the effects go quiet until `CAPTURE RELEASE`. |
 | `wavetable.c/.h`, `wavetable_banks.c` | Band-limited (mip-mapped) wavetables built at boot from spectra; the three factory banks. |
-| `audio_hot.h` | `TILES_AUDIO_HOT()`: audio code in RAM on the board. Everything core 1 touches per block is in RAM, data too (patches are not `const`): a flash read from core 1 stalls behind core 0's code fetches, which doubled the voices' cost. |
+| `audio_hot.h` | `TILES_AUDIO_HOT()`: audio code in RAM on the board (and `TILES_AUDIO_COLD`: rare code of a RAM-placed file left in flash). Everything core 1 touches per block is in RAM, data too (patches are not `const`): a flash read from core 1 stalls behind core 0's code fetches, which doubled the voices' cost. |
 | `sampler.c/.h` | The drum sampler's 5 voices on core 1: a slot's first 1 KB waits in RAM so a hit starts at once, the rest streams into a 2 KB ring per voice; a pad's new hit restarts its own voice, a sixth takes the oldest. Plain C, tested on the computer (`test/test_sampler.c`). |
 | `sample_slot.c/.h` | One slot's format in flash: a 256-byte header (written last), then 16-bit 48 kHz audio, mono up to 2 s or stereo up to 1 s. |
 | `sample_store.c/.h` | Loading (page by page, each sector erased as the data reaches it, CRC checked against flash before the header goes on), deleting and finding the 8 slots. Plain C over flash ops, power-cut tested on the computer. |
@@ -90,6 +92,8 @@ standalone mode with USB on core 1.
 |---|---|
 | `audio.streaming` | 1 while an app has the input open |
 | `audio.late_frames` | 0: each one is a frame of lost audio (the stream's first few packets, before the host polls, aren't counted) |
+| `audio.fx` | `on`, or `lent` while the pad capture holds the effects' memory |
+| `audio.fx_cost` | the effects' cycles per sample, followed live (~500-800 while they ring) |
 | `audio.usb_gap_us` | core 1's longest stretch between `tud_task()` calls while streaming; ~200-300, under 1,000 or packets miss frames |
 | `audio.underruns` | 0 (core 1 never fell behind) |
 | `audio.midi_drops` | 0 |

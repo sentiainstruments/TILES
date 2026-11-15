@@ -1,6 +1,7 @@
 /* The engine's tracks, voices and guard (audio/audio_engine.c), played
- * with the plain "pure" sound, and the cross-core ring (audio/audio_ring.h),
- * on the computer. The synth itself: test_synth.c. */
+ * with the plain "pure" sound and no effects, and the cross-core ring
+ * (audio/audio_ring.h), on the computer. The synth itself: test_synth.c;
+ * the effects: test_fx.c. */
 
 #include "audio_engine.h"
 #include "audio_ring.h"
@@ -53,13 +54,16 @@ static double rms(uint32_t frames) {
     return sqrt(sum / frames);
 }
 
-/* 150 MHz: the voices' budget is 85 % of 3,125 cycles minus the 1,100
- * reserve, 1,556. */
+/* 150 MHz: the voices' budget is 85 % of 3,125 cycles minus the 1,200
+ * reserve, 1,456. */
 static void pure_everywhere(void) {
     for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
         if (strcmp(tiles_audio_engine_patch_name(p), "pure") == 0) {
             for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
                 tiles_audio_engine_set_patch(t, p);
+                for (uint8_t f = 0; f < TILES_FX_TRACK_PARAMS; f++) {
+                    tiles_audio_engine_set_fx(t, f, 0.0f); /* the voices alone: test_fx.c has the effects */
+                }
             }
         }
     }
@@ -272,13 +276,13 @@ static void test_voices(void) {
     for (uint8_t i = 0; i < 3u; i++) {
         tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(60u + i), 100);
     }
-    tiles_audio_engine_midi(ON(MELODIC), 63, 100); /* 1,700 > 1,556: two light voices give way */
-    CHECK(tiles_audio_engine_track_voices(0u) == 3u && tiles_audio_engine_track_voices(1u) == 4u,
+    tiles_audio_engine_midi(ON(MELODIC), 63, 100); /* 1,700 > 1,456: three light voices give way */
+    CHECK(tiles_audio_engine_track_voices(0u) == 2u && tiles_audio_engine_track_voices(1u) == 4u,
           "a heavy note took %u light voices", 5u - tiles_audio_engine_track_voices(0u));
 
     /* A note that can't fit is skipped and takes nothing. */
     reset();
-    costs(300u);
+    costs(280u);
     for (uint8_t i = 0; i < 5u; i++) {
         tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(60u + i), 100);
     }

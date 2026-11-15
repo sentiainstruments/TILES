@@ -163,7 +163,16 @@ sample at 150 MHz) and is the number to check after any engine change:
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth patch 2 haze
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth play 2 57,60,64 100 3 90
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth bench
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth fx
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth fx 3 reverb 60
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth fx bus decay 80
 ```
+
+`synth fx` lists each track's effects (sends, drive, dark, crush, pump,
+0-100; a sound change resets them to the sound's) and the shared ones'
+settings (`decay damping predelay mod time feedback tone echo-verb
+chorus-rate chorus-depth pump-release`; predelay in ms, time in
+sixteenths).
 
 **Recording a pad's sensor data** for tuning pitch bend on the computer:
 records one pad for a few seconds (about 8 at most) while you play it, and

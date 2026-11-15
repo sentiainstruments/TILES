@@ -42,6 +42,14 @@ void tiles_usb_audio_set_tempo(float beats_per_minute);
 /* True once core 1 runs the engine (standalone mode). */
 bool tiles_usb_audio_started(void);
 
+/* An effect setting (audio_engine.h's TILES_FX_*) to core 1: false if the
+ * queue is full or the sound isn't running. */
+bool tiles_usb_audio_set_fx(uint8_t target, uint8_t param, float value);
+
+/* Every main-loop pass with the MIDI clock: each new beat while it runs
+ * ducks the pump (unless a kick just did). */
+void tiles_usb_audio_follow_clock(bool running, uint32_t song_pulse);
+
 typedef struct {
     bool streaming;       /* a host has the input open */
     uint32_t packets;     /* sent since boot */
@@ -55,6 +63,8 @@ typedef struct {
     uint8_t drum_voices;  /* drum samples ringing now */
     uint32_t drum_underruns; /* blocks a drum voice ran out of streamed data */
     uint32_t usb_gap_us;  /* core 1's longest tud_task() to tud_task(), streaming */
+    uint32_t fx_cost;     /* the effects' cycles per sample */
+    bool fx_lent;         /* their memory lent to the pad capture: quiet */
 } tiles_usb_audio_info_t;
 
 tiles_usb_audio_info_t tiles_usb_audio_get_info(void);

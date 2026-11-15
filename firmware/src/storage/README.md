@@ -28,6 +28,10 @@ data.
   sector is a separate call the owner makes when a stall doesn't matter
   (the clock stopped and TILES's own sound silent). Same power-cut guarantee as kv_store, tested
   the same way (`firmware/test/test_log_store.c`).
+- **`flash_staging.{h,c}`** -- one 4 KB buffer shared by the saves that
+  build and write within one call (op_mode's pattern and song sectors,
+  content's next blob), instead of 4 KB each. A save that writes over
+  several passes (the log stores' appends) keeps its own.
 - **`storage_flash.{h,c}`** -- the real flash ops (XIP reads; erase/program
   with interrupts off and the watchdog petted before/after, the same
   single-core pattern the pattern bank uses) and a boot-time check that the

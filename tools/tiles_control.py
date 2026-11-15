@@ -57,6 +57,9 @@ Usage:
     python3 tools/tiles_control.py synth list            # the synth sounds and each track's (standalone mode)
     python3 tools/tiles_control.py synth patch 2 haze    # track 2 plays "haze"
     python3 tools/tiles_control.py synth bench           # cycles per sample of one voice of each sound
+    python3 tools/tiles_control.py synth fx              # each track's effects and the shared ones' settings
+    python3 tools/tiles_control.py synth fx 2 reverb 60  # track 2's reverb send to 60 %
+    python3 tools/tiles_control.py synth fx bus decay 80 # the plate's decay
     python3 tools/tiles_control.py synth play 2 60,64,67 100 2 [pressure]  # notes on track 2's lane for 2 s
 
 Changes apply immediately and are saved to flash automatically a couple of
@@ -217,6 +220,7 @@ def capture(session, pad, seconds, path):
             if row.startswith("key=")]
     changed = " ".join(f"{t['key']}={t['value']}" for t in tune if float(t["value"]) != float(t["default"]))
     rows = session.command("CAPTURE READ", multi_line=True)
+    session.command("CAPTURE RELEASE")  # its memory back to TILES's reverb and delay
     with open(path, "w") as f:
         # Alpha 6.7: the bend mode and pad's learned path at the start, so a replay starts there too.
         f.writelines("# " + line + "\n" for line in status if line.startswith("bend "))
@@ -316,10 +320,15 @@ def synth(session, args):
         if pressure:
             session.command(f"SYNTH MIDI {0xD0 | channel:02X} 0 0")
         print("OK")
+    elif len(args) == 1 and args[0].lower() == "fx":
+        for line in session.command("SYNTH FX", multi_line=True):
+            print(line)
+    elif len(args) == 4 and args[0].lower() == "fx":
+        print(session.command(f"SYNTH FX {args[1].upper()} {args[2].lower()} {args[3]}")[0])
     elif len(args) in (3, 4) and args[0].lower() == "midi":
         print(session.command("SYNTH MIDI " + " ".join(args[1:]))[0])
     else:
-        sys.exit("synth: list | bench | patch <track> <name> | play <track> <notes,...> [velocity] [seconds] [pressure] | midi <status hex> <d1> [d2]")
+        sys.exit("synth: list | bench | fx [<1-4|bus> <name> <value>] | patch <track> <name> | play <track> <notes,...> [velocity] [seconds] [pressure] | midi <status hex> <d1> [d2]")
 
 
 def sample(session, args):

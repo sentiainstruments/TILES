@@ -65,6 +65,7 @@ add_executable(sentia_tiles_firmware
     midi/din_midi_queue.c
     storage/kv_store.c
     storage/log_store.c
+    storage/flash_staging.c
     storage/storage_flash.c
     profiles/content.c
     profiles/settings.c
@@ -76,6 +77,8 @@ add_executable(sentia_tiles_firmware
     audio/sample_store.c
     audio/sample_stream.c
     audio/sampler.c
+    audio/fx.c
+    audio/fx_memory.c
     audio/synth_patches.c
     audio/synth_voice.c
     audio/usb_audio.c
@@ -171,8 +174,26 @@ pico_add_extra_outputs(sentia_tiles_firmware)
 # (link/default_text_excludes.incl says why).
 pico_add_linker_script_override_path(sentia_tiles_firmware ${CMAKE_CURRENT_LIST_DIR}/link GLOB_FILES)
 
+# The USB stack runs from RAM (link/), where its size matters more than
+# the last of its speed: compiled for size, a tud_task() is still tens of us.
+set(TILES_USB_SIZE_SOURCES
+    ${PICO_SDK_PATH}/lib/tinyusb/src/tusb.c
+    ${PICO_SDK_PATH}/lib/tinyusb/src/common/tusb_fifo.c
+    ${PICO_SDK_PATH}/lib/tinyusb/src/device/usbd.c
+    ${PICO_SDK_PATH}/lib/tinyusb/src/device/usbd_control.c
+    ${PICO_SDK_PATH}/lib/tinyusb/src/class/audio/audio_device.c
+    ${PICO_SDK_PATH}/lib/tinyusb/src/class/cdc/cdc_device.c
+    ${PICO_SDK_PATH}/lib/tinyusb/src/class/midi/midi_device.c
+    ${PICO_SDK_PATH}/lib/tinyusb/src/class/vendor/vendor_device.c
+    ${PICO_SDK_PATH}/lib/tinyusb/src/portable/raspberrypi/rp2040/dcd_rp2040.c
+    ${PICO_SDK_PATH}/lib/tinyusb/src/portable/raspberrypi/rp2040/rp2040_usb.c
+    ${CMAKE_CURRENT_LIST_DIR}/midi/usb_descriptors.c
+    ${CMAKE_CURRENT_LIST_DIR}/midi/usb_device.c)
+set_source_files_properties(${TILES_USB_SIZE_SOURCES} TARGET_DIRECTORY sentia_tiles_firmware
+    PROPERTIES COMPILE_OPTIONS "-Os")
+
 # Core 1's audio code: on the Cortex-M33 a fused multiply-add takes 3
 # cycles against 2 for a multiply then an add (measured: the ladder 81 -> 67
 # cycles a sample), so GCC mustn't fuse them.
-set_source_files_properties(audio/synth_voice.c audio/audio_engine.c audio/sampler.c
+set_source_files_properties(audio/synth_voice.c audio/audio_engine.c audio/sampler.c audio/fx.c
     PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")

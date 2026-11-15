@@ -10654,3 +10654,19 @@ that menu opens with 2 seconds of hold not more."
   hits soft to hard at ~0.55 s spacing, a held note, two pads together,
   then a 2 s rest for the fades and cooling; held pads show the pressed
   look as in play.
+
+## 2026-11-15: RAM for the effects
+
+- **Song and pattern saves stage less.** The song save built a full 12 KB
+  copy of the store before writing it sector by sector; it now writes the
+  13-byte head and then the patterns straight from `s_song_pattern`
+  (they sit in RAM exactly as the store lays them out: same bytes in
+  flash, no format change). The pattern save, the song save and
+  `profiles/content.c` share one 4 KB staging buffer
+  (`storage/flash_staging.h`): each builds and writes within one call.
+  Together with the capture lending its buffer to the effects, this let
+  TILES's reverb, delay and ensemble in with ~45 KB of RAM still free.
+- **`tiles_midi_clock_song_pulse()`**: the song position without
+  `get_state()`'s side effect (its `start_edge` is the sequencers'), for
+  the effects' beat-locked pump.
+

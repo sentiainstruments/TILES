@@ -30,6 +30,7 @@
 #include "seq_pattern.h"
 #include "standby.h"
 #include "storage_flash.h"
+#include "flash_staging.h"
 #include "touch.h"
 #include "usb_audio.h"
 
@@ -45,6 +46,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 
 /* Modes, in the order they were added. (An arpeggiator stub was replaced
@@ -1618,12 +1620,11 @@ static void pattern_store_unpack_slot_saved(uint32_t mask) {
 }
 
 /* Rewrites the whole store from RAM every time: flash erases whole sectors
- * anyway, and RAM is the complete picture. Static buffer: 4 KB is too much
- * for the main loop's stack. */
+ * anyway, and RAM is the complete picture. */
 static void pattern_store_write_all(void) {
-    static uint8_t s_write_buf[FLASH_SECTOR_SIZE];
-    memset(s_write_buf, 0, sizeof(s_write_buf));
-    tiles_pattern_store_t *store = (tiles_pattern_store_t *)s_write_buf;
+    uint8_t *buf = tiles_flash_staging(); /* storage/flash_staging.h */
+    memset(buf, 0, FLASH_SECTOR_SIZE);
+    tiles_pattern_store_t *store = (tiles_pattern_store_t *)buf;
     store->magic = TILES_PATTERN_STORE_MAGIC;
     store->version = TILES_PATTERN_STORE_VERSION;
     store->slot_saved_mask = pattern_store_pack_slot_saved();
@@ -1639,7 +1640,7 @@ static void pattern_store_write_all(void) {
         return;
     }
     flash_range_erase(TILES_PATTERN_FLASH_OFFSET, FLASH_SECTOR_SIZE);
-    flash_range_program(TILES_PATTERN_FLASH_OFFSET, s_write_buf, sizeof(s_write_buf));
+    flash_range_program(TILES_PATTERN_FLASH_OFFSET, buf, FLASH_SECTOR_SIZE);
     tiles_flash_write_end(prev_interrupts);
     watchdog_update();
 }
@@ -3735,33 +3736,47 @@ _Static_assert(sizeof(tiles_song_store_t) <= FLASH_SECTOR_SIZE * TILES_SONG_NUM_
  * persist it. */
 static uint8_t s_song_next_hue_byte;
 
+/* The store's fields before the patterns, laid out as tiles_song_store_t. */
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t occupied_mask;
+    uint8_t next_hue_byte;
+} tiles_song_store_head_t;
+_Static_assert(offsetof(tiles_song_store_t, pattern) == sizeof(uint32_t) * 3u + 1u &&
+                   offsetof(tiles_song_store_head_t, next_hue_byte) + 1u == offsetof(tiles_song_store_t, pattern),
+               "the head is the store's first bytes");
+_Static_assert(sizeof(s_song_pattern) == sizeof(((tiles_song_store_t *)0)->pattern), "the patterns follow as in RAM");
+
 /* Rewrites the whole store from RAM (like pattern_store_write_all()),
- * sector by sector. Static buffers: ~12 KB is far too much for the stack. */
+ * sector by sector: the head, then the patterns straight from
+ * s_song_pattern (a staged copy of the store would be 12 KB). */
 static void song_store_write_all(void) {
-    static tiles_song_store_t s_store;
-    static uint8_t s_write_buf[FLASH_SECTOR_SIZE];
-    memset(&s_store, 0, sizeof(s_store));
-    s_store.magic = TILES_SONG_STORE_MAGIC;
-    s_store.version = TILES_SONG_STORE_VERSION;
-    s_store.next_hue_byte = s_song_next_hue_byte;
-    uint32_t mask = 0u;
+    uint8_t *buf = tiles_flash_staging(); /* storage/flash_staging.h */
+    tiles_song_store_head_t head = {
+        .magic = TILES_SONG_STORE_MAGIC,
+        .version = TILES_SONG_STORE_VERSION,
+        .next_hue_byte = s_song_next_hue_byte,
+    };
     for (uint8_t i = 0; i < OP_SONG_NUM_SLOTS; i++) {
         if (s_song_slot_occupied[i]) {
-            mask |= (uint32_t)1u << i;
+            head.occupied_mask |= (uint32_t)1u << i;
         }
-        s_store.pattern[i] = s_song_pattern[i];
     }
-    s_store.occupied_mask = mask;
-
-    const uint8_t *src = (const uint8_t *)&s_store;
-    size_t total = sizeof(s_store);
+    const size_t head_len = offsetof(tiles_song_store_t, pattern);
+    const size_t patterns_len = sizeof(s_song_pattern);
+    const uint8_t *patterns = (const uint8_t *)s_song_pattern;
     for (uint32_t sector = 0u; sector < TILES_SONG_NUM_FLASH_SECTORS; sector++) {
-        memset(s_write_buf, 0, sizeof(s_write_buf));
-        size_t offset_in_store = (size_t)sector * FLASH_SECTOR_SIZE;
-        size_t remaining = (offset_in_store < total) ? (total - offset_in_store) : 0u;
-        size_t copy_len = (remaining < FLASH_SECTOR_SIZE) ? remaining : FLASH_SECTOR_SIZE;
-        if (copy_len > 0u) {
-            memcpy(s_write_buf, src + offset_in_store, copy_len);
+        memset(buf, 0, FLASH_SECTOR_SIZE);
+        size_t from = (size_t)sector * FLASH_SECTOR_SIZE, to = from + FLASH_SECTOR_SIZE;
+        if (from < head_len) {
+            size_t n = (to < head_len ? to : head_len) - from;
+            memcpy(buf, (const uint8_t *)&head + from, n);
+        }
+        size_t p_from = from > head_len ? from - head_len : 0u;
+        size_t p_to = to - head_len < patterns_len ? to - head_len : patterns_len;
+        if (p_from < p_to) {
+            memcpy(buf + (head_len + p_from - from), patterns + p_from, p_to - p_from);
         }
         watchdog_update();
         uint32_t prev_interrupts;
@@ -3769,7 +3784,7 @@ static void song_store_write_all(void) {
             return;
         }
         flash_range_erase(TILES_SONG_FLASH_OFFSET + sector * FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE);
-        flash_range_program(TILES_SONG_FLASH_OFFSET + sector * FLASH_SECTOR_SIZE, s_write_buf, FLASH_SECTOR_SIZE);
+        flash_range_program(TILES_SONG_FLASH_OFFSET + sector * FLASH_SECTOR_SIZE, buf, FLASH_SECTOR_SIZE);
         tiles_flash_write_end(prev_interrupts);
         watchdog_update();
     }

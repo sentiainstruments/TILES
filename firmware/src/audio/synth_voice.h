@@ -7,6 +7,7 @@
  * (docs/architecture/synth-engines.md). Plain C, tested on the computer
  * (test/test_synth.c). */
 
+#include "fx.h"
 #include "synth_dsp.h"
 #include "wavetable.h"
 
@@ -56,6 +57,7 @@ typedef struct {
     float velocity_level; /* 0..1: how much velocity sets the level */
     float pressure_level; /* 0..1: pressure adds this much level */
     float drift_cents;    /* slow random pitch wander, 0 = tight */
+    tiles_fx_amounts_t fx; /* its effects: sends, inserts, pump */
 } synth_patch_t;
 
 /* Per-note inputs, updated by the engine from MIDI. */

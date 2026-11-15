@@ -5,6 +5,8 @@
 #include "audio_engine.h"
 #include "audio_ring.h"
 #include "diagnostics/fault.h"
+#include "fx.h"
+#include "fx_memory.h"
 #include "midi_out.h"
 #include "sampler.h"
 #include "usb_device.h"
@@ -23,11 +25,16 @@
 /* Packets right after a stream starts, before core 1 has caught up; their
  * padding isn't an underrun. */
 #define WARMUP_PACKETS 8u
-#define AUDIO_RING_WORDS 1024u /* 512 stereo frames */
+#define AUDIO_RING_WORDS 512u /* 256 stereo frames: core 1 fills it to 144 + a block */
 #define MIDI_RING_WORDS 256u
 #define DRUM_RING_WORDS 64u
-/* In the MIDI ring, a word with this status is a patch change, not MIDI. */
+/* In the MIDI ring, words with these statuses aren't MIDI: a patch change,
+ * an effect setting (target 3 bits, param 5, value x 1000 in 16), a beat. */
 #define PATCH_WORD 0xF5u
+#define FX_WORD 0xF4u
+#define BEAT_WORD 0xF9u
+/* Drum slot 1 is the kick: it keys the pump. */
+#define KICK_SLOT 0u
 
 TU_VERIFY_STATIC(2u * TARGET_FRAMES < AUDIO_RING_WORDS, "ring holds the target");
 TU_VERIFY_STATIC(TILES_AUDIO_EP_SIZE <= 1023u, "full-speed isochronous packet limit");
@@ -112,6 +119,7 @@ static void core1_main(void) {
     }
 #if !TILES_DSP_BENCH
     tiles_fault_core1_arm(); /* the stress test holds core 1 for seconds */
+    tiles_fx_memory_activate();
 #endif
     s_usb_up = true;
     int32_t block[2u * RENDER_FRAMES];
@@ -133,16 +141,30 @@ static void core1_main(void) {
         if (s_usb_on_core1) {
             run_usb_task();
         }
+        tiles_fx_memory_service();
         uint32_t word;
         while (tiles_spsc_pop(&s_midi_ring, &word, 1u) == 1u) {
-            if ((word & 0xFFu) == PATCH_WORD) {
+            switch (word & 0xFFu) {
+            case PATCH_WORD:
                 tiles_audio_engine_set_patch((uint8_t)(word >> 8), (uint8_t)(word >> 16));
-            } else {
+                break;
+            case FX_WORD:
+                tiles_audio_engine_set_fx((uint8_t)((word >> 8) & 7u), (uint8_t)((word >> 11) & 31u),
+                                          (float)(word >> 16) * 0.001f);
+                break;
+            case BEAT_WORD:
+                tiles_fx_pump_beat();
+                break;
+            default:
                 tiles_audio_engine_midi((uint8_t)word, (uint8_t)(word >> 8), (uint8_t)(word >> 16));
+                break;
             }
         }
         tiles_audio_engine_set_tempo(s_tempo_bpm);
         while (tiles_spsc_pop(&s_drum_ring, &word, 1u) == 1u) {
+            if ((uint8_t)word == KICK_SLOT) {
+                tiles_fx_pump_kick();
+            }
             tiles_sampler_hit((uint8_t)word, (uint8_t)(word >> 8));
         }
         bool streaming = s_streaming;
@@ -235,6 +257,31 @@ void tiles_usb_audio_set_tempo(float beats_per_minute) {
     s_tempo_bpm = beats_per_minute;
 }
 
+bool tiles_usb_audio_set_fx(uint8_t target, uint8_t param, float value) {
+    if (!s_started || target > TILES_FX_TARGET_BUS || param > 31u) {
+        return false;
+    }
+    float v = value < 0.0f ? 0.0f : value > 65.0f ? 65.0f : value;
+    uint32_t word = FX_WORD | ((uint32_t)target << 8) | ((uint32_t)param << 11) | ((uint32_t)(v * 1000.0f + 0.5f) << 16);
+    return tiles_spsc_push(&s_midi_ring, &word, 1u);
+}
+
+void tiles_usb_audio_follow_clock(bool running, uint32_t song_pulse) {
+    static uint32_t s_beat = UINT32_MAX;
+    uint32_t beat = song_pulse / 24u;
+    if (!s_started || !running) {
+        s_beat = UINT32_MAX;
+        return;
+    }
+    if (beat != s_beat) {
+        s_beat = beat;
+        uint32_t word = BEAT_WORD;
+        if (!tiles_spsc_push(&s_midi_ring, &word, 1u)) {
+            s_midi_drops++;
+        }
+    }
+}
+
 bool tiles_usb_audio_started(void) {
     return s_started;
 }
@@ -256,6 +303,8 @@ tiles_usb_audio_info_t tiles_usb_audio_get_info(void) {
         .drum_voices = s_drum_voices,
         .drum_underruns = tiles_sampler_underruns(),
         .usb_gap_us = s_usb_gap_us,
+        .fx_cost = tiles_audio_engine_fx_cost(),
+        .fx_lent = tiles_fx_memory_lent(),
     };
     for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
         info.cost[t] = (uint16_t)tiles_audio_engine_track_cost(t);

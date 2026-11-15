@@ -19,7 +19,7 @@ Decided with Mats2000 on 2026-11-14.
 | Unison | Up to 3 copies a voice. |
 | Voice modes | Per patch: poly, mono, legato (glide only on overlapping notes, as on the classic acid box). |
 | Bass music | Tempo-synced wobble LFO, drive and wavefold, FM growls (with the FM engine). |
-| Mix effects | Reverb and delay (planned), plus sidechain pump, chorus/ensemble, bit-crush / rate reduction. |
+| Mix effects | Built (2026-11-15): a modulated plate at the full 48 kHz, a ping-pong delay, an ensemble, a sidechain pump, and per-track overdrive and bit-crush. Amounts per sound, a track can change its own. Their memory is shared with the pad capture (a capture quiets them). |
 | FM | Six operators that **load DX7 patch files** (.syx), first through `tools/tiles_control.py`, later the companion app. |
 | Patches | A factory set first; a patch format in `shared/` once the engines settle. |
 | Track sounds at power-up | 1 acid bass, 2 pluck (melodic), 3 haze pads (chords), 4 glass bells (physics modes). |
@@ -88,6 +88,38 @@ octaves up, exact at 12 kHz; ladder -48 dB two octaves up, bounded at full
 resonance; envelope times within 5 %; every factory sound plays a chord
 with pressure and slide without clipping and falls silent after release.
 
+## Effects (2026-11-15)
+
+`audio/fx.c` (`fx.h`, `fx_memory.c`). Per track, at the mix level: the
+inserts, then the pump, then the sends (mono) to the shared effects;
+their returns, the drums and the master's soft clip follow.
+
+| Effect | Design | Cycles a sample (unit 2) |
+|---|---|---|
+| Plate | J. Dattorro's figure-eight tank (*Effect Design*, 1997) at the full 48 kHz, his lengths scaled from 29,761 Hz: four input diffusers, two halves with a modulated allpass (quadrature LFO, his 16-sample excursion), damping, his seven output taps a side. Decay 0.97-2.85 s over the range (1.6 s by default), L/R correlation -0.01, echo density 0.92 (Abel & Huang's measure, 1 = diffuse). | 473 |
+| Ping-pong delay | Two lines crossing over, each echo one feedback down, a 120 Hz-2.5..12 kHz band filter in the loop, a 1.5-sample wobble against metallic repeats; time in sixteenths of the tempo (dotted 1/8 by default), halved until it fits 0.5 s; glides to a new tempo's time. Feeds the plate a little. | 118 |
+| Ensemble | Three taps 120 degrees apart, each moved by a slow (0.3-1.2 Hz) and a fast (4.5-7.5 Hz) LFO, as the string ensembles' bucket-brigade lines; L/R correlation -0.18. | 103 |
+| Overdrive (insert) | Up to +28 dB into synth_sat's polynomial with first-order antiderivative anti-aliasing (Parker, Zavalishin, Le Bivic 2016): aliases of a hard-driven 4.7 kHz sine -26 dB against -12.5 dB plain; a bias for even harmonics, removed after; a tone low-pass 18 kHz-1.5 kHz; level matched. | 122 a driven track |
+| Bit-crush (insert) | 16 down to 5 bits and 48 kHz down to 2.1 kHz together, sample and hold. | 29 |
+| Pump | Ducks the tracks that ask (depth per sound) on every kick (drum slot 1), and on every beat of a running clock unless a kick just did; down in 1.5 ms, back along a smooth S over 0.7 beat. | 6 |
+
+How they were made cheap enough: 16-bit storage in the lines' own units
+(no scaling per access, SSAT on writes); the plate's lines in two
+power-of-two rings (8 K and 32 K, Mutable Instruments' FxEngine approach)
+so a wrap is one AND, with every offset a constant; the delay's ramps as
+running sums (a per-sample division hid in one). The plate stays at its
+seven taps a side: they are what makes it wide and dense, and nearly all
+of its cost is its 42 memory accesses a sample.
+
+Memory: 182 KB (plate 80, delay 94, ensemble 4), lent to the pad capture
+(`diagnostics/capture.c`) and used as the wavetables' working space at
+boot. The voices' budget leaves the effects and drums 1,200 cycles a
+sample.
+
+Measured live: the effects took 525 cycles a sample during a demo (pumped
+pads under kicks, a pluck through the delay, an overdriven acid line, a
+crushed wobble), with no late frame, underrun or shed voice.
+
 ## Measured on unit 2
 
 One voice of each sound, cycles per sample (`synth bench`: core 0,
@@ -120,8 +152,9 @@ board and is reported by INFO (`fault=`).
 
 ## Next, in order
 
-1. **Effects bus:** plate reverb, ping-pong delay, chorus/ensemble,
-   sidechain pump from the drum track, bit-crush; per-track sends.
+1. **Sound and effects choice on the instrument:** in standalone mode the
+   diamond (transport) button opens the sound selector, shift + diamond
+   the effects selector.
 2. **FM engine** with DX7 patch import (`patch put bank.syx`).
 3. Patch choice on the instrument (a menu) and the patch format in
    `shared/` for the companion app.

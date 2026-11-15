@@ -13,21 +13,21 @@
 #define TILES_AUDIO_RATE_HZ 48000u
 #define TILES_AUDIO_TRACKS 4u
 #define TILES_AUDIO_TRACK_DRUMS TILES_AUDIO_TRACKS /* the kit: no voices here yet */
-#define TILES_AUDIO_VOICES 32u      /* slots; the budget decides how many sound */
+#define TILES_AUDIO_VOICES 20u      /* slots; the budget lets ~15 of the cheapest sound, the rest fade */
 #define TILES_AUDIO_TRACK_VOICES 8u /* one track's most */
 #define TILES_AUDIO_DRUM_VOICES 5u  /* drum samples ringing at once (the sampler) */
 
 /* The guardrails (docs/architecture/audio-engine.md, "Guardrails"): every
  * voice together stays under TARGET % of core 1, after the reserve for the
- * effects bus and 5 drum samples (measured on unit 2: 5 stereo samples
- * with reverb, delay, chorus and master, 1,074 cycles per sample); the
- * live guard ends voices above CEILING %. */
+ * effects and drums (measured on unit 2, cycles per sample: plate 473,
+ * delay 118, ensemble 103, overdrive 122 a driven track, drum samples ~65
+ * each); the live guard ends voices above CEILING %. */
 #define TILES_AUDIO_TARGET_PCT 85u
 #define TILES_AUDIO_CEILING_PCT 90u
-#define TILES_AUDIO_RESERVE_CYCLES 1100u
+#define TILES_AUDIO_RESERVE_CYCLES 1200u
 
-/* Builds the wavetables (~0.15 s, the first time); call once before
- * anything else. bend_range is the
+/* Builds the wavetables (~0.15 s, the first time, in the effects' memory:
+ * fx_memory.h) and clears the effects; call once before anything else. bend_range is the
  * semitones a full pitch bend means (what TILES announces to receivers).
  * clk_mhz sets the budget; now_us (NULL: none) times each track's voices
  * live, to learn their cost and run the load guard. */
@@ -70,8 +70,43 @@ uint8_t tiles_audio_engine_patch(uint8_t track);
 const char *tiles_audio_engine_patch_name(uint8_t patch);
 uint8_t tiles_audio_engine_patch_count(void);
 
-/* The tempo synced LFOs follow (120 until set). */
+/* The tempo synced LFOs, the delay and the pump follow (120 until set). */
 void tiles_audio_engine_set_tempo(float beats_per_minute);
+
+/* The effects (fx.h). A track's own (TILES_FX_TRACK_*: its sound's until
+ * changed, and again when the sound changes) or the shared ones'
+ * (TILES_FX_BUS_*), by number so the settings link and the menus share
+ * one list. */
+enum {
+    TILES_FX_TRACK_REVERB = 0,
+    TILES_FX_TRACK_DELAY,
+    TILES_FX_TRACK_CHORUS,
+    TILES_FX_TRACK_DRIVE,
+    TILES_FX_TRACK_DARK,
+    TILES_FX_TRACK_CRUSH,
+    TILES_FX_TRACK_PUMP,
+    TILES_FX_TRACK_PARAMS,
+};
+enum {
+    TILES_FX_BUS_DECAY = 0,
+    TILES_FX_BUS_DAMPING,
+    TILES_FX_BUS_PREDELAY_MS,
+    TILES_FX_BUS_MOD,
+    TILES_FX_BUS_SIXTEENTHS,
+    TILES_FX_BUS_FEEDBACK,
+    TILES_FX_BUS_TONE,
+    TILES_FX_BUS_TO_REVERB,
+    TILES_FX_BUS_CHORUS_RATE,
+    TILES_FX_BUS_CHORUS_DEPTH,
+    TILES_FX_BUS_PUMP_RELEASE,
+    TILES_FX_BUS_PARAMS,
+};
+#define TILES_FX_TARGET_BUS TILES_AUDIO_TRACKS /* the target for the shared ones */
+void tiles_audio_engine_set_fx(uint8_t target, uint8_t param, float value);
+float tiles_audio_engine_fx(uint8_t target, uint8_t param);
+
+/* The effects' cycles per sample, followed live (0 before any). */
+uint32_t tiles_audio_engine_fx_cost(void);
 
 /* A test: cycles per sample of one voice of `patch` held alone for
  * `frames`, away from the playing voices; `cycles` reads a cycle counter. */

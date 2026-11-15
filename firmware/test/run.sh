@@ -43,13 +43,16 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_physics_core.c src
 /tmp/sentia_tiles_test_physics_core
 
 # TILES's own sound (USB audio): tracks, voices, the guard and the cross-core ring.
-SYNTH_SRC="src/audio/audio_engine.c src/audio/sampler.c src/audio/synth_voice.c src/audio/synth_patches.c src/audio/wavetable.c src/audio/wavetable_banks.c"
+SYNTH_SRC="src/audio/audio_engine.c src/audio/fx.c src/audio/fx_memory.c src/audio/sampler.c src/audio/synth_voice.c src/audio/synth_patches.c src/audio/wavetable.c src/audio/wavetable_banks.c"
 # shellcheck disable=SC2086
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/audio -Isrc/services test/test_audio_engine.c $SYNTH_SRC -lm -o /tmp/sentia_tiles_test_audio_engine
 /tmp/sentia_tiles_test_audio_engine
 # The wavetable engine's DSP: band-limiting, filters, envelopes, every factory sound.
 # shellcheck disable=SC2086
 cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio -Isrc/services test/test_synth.c $SYNTH_SRC -lm -o /tmp/sentia_tiles_test_synth
+# The effects: plate, delay, ensemble, overdrive, bit-crush, pump, lending their memory.
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio test/test_fx.c src/audio/fx.c src/audio/fx_memory.c -lm -o /tmp/sentia_tiles_test_fx
+/tmp/sentia_tiles_test_fx
 /tmp/sentia_tiles_test_synth
 
 # The drum sampler: slot header, loading over a flash that loses power,
@@ -111,7 +114,7 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/profiles -Isrc/storage test/test_sett
 /tmp/sentia_tiles_test_settings
 
 # Content store (custom scales) on its own simulated flash region, into the real note map.
-cc -std=c11 -Wall -Wextra -Wpedantic -Itest/stubs -Isrc/storage -Isrc/services -Isrc/board -Isrc/profiles test/test_content.c src/profiles/content.c src/storage/kv_store.c src/services/note_map.c src/board/pad_config.c -o /tmp/sentia_tiles_test_content
+cc -std=c11 -Wall -Wextra -Wpedantic -Itest/stubs -Isrc/storage -Isrc/services -Isrc/board -Isrc/profiles test/test_content.c src/profiles/content.c src/storage/kv_store.c src/storage/flash_staging.c src/services/note_map.c src/board/pad_config.c -o /tmp/sentia_tiles_test_content
 /tmp/sentia_tiles_test_content
 
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/midi test/test_identity.c -o /tmp/sentia_tiles_test_identity
