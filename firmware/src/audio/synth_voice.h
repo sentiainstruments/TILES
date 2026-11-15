@@ -69,18 +69,28 @@ typedef struct {
 typedef struct {
     const synth_patch_t *patch;
     uint32_t phase[SYNTH_UNISON_MAX];
+    uint32_t inc[SYNTH_UNISON_MAX]; /* at `semis` */
     float ratio[SYNTH_UNISON_MAX];
     float gain_l[SYNTH_UNISON_MAX], gain_r[SYNTH_UNISON_MAX];
+    uint32_t table_offset;  /* the mip level for `semis`, in a bank's data */
+    uint32_t fshift;        /* phase >> fshift = table index << 14 | fraction */
+    float semis;            /* the pitch the increments are for */
     synth_env_t amp, mod;
-    synth_svf_t svf[2]; /* left, right (right only when the copies spread) */
-    synth_ladder_t ladder[2];
-    float lfo_phase, lfo_held, lfo_fade;
-    uint32_t elapsed_steps;
-    float pitch;      /* the note glided so far */
+    synth_svf_t svf;        /* coefficients, and the left channel's state */
+    synth_ladder_t ladder;  /* the same */
+    float right[4];         /* the right channel's filter state (copies spread) */
+    float oct;              /* the cutoff octaves the coefficients are for */
+    float oct_base;         /* velocity's share, fixed for the note */
+    float level_base;       /* level and velocity, fixed for the note */
+    bool lfo_used, mod_used;
+    float lfo_phase, lfo_held, lfo_fade, lfo_step;
+    uint32_t lfo_delay_steps, elapsed_steps;
+    float pitch_env, pitch_env_k; /* semitones now, decay per step */
+    float pitch;            /* the note glided so far */
     float glide_coef;
     float pressure_s, slide_s; /* smoothed */
-    float level;      /* last control step's output level */
-    float wave_pos;   /* last control step's frame position */
+    float level;            /* last control step's output level */
+    float wave_pos;         /* last control step's frame position */
     float drift, drift_target;
     uint32_t rng;
 } synth_voice_t;

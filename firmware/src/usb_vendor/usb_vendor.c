@@ -33,6 +33,8 @@
 
 #include "tusb.h"
 
+#include "hardware/structs/m33.h"
+#include "hardware/sync.h"
 #include "hardware/watchdog.h"
 #include "pico/bootrom.h"
 #include "pico/time.h"
@@ -613,10 +615,14 @@ static void receive_raw(uint32_t now_ms) {
     }
 }
 
+static uint32_t bench_cycles(void) {
+    return m33_hw->dwt_cyccnt;
+}
+
 /* SYNTH LIST (the sounds, then each track's) | PATCH <track 1-4>
  * <number|name> | MIDI <status hex> <data1> <data2>: a message to the
- * engine only (not sent out), to play it from the computer. Standalone
- * mode only. */
+ * engine only (not sent out), to play it from the computer | BENCH: each
+ * sound's cycles per sample for one voice. Standalone mode only. */
 static void handle_synth(void) {
     char *what = strtok(NULL, " ");
     char text[USB_VENDOR_LINE_MAX];
@@ -659,6 +665,20 @@ static void handle_synth(void) {
             return;
         }
         tiles_usb_audio_set_patch((uint8_t)(track - 1), (uint8_t)patch) ? reply_ok() : reply_err("busy");
+        return;
+    }
+    if (what != NULL && strcmp(what, "BENCH") == 0) {
+        /* On core 0 with its interrupts off, ~5 ms a sound. */
+        m33_hw->demcr |= M33_DEMCR_TRCENA_BITS;
+        m33_hw->dwt_ctrl |= M33_DWT_CTRL_CYCCNTENA_BITS;
+        for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
+            uint32_t irq = save_and_disable_interrupts();
+            uint32_t c = tiles_audio_engine_bench(p, 2400u, bench_cycles);
+            restore_interrupts(irq);
+            snprintf(text, sizeof(text), "%s %lu", tiles_audio_engine_patch_name(p), (unsigned long)c);
+            reply(text);
+        }
+        reply_ok();
         return;
     }
     if (what != NULL && strcmp(what, "MIDI") == 0) {

@@ -24,7 +24,9 @@ static int s_failures;
     } while (0)
 
 #define SECOND TILES_AUDIO_RATE_HZ
-#define GUARD_TEST_BLOCKS 3u
+/* The smoothed load passes the ceiling on the 5th slow block; 3 more
+ * over it end a voice. */
+#define GUARD_TEST_BLOCKS 7u
 static int32_t s_buf[2u * SECOND];
 
 static void render(uint32_t frames) {
@@ -311,11 +313,11 @@ static void test_guard(void) {
         tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(60u + i), 100);
     }
     uint32_t cost_before = tiles_audio_engine_track_cost(1u);
-    render(16u * 2u);
+    render(16u * (GUARD_TEST_BLOCKS - 1u));
     CHECK(tiles_audio_engine_shed_count() == 0u, "the guard acted before %u blocks", GUARD_TEST_BLOCKS);
     render(16u);
-    CHECK(tiles_audio_engine_shed_count() == 1u, "the guard ended %u voices after 3 blocks over",
-          tiles_audio_engine_shed_count());
+    CHECK(tiles_audio_engine_shed_count() == 1u, "the guard ended %u voices after %u slow blocks",
+          tiles_audio_engine_shed_count(), GUARD_TEST_BLOCKS);
     CHECK(tiles_audio_engine_track_cost(1u) > cost_before + 10u, "track 2's cost didn't follow the timing (%u)",
           tiles_audio_engine_track_cost(1u));
     render(SECOND / 10u);

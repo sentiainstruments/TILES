@@ -59,13 +59,16 @@ never breaks up.
    note) the oldest played note on the busiest track. A sequencer note
    never takes a played one; if it can't fit it is skipped and takes
    nothing. A heavy FM note may take two wavetable voices' room. A taken
-   voice fades over ~2 ms in the real engines (the test voice cuts).
-4. **The live guard holds 90 %.** Three 16-frame blocks in a row over it
-   (1 ms) end the quietest voice over 10 ms: the worst case is a
-   shortened tail, never a click in a recording. The engine's cost
-   follows, so fewer voices are let in after. A block a flash write
-   paused is neither counted nor learned from. `audio.shed` and `audio.cost` in
-   INFO show it working.
+   voice fades over 5 ms.
+4. **The live guard holds 90 %.** The voices' load, smoothed over ~8
+   16-frame blocks (2.7 ms, so a USB interrupt in one block isn't an
+   overload), over it three blocks running ends the quietest voice over
+   5 ms: the worst case is a shortened tail, never a click in a
+   recording. A voice fading out is left out of the load (counted, the
+   guard ended another while it faded: a 7-voice chord lost 6). The
+   engine's cost follows, so fewer voices are let in after. A block a
+   flash write paused is neither counted nor learned from. `audio.shed`
+   and `audio.cost` in INFO show it working.
 5. **Saves never break the sound.** No erase while the clock runs or the
    sound rings; pages go out at least 8 ms apart, so at 90 % core 1
    refills its 3 ms of audio between them.

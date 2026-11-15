@@ -15,10 +15,16 @@
 /* Every level of one frame, guard points included (tiles_wt_level_bits()). */
 #define TILES_WT_FRAME_SAMPLES 2376u
 
+/* Interleaved: sample i of every frame side by side, so one pointer reaches
+ * the two frames a voice crossfades and the next sample of each. */
 typedef struct {
-    int16_t data[TILES_WT_FRAMES][TILES_WT_FRAME_SAMPLES];
+    int16_t data[TILES_WT_FRAME_SAMPLES * TILES_WT_FRAMES];
     float gain; /* int16 -> float, same for every frame */
 } tiles_wt_bank_t;
+
+static inline int16_t tiles_wt_sample(const tiles_wt_bank_t *bank, uint32_t frame, uint32_t i) {
+    return bank->data[i * TILES_WT_FRAMES + frame];
+}
 
 /* A frame's spectrum: amplitude and phase (radians) of harmonics 1..n. */
 typedef struct {

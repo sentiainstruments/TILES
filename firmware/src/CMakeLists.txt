@@ -166,3 +166,9 @@ if(DEFINED TILES_UNIT)
 endif()
 
 pico_add_extra_outputs(sentia_tiles_firmware)
+
+# Core 1's audio code: on the Cortex-M33 a fused multiply-add takes 3
+# cycles against 2 for a multiply then an add (measured: the ladder 81 -> 67
+# cycles a sample), so GCC mustn't fuse them.
+set_source_files_properties(audio/synth_voice.c audio/audio_engine.c audio/sampler.c
+    PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")

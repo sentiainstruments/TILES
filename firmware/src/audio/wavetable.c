@@ -125,18 +125,18 @@ void tiles_wt_build(tiles_wt_bank_t *bank, tiles_wt_design_fn design, void *ctx,
             }
             for (uint32_t level = 0; level < TILES_WT_LEVELS; level++) {
                 uint32_t len = synth_level(spectrum, level, scratch);
-                int16_t *dst = &bank->data[f][tiles_wt_level_offset(level)];
+                int16_t *dst = &bank->data[tiles_wt_level_offset(level) * TILES_WT_FRAMES + f];
                 for (uint32_t i = 0; i < len; i++) {
                     float v = scratch[i];
                     if (pass == 0u) {
                         float a = fabsf(v);
                         peak = a > peak ? a : peak;
                     } else {
-                        dst[i] = (int16_t)lrintf(v * to_int);
+                        dst[i * TILES_WT_FRAMES] = (int16_t)lrintf(v * to_int);
                     }
                 }
                 if (pass == 1u) {
-                    dst[len] = dst[0]; /* guard point: interpolation wraps */
+                    dst[len * TILES_WT_FRAMES] = dst[0]; /* guard point: interpolation wraps */
                 }
             }
         }

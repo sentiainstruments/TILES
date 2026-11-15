@@ -72,3 +72,7 @@ uint8_t tiles_audio_engine_patch_count(void);
 
 /* The tempo synced LFOs follow (120 until set). */
 void tiles_audio_engine_set_tempo(float beats_per_minute);
+
+/* A test: cycles per sample of one voice of `patch` held alone for
+ * `frames`, away from the playing voices; `cycles` reads a cycle counter. */
+uint32_t tiles_audio_engine_bench(uint8_t patch, uint32_t frames, uint32_t (*cycles)(void));

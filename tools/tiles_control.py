@@ -56,6 +56,7 @@ Usage:
     python3 tools/tiles_control.py sample delete 1
     python3 tools/tiles_control.py synth list            # the synth sounds and each track's (standalone mode)
     python3 tools/tiles_control.py synth patch 2 haze    # track 2 plays "haze"
+    python3 tools/tiles_control.py synth bench           # cycles per sample of one voice of each sound
     python3 tools/tiles_control.py synth play 2 60,64,67 100 2 [pressure]  # notes on track 2's lane for 2 s
 
 Changes apply immediately and are saved to flash automatically a couple of
@@ -292,8 +293,8 @@ LANE_CHANNEL = {1: 15, 2: 14, 3: 13, 4: 12}
 
 
 def synth(session, args):
-    if len(args) == 1 and args[0].lower() == "list":
-        for line in session.command("SYNTH LIST", multi_line=True):
+    if len(args) == 1 and args[0].lower() in ("list", "bench"):
+        for line in session.command("SYNTH " + args[0].upper(), multi_line=True):
             print(line)
     elif len(args) == 3 and args[0].lower() == "patch":
         print(session.command(f"SYNTH PATCH {args[1]} {args[2]}")[0])
@@ -318,7 +319,7 @@ def synth(session, args):
     elif len(args) in (3, 4) and args[0].lower() == "midi":
         print(session.command("SYNTH MIDI " + " ".join(args[1:]))[0])
     else:
-        sys.exit("synth: list | patch <track> <name> | play <track> <notes,...> [velocity] [seconds] [pressure] | midi <status hex> <d1> [d2]")
+        sys.exit("synth: list | bench | patch <track> <name> | play <track> <notes,...> [velocity] [seconds] [pressure] | midi <status hex> <d1> [d2]")
 
 
 def sample(session, args):

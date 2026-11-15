@@ -14,8 +14,9 @@
 #define SYNTH_CTRL 8u /* samples per control step: 6 kHz */
 #define SYNTH_PI 3.14159265358979f
 
+/* fmaxf/fminf: one branch-free instruction each on the RP2350 (VMAXNM). */
 static inline float synth_clamp(float x, float lo, float hi) {
-    return x < lo ? lo : x > hi ? hi : x;
+    return __builtin_fminf(__builtin_fmaxf(x, lo), hi);
 }
 
 /* tan(pi * f), f in cycles per sample (clamped below Nyquist): Lambert's
@@ -58,11 +59,13 @@ static inline float synth_sin_turns(float t) {
     return x * (1.0f - x2 * (1.0f / 6.0f) * (1.0f - x2 * (1.0f / 20.0f) * (1.0f - x2 * (1.0f / 42.0f))));
 }
 
-/* Soft saturation: x(27 + x^2) / (27 + 9x^2), the tanh Pade, flat past +-3. */
+/* Soft saturation without a division (per sample on the audio path): odd
+ * 5th-order polynomial, slope 1 at 0, flat in slope and curve at +-15/8,
+ * where it reaches +-1. */
 static inline float synth_sat(float x) {
-    x = synth_clamp(x, -3.0f, 3.0f);
+    x = synth_clamp(x, -1.875f, 1.875f);
     float x2 = x * x;
-    return x * (27.0f + x2) / (27.0f + 9.0f * x2);
+    return x * (1.0f + x2 * (-0.18962963f + x2 * 0.016181728f));
 }
 
 /* Division-free cubic soft clip for the audio path: odd, slope 1 at 0,
@@ -83,33 +86,33 @@ static inline float synth_fold(float x, float amount) {
 
 typedef struct {
     float g, k, a1, a2, a3; /* coefficients */
-    float ic1, ic2;          /* integrator states */
+    float ic[2];             /* integrator states */
 } synth_svf_t;
 
 enum { SYNTH_SVF_LP = 0, SYNTH_SVF_BP, SYNTH_SVF_HP };
 
 /* res 0..1: Q from 0.5 to ~25. */
 static inline void synth_svf_set(synth_svf_t *s, float hz, float res) {
-    s->g = synth_tan_pi(hz / SYNTH_RATE);
+    s->g = synth_tan_pi(hz * (1.0f / SYNTH_RATE));
     s->k = 2.0f - 1.96f * synth_clamp(res, 0.0f, 1.0f);
     s->a1 = 1.0f / (1.0f + s->g * (s->g + s->k));
     s->a2 = s->g * s->a1;
     s->a3 = s->g * s->a2;
 }
 
+/* One sample on loose coefficients and state (the voice keeps them in
+ * registers for a whole step). */
+static inline float synth_svf_step(float a1, float a2, float a3, float k, float *ic1, float *ic2, float x, int mode) {
+    float v3 = x - *ic2;
+    float v1 = a1 * *ic1 + a2 * v3;
+    float v2 = *ic2 + a2 * *ic1 + a3 * v3;
+    *ic1 = 2.0f * v1 - *ic1;
+    *ic2 = 2.0f * v2 - *ic2;
+    return mode == SYNTH_SVF_LP ? v2 : mode == SYNTH_SVF_BP ? v1 : x - k * v1 - v2;
+}
+
 static inline float synth_svf_tick(synth_svf_t *s, float x, int mode) {
-    float v3 = x - s->ic2;
-    float v1 = s->a1 * s->ic1 + s->a2 * v3;
-    float v2 = s->ic2 + s->a2 * s->ic1 + s->a3 * v3;
-    s->ic1 = 2.0f * v1 - s->ic1;
-    s->ic2 = 2.0f * v2 - s->ic2;
-    if (mode == SYNTH_SVF_LP) {
-        return v2;
-    }
-    if (mode == SYNTH_SVF_BP) {
-        return v1;
-    }
-    return x - s->k * v1 - v2;
+    return synth_svf_step(s->a1, s->a2, s->a3, s->k, &s->ic[0], &s->ic[1], x, mode);
 }
 
 /* ---- 4-pole ladder, zero-delay feedback ------------------------------------
@@ -120,30 +123,45 @@ static inline float synth_svf_tick(synth_svf_t *s, float x, int mode) {
 
 typedef struct {
     float G, beta, k, comp;
+    float G4comp, inv; /* G^4 comp and the loop's 1 / (1 + k G^4) */
     float s[4];
 } synth_ladder_t;
 
 static inline void synth_ladder_set(synth_ladder_t *l, float hz, float res) {
-    float g = synth_tan_pi(hz / SYNTH_RATE);
-    l->G = g / (1.0f + g);
+    float g = synth_tan_pi(hz * (1.0f / SYNTH_RATE));
     l->beta = 1.0f / (1.0f + g);
+    l->G = g * l->beta;
     l->k = 4.1f * synth_clamp(res, 0.0f, 1.0f);
     l->comp = 1.0f + 0.5f * l->k; /* passband makeup */
+    float G2 = l->G * l->G, G4 = G2 * G2;
+    l->G4comp = G4 * l->comp;
+    l->inv = 1.0f / (1.0f + l->k * G4);
+}
+
+/* One sample on loose coefficients and state st[4]. */
+static inline float synth_ladder_step(float G, float b, float k, float comp, float G4comp, float inv, float *st,
+                                      float x) {
+    float s0 = st[0], s1 = st[1], s2 = st[2], s3 = st[3];
+    float S = b * (G * (G * (G * s0 + s1) + s2) + s3);
+    float y4 = (G4comp * x + S) * inv;
+    float u = synth_sat(x * comp - k * y4);
+    float w = (u - s0) * G;
+    float y = w + s0;
+    st[0] = y + w;
+    w = (y - s1) * G;
+    u = w + s1;
+    st[1] = u + w;
+    w = (u - s2) * G;
+    y = w + s2;
+    st[2] = y + w;
+    w = (y - s3) * G;
+    u = w + s3;
+    st[3] = u + w;
+    return u;
 }
 
 static inline float synth_ladder_tick(synth_ladder_t *l, float x) {
-    float G = l->G, b = l->beta;
-    float S = b * (G * (G * (G * l->s[0] + l->s[1]) + l->s[2]) + l->s[3]);
-    float G4 = G * G * G * G;
-    float y4 = (G4 * x * l->comp + S) / (1.0f + l->k * G4);
-    float u = synth_sat(x * l->comp - l->k * y4);
-    for (int i = 0; i < 4; i++) {
-        float v = (u - l->s[i]) * G;
-        float y = v + l->s[i];
-        l->s[i] = y + v;
-        u = y;
-    }
-    return u;
+    return synth_ladder_step(l->G, l->beta, l->k, l->comp, l->G4comp, l->inv, l->s, x);
 }
 
 /* ---- Envelope ---------------------------------------------------------------

@@ -154,12 +154,15 @@ slot. The conversion is `tools/tiles_sample.py` (plain Python).
 ```
 
 **The synth** (standalone mode): list the sounds, give a track one, and
-play notes on a track from the computer (`docs/architecture/synth-engines.md`):
+play notes on a track from the computer (`docs/architecture/synth-engines.md`);
+`bench` times one voice of each sound (cycles per sample, out of 3,125 a
+sample at 150 MHz) and is the number to check after any engine change:
 
 ```
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth list
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth patch 2 haze
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth play 2 57,60,64 100 3 90
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth bench
 ```
 
 **Recording a pad's sensor data** for tuning pitch bend on the computer:

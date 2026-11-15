@@ -59,12 +59,12 @@ static double db(double ratio) {
 
 static void test_levels(void) {
     /* Each level holds only its harmonics: nothing above them. */
-    const int16_t *saw = s_banks[TILES_WT_BANK_CLASSIC].data[3];
+    const tiles_wt_bank_t *classic = &s_banks[TILES_WT_BANK_CLASSIC];
     for (uint32_t level = 0; level < TILES_WT_LEVELS; level += 2u) {
         uint32_t len = 1u << tiles_wt_level_bits(level), harmonics = TILES_WT_TOP_HARMONICS >> level;
         static float x[1024];
         for (uint32_t i = 0; i < len; i++) {
-            x[i] = (float)saw[tiles_wt_level_offset(level) + i];
+            x[i] = (float)tiles_wt_sample(classic, 3u, tiles_wt_level_offset(level) + i);
         }
         double fundamental = bin(x, len, 1u), above = 0.0;
         for (uint32_t k = harmonics + 1u; k < len / 2u; k++) {
@@ -73,7 +73,9 @@ static void test_levels(void) {
         }
         CHECK(db(above / fundamental) < -80.0, "level %u has content above harmonic %u (%.1f dB)", level, harmonics,
               db(above / fundamental));
-        CHECK(saw[tiles_wt_level_offset(level) + len] == saw[tiles_wt_level_offset(level)], "level %u guard point",
+        CHECK(tiles_wt_sample(classic, 3u, tiles_wt_level_offset(level) + len) ==
+                  tiles_wt_sample(classic, 3u, tiles_wt_level_offset(level)),
+              "level %u guard point",
               level);
     }
     /* Every frame comes out equally loud. */
@@ -82,7 +84,7 @@ static void test_levels(void) {
         for (uint32_t f = 0; f < TILES_WT_FRAMES; f++) {
             double sum = 0.0;
             for (uint32_t i = 0; i < 1024u; i++) {
-                double v = s_banks[b].data[f][i] * (double)s_banks[b].gain;
+                double v = tiles_wt_sample(&s_banks[b], f, i) * (double)s_banks[b].gain;
                 sum += v * v;
             }
             double r = sqrt(sum / 1024.0);
