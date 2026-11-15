@@ -6,7 +6,9 @@ with three changes; everything not listed here stays as on Rev A0.
 
 1. **Stereo audio out:** a DAC, a headphone amplifier and one phones/line
    jack on the back panel (`audio-output.md`).
-2. **Two rotary encoders.** No function yet; they get mapped later.
+2. **Two rotary encoders** (maybe three). In standalone mode they will be
+   assignable to sound and effect parameters
+   (`../architecture/synth-engines.md`, "Next").
 3. **The six function buttons move to an I2C expander,** freeing their
    GPIOs for the encoders. Rev A0 has only three unused GPIOs (GP9, GP27,
    GP28) and the DAC needs all three.
@@ -54,8 +56,16 @@ knob turns.
 
 - Any detented encoder with a push switch (EC11 class). 10 k pull-ups to
   3.3 V on A and B; the PIO counter tolerates contact bounce.
-- No function yet: the firmware reports their counts and pushes (INFO,
-  settings shell) until they are mapped.
+- Planned use (owner, 2026-11-15): assignable parameter controls in
+  standalone mode. Relative steps, so a knob moved to another parameter
+  never jumps the sound to where the knob happens to sit. Until then the
+  firmware reports their counts and pushes (INFO, settings shell).
+- **If a third is added** (not decided): its A/B need two adjacent free
+  GPIOs, and after the changes above only GP19 is free. GP18 + GP19 work
+  if the audio mute moves to a spare PCA9685 channel (`audio-output.md`
+  allows either) and headphone detect is dropped; its push needs a ninth
+  expander input (a 16-pin TCA9555 in place of the TCA9554, or an
+  encoder without a push). Decide before the board is drawn.
 
 ## Firmware
 

@@ -185,8 +185,9 @@ lane colour. No DAW transport here.
 - **Effects:** a column each: reverb, delay, chorus, drive, crush, pump.
   Bottom row off, then a third, two thirds, full at the top, lit as a
   meter; a press sets that level, pressing deeper adds up to a third more.
-- Planned: two assignable potentiometers on the First Edition, for any of
-  these parameters while playing (`../../../docs/architecture/synth-engines.md`).
+- Planned: the First Edition's encoders (two, maybe three) assignable to
+  any of these parameters while playing
+  (`../../../docs/architecture/synth-engines.md`).
 
 Colours and the preview notes are first guesses. Built 2026-11-15, not yet
 tried on the board.
