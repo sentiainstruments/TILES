@@ -62,6 +62,8 @@ SAMPLE PLAY <slot> [velocity]\n  hit a slot in TILES's own sound: OK
 SYNTH LIST\n              the synth sounds (`<n> <name>`), then each track's (`track <t> <name>`), then OK
 SYNTH PATCH <track> <n|name>\n  give track 1-4 a sound: OK, or ERR unknown-patch / track-1-4
 SYNTH MIDI <status hex> <data1> [data2]\n  a channel message (80-EF) to the synth only, not sent out: OK
+SYNTH BENCH\n              one voice of each sound timed: `<name> <cycles per sample>` lines, then OK
+                          (core 0 pauses ~5 ms a sound)
 TEST LEDS <0-100>\n       bench only: every LED white at that % (current measurement)
 TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
 TEST MOTOR <pad> [duty%]\n bench only: one pad's motor (1-24) for 1 s
