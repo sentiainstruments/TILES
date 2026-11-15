@@ -120,6 +120,45 @@ Measured live: the effects took 525 cycles a sample during a demo (pumped
 pads under kicks, a pluck through the delay, an overdriven acid line, a
 crushed wobble), with no late frame, underrun or shed voice.
 
+## FM (in progress, 2026-11-15)
+
+Six operators playing DX7 voice data; interface in
+`firmware/src/audio/fm_voice.h` (not built yet). Studied: the DX7 engine
+behind Dexed (Google's *Music Synthesizer for Android*, Apache 2.0),
+written fresh for TILES. What it settled:
+
+- **Algorithms:** 32 routings, computed operator 6 first; each operator
+  reads bus 1 or 2 (or nothing), writes bus 1, bus 2 or the output, and
+  adds or overwrites. Algorithms 4 and 6's three-operator feedback loops
+  are approximated as operator 6's own feedback, as Dexed does.
+- **Units:** phase 1 << 24 = one cycle; a modulator's output (Q24) is
+  added to its carrier's phase, so full scale = +-1 cycle; levels are log2
+  Q24, gain = 2^(level - 14 octaves), at most 2.0 (+-4 pi of modulation).
+  Feedback: the mean of the last two outputs >> (8 - feedback).
+- **Envelope:** levels 0.75 dB a step (`scaleoutlevel`: below 20 a table,
+  else 28 + level); rate step (4 + (q & 3)) << (q >> 2) per sample at
+  44.1 kHz, q = rate x 41 / 64 + rate scaling; decay linear in dB; attack
+  jumps to 1716 << 16, then climbs by (17 - level in octaves) x step.
+- **Pitch:** coarse 0 = x0.5, else x coarse; fine x(1 + fine/100); detune
+  0.0209 e^(-0.396 octaves) / 7 x (detune - 7) of the log pitch; fixed mode
+  10^(coarse & 3 + fine / 100) Hz. Keyboard level scaling in groups of 3
+  notes from break point + 17 (linear: group x depth x 329 >> 12;
+  exponential from a 33-entry table); rate scaling (sens x clamp(note/3 -
+  7, 0, 31)) >> 3; velocity from a 64-entry curve.
+- **LFO** speeds 0.06-49 Hz (a 100-entry table), six waves, pitch depth up
+  to an octave; **pitch envelope** levels up to +-4 octaves.
+- **Bank format:** F0 43 0n 09 20 00, 32 x 128 packed bytes, checksum
+  (128 - sum) & 127, F7 (4,104 bytes).
+
+Plan: integer operators (a 4,096-entry 16-bit sine, SMULWB gains), 16-
+sample blocks with gain ramps, operators too quiet to hear skipped,
+~100 cycles a voice; pressure and slide raise the modulators; sounds are
+wavetable or FM (`synth_patch_t.engine`); `SYNTH BANK` uploads a bank
+(the `SAMPLE BEGIN` raw path) into a 2-sector flash region below the
+sequencer autosave, and a track picks one of its voices; then our own
+factory FM sounds (an electric piano, a growl bass, bells, a pluck, a
+stab).
+
 ## Measured on unit 2
 
 One voice of each sound, cycles per sample (`synth bench`: core 0,
