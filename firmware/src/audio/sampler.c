@@ -1,5 +1,7 @@
 #include "sampler.h"
 
+#include "audio_hot.h"
+
 #include <string.h>
 
 _Static_assert(TILES_SAMPLER_RING_BYTES % TILES_SAMPLER_CHUNK_BYTES == 0u, "chunks never straddle the ring's end");
@@ -81,7 +83,7 @@ void tiles_sampler_slot_set(uint8_t slot, uint8_t channels, uint32_t frames, uin
 
 /* Lands the chunk in flight, then starts one for the voice with the least
  * audio waiting that has room for a chunk. */
-static void service_fetch(void) {
+static void TILES_AUDIO_HOT(service_fetch)(void) {
     if (s_fetch == NULL) {
         return;
     }
@@ -171,7 +173,7 @@ void tiles_sampler_hit(uint8_t slot, uint8_t velocity) {
     service_fetch();
 }
 
-void tiles_sampler_render(float *l, float *r, uint32_t n) {
+void TILES_AUDIO_HOT(tiles_sampler_render)(float *l, float *r, uint32_t n) {
     service_fetch();
     for (uint32_t vi = 0; vi < TILES_SAMPLER_VOICES; vi++) {
         voice_t *v = &s_voice[vi];

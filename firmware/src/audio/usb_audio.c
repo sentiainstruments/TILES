@@ -25,6 +25,8 @@
 #define AUDIO_RING_WORDS 1024u /* 512 stereo frames */
 #define MIDI_RING_WORDS 256u
 #define DRUM_RING_WORDS 64u
+/* In the MIDI ring, a word with this status is a patch change, not MIDI. */
+#define PATCH_WORD 0xF5u
 
 TU_VERIFY_STATIC(2u * TARGET_FRAMES < AUDIO_RING_WORDS, "ring holds the target");
 TU_VERIFY_STATIC(TILES_AUDIO_EP_SIZE <= 1023u, "full-speed isochronous packet limit");
@@ -49,6 +51,8 @@ static uint32_t s_packets;
 static uint32_t s_late_frames;
 static uint32_t s_underruns;
 static uint32_t s_midi_drops;
+
+static volatile float s_tempo_bpm = 120.0f;
 
 /* Core 1 side. */
 static volatile uint8_t s_voices;
@@ -81,7 +85,7 @@ void tiles_usb_audio_bench_soak(uint32_t ms, bool cached) {
 }
 #endif
 
-static uint32_t engine_now_us(void) {
+static uint32_t __not_in_flash_func(engine_now_us)(void) {
     return time_us_32();
 }
 
@@ -112,8 +116,13 @@ static void core1_main(void) {
         }
         uint32_t word;
         while (tiles_spsc_pop(&s_midi_ring, &word, 1u) == 1u) {
-            tiles_audio_engine_midi((uint8_t)word, (uint8_t)(word >> 8), (uint8_t)(word >> 16));
+            if ((word & 0xFFu) == PATCH_WORD) {
+                tiles_audio_engine_set_patch((uint8_t)(word >> 8), (uint8_t)(word >> 16));
+            } else {
+                tiles_audio_engine_midi((uint8_t)word, (uint8_t)(word >> 8), (uint8_t)(word >> 16));
+            }
         }
+        tiles_audio_engine_set_tempo(s_tempo_bpm);
         while (tiles_spsc_pop(&s_drum_ring, &word, 1u) == 1u) {
             tiles_sampler_hit((uint8_t)word, (uint8_t)(word >> 8));
         }
@@ -190,6 +199,22 @@ void tiles_usb_audio_midi(uint8_t status, uint8_t data1, uint8_t data2) {
     }
 }
 
+bool tiles_usb_audio_set_patch(uint8_t track, uint8_t patch) {
+    if (!s_started) {
+        return false;
+    }
+    uint32_t word = PATCH_WORD | ((uint32_t)track << 8) | ((uint32_t)patch << 16);
+    return tiles_spsc_push(&s_midi_ring, &word, 1u);
+}
+
+void tiles_usb_audio_set_tempo(float beats_per_minute) {
+    s_tempo_bpm = beats_per_minute;
+}
+
+bool tiles_usb_audio_started(void) {
+    return s_started;
+}
+
 bool tiles_usb_audio_is_quiet(void) {
     return !s_streaming || s_voices == 0u;
 }
@@ -258,10 +283,27 @@ bool tud_audio_tx_done_pre_load_cb(uint8_t rhport, uint8_t func_id, uint8_t ep_i
     return true;
 }
 
+/* TinyUSB's RP2350 driver leaves the packet armed when the host stops the
+ * stream, and the next start arms it again: panic ("ep 85 was already
+ * available"), every time a recording app closes and reopens. Revoke it
+ * in hardware (EP_ABORT) so the next start finds the endpoint free. */
+static void abort_armed_packet(void) {
+    uint32_t ep = TILES_AUDIO_EP_IN & 0x0Fu;
+    uint32_t bit = 1u << (2u * ep); /* EPn IN */
+    hw_set_bits(&usb_hw->abort, bit);
+    uint32_t t0 = time_us_32();
+    while (!(usb_hw->abort_done & bit) && time_us_32() - t0 < 1000u) {
+    }
+    usb_dpram->ep_buf_ctrl[ep].in = 0u;
+    hw_clear_bits(&usb_hw->abort_done, bit); /* as TinyUSB's own EP0 abort */
+    hw_clear_bits(&usb_hw->abort, bit);
+}
+
 bool tud_audio_set_itf_close_EP_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
     (void)rhport;
     (void)p_request;
     s_streaming = false;
+    abort_armed_packet();
     return true;
 }
 

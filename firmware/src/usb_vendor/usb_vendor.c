@@ -8,6 +8,7 @@
 #include "device_mode.h"
 #include "diagnostics/capture.h"
 #include "diagnostics/boot_stage.h"
+#include "diagnostics/fault.h"
 #include "diagnostics/loop_stats.h"
 #include "drum_seq.h"
 #include "expression.h"
@@ -25,6 +26,7 @@
 #include "settings_persist.h"
 #include "storage_flash.h"
 #include "touch.h"
+#include "audio_engine.h"
 #include "usb_audio.h"
 #include "usb_device.h"
 #include "tune.h"
@@ -611,6 +613,70 @@ static void receive_raw(uint32_t now_ms) {
     }
 }
 
+/* SYNTH LIST (the sounds, then each track's) | PATCH <track 1-4>
+ * <number|name> | MIDI <status hex> <data1> <data2>: a message to the
+ * engine only (not sent out), to play it from the computer. Standalone
+ * mode only. */
+static void handle_synth(void) {
+    char *what = strtok(NULL, " ");
+    char text[USB_VENDOR_LINE_MAX];
+    if (!tiles_usb_audio_started()) {
+        reply_err("standalone-only");
+        return;
+    }
+    if (what != NULL && strcmp(what, "LIST") == 0) {
+        for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
+            snprintf(text, sizeof(text), "%u %s", (unsigned)p, tiles_audio_engine_patch_name(p));
+            reply(text);
+        }
+        for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
+            snprintf(text, sizeof(text), "track %u %s", (unsigned)t + 1u,
+                     tiles_audio_engine_patch_name(tiles_audio_engine_patch(t)));
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+    if (what != NULL && strcmp(what, "PATCH") == 0) {
+        char *track_arg = strtok(NULL, " ");
+        char *patch_arg = strtok(NULL, " ");
+        int track = track_arg != NULL ? atoi(track_arg) : 0;
+        if (track < 1 || track > (int)TILES_AUDIO_TRACKS || patch_arg == NULL) {
+            reply_err("track-1-4");
+            return;
+        }
+        int patch = -1;
+        for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
+            if (strcmp(patch_arg, tiles_audio_engine_patch_name(p)) == 0) {
+                patch = p;
+            }
+        }
+        if (patch < 0 && patch_arg[0] >= '0' && patch_arg[0] <= '9') {
+            patch = atoi(patch_arg);
+        }
+        if (patch < 0 || patch >= (int)tiles_audio_engine_patch_count()) {
+            reply_err("unknown-patch");
+            return;
+        }
+        tiles_usb_audio_set_patch((uint8_t)(track - 1), (uint8_t)patch) ? reply_ok() : reply_err("busy");
+        return;
+    }
+    if (what != NULL && strcmp(what, "MIDI") == 0) {
+        char *st = strtok(NULL, " ");
+        char *d1 = strtok(NULL, " ");
+        char *d2 = strtok(NULL, " ");
+        unsigned long status = st != NULL ? strtoul(st, NULL, 16) : 0u;
+        if (status < 0x80u || status > 0xEFu || d1 == NULL) {
+            reply_err("status-80-ef");
+            return;
+        }
+        tiles_usb_audio_midi((uint8_t)status, (uint8_t)(atoi(d1) & 0x7F), (uint8_t)(d2 != NULL ? atoi(d2) & 0x7F : 0));
+        reply_ok();
+        return;
+    }
+    reply_err("unknown-key");
+}
+
 static void handle_line(char *line) {
     if (!take_tag(&line)) {
         reply_err("bad-tag");
@@ -641,6 +707,10 @@ static void handle_line(char *line) {
      * SCALE PUT-shaped line each; SCALE GET/PUT/DELETE edit one slot. */
     if (strcmp(cmd, "SCALES") == 0) {
         start_listing(LISTING_SCALES);
+        return;
+    }
+    if (strcmp(cmd, "SYNTH") == 0) {
+        handle_synth();
         return;
     }
     if (strcmp(cmd, "SAMPLE") == 0) {
@@ -907,6 +977,14 @@ static void handle_line(char *line) {
         snprintf(text, sizeof(text), "audio.cost=%u,%u,%u,%u", (unsigned)audio.cost[0], (unsigned)audio.cost[1],
                  (unsigned)audio.cost[2], (unsigned)audio.cost[3]);
         reply(text);
+        if (tiles_usb_audio_started()) {
+            snprintf(text, sizeof(text), "audio.patch=%s,%s,%s,%s",
+                     tiles_audio_engine_patch_name(tiles_audio_engine_patch(0)),
+                     tiles_audio_engine_patch_name(tiles_audio_engine_patch(1)),
+                     tiles_audio_engine_patch_name(tiles_audio_engine_patch(2)),
+                     tiles_audio_engine_patch_name(tiles_audio_engine_patch(3)));
+            reply(text);
+        }
         tiles_buttons_pca_health_t pca = tiles_buttons_pca_health();
         snprintf(text, sizeof(text), "pca.mode1=%02x,%02x", (unsigned)pca.mode1[0], (unsigned)pca.mode1[1]);
         reply(text);
@@ -938,6 +1016,22 @@ static void handle_line(char *line) {
         snprintf(text, sizeof(text), "tune.changed=%u", (unsigned)tiles_tune_changed());
         reply(text);
         snprintf(text, sizeof(text), "boot.ms=%lu", (unsigned long)loop.boot_ms);
+        reply(text);
+        tiles_fault_t fault;
+        if (tiles_fault_last(&fault)) {
+            snprintf(text, sizeof(text), "fault=core%lu pc=%08lx lr=%08lx cfsr=%08lx hfsr=%08lx bfar=%08lx sp=%08lx",
+                     (unsigned long)fault.core, (unsigned long)fault.pc, (unsigned long)fault.lr,
+                     (unsigned long)fault.cfsr, (unsigned long)fault.hfsr, (unsigned long)fault.bfar,
+                     (unsigned long)fault.sp);
+            reply(text);
+            snprintf(text, sizeof(text), "fault.callers=%08lx,%08lx,%08lx,%08lx", (unsigned long)fault.callers[0],
+                     (unsigned long)fault.callers[1], (unsigned long)fault.callers[2],
+                     (unsigned long)fault.callers[3]);
+            reply(text);
+            snprintf(text, sizeof(text), "fault.message=%s", fault.message);
+        } else {
+            snprintf(text, sizeof(text), "fault=none");
+        }
         reply(text);
         snprintf(text, sizeof(text), "boot.hang=%s",
                  tiles_boot_stage_last_hang() != NULL ? tiles_boot_stage_last_hang() : "none");

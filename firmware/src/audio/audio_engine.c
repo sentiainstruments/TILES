@@ -1,32 +1,22 @@
 #include "audio_engine.h"
 
+#include "audio_hot.h"
 #include "midi_channels.h"
 #include "sampler.h"
+#include "synth_voice.h"
+#include "wavetable.h"
 
 #include <math.h>
 #include <string.h>
 
-/* Sine table with one guard point for linear interpolation. */
-#define TABLE_BITS 11u
-#define TABLE_SIZE (1u << TABLE_BITS)
-#define FRAC_BITS (32u - TABLE_BITS)
-static float s_sine[TABLE_SIZE + 1u];
-
-/* First guesses, to be tuned by ear. */
-#define ATTACK_MS 4.0f
-#define RELEASE_MS 300.0f
-#define SHED_RELEASE_MS 10.0f /* a voice the load guard ends */
-#define SILENT_ENV 0.0001f
-/* Level and pitch move once per block, the level ramped across it. */
+/* Frames per block: two control steps of the voices (SYNTH_CTRL). */
 #define BLOCK_FRAMES 16u
-/* Four loud voices reach the soft clip's knee. */
-#define MIX_GAIN 0.22f
+/* Several loud voices reach the soft clip's knee. */
+#define MIX_GAIN 0.3f
+/* The note stack of a mono track (notes held, newest last). */
+#define MONO_STACK 8u
 /* A full-scale drum sample alone stays below the knee (about -6 dBFS). */
 #define DRUM_GAIN 0.5f
-/* 2^32 / 48000: Hz to phase increment. */
-#define HZ_TO_INC 89478.485f
-/* A track's cost before it has been measured (cycles per voice-sample). */
-#define COST_GUESS 150.0f
 /* Measured costs follow the live timing over ~16 blocks. */
 #define COST_SMOOTHING (1.0f / 16.0f)
 /* Over the ceiling this many blocks running: end a voice. */
@@ -47,21 +37,31 @@ typedef struct {
     bool marked;    /* chosen to give way, while a note-on decides */
     float velocity; /* 0..1 */
     float poly;     /* poly pressure 0..1 */
-    float env;      /* attack/release envelope 0..1 */
-    float level;    /* level reached at the end of the last block */
-    uint32_t phase;
     uint32_t age;
+    synth_voice_t sv;
 } voice_t;
+
+typedef struct {
+    uint8_t channel, note, velocity;
+} held_note_t;
 
 static voice_t s_voice[TILES_AUDIO_VOICES];
 static float s_bend[16];     /* semitones */
 static float s_pressure[16]; /* channel pressure 0..1 */
+static float s_slide[16];    /* CC74 0..1 */
 static bool s_sustain[16];
 static float s_bend_range;
-static float s_attack_step;
-static float s_release_coef;
-static float s_shed_coef;
 static uint32_t s_age;
+static uint8_t s_track_patch[TILES_AUDIO_TRACKS];
+static held_note_t s_mono_held[TILES_AUDIO_TRACKS][MONO_STACK];
+static uint8_t s_mono_count[TILES_AUDIO_TRACKS];
+
+/* The wavetables, built once at init (TILES_WT_BANK_*), and the working
+ * space for building them. */
+static tiles_wt_bank_t s_banks[TILES_WT_BANK_COUNT];
+static tiles_wt_spectrum_t s_build_spectrum;
+static float s_build_scratch[TILES_WT_SCRATCH_FLOATS];
+static synth_context_t s_ctx;
 
 /* The budget, in cycles per output sample. */
 static uint32_t (*s_now_us)(void);
@@ -73,19 +73,41 @@ static float s_cost[TILES_AUDIO_TRACKS];
 static uint32_t s_over_blocks;
 static uint32_t s_shed;
 
+typedef struct {
+    uint32_t bank;
+} design_ctx_t;
+
+static void design(void *ctx, uint32_t frame, tiles_wt_spectrum_t *spectrum) {
+    tiles_wt_design(((const design_ctx_t *)ctx)->bank, frame, spectrum, s_build_scratch);
+}
+
+/* A patch's cost before it has been measured, cycles per voice-sample: its
+ * unison copies and its filter (first guesses, then learned live). */
+static float patch_cost(const synth_patch_t *p) {
+    float copies = (float)(p->unison < 1u ? 1u : p->unison);
+    bool stereo = p->unison > 1u && p->width > 0.0f;
+    float filter = p->filter == SYNTH_FILTER_LADDER24 ? 45.0f : 20.0f;
+    return 45.0f + 35.0f * copies + filter * (stereo ? 2.0f : 1.0f) + (p->drive > 0.0f || p->fold > 0.0f ? 20.0f : 0.0f);
+}
+
 void tiles_audio_engine_init(uint8_t bend_range_semitones, uint32_t clk_mhz, uint32_t (*now_us)(void)) {
-    for (uint32_t i = 0; i <= TABLE_SIZE; i++) {
-        s_sine[i] = sinf(6.2831853f * (float)i / (float)TABLE_SIZE);
+    static bool built;
+    if (!built) {
+        for (uint32_t b = 0; b < TILES_WT_BANK_COUNT; b++) {
+            design_ctx_t ctx = {b};
+            tiles_wt_build(&s_banks[b], design, &ctx, &s_build_spectrum, s_build_scratch);
+            s_ctx.banks[b] = &s_banks[b];
+        }
+        built = true;
     }
+    s_ctx.beats_per_second = 2.0f; /* 120 BPM until told */
     memset(s_voice, 0, sizeof(s_voice));
     memset(s_bend, 0, sizeof(s_bend));
     memset(s_pressure, 0, sizeof(s_pressure));
+    memset(s_slide, 0, sizeof(s_slide));
     memset(s_sustain, 0, sizeof(s_sustain));
+    memset(s_mono_count, 0, sizeof(s_mono_count));
     s_bend_range = (float)bend_range_semitones;
-    s_attack_step = 1000.0f / (ATTACK_MS * (float)TILES_AUDIO_RATE_HZ);
-    /* Falls to SILENT_ENV over RELEASE_MS. */
-    s_release_coef = expf(logf(SILENT_ENV) / (RELEASE_MS * 0.001f * (float)TILES_AUDIO_RATE_HZ));
-    s_shed_coef = expf(logf(SILENT_ENV) / (SHED_RELEASE_MS * 0.001f * (float)TILES_AUDIO_RATE_HZ));
     s_age = 0;
     s_now_us = now_us;
     s_clk_mhz = (float)clk_mhz;
@@ -93,7 +115,8 @@ void tiles_audio_engine_init(uint8_t bend_range_semitones, uint32_t clk_mhz, uin
     s_budget = s_core_cycles * (float)TILES_AUDIO_TARGET_PCT / 100.0f - (float)TILES_AUDIO_RESERVE_CYCLES;
     s_ceiling = s_core_cycles * (float)TILES_AUDIO_CEILING_PCT / 100.0f - (float)TILES_AUDIO_RESERVE_CYCLES;
     for (uint32_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
-        s_cost[t] = COST_GUESS;
+        s_track_patch[t] = g_synth_track_default[t];
+        s_cost[t] = patch_cost(&g_synth_patches[s_track_patch[t]]);
     }
     s_over_blocks = 0;
     s_shed = 0;
@@ -113,10 +136,37 @@ uint32_t tiles_audio_engine_shed_count(void) {
     return s_shed;
 }
 
-static float osc(uint32_t phase) {
-    uint32_t i = phase >> FRAC_BITS;
-    float frac = (float)(phase & ((1u << FRAC_BITS) - 1u)) * (1.0f / (float)(1u << FRAC_BITS));
-    return s_sine[i] + frac * (s_sine[i + 1u] - s_sine[i]);
+void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch) {
+    if (track >= TILES_AUDIO_TRACKS || patch >= g_synth_patch_count || s_track_patch[track] == patch) {
+        return;
+    }
+    for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
+        if (s_voice[i].state != VOICE_OFF && s_voice[i].track == track) {
+            s_voice[i].state = VOICE_RELEASE;
+            synth_voice_kill(&s_voice[i].sv); /* the old sound ends in 5 ms */
+        }
+    }
+    s_track_patch[track] = patch;
+    s_mono_count[track] = 0u;
+    s_cost[track] = patch_cost(&g_synth_patches[patch]);
+}
+
+uint8_t tiles_audio_engine_patch(uint8_t track) {
+    return track < TILES_AUDIO_TRACKS ? s_track_patch[track] : 0u;
+}
+
+const char *tiles_audio_engine_patch_name(uint8_t patch) {
+    return patch < g_synth_patch_count ? g_synth_patches[patch].name : "";
+}
+
+uint8_t tiles_audio_engine_patch_count(void) {
+    return (uint8_t)g_synth_patch_count;
+}
+
+void tiles_audio_engine_set_tempo(float beats_per_minute) {
+    if (beats_per_minute >= 20.0f && beats_per_minute <= 400.0f) {
+        s_ctx.beats_per_second = beats_per_minute / 60.0f;
+    }
 }
 
 uint8_t tiles_audio_engine_track(uint8_t channel, bool *from_lane) {
@@ -153,11 +203,11 @@ static voice_t *victim(int32_t track, bool tails_only, bool take_played) {
     voice_t *tail = NULL, *lane = NULL, *played = NULL;
     for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
         voice_t *v = &s_voice[i];
-        if (v->state == VOICE_OFF || v->marked || (track >= 0 && v->track != (uint8_t)track)) {
-            continue;
+        if (v->state == VOICE_OFF || v->marked || v->fast || (track >= 0 && v->track != (uint8_t)track)) {
+            continue; /* a voice being cut has given way already */
         }
         if (v->state == VOICE_RELEASE) {
-            if (tail == NULL || v->env < tail->env) {
+            if (tail == NULL || synth_voice_level(&v->sv) < synth_voice_level(&tail->sv)) {
                 tail = v;
             }
         } else if (v->lane) {
@@ -227,6 +277,9 @@ static voice_t *voice_for_note_on(uint8_t channel, uint8_t note, uint8_t track, 
             }
             continue;
         }
+        if (v->fast) {
+            continue; /* fading out: neither the track's nor the budget's */
+        }
         if (v->channel == channel && v->note == note) {
             return v; /* the same note again: retrigger, never two */
         }
@@ -256,33 +309,40 @@ static voice_t *voice_for_note_on(uint8_t channel, uint8_t note, uint8_t track, 
             break;
         }
     }
+    /* The voices given up fade out over 5 ms; the note takes a free slot
+     * (there are more slots than the budget lets sound), else the first. */
+    voice_t *slot = NULL;
     for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
         voice_t *v = &s_voice[i];
         if (v->marked) {
             v->marked = false;
-            if (fits && v != first) {
-                v->state = VOICE_OFF; /* the real engines fade a taken voice over ~2 ms */
+            if (fits) {
+                v->state = VOICE_RELEASE;
+                v->fast = true;
+                synth_voice_kill(&v->sv);
             }
+        } else if (v->state == VOICE_OFF && slot == NULL) {
+            slot = v;
         }
     }
-    return fits ? first : NULL;
+    if (!fits) {
+        return NULL;
+    }
+    if (slot == NULL) {
+        slot = first;
+        slot->sv.amp.stage = SYNTH_ENV_IDLE; /* no slot left: cut */
+    }
+    return slot;
 }
 
-static void note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
-    bool lane;
-    uint8_t track = tiles_audio_engine_track(channel, &lane);
-    if (track == TILES_AUDIO_TRACK_DRUMS) {
-        return; /* the drum kit comes with the drum engine */
-    }
-    voice_t *v = voice_for_note_on(channel, note, track, lane);
-    if (v == NULL) {
-        return;
-    }
-    if (v->state == VOICE_OFF) {
-        v->phase = 0; /* a sine from zero starts without a click */
-        v->env = 0.0f;
-        v->level = 0.0f;
-    }
+static synth_input_t voice_input(const voice_t *v) {
+    float pressure = s_pressure[v->channel] > v->poly ? s_pressure[v->channel] : v->poly;
+    synth_input_t in = {(float)v->note + s_bend[v->channel], v->velocity, pressure, s_slide[v->channel]};
+    return in;
+}
+
+static void start_voice(voice_t *v, uint8_t channel, uint8_t note, uint8_t velocity, uint8_t track, bool lane,
+                        bool legato) {
     v->state = VOICE_ON;
     v->channel = channel;
     v->note = note;
@@ -292,13 +352,82 @@ static void note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
     v->velocity = (float)velocity / 127.0f;
     v->poly = 0.0f;
     v->age = ++s_age;
+    synth_input_t in = voice_input(v);
+    synth_voice_start(&v->sv, &g_synth_patches[s_track_patch[track]], &in, s_age * 2654435761u, legato);
+}
+
+/* A mono track's one voice (sounding, or its tail). */
+static voice_t *mono_voice(uint8_t track) {
+    voice_t *found = NULL;
+    for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
+        voice_t *v = &s_voice[i];
+        if (v->state != VOICE_OFF && v->track == track && !v->fast && (found == NULL || v->age > found->age)) {
+            found = v;
+        }
+    }
+    return found;
+}
+
+static void mono_forget(uint8_t track, uint8_t channel, uint8_t note) {
+    uint8_t n = s_mono_count[track], k = 0;
+    for (uint8_t i = 0; i < n; i++) {
+        held_note_t h = s_mono_held[track][i];
+        if (!(h.channel == channel && h.note == note)) {
+            s_mono_held[track][k++] = h;
+        }
+    }
+    s_mono_count[track] = k;
+}
+
+static void note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
+    bool lane;
+    uint8_t track = tiles_audio_engine_track(channel, &lane);
+    if (track == TILES_AUDIO_TRACK_DRUMS) {
+        return; /* drums are the sampler's (usb_audio.c) */
+    }
+    const synth_patch_t *patch = &g_synth_patches[s_track_patch[track]];
+    if (patch->voice_mode != SYNTH_POLY) {
+        /* Mono: the newest held note sounds; legato glides into it while
+         * another is still held. */
+        mono_forget(track, channel, note);
+        if (s_mono_count[track] == MONO_STACK) {
+            mono_forget(track, s_mono_held[track][0].channel, s_mono_held[track][0].note);
+        }
+        bool held_before = s_mono_count[track] > 0u;
+        s_mono_held[track][s_mono_count[track]++] = (held_note_t){channel, note, velocity};
+        voice_t *v = mono_voice(track);
+        if (v != NULL) {
+            bool legato = patch->voice_mode == SYNTH_LEGATO && held_before && v->state != VOICE_RELEASE;
+            start_voice(v, channel, note, velocity, track, lane, legato);
+            return;
+        }
+    }
+    voice_t *v = voice_for_note_on(channel, note, track, lane);
+    if (v != NULL) {
+        start_voice(v, channel, note, velocity, track, lane, false);
+    }
 }
 
 static void note_off(uint8_t channel, uint8_t note) {
+    bool lane;
+    uint8_t track = tiles_audio_engine_track(channel, &lane);
+    if (track < TILES_AUDIO_TRACKS && g_synth_patches[s_track_patch[track]].voice_mode != SYNTH_POLY) {
+        mono_forget(track, channel, note);
+        voice_t *v = mono_voice(track);
+        if (v != NULL && v->channel == channel && v->note == note && v->state == VOICE_ON && s_mono_count[track] > 0u) {
+            /* Back to the newest note still held, gliding. */
+            held_note_t h = s_mono_held[track][s_mono_count[track] - 1u];
+            start_voice(v, h.channel, h.note, h.velocity, track, lane, true);
+            return;
+        }
+    }
     for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
         voice_t *v = &s_voice[i];
         if (v->state == VOICE_ON && v->channel == channel && v->note == note) {
             v->state = s_sustain[channel] ? VOICE_HELD : VOICE_RELEASE;
+            if (v->state == VOICE_RELEASE) {
+                synth_voice_release(&v->sv);
+            }
         }
     }
 }
@@ -311,6 +440,7 @@ static void release_channel(uint8_t channel, bool held_only) {
         }
         if (v->state == VOICE_HELD || (!held_only && v->state == VOICE_ON)) {
             v->state = VOICE_RELEASE;
+            synth_voice_release(&v->sv);
         }
     }
 }
@@ -350,8 +480,15 @@ void tiles_audio_engine_midi(uint8_t status, uint8_t data1, uint8_t data2) {
                 if (!s_sustain[channel]) {
                     release_channel(channel, true);
                 }
+            } else if (data1 == 74u) {
+                s_slide[channel] = (float)data2 / 127.0f;
             } else if (data1 == 120u || data1 == 123u) {
                 release_channel(channel, false);
+                bool lane;
+                uint8_t track = tiles_audio_engine_track(channel, &lane);
+                if (track < TILES_AUDIO_TRACKS) {
+                    s_mono_count[track] = 0u;
+                }
             }
             break;
         default:
@@ -371,32 +508,10 @@ static float soft_clip(float x) {
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
 
-static void render_voice(voice_t *v, float *mix, uint32_t n) {
-    float pressure = s_pressure[v->channel] > v->poly ? s_pressure[v->channel] : v->poly;
-    float target = (0.25f + 0.75f * v->velocity) * (0.55f + 0.45f * pressure);
-    float bright = 0.1f + 0.5f * pressure;
-    float norm = 1.0f / (1.0f + 0.5f * bright);
-    float hz = 440.0f * exp2f(((float)v->note - 69.0f + s_bend[v->channel]) / 12.0f);
-    uint32_t inc = (uint32_t)(hz * HZ_TO_INC);
-    float level = v->level;
-    float step = (target - level) / (float)n;
-    float release = v->fast ? s_shed_coef : s_release_coef;
-    for (uint32_t i = 0; i < n; i++) {
-        if (v->state == VOICE_RELEASE) {
-            v->env *= release;
-        } else if (v->env < 1.0f) {
-            v->env += s_attack_step;
-            if (v->env > 1.0f) {
-                v->env = 1.0f;
-            }
-        }
-        float s = osc(v->phase) + bright * (0.35f * osc(v->phase * 2u) + 0.15f * osc(v->phase * 3u));
-        mix[i] += s * norm * level * v->env;
-        level += step;
-        v->phase += inc;
-    }
-    v->level = target;
-    if (v->state == VOICE_RELEASE && v->env < SILENT_ENV) {
+static void TILES_AUDIO_HOT(render_voice)(voice_t *v, float *l, float *r, uint32_t n) {
+    synth_input_t in = voice_input(v);
+    synth_voice_render(&v->sv, &s_ctx, &in, l, r, n);
+    if (!synth_voice_active(&v->sv)) {
         v->state = VOICE_OFF;
     }
 }
@@ -405,7 +520,7 @@ static void render_voice(voice_t *v, float *mix, uint32_t n) {
  * the voices under the ceiling: several blocks over it in a row end the
  * quietest voice quickly (a tail, then a sequencer note, then the oldest
  * played note). */
-static void guard(const float *track_cycles, const uint32_t *track_voices, uint32_t n) {
+static void TILES_AUDIO_HOT(guard)(const float *track_cycles, const uint32_t *track_voices, uint32_t n) {
     float total = 0.0f;
     for (uint32_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
         total += track_cycles[t];
@@ -437,13 +552,15 @@ static void guard(const float *track_cycles, const uint32_t *track_voices, uint3
     if (v != NULL) {
         v->state = VOICE_RELEASE;
         v->fast = true;
+        synth_voice_kill(&v->sv);
         s_shed++;
     }
 }
 
-static void render_block(int32_t *out_lr, uint32_t n) {
-    float mix[BLOCK_FRAMES];
-    memset(mix, 0, sizeof(mix));
+static void TILES_AUDIO_HOT(render_block)(int32_t *out_lr, uint32_t n) {
+    float mix_l[BLOCK_FRAMES], mix_r[BLOCK_FRAMES];
+    memset(mix_l, 0, sizeof(mix_l));
+    memset(mix_r, 0, sizeof(mix_r));
     float track_cycles[TILES_AUDIO_TRACKS] = {0};
     uint32_t track_voices[TILES_AUDIO_TRACKS] = {0};
     for (uint32_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
@@ -451,7 +568,7 @@ static void render_block(int32_t *out_lr, uint32_t n) {
         for (uint32_t vi = 0; vi < TILES_AUDIO_VOICES; vi++) {
             voice_t *v = &s_voice[vi];
             if (v->state != VOICE_OFF && v->track == t) {
-                render_voice(v, mix, n);
+                render_voice(v, mix_l, mix_r, n);
                 track_voices[t]++;
             }
         }
@@ -467,8 +584,8 @@ static void render_block(int32_t *out_lr, uint32_t n) {
     memset(drums_r, 0, sizeof(drums_r));
     tiles_sampler_render(drums_l, drums_r, n);
     for (uint32_t i = 0; i < n; i++) {
-        float yl = soft_clip(mix[i] * MIX_GAIN + drums_l[i] * DRUM_GAIN);
-        float yr = soft_clip(mix[i] * MIX_GAIN + drums_r[i] * DRUM_GAIN);
+        float yl = soft_clip(mix_l[i] * MIX_GAIN + drums_l[i] * DRUM_GAIN);
+        float yr = soft_clip(mix_r[i] * MIX_GAIN + drums_r[i] * DRUM_GAIN);
         out_lr[2u * i] = (int32_t)(yl * 8388607.0f) * 256; /* 24 bits in the top of the subslot */
         out_lr[2u * i + 1u] = (int32_t)(yr * 8388607.0f) * 256;
     }
@@ -483,10 +600,11 @@ void tiles_audio_engine_render(int32_t *out_lr, uint32_t frames) {
     }
 }
 
+/* Counts leave out voices being cut (a 5 ms fade): they gave way already. */
 uint8_t tiles_audio_engine_active_voices(void) {
     uint8_t count = 0;
     for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
-        if (s_voice[i].state != VOICE_OFF) {
+        if (s_voice[i].state != VOICE_OFF && !s_voice[i].fast) {
             count++;
         }
     }
@@ -496,7 +614,7 @@ uint8_t tiles_audio_engine_active_voices(void) {
 uint8_t tiles_audio_engine_track_voices(uint8_t track) {
     uint8_t count = 0;
     for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
-        if (s_voice[i].state != VOICE_OFF && s_voice[i].track == track) {
+        if (s_voice[i].state != VOICE_OFF && !s_voice[i].fast && s_voice[i].track == track) {
             count++;
         }
     }

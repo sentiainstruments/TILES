@@ -3,12 +3,17 @@
 TILES's own sound, streamed to the computer over the same USB-C cable as
 MIDI: a stereo 48 kHz / 24-bit USB audio input (UAC2, class compliant on
 macOS, Windows 10+, Linux and iPadOS) that a DAW records like any
-interface input. For now the sound is a placeholder **test voice**; the
-real engines replace the voice code, not the plumbing.
+interface input. The synth is the **wavetable engine** (13 factory
+sounds, a sound per track); how it is built and what it measures:
+`../../../docs/architecture/synth-engines.md`.
 
 | File | What it is |
 |---|---|
-| `audio_engine.c/.h` | The test voice, a sine with a little harmonic colour, on the four tracks, with the guardrails: voices admitted by measured cost, at most 8 a track, the stealing order and the live load guard (`../../../docs/architecture/audio-engine.md`, "Guardrails"). Plain C, no Pico code, tested on the computer (`test/test_audio_engine.c`). |
+| `audio_engine.c/.h` | The four tracks, a sound (patch) each, with the guardrails: voices admitted by measured cost, at most 8 a track, the stealing order and the live load guard (`../../../docs/architecture/audio-engine.md`, "Guardrails"); MPE, mono/legato note stacks, the stereo mix. Plain C, no Pico code, tested on the computer (`test/test_audio_engine.c`). |
+| `synth_voice.c/.h`, `synth_patches.c` | The wavetable voice (up to 3 unison copies, drive/fold, SVF or ladder, two envelopes, LFO, glide) and the factory sounds. Tested on the computer (`test/test_synth.c`). |
+| `synth_dsp.h` | The building blocks: filters, envelope, LFO, shapers, fast maths. |
+| `wavetable.c/.h`, `wavetable_banks.c` | Band-limited (mip-mapped) wavetables built at boot from spectra; the three factory banks. |
+| `audio_hot.h` | `TILES_AUDIO_HOT()`: audio code in RAM on the board. Everything core 1 touches per block is in RAM, data too (patches are not `const`): a flash read from core 1 stalls behind core 0's code fetches, which doubled the voices' cost. |
 | `sampler.c/.h` | The drum sampler's 5 voices on core 1: a slot's first 1 KB waits in RAM so a hit starts at once, the rest streams into a 2 KB ring per voice; a pad's new hit restarts its own voice, a sixth takes the oldest. Plain C, tested on the computer (`test/test_sampler.c`). |
 | `sample_slot.c/.h` | One slot's format in flash: a 256-byte header (written last), then 16-bit 48 kHz audio, mono up to 2 s or stereo up to 1 s. |
 | `sample_store.c/.h` | Loading (page by page, each sector erased as the data reaches it, CRC checked against flash before the header goes on), deleting and finding the 8 slots. Plain C over flash ops, power-cut tested on the computer. |
@@ -84,6 +89,8 @@ standalone mode with USB on core 1.
 | `audio.shed` | voices the load guard ended; 0 unless the sounds asked for more than the core has |
 | `audio.cost` | each track's measured cycles per voice-sample (150 until it has played) |
 | `flash.lockout_fails` | 0 |
+| `audio.patch` | each track's sound |
+| `fault` | `none`; else the last boot ended in a panic or hard fault (`fault.message`, `fault.callers`; `diagnostics/fault.h`) |
 
 On a Mac: Audio MIDI Setup shows "SENTIA TILES N" with 2 inputs at
 48 kHz. In Live, pick it as the audio input device, arm an audio track

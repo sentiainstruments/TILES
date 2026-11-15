@@ -19,18 +19,18 @@ static int s_dma = -1;
 static dma_channel_config s_cfg;
 static volatile bool s_paused;
 
-static void stop_stream(void) {
+static void __not_in_flash_func(stop_stream)(void) {
     xip_ctrl_hw->stream_ctr = 0u;
     while (!(xip_ctrl_hw->stat & XIP_STAT_FIFO_EMPTY)) {
         (void)xip_ctrl_hw->stream_fifo;
     }
 }
 
-static bool fetch_busy(void) {
+static bool __not_in_flash_func(fetch_busy)(void) {
     return dma_channel_is_busy((uint)s_dma);
 }
 
-static bool fetch_start(uint32_t flash_offset, uint32_t *dst, uint32_t words) {
+static bool __not_in_flash_func(fetch_start)(uint32_t flash_offset, uint32_t *dst, uint32_t words) {
     if (s_paused) {
         return false;
     }

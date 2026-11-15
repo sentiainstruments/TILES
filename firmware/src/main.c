@@ -13,6 +13,7 @@
 #include "board/board_init.h"
 #include "board/unit_id.h"
 #include "diagnostics/boot_stage.h"
+#include "diagnostics/fault.h"
 #include "diagnostics/calibration.h"
 #include "diagnostics/i2c_scan.h"
 #include "diagnostics/loop_stats.h"
@@ -81,6 +82,7 @@ int main(void) {
      * the same ring buffer this snapshots (see debug_mode.h). */
     tiles_debug_mode_capture_crash_snapshot(crash_recovered);
     tiles_boot_stage_start(crash_recovered);
+    tiles_fault_boot();
 
     /* A watchdog from here, not only from debug mode's 1 s one before the
      * loop: a hang during boot froze the board for good (no reset, USB
@@ -338,6 +340,7 @@ int main(void) {
         /* Clock, before op_mode, so the sequencer sees this pass's clock. */
         tiles_debug_trace('M');
         tiles_midi_clock_scan();
+        tiles_usb_audio_set_tempo(60000.0f / tiles_midi_clock_get_ms_per_beat());
 
         /* Power first among the services: lighting, haptics and CV read it this
          * pass. */

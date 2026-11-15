@@ -77,7 +77,7 @@ enum {
 #define EPNUM_VENDOR_OUT 0x04u
 #define EPNUM_VENDOR_IN 0x84u
 
-#define EPNUM_AUDIO_IN 0x85u
+#define EPNUM_AUDIO_IN TILES_AUDIO_EP_IN
 
 /* String indices; see string_desc_arr below. */
 enum {

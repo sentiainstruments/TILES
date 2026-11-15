@@ -42,9 +42,15 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_bounce_core.c src/
 cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_physics_core.c src/services/physics_core.c -lm -o /tmp/sentia_tiles_test_physics_core
 /tmp/sentia_tiles_test_physics_core
 
-# TILES's own sound (USB audio): the test voice and the cross-core ring.
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/audio -Isrc/services test/test_audio_engine.c src/audio/audio_engine.c src/audio/sampler.c -lm -o /tmp/sentia_tiles_test_audio_engine
+# TILES's own sound (USB audio): tracks, voices, the guard and the cross-core ring.
+SYNTH_SRC="src/audio/audio_engine.c src/audio/sampler.c src/audio/synth_voice.c src/audio/synth_patches.c src/audio/wavetable.c src/audio/wavetable_banks.c"
+# shellcheck disable=SC2086
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/audio -Isrc/services test/test_audio_engine.c $SYNTH_SRC -lm -o /tmp/sentia_tiles_test_audio_engine
 /tmp/sentia_tiles_test_audio_engine
+# The wavetable engine's DSP: band-limiting, filters, envelopes, every factory sound.
+# shellcheck disable=SC2086
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio -Isrc/services test/test_synth.c $SYNTH_SRC -lm -o /tmp/sentia_tiles_test_synth
+/tmp/sentia_tiles_test_synth
 
 # The drum sampler: slot header, loading over a flash that loses power,
 # voices streaming back what was loaded.

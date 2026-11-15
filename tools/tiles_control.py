@@ -54,6 +54,9 @@ Usage:
     python3 tools/tiles_control.py sample put 1 kick.wav # load slot 1 (drum 1); --mono --normalize --keep-silence --name NAME
     python3 tools/tiles_control.py sample play 1 100     # hear slot 1 at velocity 100 (TILES's own sound)
     python3 tools/tiles_control.py sample delete 1
+    python3 tools/tiles_control.py synth list            # the synth sounds and each track's (standalone mode)
+    python3 tools/tiles_control.py synth patch 2 haze    # track 2 plays "haze"
+    python3 tools/tiles_control.py synth play 2 60,64,67 100 2 [pressure]  # notes on track 2's lane for 2 s
 
 Changes apply immediately and are saved to flash automatically a couple of
 seconds after the last one (only while no pad is being touched); `save` just
@@ -284,6 +287,40 @@ def sample_put(session, slot, path, options):
           f"in {time.time() - started:.1f} s ({'; '.join(notes)})")
 
 
+# A track's sequencer lane channel (firmware/src/services/midi_channels.h): lane N is track N.
+LANE_CHANNEL = {1: 15, 2: 14, 3: 13, 4: 12}
+
+
+def synth(session, args):
+    if len(args) == 1 and args[0].lower() == "list":
+        for line in session.command("SYNTH LIST", multi_line=True):
+            print(line)
+    elif len(args) == 3 and args[0].lower() == "patch":
+        print(session.command(f"SYNTH PATCH {args[1]} {args[2]}")[0])
+    elif len(args) >= 3 and args[0].lower() == "play":
+        channel = LANE_CHANNEL.get(int(args[1]))
+        if channel is None:
+            sys.exit("synth play: track 1-4")
+        notes = [int(n) for n in args[2].split(",")]
+        velocity = int(args[3]) if len(args) > 3 else 100
+        seconds = float(args[4]) if len(args) > 4 else 1.0
+        pressure = int(args[5]) if len(args) > 5 else 0
+        for n in notes:
+            session.command(f"SYNTH MIDI {0x90 | channel:02X} {n} {velocity}")
+        if pressure:
+            session.command(f"SYNTH MIDI {0xD0 | channel:02X} {pressure} 0")
+        time.sleep(seconds)
+        for n in notes:
+            session.command(f"SYNTH MIDI {0x80 | channel:02X} {n} 0")
+        if pressure:
+            session.command(f"SYNTH MIDI {0xD0 | channel:02X} 0 0")
+        print("OK")
+    elif len(args) in (3, 4) and args[0].lower() == "midi":
+        print(session.command("SYNTH MIDI " + " ".join(args[1:]))[0])
+    else:
+        sys.exit("synth: list | patch <track> <name> | play <track> <notes,...> [velocity] [seconds] [pressure] | midi <status hex> <d1> [d2]")
+
+
 def sample(session, args):
     verb = args[0].lower() if args else ""
     if verb == "list" and len(args) == 1:
@@ -373,6 +410,9 @@ def main():
         return
     elif command == "sample":
         sample(session, sys.argv[2:])
+        return
+    elif command == "synth":
+        synth(session, sys.argv[2:])
         return
     elif command == "capture" and argc == 5:
         capture(session, int(sys.argv[2]), float(sys.argv[3]), sys.argv[4])

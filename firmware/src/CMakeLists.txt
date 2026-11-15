@@ -6,6 +6,7 @@ add_executable(sentia_tiles_firmware
     diagnostics/capture.c
     diagnostics/calibration.c
     diagnostics/boot_stage.c
+    diagnostics/fault.c
     diagnostics/loop_stats.c
     drivers/sk6805.c
     drivers/tca9554.c
@@ -75,7 +76,11 @@ add_executable(sentia_tiles_firmware
     audio/sample_store.c
     audio/sample_stream.c
     audio/sampler.c
+    audio/synth_patches.c
+    audio/synth_voice.c
     audio/usb_audio.c
+    audio/wavetable.c
+    audio/wavetable_banks.c
 )
 
 pico_generate_pio_header(sentia_tiles_firmware ${CMAKE_CURRENT_SOURCE_DIR}/drivers/sk6805.pio)
@@ -132,6 +137,8 @@ target_compile_definitions(sentia_tiles_firmware PRIVATE PICO_STDIO_USB_STDOUT_T
 # Core 1 runs the audio engine (audio/usb_audio.c); 4 KB rather than the
 # SDK's 2 KB leaves room for the engine and pico_time's sleep.
 target_compile_definitions(sentia_tiles_firmware PRIVATE PICO_CORE1_STACK_SIZE=0x1000)
+# panic() records its message and restarts (diagnostics/fault.h).
+target_compile_definitions(sentia_tiles_firmware PRIVATE PICO_PANIC_FUNCTION=tiles_panic)
 
 # No fused multiply-adds in the bend math, so the computer's replay
 # (test/bend_replay.c, built the same way) matches the board bit for bit.

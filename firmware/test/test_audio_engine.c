@@ -1,5 +1,6 @@
-/* The test voice (audio/audio_engine.c) and the cross-core ring
- * (audio/audio_ring.h), on the computer. */
+/* The engine's tracks, voices and guard (audio/audio_engine.c), played
+ * with the plain "pure" sound, and the cross-core ring (audio/audio_ring.h),
+ * on the computer. The synth itself: test_synth.c. */
 
 #include "audio_engine.h"
 #include "audio_ring.h"
@@ -8,6 +9,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static int s_failures;
 
@@ -51,8 +53,19 @@ static double rms(uint32_t frames) {
 
 /* 150 MHz: the voices' budget is 85 % of 3,125 cycles minus the 1,100
  * reserve, 1,556. */
+static void pure_everywhere(void) {
+    for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
+        if (strcmp(tiles_audio_engine_patch_name(p), "pure") == 0) {
+            for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
+                tiles_audio_engine_set_patch(t, p);
+            }
+        }
+    }
+}
+
 static void reset(void) {
     tiles_audio_engine_init(12u, 150u, NULL);
+    pure_everywhere();
 }
 
 static void costs(uint32_t cycles) {
@@ -293,15 +306,17 @@ static uint32_t slow_clock(void) {
 
 static void test_guard(void) {
     tiles_audio_engine_init(12u, 150u, slow_clock);
+    pure_everywhere();
     for (uint8_t i = 0; i < 4u; i++) {
         tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(60u + i), 100);
     }
+    uint32_t cost_before = tiles_audio_engine_track_cost(1u);
     render(16u * 2u);
     CHECK(tiles_audio_engine_shed_count() == 0u, "the guard acted before %u blocks", GUARD_TEST_BLOCKS);
     render(16u);
     CHECK(tiles_audio_engine_shed_count() == 1u, "the guard ended %u voices after 3 blocks over",
           tiles_audio_engine_shed_count());
-    CHECK(tiles_audio_engine_track_cost(1u) > 150u, "track 2's cost didn't follow the timing (%u)",
+    CHECK(tiles_audio_engine_track_cost(1u) > cost_before + 10u, "track 2's cost didn't follow the timing (%u)",
           tiles_audio_engine_track_cost(1u));
     render(SECOND / 10u);
     CHECK(tiles_audio_engine_track_voices(1u) < 4u, "an ended voice still sounds");

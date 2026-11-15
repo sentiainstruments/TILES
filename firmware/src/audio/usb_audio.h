@@ -10,6 +10,7 @@
 #define TILES_AUDIO_ENTITY_INPUT 0x01u  /* the test voice, a "synthesizer" terminal */
 #define TILES_AUDIO_ENTITY_OUTPUT 0x03u /* USB streaming */
 #define TILES_AUDIO_ENTITY_CLOCK 0x04u  /* fixed 48 kHz */
+#define TILES_AUDIO_EP_IN 0x85u        /* the isochronous stream */
 #define TILES_AUDIO_CHANNELS 2u
 #define TILES_AUDIO_BYTES_PER_SAMPLE 4u /* 24 bits in a 4-byte subslot */
 #define TILES_AUDIO_BITS_PER_SAMPLE 24u
@@ -30,6 +31,16 @@ void tiles_usb_audio_midi(uint8_t status, uint8_t data1, uint8_t data2);
 /* A drum hit for the sampler: slot 0-7 (drum 1-8 of the first bank),
  * velocity 1-127. Queued for core 1 like the messages above. */
 void tiles_usb_audio_drum_hit(uint8_t slot, uint8_t velocity);
+
+/* A track's sound (0-3, a factory patch), in order with the notes around
+ * it; false outside standalone mode. */
+bool tiles_usb_audio_set_patch(uint8_t track, uint8_t patch);
+
+/* The tempo the synced LFOs follow; the main loop passes it on. */
+void tiles_usb_audio_set_tempo(float beats_per_minute);
+
+/* True once core 1 runs the engine (standalone mode). */
+bool tiles_usb_audio_started(void);
 
 typedef struct {
     bool streaming;       /* a host has the input open */

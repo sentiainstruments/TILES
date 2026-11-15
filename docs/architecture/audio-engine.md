@@ -96,10 +96,11 @@ What raises it, roughly a voice per ~105-215 cycles freed:
 
 ## Engines
 
-The web player's sounds (`TILES_QuickStart/play/synth-worklet.js`) are
-the starting point, ported to C on core 1. The web player's sampled grand
-piano (hundreds of MB) doesn't fit; a modelled or FM piano takes its
-place. Sound names stay Sentia's own (no instrument or product names).
+The engines, their sound direction and techniques, and what they measure:
+`synth-engines.md`. The wavetable engine is built (2026-11-14). The web
+player's sampled grand piano (hundreds of MB) doesn't fit; a modelled or
+FM piano takes its place. Sound names stay Sentia's own (no instrument or
+product names).
 
 ## Measured cost
 
@@ -311,7 +312,8 @@ settling a voice count.
 2. Engine framework: an engine per track (the tracks and guardrails are
    built, with the test voice), the effects bus and per-sound sends,
    following the rules above.
-3. Port the engines one at a time, wavetable first.
+3. Port the engines one at a time, wavetable first: built 2026-11-14
+   (`synth-engines.md`, which has the next steps).
 4. The drum sampler: built (firmware side and `sample put`). Left: per-slot
    playback settings, loading from the companion app, and hearing it once
    USB audio streams on macOS.
