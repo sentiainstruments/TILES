@@ -2120,8 +2120,10 @@ static void set_volca(bool volca) {
     tiles_drum_seq_set_volca(volca);
 }
 
+static void sound_menu_close(void); /* with the diamond, below */
+
 static void set_active_mode(tiles_op_mode_t mode) {
-    tiles_sound_menu_close();
+    sound_menu_close();
     if (mode != s_active_mode) {
         tiles_fx_set(tiles_fx_get()); /* the last mode's light, gone */
     }
@@ -2675,6 +2677,28 @@ static uint8_t mode_track(void) {
     }
 }
 
+/* The sound menus draw through standby, like the mode menu; closing hands
+ * the pads and keys back unless the mode draws them itself. */
+static void sound_menu_open(bool effects) {
+    if (s_active_mode == OP_MODE_HARMONY) {
+        tiles_harmony_leave(); /* the menu takes the grid: end the held chord */
+    }
+    tiles_sound_menu_open(effects, mode_track());
+    tiles_lighting_set_standby_active(true);
+    tiles_buttons_set_standby_active(true);
+}
+
+static void sound_menu_close(void) {
+    if (!tiles_sound_menu_is_open()) {
+        return;
+    }
+    tiles_sound_menu_close();
+    if (!mode_owns_standby_grid(s_active_mode)) {
+        tiles_lighting_set_standby_active(false);
+        tiles_buttons_set_standby_active(false);
+    }
+}
+
 /* Standalone mode outside the sequencer: diamond is the sound menu,
  * circle + diamond the effects menu (services/sound_menu.h), no DAW
  * transport. Song's step editor keeps its diamond (back). */
@@ -2735,9 +2759,9 @@ static void handle_diamond_transport(uint32_t now_ms) {
                 /* The same key again closes; the other menu's key switches. */
                 bool effects = s_diamond_press_was_shift;
                 if (tiles_sound_menu_is_open() && tiles_sound_menu_is_effects() == effects) {
-                    tiles_sound_menu_close();
+                    sound_menu_close();
                 } else {
-                    tiles_sound_menu_open(effects, mode_track());
+                    sound_menu_open(effects);
                 }
             } else if (s_ableton_capture_active && s_diamond_press_was_shift) {
                 /* Recording a Live clip from melodic mode (s_ableton_capture_active):
@@ -2825,7 +2849,8 @@ static void handle_diamond_transport(uint32_t now_ms) {
     } else {
         /* Transport LED: armed beats recording beats playing. Playing follows the
          * actual clock; s_transport_playing only decides the next click. */
-        tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, transport_led_level(now_ms));
+        tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID,
+                                       tiles_sound_menu_is_open() ? 1.0f : transport_led_level(now_ms));
     }
 
     s_diamond_was_held = held;
@@ -3450,7 +3475,13 @@ void tiles_op_mode_scan(void) {
     handle_triangle_click();
     handle_diamond_transport(now_ms);
     handle_circle_tap(now_ms);
-    handle_transport_and_length(now_ms);
+    if (tiles_sound_menu_is_open()) {
+        /* "-"/"+" step the menu's track (sound_menu.c), nothing else. */
+        s_minus_was_held = tiles_button_is_pressed(TILES_MINUS_BUTTON_ID);
+        s_plus_was_held = tiles_button_is_pressed(TILES_PLUS_BUTTON_ID);
+    } else {
+        handle_transport_and_length(now_ms);
+    }
 
     /* Fetched once per scan (it clears start_edge); playback and the beat
      * flash share it. A Start a tick already stepped playback on still
