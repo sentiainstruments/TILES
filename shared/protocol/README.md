@@ -452,7 +452,9 @@ the motor chips' health `pca.mode1=<0x40>,<0x41>` (hex, `00` when
 awake), `pca.resets` (chips found asleep after losing power and set up
 again) and `pca.read_fails`; TILES's own sound `audio.*`
 (`firmware/src/audio/README.md`), with the drum sampler's `audio.drums`
-(ringing now) and `audio.drum_underruns`, and each track's synth sound
+(ringing now) and `audio.drum_underruns`, `audio.usb_gap_us` (core 1's
+longest stretch between USB task calls while streaming, in us: under
+1,000 or packets miss frames), and each track's synth sound
 `audio.patch=<t1>,<t2>,<t3>,<t4>` (standalone mode). The SYNTH commands
 answer `ERR standalone-only` in controller mode. New keys may be added;
 ignore ones you don't know.
