@@ -8,6 +8,8 @@ higher-level services, so a failed sensor can't take them down.
 |---|---|
 | `i2c_scan` | At boot, probes every expected I2C0/I2C1 address and prints pass/fail per device. `tiles_diag_i2c_full_scan()` lists every address that answers. |
 | `capture` | Records one pad's raw Hall readings and what the expression code made of them (strokes, note-on with velocity and strike timing, pressure, bend, note-off with release velocity), per pass, into RAM (`CAPTURE` over the settings interface) for replaying on the computer; `CAPTURE WATCH` keeps streaming for the studio (`tools/studio/`). |
+| `fault` | A hard fault or `panic()` on either core, or core 1 standing still for a second (core 0 rings it a doorbell to learn where it is stuck), is recorded in RAM a reset keeps and the chip restarts; the next boot reports it in INFO (`fault=`, `fault.callers=`, `fault.message=`). |
+| `boot_stage` | The last stage `main()` reached before a watchdog reset (INFO `boot.hang=`). |
 | `calibration` | Single-key serial commands for Hall calibration: `r` recaptures the rest baseline, `m` prints each pad's strong-strike depth against it (`f`, a "regular press" snapshot, is not part of the procedure). |
 
 ## Calibration rule

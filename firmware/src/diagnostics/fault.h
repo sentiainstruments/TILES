@@ -19,3 +19,13 @@ void tiles_fault_boot(void);
 
 /* The fault that ended the last boot; false if it ended cleanly. */
 bool tiles_fault_last(tiles_fault_t *out);
+
+/* Core 1's pulse, bumped by its loop every pass. */
+extern volatile uint32_t g_tiles_core1_beat;
+
+/* Core 1, once at its start: lets core 0 interrupt it when it stops. */
+void tiles_fault_core1_arm(void);
+
+/* Core 0's loop: core 1 still for a second is recorded as a fault (where
+ * it was stuck, if it takes the interrupt) and the chip restarts. */
+void tiles_fault_watch_core1(void);

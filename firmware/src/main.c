@@ -434,6 +434,7 @@ int main(void) {
         /* Feed the watchdog LAST: if anything above hangs, this isn't reached, the
          * chip resets after 1 s, and the crash recorder keeps the trace. */
         watchdog_update();
+        tiles_fault_watch_core1();
 
         /* No periodic diagnostic printing in the loop: with no terminal attached,
          * each blocked printf can stall the loop for the stdio timeout (a 2 s

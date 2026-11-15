@@ -569,3 +569,17 @@ owner's feedback that prompted each change.
   connected. To check on hardware: enumeration on macOS, a clean
   recording in Live, audio.late_frames/underruns, and that MIDI timing
   and settings saves are unchanged.
+- **picotool froze a standalone board (2026-11-14).** `tools/flash.sh`
+  left unit 2 dead twice in a row: USB gone, lights on, same USB session.
+  In standalone mode tud_task() runs on core 1, so the reset interface's
+  BOOTSEL (and reboot) request ran there; the ROM arms the watchdog for
+  the reboot, and core 0, still looping, fed it, so the reboot never
+  came and core 1 sat in the ROM's wait. Now `usb_device.c` wraps
+  `rom_reset_usb_boot_extra` and `watchdog_reboot` (`--wrap`): on core 1
+  it hands the request to core 0, which carries it out in
+  `tiles_usb_task()` (a 0 ms reboot, as the fault recorder uses, passes
+  straight through). Behind a hub the board can reach BOOTSEL after
+  picotool stops waiting (~9 s), so `flash.sh` now waits 20 s more for
+  it. Found with a new watch (`diagnostics/fault.c`): core 1 still for a
+  second is recorded and restarts the chip, so a hang like this now
+  reports itself instead of needing a replug.

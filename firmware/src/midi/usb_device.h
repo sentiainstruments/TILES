@@ -16,9 +16,9 @@ void tiles_usb_device_init(bool audio);
 /* Whether the descriptor has the USB audio input. */
 bool tiles_usb_device_has_audio(void);
 
-/* Core 0's tud_task(): runs it in controller mode, and does nothing in
- * standalone mode, where core 1 owns it. Every core 0 caller goes through
- * this. */
+/* Core 0's tud_task(): runs it in controller mode; in standalone mode,
+ * where core 1 owns it, carries out the reboots core 1 was asked for over
+ * USB. Every core 0 caller goes through this. */
 void tiles_usb_task(void);
 void tiles_usb_task_on_core1(void);
 

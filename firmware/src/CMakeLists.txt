@@ -124,6 +124,13 @@ target_link_libraries(sentia_tiles_firmware
 # makes pico_stdio_usb leave tusb_init() and the descriptors to us (see
 # midi/usb_device.h, midi/usb_descriptors.c).
 pico_enable_stdio_usb(sentia_tiles_firmware 1)
+
+# picotool's reset requests reach core 1 in standalone mode; usb_device.c
+# hands them to core 0, which feeds the watchdog.
+target_link_options(sentia_tiles_firmware PRIVATE
+    -Wl,--wrap=rom_reset_usb_boot_extra
+    -Wl,--wrap=watchdog_reboot
+)
 pico_enable_stdio_uart(sentia_tiles_firmware 0)
 
 # printf() over USB-CDC waits for buffer room when a terminal holds the port

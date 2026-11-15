@@ -59,5 +59,15 @@ for id in "${IDS[@]}"; do
     fi
 done
 
+# picotool -f stops waiting after ~9 s; a board behind a hub can reach
+# BOOTSEL later than that.
+for _ in $(seq 1 40); do
+    if picotool info ${SER_ARGS[@]+"${SER_ARGS[@]}"} >/dev/null 2>&1; then
+        echo "Board reached BOOTSEL late -- flashing it."
+        exec picotool load ${SER_ARGS[@]+"${SER_ARGS[@]}"} -x -v --ignore-partitions "$UF2"
+    fi
+    sleep 0.5
+done
+
 echo "No running TILES board found. Is it plugged in (and not frozen)? As a last resort, hold BOOTSEL while plugging in and run this again." >&2
 exit 1

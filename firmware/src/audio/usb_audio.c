@@ -4,6 +4,7 @@
 
 #include "audio_engine.h"
 #include "audio_ring.h"
+#include "diagnostics/fault.h"
 #include "midi_out.h"
 #include "sampler.h"
 #include "usb_device.h"
@@ -95,11 +96,15 @@ static void core1_main(void) {
     if (s_usb_on_core1) {
         tiles_usb_device_init(true); /* its interrupt on this core too */
     }
+#if !TILES_DSP_BENCH
+    tiles_fault_core1_arm(); /* the stress test holds core 1 for seconds */
+#endif
     s_usb_up = true;
     int32_t block[2u * RENDER_FRAMES];
     uint32_t window_start = time_us_32();
     uint32_t busy_us = 0;
     for (;;) {
+        g_tiles_core1_beat++;
 #if TILES_DSP_BENCH
         if (s_bench_request) {
             s_bench_request = false;
@@ -132,6 +137,7 @@ static void core1_main(void) {
             while (AUDIO_RING_WORDS - tiles_spsc_space(&s_audio_ring) < 2u * TARGET_FRAMES) {
                 tiles_audio_engine_render(block, RENDER_FRAMES);
                 (void)tiles_spsc_push(&s_audio_ring, (const uint32_t *)block, 2u * RENDER_FRAMES);
+                g_tiles_core1_beat++;
                 if (s_usb_on_core1) {
                     tud_task(); /* a block takes up to ~0.3 ms: never a frame without */
                 }
