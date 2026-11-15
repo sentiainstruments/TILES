@@ -982,6 +982,8 @@ static void handle_line(char *line) {
         reply(text);
         snprintf(text, sizeof(text), "audio.underruns=%lu", (unsigned long)audio.underruns);
         reply(text);
+        snprintf(text, sizeof(text), "audio.usb_gap_us=%lu", (unsigned long)audio.usb_gap_us);
+        reply(text);
         snprintf(text, sizeof(text), "audio.midi_drops=%lu", (unsigned long)audio.midi_drops);
         reply(text);
         snprintf(text, sizeof(text), "audio.voices=%u", (unsigned)audio.voices);

@@ -111,25 +111,19 @@ none (67 before).
 
 ## Known issues
 
-- **Late USB packets drop the stream for up to a second.** The tour,
-  recorded whole (46 s), has two gaps of ~1 s and three of ~250 ms of
-  digital silence: macOS restarting the stream after late packets
-  (`audio.late_frames` rose by ~24, plus ~8 at every stream start) at
-  only 12-57 % load. TinyUSB's RP2350 driver used to panic on that
-  restart ("ep 85 was already available"), which left USB dead: now the
-  armed packet is revoked when the stream stops (`audio/usb_audio.c`),
-  and any panic, hard fault or stalled core 1 restarts the board and is
-  reported by INFO (`fault=`).
+None open. Fixed along the way: late USB packets that made macOS drop
+the stream for up to a second (core 1's USB code ran from flash:
+`firmware/src/midi/HISTORY.md`), and TinyUSB's RP2350 driver panicking
+when a recording app restarted the stream ("ep 85 was already
+available"). Any panic, hard fault or stalled core 1 now restarts the
+board and is reported by INFO (`fault=`).
 
 ## Next, in order
 
-1. **Late packets:** find what holds core 1 off USB for a whole frame at
-   low load (note-on bursts? core 1's own flash-resident code, USB
-   interrupt included, waiting behind core 0's fetches?).
-2. **Effects bus:** plate reverb, ping-pong delay, chorus/ensemble,
+1. **Effects bus:** plate reverb, ping-pong delay, chorus/ensemble,
    sidechain pump from the drum track, bit-crush; per-track sends.
-3. **FM engine** with DX7 patch import (`patch put bank.syx`).
-4. Patch choice on the instrument (a menu) and the patch format in
+2. **FM engine** with DX7 patch import (`patch put bank.syx`).
+3. Patch choice on the instrument (a menu) and the patch format in
    `shared/` for the companion app.
-5. More voice speed if needed: the ladder (~80 cycles a channel) and the
+4. More voice speed if needed: the ladder (~80 cycles a channel) and the
    wavefolder are the dearest parts left.

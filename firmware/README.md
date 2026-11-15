@@ -16,7 +16,8 @@ several boards, the feedback loop): `AGENTS.md`. Tests: `test/README.md`.
 | `src/drivers/` | One small driver per chip (TCA9548A, TMAG5273, MPR121, PCA9685, TCA9554, SK6805, DAC80502) plus the shared bounded I2C layer. | `src/drivers/README.md` |
 | `src/services/` | Everything musical and interactive: sensing, expression/MPE, modes and menus, lighting, haptics, standby, games, CV/gate. | `src/services/README.md` |
 | `src/midi/` | The USB device (MIDI on three ports, CDC console, vendor, reset, audio input), MIDI in/out, DIN MIDI, the MPE wire protocol, product identity. | `src/midi/README.md` |
-| `src/audio/` | TILES's own sound on core 1 (a placeholder test voice for now), streamed as a USB audio input. | `src/audio/README.md` |
+| `src/audio/` | TILES's own sound on core 1 (the wavetable synth and the drum sampler), streamed as a USB audio input. | `src/audio/README.md` |
+| `src/link/` | Linker overrides: core 1's USB path and note handling placed in RAM. | `src/audio/README.md` |
 | `src/usb_vendor/` | The text settings protocol for the companion app and scripts. | `src/usb_vendor/README.md` |
 | `src/profiles/` | The settings table: every user-tunable value, saved to flash. | `src/profiles/README.md` |
 | `src/storage/` | Power-cut-safe two-slot flash store and the flash region map. | `src/storage/README.md` |

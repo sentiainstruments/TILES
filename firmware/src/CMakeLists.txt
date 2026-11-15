@@ -167,6 +167,10 @@ endif()
 
 pico_add_extra_outputs(sentia_tiles_firmware)
 
+# Core 1's USB path and the engine's note handling run from RAM
+# (link/default_text_excludes.incl says why).
+pico_add_linker_script_override_path(sentia_tiles_firmware ${CMAKE_CURRENT_LIST_DIR}/link GLOB_FILES)
+
 # Core 1's audio code: on the Cortex-M33 a fused multiply-add takes 3
 # cycles against 2 for a multiply then an add (measured: the ladder 81 -> 67
 # cycles a sample), so GCC mustn't fuse them.

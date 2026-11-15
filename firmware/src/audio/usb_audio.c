@@ -86,6 +86,20 @@ void tiles_usb_audio_bench_soak(uint32_t ms, bool cached) {
 }
 #endif
 
+/* The longest time from one tud_task() start to the next while streaming
+ * (audio.usb_gap_us): near 1 ms a packet misses its frame. */
+static volatile uint32_t s_usb_gap_us;
+static uint32_t s_task_start_us;
+
+static void run_usb_task(void) {
+    uint32_t now = time_us_32();
+    if (s_streaming && now - s_task_start_us > s_usb_gap_us) {
+        s_usb_gap_us = now - s_task_start_us;
+    }
+    s_task_start_us = now;
+    tud_task();
+}
+
 static uint32_t __not_in_flash_func(engine_now_us)(void) {
     return time_us_32();
 }
@@ -117,7 +131,7 @@ static void core1_main(void) {
         }
 #endif
         if (s_usb_on_core1) {
-            tud_task();
+            run_usb_task();
         }
         uint32_t word;
         while (tiles_spsc_pop(&s_midi_ring, &word, 1u) == 1u) {
@@ -139,7 +153,7 @@ static void core1_main(void) {
                 (void)tiles_spsc_push(&s_audio_ring, (const uint32_t *)block, 2u * RENDER_FRAMES);
                 g_tiles_core1_beat++;
                 if (s_usb_on_core1) {
-                    tud_task(); /* a block takes up to ~0.3 ms: never a frame without */
+                    run_usb_task(); /* a block takes up to ~0.2 ms: never a frame without */
                 }
             }
             busy_us += time_us_32() - t0;
@@ -152,7 +166,11 @@ static void core1_main(void) {
             busy_us = 0;
             window_start = now;
         }
-        sleep_us(streaming || s_usb_on_core1 ? 200u : 1000u);
+        /* Not sleep_us(): its alarm is core 0's interrupt, its code in flash. */
+        uint32_t wait = streaming ? 50u : s_usb_on_core1 ? 200u : 1000u;
+        while (time_us_32() - now < wait) {
+            tight_loop_contents();
+        }
     }
 }
 
@@ -237,6 +255,7 @@ tiles_usb_audio_info_t tiles_usb_audio_get_info(void) {
         .shed = tiles_audio_engine_shed_count(),
         .drum_voices = s_drum_voices,
         .drum_underruns = tiles_sampler_underruns(),
+        .usb_gap_us = s_usb_gap_us,
     };
     for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
         info.cost[t] = (uint16_t)tiles_audio_engine_track_cost(t);
@@ -265,7 +284,7 @@ bool tud_audio_tx_done_pre_load_cb(uint8_t rhport, uint8_t func_id, uint8_t ep_i
         s_streaming = true;
     }
     uint16_t sof = (uint16_t)(usb_hw->sof_rd & USB_SOF_RD_BITS);
-    if (s_have_sof) {
+    if (s_have_sof && s_warmup == 0u) { /* the host starts polling a few frames in */
         uint32_t elapsed = (uint32_t)((uint16_t)(sof - s_last_sof) & USB_SOF_RD_BITS);
         if (elapsed > 1u) {
             s_late_frames += elapsed - 1u;

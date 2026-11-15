@@ -49,6 +49,15 @@ sounds, a sound per track); how it is built and what it measures:
   console is a small stdio driver without pico_stdio_usb's `tud_task()`.
 - **Every packet is 48 frames.** A frame with no packet loses its audio
   (`audio.late_frames`); packets of 96 to make one up stopped macOS.
+- **Core 1's USB path runs from RAM.** TinyUSB, its RP2350 driver, this
+  folder's USB and note-handling code and the float maths are kept out of
+  flash (`src/link/default_text_excludes.incl`). From flash they waited
+  behind core 0's fetches through the shared 16 KB XIP cache: a
+  `tud_task()` took up to 0.34 ms, packets missed their frame and macOS
+  restarted the stream (a second of silence at a time). In RAM:
+  `tud_task()` at most ~30 us, `audio.usb_gap_us` ~0.2 ms, no late frame
+  through a recorded tour of every sound. Core 1 waits between passes
+  without `sleep_us()` (its alarm is core 0's interrupt).
 - **Flash writes pause core 1.** XIP is off while flash is erased or
   programmed, so no core may run from flash. Every write goes through
   `tiles_flash_write_begin()/end()` (`storage/storage_flash.h`), which
@@ -80,7 +89,8 @@ standalone mode with USB on core 1.
 | Field | Healthy |
 |---|---|
 | `audio.streaming` | 1 while an app has the input open |
-| `audio.late_frames` | grows slowly or not at all; made up, not lost |
+| `audio.late_frames` | 0: each one is a frame of lost audio (the stream's first few packets, before the host polls, aren't counted) |
+| `audio.usb_gap_us` | core 1's longest stretch between `tud_task()` calls while streaming; ~200-300, under 1,000 or packets miss frames |
 | `audio.underruns` | 0 (core 1 never fell behind) |
 | `audio.midi_drops` | 0 |
 | `audio.load_pct` | core 1 time rendering in the last second |

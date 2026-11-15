@@ -54,6 +54,7 @@ typedef struct {
     uint16_t cost[4];     /* each track's measured cycles per voice-sample */
     uint8_t drum_voices;  /* drum samples ringing now */
     uint32_t drum_underruns; /* blocks a drum voice ran out of streamed data */
+    uint32_t usb_gap_us;  /* core 1's longest tud_task() to tud_task(), streaming */
 } tiles_usb_audio_info_t;
 
 tiles_usb_audio_info_t tiles_usb_audio_get_info(void);

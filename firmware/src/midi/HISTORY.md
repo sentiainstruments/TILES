@@ -583,3 +583,21 @@ owner's feedback that prompted each change.
   it. Found with a new watch (`diagnostics/fault.c`): core 1 still for a
   second is recorded and restarts the chip, so a hang like this now
   reports itself instead of needing a replug.
+- **Recordings lost a second at a time (2026-11-14).** A recorded tour of
+  the synth's sounds had gaps of ~1 s of digital silence: macOS restarting
+  the stream after missed packets (`audio.late_frames` +44 in 46 s at
+  6-57 % load). Timing core 1 showed its loop never went 1 ms without
+  `tud_task()` (0.73 ms at worst), but one `tud_task()` took up to
+  0.34 ms, one called right after another as long, and the packet
+  callback 0.17 ms: TinyUSB and core 1's USB code ran from flash, and
+  core 0's ~2 ms loop keeps the shared 16 KB XIP cache full of its own
+  code. Moving them to RAM (`src/link/default_text_excludes.incl`, the
+  SDK's `pico_add_linker_script_override_path`, 38 KB) brought
+  `tud_task()` to ~30 us at most, the callback to 15 us, note handling
+  0.48 -> 0.11 ms and core 1's load 15 -> 8 %: no late frame since,
+  through the tour, four busy tracks, the voice budget full with drums,
+  and five stream restarts. Core 1 also stopped using `sleep_us()`, whose
+  wake-up is an alarm interrupt on core 0. The ~8 "late" frames at every
+  stream start were the host starting to poll a few frames after
+  choosing the interface: no longer counted. INFO `audio.usb_gap_us`
+  keeps the longest stretch between `tud_task()` calls.
