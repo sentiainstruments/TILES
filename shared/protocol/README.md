@@ -62,8 +62,15 @@ SAMPLE PLAY <slot> [velocity]\n  hit a slot in TILES's own sound: OK
 SYNTH LIST\n              the synth sounds (`<n> <name>`), then each track's (`track <t> <name>`), then OK
 SYNTH PATCH <track> <n|name>\n  give track 1-4 a sound: OK, or ERR unknown-patch / track-1-4
 SYNTH MIDI <status hex> <data1> [data2]\n  a channel message (80-EF) to the synth only, not sent out: OK
-SYNTH BENCH\n              one voice of each sound timed: `<name> <cycles per sample>` lines, then OK
-                          (core 0 pauses ~5 ms a sound)
+SYNTH BENCH\n              one voice of each sound timed: `<name> <cycles per sample>` lines, then each effect's
+                          (`fx-<chorus|delay|reverb|drive|crush|pump> <cycles>`, only while no app streams), then OK
+                          (core 0 pauses ~5 ms an item)
+SYNTH FX\n                 each track's effects (`track <t> reverb=<0-100> delay= chorus= drive= dark= crush= pump=`),
+                          then the shared ones' settings (`bus <name>=<value>`), then OK
+SYNTH FX <t|BUS> <name> <value>\n  set one: a track 1-4's (reverb delay chorus drive dark crush pump, 0-100; its
+                          sound's again when the sound changes) or the shared ones' (decay damping mod tone
+                          feedback echo-verb chorus-rate chorus-depth pump-release 0-100, predelay in ms,
+                          time in sixteenths): OK, or ERR unknown-fx / busy
 TEST LEDS <0-100>\n       bench only: every LED white at that % (current measurement)
 TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
 TEST MOTOR <pad> [duty%]\n bench only: one pad's motor (1-24) for 1 s
@@ -72,7 +79,9 @@ TEST OFF\n                bench only: back to normal
 CAPTURE START <pad>\n     record pad 1-24's raw Hall readings, one per pass (~8 s max): OK
 CAPTURE WATCH <pad>\n     the same, never stopping: keeps the newest 4000, skips passes that
                           only repeat the last (the studio): OK
-CAPTURE STOP\n            stop recording: OK
+CAPTURE STOP\n            stop recording: OK (the records stay readable)
+CAPTURE RELEASE\n         the records' memory back to TILES's reverb and delay, quiet since the first
+                          START/WATCH (START/WATCH answer ERR memory-busy if they couldn't have it): OK
 CAPTURE STATUS\n          pad=<p> running=<0|1> count=<n> max=<m> watching=<0|1> total=<seq>
                           bend mode=<m> sensitivity=<s> bx=<b> by=<b> strokes=<n>
                           (the pad's bend setup when recording started), then OK
@@ -452,7 +461,8 @@ the motor chips' health `pca.mode1=<0x40>,<0x41>` (hex, `00` when
 awake), `pca.resets` (chips found asleep after losing power and set up
 again) and `pca.read_fails`; TILES's own sound `audio.*`
 (`firmware/src/audio/README.md`), with the drum sampler's `audio.drums`
-(ringing now) and `audio.drum_underruns`, `audio.usb_gap_us` (core 1's
+(ringing now) and `audio.drum_underruns`, the effects' `audio.fx=on|lent` (lent: the
+pad capture holds their memory) and `audio.fx_cost` (cycles per sample), `audio.usb_gap_us` (core 1's
 longest stretch between USB task calls while streaming, in us: under
 1,000 or packets miss frames), and each track's synth sound
 `audio.patch=<t1>,<t2>,<t3>,<t4>` (standalone mode). The SYNTH commands
