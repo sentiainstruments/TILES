@@ -36,9 +36,10 @@ static inline uint8_t board_button_for_col(uint8_t col) {
 #define TILES_SQUARE_BUTTON_ID 5u
 #define TILES_SQUARE_BUTTON_COL 5u
 
-/* SW4 (diamond): DAW transport in play modes, pattern bank in sequencer
- * (services/op_mode.h owns the roles; roles have been swapped with
- * triangle before, the physical ids never change). */
+/* SW4 (diamond): DAW transport in play modes (in standalone mode the sound
+ * menus), pattern bank in sequencer (services/op_mode.h owns the roles;
+ * roles have been swapped with triangle before, the physical ids never
+ * change). */
 #define TILES_DIAMOND_BUTTON_ID 4u
 #define TILES_DIAMOND_BUTTON_COL 4u
 

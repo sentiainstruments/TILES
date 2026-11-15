@@ -152,11 +152,16 @@ board and is reported by INFO (`fault=`).
 
 ## Next, in order
 
-1. **Sound and effects choice on the instrument:** in standalone mode the
-   diamond (transport) button opens the sound selector, shift + diamond
-   the effects selector.
-2. **FM engine** with DX7 patch import (`patch put bank.syx`).
-3. Patch choice on the instrument (a menu) and the patch format in
-   `shared/` for the companion app.
-4. More voice speed if needed: the ladder (~80 cycles a channel) and the
+1. **Try the sound and effects menus on the board** (built 2026-11-15,
+   `firmware/src/services/sound_menu.c`): diamond = sounds, circle +
+   diamond = effects, in standalone mode outside the sequencer.
+2. **Two assignable potentiometers** (First Edition hardware): any
+   parameter while playing in standalone mode. The effects already have
+   numbered parameters (`TILES_FX_TRACK_*`, `TILES_FX_BUS_*` in
+   `audio_engine.h`) shared by the settings link and the menus; a knob
+   assignment would point at one of them (and later at sound parameters
+   such as cutoff or the wave position).
+3. **FM engine** with DX7 patch import (`patch put bank.syx`).
+4. The patch format in `shared/` for the companion app.
+5. More voice speed if needed: the ladder (~80 cycles a channel) and the
    wavefolder are the dearest parts left.

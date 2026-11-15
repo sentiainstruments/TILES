@@ -53,6 +53,7 @@ before re-tuning a constant or reviving an approach that was dropped.
 | `expression_control` | Square: pitch bend toggle, expression menu; circle + square: MPE on/off. |
 | `lighting` | Pad LEDs and underglow; power-derived brightness ceiling; idle colors by note role; indicator priority on the underglow; on touched pads, every mode: hue turns toward Sentia blue with pressure, brightness swells down with bend; LED intensity (Feel menu row 4) scales pads, underglow and button LEDs. |
 | `standby` | Screensaver animations and deep sleep; circle holds. |
+| `sound_menu` | Standalone mode's sound and effects menus on the diamond (see "Sound menus"). |
 | `show_link` | Show takeover: a computer's light show (Show Control) streams the music as SysEx and, while it does, owns every LED (see "Show link"). |
 | `boot_sequence` | Power-on animation (+ a Hall baseline recapture); its last pulse shows the device mode, and triangle during it switches it. |
 | `device_mode` | Controller or standalone mode (below): read before USB starts; a switch saves and restarts. |
@@ -84,8 +85,8 @@ sequencer, Song, Ableton and drums draw the whole grid themselves.
 |---|---|
 | triangle | mode menu (toggle) |
 | circle + triangle | scale picker (drums: the other step page); cancels a step edit or capture |
-| diamond | Live transport: click = play/stop, hold 2 s = record. Sequencer: pattern bank. Song step editor: back |
-| circle + diamond | capture (sequencer; Song from melodic/chord/bass/Song); stop all clips in Ableton; end a Live recording |
+| diamond | Live transport: click = play/stop, hold 2 s = record. Standalone mode: the sound menu instead (below). Sequencer: pattern bank. Song step editor: back |
+| circle + diamond | capture (sequencer; Song from melodic/chord/bass/Song); stop all clips in Ableton; end a Live recording. Standalone mode outside the sequencer: the effects menu |
 | "-" / "+" | sequencer and drums: stop/start the viewed lane ("-" twice rewinds; "+" restarts the clock when none comes in); circle first = length (drums: previous/next 8 drums). Bass guitar: frets. Ableton: pan the 5-track window |
 | circle | tap tempo when no external clock; flashes the beat |
 
@@ -164,6 +165,31 @@ The USB descriptor differs, so a switch saves and restarts TILES; that
 restart skips the animation (a flag in RAM a power cut clears). The mode
 is read from the settings in flash before USB starts
 (`tiles_settings_persist_peek()`), since the settings load later.
+
+## Sound menus
+
+Standalone mode, every mode but the sequencer (whose diamond stays the
+pattern bank and capture) and Song's step editor (back): diamond opens the
+**sound menu**, circle + diamond the **effects menu**; the same keys close
+them, the other key switches. They set one of TILES's four synth tracks,
+first the one the mode plays (melodic, bass guitar, Song, Ableton: 2;
+Duet, Prism: 3; bouncing notes and the physics modes: 4; drums: 1);
+"-"/"+" step through the tracks, the underglow in the track's sequencer
+lane colour. No DAW transport here.
+
+- **Sounds:** a family a row, top to bottom: basses (acid, reese, wobble,
+  sub), plucks and leads (pluck, lead, stab, hoover), pads (haze, air,
+  choir), bells (glass, pure). The track's sound bright, the rest dim; a
+  press past half travel picks and plays a short preview on the track. A
+  new sound brings its own effect amounts.
+- **Effects:** a column each: reverb, delay, chorus, drive, crush, pump.
+  Bottom row off, then a third, two thirds, full at the top, lit as a
+  meter; a press sets that level, pressing deeper adds up to a third more.
+- Planned: two assignable potentiometers on the First Edition, for any of
+  these parameters while playing (`../../../docs/architecture/synth-engines.md`).
+
+Colours and the preview notes are first guesses. Built 2026-11-15, not yet
+tried on the board.
 
 ## Show link
 

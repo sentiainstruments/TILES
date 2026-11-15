@@ -29,6 +29,7 @@
 #include "product_identity.h"
 #include "seq_pattern.h"
 #include "standby.h"
+#include "sound_menu.h"
 #include "storage_flash.h"
 #include "flash_staging.h"
 #include "touch.h"
@@ -1224,6 +1225,7 @@ static bool mode_owns_standby_grid(tiles_op_mode_t mode) {
 /* ---- Mode menu ------------------------------------------------------------ */
 
 static void menu_enter(void) {
+    tiles_sound_menu_close();
     if (s_active_mode == OP_MODE_HARMONY) {
         tiles_harmony_leave(); /* the menu takes the grid: end the held chord */
     }
@@ -2119,6 +2121,7 @@ static void set_volca(bool volca) {
 }
 
 static void set_active_mode(tiles_op_mode_t mode) {
+    tiles_sound_menu_close();
     if (mode != s_active_mode) {
         tiles_fx_set(tiles_fx_get()); /* the last mode's light, gone */
     }
@@ -2652,6 +2655,34 @@ static float transport_led_level(uint32_t now_ms) {
     return led_level;
 }
 
+/* The synth track (0-3) a mode plays on (audio_engine.h's channel map):
+ * where the sound menus open. */
+static uint8_t mode_track(void) {
+    switch (s_active_mode) {
+    case OP_MODE_CHORD:
+    case OP_MODE_HARMONY:
+        return 2u;
+    case OP_MODE_BOUNCE:
+    case OP_MODE_RIPPLES:
+    case OP_MODE_SAND:
+    case OP_MODE_ORBITS:
+    case OP_MODE_CRADLE:
+        return 3u;
+    case OP_MODE_DRUM:
+        return 0u;
+    default:
+        return 1u;
+    }
+}
+
+/* Standalone mode outside the sequencer: diamond is the sound menu,
+ * circle + diamond the effects menu (services/sound_menu.h), no DAW
+ * transport. Song's step editor keeps its diamond (back). */
+static bool diamond_opens_sound_menus(void) {
+    return tiles_device_mode_is_standalone() && s_active_mode != OP_MODE_SEQUENCER &&
+           !(s_active_mode == OP_MODE_SONG && s_song_edit_active) && !s_ableton_capture_active;
+}
+
 static void handle_diamond_transport(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
@@ -2675,8 +2706,9 @@ static void handle_diamond_transport(uint32_t now_ms) {
         }
     }
     /* Record arm only outside the sequencer. */
-    if (held && !sequencer_active && !s_diamond_press_had_conflict && !s_diamond_press_was_shift &&
-        !s_diamond_record_armed && (now_ms - s_diamond_press_start_ms) >= OP_TRANSPORT_RECORD_ARM_HOLD_MS) {
+    if (held && !sequencer_active && !diamond_opens_sound_menus() && !s_diamond_press_had_conflict &&
+        !s_diamond_press_was_shift && !s_diamond_record_armed &&
+        (now_ms - s_diamond_press_start_ms) >= OP_TRANSPORT_RECORD_ARM_HOLD_MS) {
         s_diamond_record_armed = true;
     }
 
@@ -2698,6 +2730,14 @@ static void handle_diamond_transport(uint32_t now_ms) {
                     pattern_bank_exit();
                 } else {
                     pattern_bank_enter();
+                }
+            } else if (diamond_opens_sound_menus()) {
+                /* The same key again closes; the other menu's key switches. */
+                bool effects = s_diamond_press_was_shift;
+                if (tiles_sound_menu_is_open() && tiles_sound_menu_is_effects() == effects) {
+                    tiles_sound_menu_close();
+                } else {
+                    tiles_sound_menu_open(effects, mode_track());
                 }
             } else if (s_ableton_capture_active && s_diamond_press_was_shift) {
                 /* Recording a Live clip from melodic mode (s_ableton_capture_active):
@@ -3476,6 +3516,11 @@ void tiles_op_mode_scan(void) {
         return;
     }
 
+    if (tiles_sound_menu_is_open()) {
+        tiles_sound_menu_scan(now_ms);
+        return;
+    }
+
     if (s_active_mode == OP_MODE_SEQUENCER && s_pattern_bank_visible) {
         handle_pattern_bank_taps(now_ms);
         render_pattern_bank(now_ms);
@@ -3549,7 +3594,7 @@ void tiles_op_mode_scan(void) {
     }
     /* Chord pads bypass owns_pad() and expression.c's gate, so check the
      * menus here: no chords under an open menu. */
-    if (s_active_mode == OP_MODE_CHORD && !s_menu_visible && !s_scale_menu_visible) {
+    if (s_active_mode == OP_MODE_CHORD && !s_menu_visible && !s_scale_menu_visible && !tiles_sound_menu_is_open()) {
         handle_chord_pad_taps(now_ms);
         chord_pads_pressure();
     }
@@ -3561,14 +3606,15 @@ void tiles_op_mode_scan(void) {
 bool tiles_op_mode_owns_pad_grid(void) {
     /* Menus and whole-grid modes own every pad. Song capture and pitch pick
      * don't: there the grid plays live while the touch is recorded. */
-    return s_menu_visible || s_scale_menu_visible || mode_owns_standby_grid(s_active_mode);
+    return s_menu_visible || s_scale_menu_visible || tiles_sound_menu_is_open() ||
+           mode_owns_standby_grid(s_active_mode);
 }
 
 /* Chord mode claims only its 8 strip pads, unless a menu is open, in which
  * case every pad defers to the blanket answer (menu touches mustn't play,
  * which they did before this check). */
 bool tiles_op_mode_owns_pad(uint8_t logical_pad) {
-    if (s_active_mode == OP_MODE_CHORD && !s_menu_visible && !s_scale_menu_visible) {
+    if (s_active_mode == OP_MODE_CHORD && !s_menu_visible && !s_scale_menu_visible && !tiles_sound_menu_is_open()) {
         return tiles_note_map_is_chord_region_pad(logical_pad);
     }
     return tiles_op_mode_owns_pad_grid();
@@ -3577,7 +3623,8 @@ bool tiles_op_mode_owns_pad(uint8_t logical_pad) {
 /* Wider than owns_pad_grid(): also bass guitar (its notes play, "-"/"+"
  * are frets). Narrower for Ripples, Sand and the cradle ("-"/"+" octave). */
 bool tiles_op_mode_owns_octave_buttons(void) {
-    if (!s_menu_visible && !s_scale_menu_visible && phys_kind_of(s_active_mode) != TILES_PHYS_NONE) {
+    if (!s_menu_visible && !s_scale_menu_visible && !tiles_sound_menu_is_open() &&
+        phys_kind_of(s_active_mode) != TILES_PHYS_NONE) {
         return s_active_mode == OP_MODE_ORBITS;
     }
     return tiles_op_mode_owns_pad_grid() || s_active_mode == OP_MODE_GUITAR;
@@ -3665,7 +3712,8 @@ bool tiles_op_mode_test_set_mode(const char *name) {
 bool tiles_op_mode_has_menu_open(void) {
     /* Sub-views that can sit untouched (menus, pattern bank, step edit,
      * capture waiting for a tempo): standby must not cover them. */
-    return s_menu_visible || s_scale_menu_visible || s_pattern_bank_visible || s_seq_edit_mode != OP_SEQ_EDIT_NONE ||
+    return s_menu_visible || s_scale_menu_visible || tiles_sound_menu_is_open() || s_pattern_bank_visible ||
+           s_seq_edit_mode != OP_SEQ_EDIT_NONE ||
            s_seq_capture_mode_active || (s_active_mode == OP_MODE_BOUNCE && tiles_bounce_mode_is_picking());
 }
 
