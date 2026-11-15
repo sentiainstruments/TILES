@@ -59,6 +59,9 @@ SAMPLE BEGIN <slot> <channels> <frames> <crc32> <name>\n
                           load a slot: OK <bytes>, then the audio as raw bytes, then OK / ERR
 SAMPLE DELETE <slot>\n    empty a slot: OK (also when already empty)
 SAMPLE PLAY <slot> [velocity]\n  hit a slot in TILES's own sound: OK
+SYNTH LIST\n              the synth sounds (`<n> <name>`), then each track's (`track <t> <name>`), then OK
+SYNTH PATCH <track> <n|name>\n  give track 1-4 a sound: OK, or ERR unknown-patch / track-1-4
+SYNTH MIDI <status hex> <data1> [data2]\n  a channel message (80-EF) to the synth only, not sent out: OK
 TEST LEDS <0-100>\n       bench only: every LED white at that % (current measurement)
 TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
 TEST MOTOR <pad> [duty%]\n bench only: one pad's motor (1-24) for 1 s
@@ -435,7 +438,10 @@ second) and `loop.max_ever_us`; sensor health `hall.rezeros`,
 sequencer's autosave `seq.storage`, `seq.saved_bytes`, `seq.saves`,
 `seq.pending`, `seq.truncated`; boot timing `boot.ms` (power-on to the main loop) and
 `boot.sensors_ms`; `boot.hang`, the init step a watchdog reset cut short on
-the last boot (`none` when it booted cleanly); drum mode's store `drums.storage`,
+the last boot (`none` when it booted cleanly); `fault`, the panic or hard
+fault that ended the last boot (`none`, or `core<n> pc=... lr=...
+cfsr=... hfsr=... bfar=... sp=...`, then `fault.callers=` four code
+addresses and `fault.message=` a panic's text); drum mode's store `drums.storage`,
 `drums.saved_bytes`, `drums.saves`, `drums.pending`; the play state (mode,
 scale, key, octave kept across power cycles) `state.storage`,
 `state.saved=mode:<n> scale:<n> octave:<n> key:<n>` (once something is
@@ -444,7 +450,9 @@ the motor chips' health `pca.mode1=<0x40>,<0x41>` (hex, `00` when
 awake), `pca.resets` (chips found asleep after losing power and set up
 again) and `pca.read_fails`; TILES's own sound `audio.*`
 (`firmware/src/audio/README.md`), with the drum sampler's `audio.drums`
-(ringing now) and `audio.drum_underruns`. New keys may be added;
+(ringing now) and `audio.drum_underruns`, and each track's synth sound
+`audio.patch=<t1>,<t2>,<t3>,<t4>` (standalone mode). The SYNTH commands
+answer `ERR standalone-only` in controller mode. New keys may be added;
 ignore ones you don't know.
 
 ## Persistence
