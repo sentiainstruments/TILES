@@ -28,10 +28,10 @@
 /* A family a row, top to bottom, by name (a reordered list keeps its
  * place); the preview note suits the family. */
 static const char *const k_rows[ROWS][COLS] = {
-    {"acid", "reese", "wobble", "sub"},
-    {"pluck", "lead", "stab", "hoover"},
+    {"acid", "reese", "wobble", "sub", "solid"},
+    {"pluck", "lead", "stab", "hoover", "tine"},
     {"haze", "air", "choir"},
-    {"glass", "pure"},
+    {"glass", "pure", "chime"},
 };
 static const float k_row_rgb[ROWS][3] = {
     {1.0f, 0.0f, 0.3f},   /* basses */

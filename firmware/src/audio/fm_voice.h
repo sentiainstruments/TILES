@@ -101,7 +101,8 @@ typedef struct {
 /* Fills the sine table (once, before any voice plays). */
 void tiles_fm_init(void);
 
-/* glide_ms > 0 with legato: glide from the last note. */
+/* glide_ms > 0: glide from the note still sounding; legato: its envelopes
+ * carry on. */
 void tiles_fm_voice_start(tiles_fm_voice_t *v, const tiles_fm_patch_t *patch, const tiles_fm_input_t *in,
                           float glide_ms, bool legato);
 void tiles_fm_voice_release(tiles_fm_voice_t *v);
@@ -115,3 +116,7 @@ float tiles_fm_voice_level(const tiles_fm_voice_t *v);
  * velocity and pressure shares). */
 void tiles_fm_voice_render(tiles_fm_voice_t *v, const tiles_fm_input_t *in, float gain, float *l, float *r,
                            uint32_t n);
+
+/* The factory FM voices (audio/fm_patches.c); in RAM, read every block. */
+enum { TILES_FM_TINE = 0, TILES_FM_SOLID, TILES_FM_CHIME, TILES_FM_FACTORY_COUNT };
+extern tiles_fm_patch_t g_fm_factory[TILES_FM_FACTORY_COUNT];

@@ -120,10 +120,10 @@ Measured live: the effects took 525 cycles a sample during a demo (pumped
 pads under kicks, a pluck through the delay, an overdriven acid line, a
 crushed wobble), with no late frame, underrun or shed voice.
 
-## FM (in progress, 2026-11-15)
+## FM (built 2026-11-16)
 
-Six operators playing DX7 voice data; interface in
-`firmware/src/audio/fm_voice.h` (not built yet). Studied: the DX7 engine
+Six operators playing DX7 voice data (`firmware/src/audio/fm_voice.c`,
+tested on the computer by `test/test_fm.c`). Studied: the DX7 engine
 behind Dexed (Google's *Music Synthesizer for Android*, Apache 2.0),
 written fresh for TILES. What it settled:
 
@@ -150,14 +150,34 @@ written fresh for TILES. What it settled:
 - **Bank format:** F0 43 0n 09 20 00, 32 x 128 packed bytes, checksum
   (128 - sum) & 127, F7 (4,104 bytes).
 
-Plan: integer operators (a 4,096-entry 16-bit sine, SMULWB gains), 16-
-sample blocks with gain ramps, operators too quiet to hear skipped,
-~100 cycles a voice; pressure and slide raise the modulators; sounds are
-wavetable or FM (`synth_patch_t.engine`); `SYNTH BANK` uploads a bank
-(the `SAMPLE BEGIN` raw path) into a 2-sector flash region below the
-sequencer autosave, and a track picks one of its voices; then our own
-factory FM sounds (an electric piano, a growl bass, bells, a pluck, a
-stab).
+How it is built:
+
+- **Integer operators:** a 4,096-entry 16-bit sine (8 KB of RAM), SMULWB
+  gains, 16-sample blocks with the gains ramped across each; the
+  envelopes, LFO, pitch and gains are worked out once a block. An
+  operator below -84 dB isn't computed (a bass using two of its six
+  pays for two). Aimed at ~100 cycles a voice, to be measured.
+- **Any sound is wavetable or FM:** `synth_patch_t.engine`; an FM sound
+  points at its DX7 voice and keeps from the patch only the voice mode,
+  glide, levels and effects. The engine's voices are a union of the two
+  (`audio_engine.c`); a voice that last played the other engine starts
+  clean.
+- **Expression:** pressure and slide (CC74) raise the modulators by
+  `pressure_db` / `slide_db` at full (brighter, as on the wavetable
+  sounds); bend moves every operator but a fixed-frequency one; the
+  carriers follow the patch's level, velocity and pressure shares.
+- **A voice ends** when its carriers fall below -84 dB with the key up:
+  DX7 release times are kept (rate 50 is ~1.3 s from full).
+- **Factory FM sounds** (`fm_patches.c`, our own): *tine* (electric
+  piano, algorithm 5, a x14 strike pair), *solid* (sine plus sub bass,
+  algorithm 1, legato with glide), *chime* (bell, inharmonic x3.5 /
+  x7.07 / x1.41 pairs). In the sound menu: basses, plucks and bells rows.
+- **RAM:** ~21 KB (the sine, the render loop's eight operator variants,
+  the voices' larger union); ~22 KB stays free.
+
+Next: `SYNTH BANK` uploads a bank (the `SAMPLE BEGIN` raw path) into a
+2-sector flash region below the sequencer autosave, and a track picks
+one of its voices; more factory FM sounds (a pluck, a stab).
 
 ## Measured on unit 2
 
@@ -201,7 +221,8 @@ board and is reported by INFO (`fault=`).
    `TILES_FX_BUS_*` in `audio_engine.h`) shared by the settings link and
    the menus; an assignment would point at one of them (and later at sound
    parameters such as cutoff or the wave position).
-3. **FM engine** with DX7 patch import (`patch put bank.syx`).
+3. **FM:** measure it on the board (`synth bench`), then DX7 bank
+   import (`patch put bank.syx`).
 4. The patch format in `shared/` for the companion app.
 5. More voice speed if needed: the ladder (~80 cycles a channel) and the
    wavefolder are the dearest parts left.

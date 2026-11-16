@@ -1,3 +1,3 @@
 /* The SDK's list, plus the constants of the code default_text_excludes.incl
  * moves to RAM (TinyUSB's driver table, the descriptors). */
-*(EXCLUDE_FILE(*libgcc.a: *libc.a: *lib*_a-mem*.o *libm.a: *tinyusb/src/*.o *pico_usb_reset/*.o *pico_float/float_sci_m33_vfp.S.o *pico_float/float_math.c.o *audio/usb_audio.c.o *audio/audio_engine.c.o *audio/synth_voice.c.o *audio/fx.c.o *audio/fx_memory.c.o *audio/sampler.c.o *audio/sample_stream.c.o *midi/usb_device.c.o *midi/usb_descriptors.c.o) .rodata*)
+*(EXCLUDE_FILE(*libgcc.a: *libc.a: *lib*_a-mem*.o *libm.a: *tinyusb/src/*.o *pico_usb_reset/*.o *pico_float/float_sci_m33_vfp.S.o *pico_float/float_math.c.o *audio/usb_audio.c.o *audio/audio_engine.c.o *audio/synth_voice.c.o *audio/fm_voice.c.o *audio/fx.c.o *audio/fx_memory.c.o *audio/sampler.c.o *audio/sample_stream.c.o *midi/usb_device.c.o *midi/usb_descriptors.c.o) .rodata*)

@@ -74,6 +74,8 @@ add_executable(sentia_tiles_firmware
     profiles/settings_table.c
     usb_vendor/usb_vendor.c
     audio/audio_engine.c
+    audio/fm_patches.c
+    audio/fm_voice.c
     audio/sample_slot.c
     audio/sample_store.c
     audio/sample_stream.c
@@ -196,5 +198,5 @@ set_source_files_properties(${TILES_USB_SIZE_SOURCES} TARGET_DIRECTORY sentia_ti
 # Core 1's audio code: on the Cortex-M33 a fused multiply-add takes 3
 # cycles against 2 for a multiply then an add (measured: the ladder 81 -> 67
 # cycles a sample), so GCC mustn't fuse them.
-set_source_files_properties(audio/synth_voice.c audio/audio_engine.c audio/sampler.c audio/fx.c
+set_source_files_properties(audio/synth_voice.c audio/fm_voice.c audio/audio_engine.c audio/sampler.c audio/fx.c
     PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")

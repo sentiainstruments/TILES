@@ -3,14 +3,16 @@
 TILES's own sound, streamed to the computer over the same USB-C cable as
 MIDI: a stereo 48 kHz / 24-bit USB audio input (UAC2, class compliant on
 macOS, Windows 10+, Linux and iPadOS) that a DAW records like any
-interface input. The synth is the **wavetable engine** (13 factory
-sounds, a sound per track); how it is built and what it measures:
+interface input. A sound is the **wavetable engine** or the **FM
+engine** (13 + 3 factory sounds, a sound per track); how they are built
+and what they measure:
 `../../../docs/architecture/synth-engines.md`.
 
 | File | What it is |
 |---|---|
 | `audio_engine.c/.h` | The four tracks, a sound (patch) each, with the guardrails: voices admitted by measured cost, at most 8 a track, the stealing order and the live load guard (`../../../docs/architecture/audio-engine.md`, "Guardrails"); MPE, mono/legato note stacks, the stereo mix. Plain C, no Pico code, tested on the computer (`test/test_audio_engine.c`). |
 | `synth_voice.c/.h`, `synth_patches.c` | The wavetable voice (up to 3 unison copies, drive/fold, SVF or ladder, two envelopes, LFO, glide) and the factory sounds. Tested on the computer (`test/test_synth.c`). |
+| `fm_voice.c/.h`, `fm_patches.c` | The FM voice: six operators playing DX7 voice data (32 algorithms, envelopes, scaling, LFO, pitch envelope), pressure and slide brightening the modulators; DX7 bank and voice unpacking; the factory FM voices. Tested on the computer (`test/test_fm.c`). |
 | `synth_dsp.h` | The building blocks: filters, envelope, LFO, shapers, fast maths. |
 | `fx.c/.h` | The effects (`../../../docs/architecture/synth-engines.md`, "Effects"): per track overdrive (anti-aliased), bit-crush and the sidechain pump; shared plate reverb, ping-pong delay and ensemble fed by sends. Plain C, tested on the computer (`test/test_fx.c`). |
 | `fx_memory.c/.h` | The effects' 182 KB, also the boot-time wavetable build's working space and lent to the pad capture (`diagnostics/capture.c`): core 1 lets go between two blocks and the effects go quiet until `CAPTURE RELEASE`. |

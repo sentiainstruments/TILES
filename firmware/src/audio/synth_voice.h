@@ -7,6 +7,7 @@
  * (docs/architecture/synth-engines.md). Plain C, tested on the computer
  * (test/test_synth.c). */
 
+#include "fm_voice.h"
 #include "fx.h"
 #include "synth_dsp.h"
 #include "wavetable.h"
@@ -18,6 +19,7 @@
 
 enum { SYNTH_FILTER_LP12 = 0, SYNTH_FILTER_BP12, SYNTH_FILTER_HP12, SYNTH_FILTER_LADDER24 };
 enum { SYNTH_POLY = 0, SYNTH_MONO, SYNTH_LEGATO };
+enum { SYNTH_ENGINE_WAVETABLE = 0, SYNTH_ENGINE_FM };
 
 /* LFO rate: free in Hz, or synced to the tempo as beats per cycle. */
 typedef struct {
@@ -28,8 +30,12 @@ typedef struct {
     float delay_ms; /* fades in after this (vibrato) */
 } synth_lfo_cfg_t;
 
+/* A sound. An FM one (engine SYNTH_ENGINE_FM) plays its DX7 voice and
+ * uses only voice_mode, glide, the levels and fx from here. */
 typedef struct {
     const char *name;
+    uint8_t engine;
+    const tiles_fm_patch_t *fm;
     uint8_t bank;
     /* Wavetable position 0..1 and what moves it (in table widths). */
     float wave, wave_pressure, wave_slide, wave_env, wave_lfo;

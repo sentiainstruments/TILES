@@ -178,8 +178,9 @@ Duet, Prism: 3; bouncing notes and the physics modes: 4; drums: 1);
 lane colour. No DAW transport here.
 
 - **Sounds:** a family a row, top to bottom: basses (acid, reese, wobble,
-  sub), plucks and leads (pluck, lead, stab, hoover), pads (haze, air,
-  choir), bells (glass, pure). The track's sound bright, the rest dim; a
+  sub, solid), plucks and leads (pluck, lead, stab, hoover, tine), pads
+  (haze, air, choir), bells (glass, pure, chime); solid, tine and chime
+  are FM. The track's sound bright, the rest dim; a
   press past half travel picks and plays a short preview on the track. A
   new sound brings its own effect amounts.
 - **Effects:** a column each: reverb, delay, chorus, drive, crush, pump.

@@ -1,9 +1,9 @@
 #include "synth_voice.h"
 
-/* The factory sounds of the wavetable engine (docs/architecture/
- * synth-engines.md, "Sound direction"): glossy by default, grit per
- * patch. Wave positions: CLASSIC frames are sine, triangle, soft saw, saw,
- * square, pulse 30/15/7 %, at 0, 1/7 ... 1. */
+/* The factory sounds (docs/architecture/synth-engines.md, "Sound
+ * direction"): glossy by default, grit per patch. Wave positions: CLASSIC
+ * frames are sine, triangle, soft saw, saw, square, pulse 30/15/7 %, at
+ * 0, 1/7 ... 1. The FM ones play voices from fm_patches.c. */
 
 #define F(n) ((float)(n) / 7.0f) /* frame n of 8 */
 
@@ -180,6 +180,27 @@ synth_patch_t g_synth_patches[] = {
         .voice_mode = SYNTH_POLY,
         .level = 0.8f, .velocity_level = 0.6f, .pressure_level = 0.5f,
         .fx = {.reverb = 0.2f},
+    },
+    {
+        .name = "tine",
+        .engine = SYNTH_ENGINE_FM, .fm = &g_fm_factory[TILES_FM_TINE],
+        .voice_mode = SYNTH_POLY,
+        .level = 0.35f, .velocity_level = 0.2f, .pressure_level = 0.15f,
+        .fx = {.reverb = 0.25f, .delay = 0.15f, .chorus = 0.35f},
+    },
+    {
+        .name = "solid",
+        .engine = SYNTH_ENGINE_FM, .fm = &g_fm_factory[TILES_FM_SOLID],
+        .voice_mode = SYNTH_LEGATO, .glide_ms = 50.0f,
+        .level = 0.75f, .velocity_level = 0.2f, .pressure_level = 0.15f,
+        .fx = {.reverb = 0.05f, .drive = 0.2f, .dark = 0.1f, .pump = 0.2f},
+    },
+    {
+        .name = "chime",
+        .engine = SYNTH_ENGINE_FM, .fm = &g_fm_factory[TILES_FM_CHIME],
+        .voice_mode = SYNTH_POLY,
+        .level = 0.55f, .velocity_level = 0.2f, .pressure_level = 0.2f,
+        .fx = {.reverb = 0.45f, .delay = 0.25f, .chorus = 0.1f},
     },
 };
 

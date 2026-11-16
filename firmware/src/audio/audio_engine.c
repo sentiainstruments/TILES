@@ -43,7 +43,11 @@ typedef struct {
     float velocity; /* 0..1 */
     float poly;     /* poly pressure 0..1 */
     uint32_t age;
-    synth_voice_t sv;
+    const synth_patch_t *patch; /* the sound it started with (NULL: none yet) */
+    union {
+        synth_voice_t sv; /* SYNTH_ENGINE_WAVETABLE */
+        tiles_fm_voice_t fm;
+    } u;
 } voice_t;
 
 typedef struct {
@@ -87,6 +91,54 @@ static uint32_t s_over_blocks;
 static float s_load; /* cycles a sample, fading voices left out, smoothed */
 static uint32_t s_shed;
 
+/* A voice of either engine. */
+static inline bool is_fm(const voice_t *v) {
+    return v->patch != NULL && v->patch->engine == SYNTH_ENGINE_FM;
+}
+
+static void voice_release(voice_t *v) {
+    if (is_fm(v)) {
+        tiles_fm_voice_release(&v->u.fm);
+    } else {
+        synth_voice_release(&v->u.sv);
+    }
+}
+
+static void voice_kill(voice_t *v) {
+    if (is_fm(v)) {
+        tiles_fm_voice_kill(&v->u.fm);
+    } else {
+        synth_voice_kill(&v->u.sv);
+    }
+}
+
+/* 0..~1 in both engines (an FM carrier's gain goes to 2). */
+static float voice_level(const voice_t *v) {
+    return is_fm(v) ? 0.5f * tiles_fm_voice_level(&v->u.fm) : synth_voice_level(&v->u.sv);
+}
+
+/* Silent now: its slot is taken. */
+static void voice_cut(voice_t *v) {
+    if (is_fm(v)) {
+        v->u.fm.sounding = false;
+    } else {
+        v->u.sv.amp.stage = SYNTH_ENV_IDLE;
+    }
+}
+
+/* An FM sound's level, velocity and pressure shares, as the wavetable
+ * voice takes them. */
+static float fm_gain(const voice_t *v, const synth_input_t *in) {
+    const synth_patch_t *p = v->patch;
+    float velocity = 1.0f - p->velocity_level + p->velocity_level * in->velocity * in->velocity;
+    return p->level * velocity * (1.0f + p->pressure_level * v->u.fm.pressure_s);
+}
+
+static tiles_fm_input_t fm_input(const synth_input_t *in) {
+    tiles_fm_input_t f = {in->note, in->velocity, in->pressure, in->slide};
+    return f;
+}
+
 typedef struct {
     uint32_t bank;
 } design_ctx_t;
@@ -98,6 +150,14 @@ TILES_AUDIO_COLD static void design(void *ctx, uint32_t frame, tiles_wt_spectrum
 /* A patch's cost before it has been measured, cycles per voice-sample,
  * from SYNTH BENCH on unit 2 (2026-11-14), then learned live. */
 TILES_AUDIO_COLD static float patch_cost(const synth_patch_t *p) {
+    if (p->engine == SYNTH_ENGINE_FM) {
+        /* Operators at output level 0 are skipped. */
+        uint32_t ops = 0;
+        for (uint32_t k = 0; k < 6u; k++) {
+            ops += p->fm->dx7[k * TILES_DX7_OP_BYTES + 16u] > 0u ? 1u : 0u;
+        }
+        return 30.0f + 22.0f * (float)ops;
+    }
     float copies = (float)(p->unison < 1u ? 1u : p->unison);
     bool stereo = p->unison > 1u && p->width > 0.0f;
     float channels = stereo ? 2.0f : 1.0f;
@@ -116,6 +176,7 @@ TILES_AUDIO_COLD void tiles_audio_engine_init(uint8_t bend_range_semitones, uint
             tiles_wt_build(&s_banks[b], design, &ctx, spectrum, s_build_scratch);
             s_ctx.banks[b] = &s_banks[b];
         }
+        tiles_fm_init();
         built = true;
     }
     tiles_fx_init(tiles_fx_memory());
@@ -166,7 +227,7 @@ TILES_AUDIO_COLD void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch)
     for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
         if (s_voice[i].state != VOICE_OFF && s_voice[i].track == track) {
             s_voice[i].state = VOICE_RELEASE;
-            synth_voice_kill(&s_voice[i].sv); /* the old sound ends in 5 ms */
+            voice_kill(&s_voice[i]); /* the old sound ends in 5 ms */
         }
     }
     s_track_patch[track] = patch;
@@ -280,10 +341,17 @@ TILES_AUDIO_COLD uint32_t tiles_audio_engine_bench(uint8_t patch, uint32_t frame
     if (patch >= g_synth_patch_count || frames == 0u) {
         return 0u;
     }
-    synth_voice_t v;
+    const synth_patch_t *p = &g_synth_patches[patch];
+    voice_t v;
     memset(&v, 0, sizeof(v));
+    v.patch = p;
     synth_input_t in = {48.0f, 0.8f, 0.5f, 0.5f};
-    synth_voice_start(&v, &g_synth_patches[patch], &in, 12345u, false);
+    tiles_fm_input_t fin = fm_input(&in);
+    if (is_fm(&v)) {
+        tiles_fm_voice_start(&v.u.fm, p->fm, &fin, 0.0f, false);
+    } else {
+        synth_voice_start(&v.u.sv, p, &in, 12345u, false);
+    }
     float l[BLOCK_FRAMES], r[BLOCK_FRAMES];
     uint64_t total = 0;
     uint32_t done = 0;
@@ -291,7 +359,11 @@ TILES_AUDIO_COLD uint32_t tiles_audio_engine_bench(uint8_t patch, uint32_t frame
         memset(l, 0, sizeof(l));
         memset(r, 0, sizeof(r));
         uint32_t t0 = cycles();
-        synth_voice_render(&v, &s_ctx, &in, l, r, BLOCK_FRAMES);
+        if (is_fm(&v)) {
+            tiles_fm_voice_render(&v.u.fm, &fin, fm_gain(&v, &in), l, r, BLOCK_FRAMES);
+        } else {
+            synth_voice_render(&v.u.sv, &s_ctx, &in, l, r, BLOCK_FRAMES);
+        }
         total += cycles() - t0;
         done += BLOCK_FRAMES;
     }
@@ -336,7 +408,7 @@ static voice_t *victim(int32_t track, bool tails_only, bool take_played) {
             continue; /* a voice being cut has given way already */
         }
         if (v->state == VOICE_RELEASE) {
-            if (tail == NULL || synth_voice_level(&v->sv) < synth_voice_level(&tail->sv)) {
+            if (tail == NULL || voice_level(v) < voice_level(tail)) {
                 tail = v;
             }
         } else if (v->lane) {
@@ -448,7 +520,7 @@ static voice_t *voice_for_note_on(uint8_t channel, uint8_t note, uint8_t track, 
             if (fits) {
                 v->state = VOICE_RELEASE;
                 v->fast = true;
-                synth_voice_kill(&v->sv);
+                voice_kill(v);
             }
         } else if (v->state == VOICE_OFF && slot == NULL) {
             slot = v;
@@ -459,7 +531,7 @@ static voice_t *voice_for_note_on(uint8_t channel, uint8_t note, uint8_t track, 
     }
     if (slot == NULL) {
         slot = first;
-        slot->sv.amp.stage = SYNTH_ENV_IDLE; /* no slot left: cut */
+        voice_cut(slot); /* no slot left: cut */
     }
     return slot;
 }
@@ -482,7 +554,18 @@ static void start_voice(voice_t *v, uint8_t channel, uint8_t note, uint8_t veloc
     v->poly = 0.0f;
     v->age = ++s_age;
     synth_input_t in = voice_input(v);
-    synth_voice_start(&v->sv, &g_synth_patches[s_track_patch[track]], &in, s_age * 2654435761u, legato);
+    const synth_patch_t *patch = &g_synth_patches[s_track_patch[track]];
+    if (v->patch == NULL || v->patch->engine != patch->engine) {
+        memset(&v->u, 0, sizeof(v->u)); /* the slot last played the other engine */
+    }
+    v->patch = patch;
+    if (patch->engine == SYNTH_ENGINE_FM) {
+        tiles_fm_input_t fin = fm_input(&in);
+        bool glide = legato || patch->voice_mode == SYNTH_MONO; /* as the wavetable voice */
+        tiles_fm_voice_start(&v->u.fm, patch->fm, &fin, glide ? patch->glide_ms : 0.0f, legato);
+    } else {
+        synth_voice_start(&v->u.sv, patch, &in, s_age * 2654435761u, legato);
+    }
 }
 
 /* A mono track's one voice (sounding, or its tail). */
@@ -555,7 +638,7 @@ static void note_off(uint8_t channel, uint8_t note) {
         if (v->state == VOICE_ON && v->channel == channel && v->note == note) {
             v->state = s_sustain[channel] ? VOICE_HELD : VOICE_RELEASE;
             if (v->state == VOICE_RELEASE) {
-                synth_voice_release(&v->sv);
+                voice_release(v);
             }
         }
     }
@@ -569,7 +652,7 @@ static void release_channel(uint8_t channel, bool held_only) {
         }
         if (v->state == VOICE_HELD || (!held_only && v->state == VOICE_ON)) {
             v->state = VOICE_RELEASE;
-            synth_voice_release(&v->sv);
+            voice_release(v);
         }
     }
 }
@@ -627,8 +710,16 @@ void tiles_audio_engine_midi(uint8_t status, uint8_t data1, uint8_t data2) {
 
 static void TILES_AUDIO_HOT(render_voice)(voice_t *v, float *l, float *r, uint32_t n) {
     synth_input_t in = voice_input(v);
-    synth_voice_render(&v->sv, &s_ctx, &in, l, r, n);
-    if (!synth_voice_active(&v->sv)) {
+    if (is_fm(v)) {
+        tiles_fm_input_t fin = fm_input(&in);
+        tiles_fm_voice_render(&v->u.fm, &fin, fm_gain(v, &in), l, r, n);
+        if (!tiles_fm_voice_active(&v->u.fm)) {
+            v->state = VOICE_OFF;
+        }
+        return;
+    }
+    synth_voice_render(&v->u.sv, &s_ctx, &in, l, r, n);
+    if (!synth_voice_active(&v->u.sv)) {
         v->state = VOICE_OFF;
     }
 }
@@ -674,7 +765,7 @@ static void TILES_AUDIO_HOT(guard)(const float *track_cycles, const uint32_t *tr
     if (v != NULL) {
         v->state = VOICE_RELEASE;
         v->fast = true;
-        synth_voice_kill(&v->sv);
+        voice_kill(v);
         s_load -= s_cost[v->track]; /* its fade isn't load from here */
         s_shed++;
     }
