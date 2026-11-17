@@ -240,6 +240,13 @@ cycles a sample instead of 1,456 (the effects and drums take the same
 cycles); the flash runs at half, 115 MHz, inside its 133 MHz rating.
 Qualified on units 1 and 2 before it is the default: margin steps above
 it, then a soak (full load, streaming, flash writes, read-back).
+**Unit 2, 2026-11-17** (`cmake -DTILES_CLK_KHZ=...`, the stress tool at
+~500 MIDI messages a second, every sound, every effect at 100, streaming,
+the program read back every 30 s): 230.4 MHz at 1.15 V 10 min, 268.8 and
+288 MHz at 1.20 V 10 min each (25 % margin), then a 30 min soak at 230.4:
+no restart, no read-back error, nothing shed, no underrun; up to 20
+voices at 96-98 % peak load (6 at 150 MHz), 28-33 C. Unit 2 now runs
+230.4 MHz; unit 1 is still to test.
 
 1. **Try the sound and effects menus on the board** (built 2026-11-15,
    `firmware/src/services/sound_menu.c`): diamond = sounds, circle +
