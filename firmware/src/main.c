@@ -426,6 +426,8 @@ int main(void) {
             !tiles_expression_control_owns_pad_grid() && !tiles_op_mode_owns_pad_grid()) {
             tiles_debug_trace('Y');
             tiles_standby_scan();
+        } else {
+            tiles_standby_hold_off();
         }
         tiles_show_link_service();
         tiles_debug_trace('L');

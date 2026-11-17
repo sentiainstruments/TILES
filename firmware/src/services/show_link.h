@@ -12,5 +12,8 @@ void tiles_show_link_init(void); /* after tiles_midi_in_init() */
 void tiles_show_link_service(void);
 /* The show has the LEDs (on, and a frame within the last 2 s). */
 bool tiles_show_link_active(void);
+/* A show is in progress: the app said "on" and has sent something within
+ * 30 min. Keeps TILES out of standby through pauses. */
+bool tiles_show_link_session(void);
 
 #endif

@@ -25,6 +25,9 @@
 /* Without messages for this long the LEDs go back to TILES (app quit,
  * cable out, music stopped and the sender went quiet). */
 #define SHOW_TIMEOUT_MS 2000u
+/* A show in progress (the app's "on", then any message within this) keeps
+ * TILES out of standby through the pauses between songs. First guess. */
+#define SHOW_SESSION_MS (30u * 60u * 1000u)
 /* Render step; the pads are paced further by the lighting service. */
 #define SHOW_STEP_MS 20u
 
@@ -231,6 +234,10 @@ void tiles_show_link_init(void) {
 
 bool tiles_show_link_active(void) {
     return s_active;
+}
+
+bool tiles_show_link_session(void) {
+    return s_on && to_ms_since_boot(get_absolute_time()) - s_last_frame_ms < SHOW_SESSION_MS;
 }
 
 static void mix(const float *x, const float *y, float t, float out[3]) {

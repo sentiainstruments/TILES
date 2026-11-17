@@ -1849,9 +1849,10 @@ void tiles_standby_scan(void) {
         return;
     }
 
-    /* A computer's show running the LEDs counts as activity: no standby
-     * screen or deep sleep under it. */
-    if (tiles_show_link_active()) {
+    /* A computer's show counts as activity from the app's "on" until its
+     * "off" (or a long silence), pauses between songs included: no standby
+     * screen or deep sleep in a show. */
+    if (tiles_show_link_session()) {
         s_last_activity_ms = now_ms;
         if (s_state != TILES_STANDBY_STATE_AWAKE) {
             exit_standby();
@@ -1929,6 +1930,11 @@ void tiles_standby_scan(void) {
         render_frame(s_animation_index, now_ms);
         s_last_frame_ms = now_ms;
     }
+}
+
+void tiles_standby_hold_off(void) {
+    s_last_activity_ms = to_ms_since_boot(get_absolute_time());
+    s_seen_midi_activity = tiles_midi_in_activity_count();
 }
 
 bool tiles_standby_is_active(void) {

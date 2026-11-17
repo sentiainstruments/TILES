@@ -120,7 +120,9 @@ crash reboot (`__uninitialized_ram`, `tiles_op_mode_init()`).
   "-"/"+" for its own purpose says so (`*_owns_pad_grid()`,
   `*_owns_octave_buttons()`, `tiles_game_mode_is_active()`), and the
   others stand down: `expression.c` starts no new strike,
-  `octave_control.c` ignores "-"/"+", `main.c` skips standby. A module
+  `octave_control.c` ignores "-"/"+", `main.c` holds standby off (its
+  idle minute starts when the owner lets go, not at the last touch before
+  it took over). A module
   that stands down keeps its edge tracking current, so a held button
   isn't read as a new press when control returns.
 - **Gestures are exact.** Combos check their complete button set (the
@@ -216,7 +218,8 @@ row: kicks in the main colour, accents in the accent colour), **5 chase**
 (a lit column steps across on each kick) or **6 spectrum** (the meter's
 bars coloured main to second across the grid, peaks in the accent
 colour). Without messages for 2 s it lets go and everything is as it
-was; while it runs, standby and deep sleep wait. Pads still play notes
+was. From the app's "on" until its "off" (or 30 min without a message)
+standby and deep sleep wait, the pauses between songs included. Pads still play notes
 underneath. The decays are first guesses.
 
 ## Status
