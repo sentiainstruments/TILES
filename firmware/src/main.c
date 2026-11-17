@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #include "hardware/clocks.h"
+#include "hardware/vreg.h"
 #include "hardware/watchdog.h"
 #include "pico/stdlib.h"
 
@@ -75,7 +76,14 @@ static void timing_tick(void) {
 
 #define BOOT_WATCHDOG_MS 8000u
 
+#ifndef TILES_VREG_VOLTAGE
+#define TILES_VREG_VOLTAGE VREG_VOLTAGE_DEFAULT
+#endif
+
 int main(void) {
+    /* The build's own core voltage: the SDK only raises it at boot, and a
+     * reset keeps the last one (a 288 MHz test left 1.20 V under 230.4). */
+    vreg_set_voltage(TILES_VREG_VOLTAGE);
     /* Above the 150 MHz rating the UART and SPI run from the USB PLL's
      * 48 MHz (I2C and PIO follow the system clock either way). */
     if (clock_get_hz(clk_sys) > 150000000u) {

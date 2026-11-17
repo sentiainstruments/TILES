@@ -215,7 +215,8 @@ if(NOT TILES_CLK_KHZ EQUAL 150000)
         PLL_SYS_POSTDIV1=${tiles_pd1}
         PLL_SYS_POSTDIV2=${tiles_pd2}
         SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST=1
-        SYS_CLK_VREG_VOLTAGE_MIN=VREG_VOLTAGE_${tiles_vreg})
+        SYS_CLK_VREG_VOLTAGE_MIN=VREG_VOLTAGE_${tiles_vreg}
+        TILES_VREG_VOLTAGE=VREG_VOLTAGE_${tiles_vreg})
     if(TILES_CLK_KHZ GREATER 160000)
         pico_define_boot_stage2(tiles_boot2 ${PICO_DEFAULT_BOOT_STAGE2_FILE})
         target_compile_definitions(tiles_boot2 PRIVATE PICO_FLASH_SPI_CLKDIV=3 PICO_FLASH_SPI_RXDELAY=3)
