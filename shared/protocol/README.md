@@ -449,7 +449,11 @@ second) and `loop.max_ever_us`; sensor health `hall.rezeros`,
 `hall.unconfirmed`, `hall.reinits`, `hall.dead`, `touch.recoveries`;
 `tune.changed` (live tuning values away from their defaults); the
 sequencer's autosave `seq.storage`, `seq.saved_bytes`, `seq.saves`,
-`seq.pending`, `seq.truncated`; boot timing `boot.ms` (power-on to the main loop) and
+`seq.pending`, `seq.truncated`; `uptime_s` (seconds since this boot);
+`boot.reset=<cause> (0x<CHIP_RESET>)`, what reset the chip before this boot:
+`watchdog-timer` (a hang, or a restart that lets the watchdog run out:
+REBOOT APP, picotool), `watchdog-force` (a caught crash), else `por`
+(power on), `bor` (brown-out), `run` (the RUN pin), `glitch`, ...; boot timing `boot.ms` (power-on to the main loop) and
 `boot.sensors_ms`; `boot.hang`, the init step a watchdog reset cut short on
 the last boot (`none` when it booted cleanly); `fault`, the panic or hard
 fault that ended the last boot (`none`, or `core<n> pc=... lr=...
