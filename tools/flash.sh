@@ -49,6 +49,18 @@ if [ -n "${TILES_SERIAL:-}" ]; then
         done
         exec picotool load --ser "$TILES_SERIAL" -x -v --ignore-partitions "$UF2"
     fi
+    # Not running (or not plugged in): never fall through to picotool -f,
+    # which would send whichever other TILES is running to BOOTSEL. Only
+    # wait for this one to arrive in BOOTSEL by hand.
+    for _ in $(seq 1 20); do
+        if picotool info --ser "$TILES_SERIAL" >/dev/null 2>&1; then
+            echo "Board $TILES_SERIAL is in BOOTSEL -- flashing it."
+            exec picotool load --ser "$TILES_SERIAL" -x -v --ignore-partitions "$UF2"
+        fi
+        sleep 0.5
+    done
+    echo "Board $TILES_SERIAL not found running or in BOOTSEL. Is it plugged in? (Other boards were left alone.)" >&2
+    exit 1
 fi
 
 for id in "${IDS[@]}"; do
