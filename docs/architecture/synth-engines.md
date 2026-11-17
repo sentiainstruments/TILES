@@ -233,13 +233,13 @@ board and is reported by INFO (`fault=`).
 
 ## Next, in order
 
-Pinned: **the clock.** 150 MHz now (the RP2350's rating). After the
-restart above is found: 200 MHz on unit 2 with a soak test (full load,
-flash writes, USB audio): about 60 % more room for voices, the effects
-and drums taking the same cycles; the flash stays at half the clock
-(100 MHz). For the First Edition, 230.4 MHz instead: the DAC's bit clock
-divides from it exactly (by 75), which 200 and 250 don't; 250 would need
-more core voltage and the flash slowed to a third.
+Pinned: **the clock, 230.4 MHz** (decided 2026-11-17), the same on Rev A0
+and the First Edition: the DAC's bit clock divides from it exactly
+(`../hardware/audio-output.md`), 200 and 250 MHz don't. Voices get 2,880
+cycles a sample instead of 1,456 (the effects and drums take the same
+cycles); the flash runs at half, 115 MHz, inside its 133 MHz rating.
+Qualified on units 1 and 2 before it is the default: margin steps above
+it, then a soak (full load, streaming, flash writes, read-back).
 
 1. **Try the sound and effects menus on the board** (built 2026-11-15,
    `firmware/src/services/sound_menu.c`): diamond = sounds, circle +
