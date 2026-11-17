@@ -1065,6 +1065,10 @@ static void handle_line(char *line) {
         reply(text);
         snprintf(text, sizeof(text), "audio.load_pct=%u", (unsigned)audio.load_pct);
         reply(text);
+        snprintf(text, sizeof(text), "audio.load_peak_pct=%u", (unsigned)audio.load_peak_pct);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.stack_free=%lu", (unsigned long)audio.stack_free);
+        reply(text);
         snprintf(text, sizeof(text), "audio.shed=%lu", (unsigned long)audio.shed);
         reply(text);
         snprintf(text, sizeof(text), "audio.drums=%u", (unsigned)audio.drum_voices);
@@ -1149,6 +1153,11 @@ static void handle_line(char *line) {
         } else {
             snprintf(text, sizeof(text), "fault.saved=none");
         }
+        reply(text);
+        snprintf(text, sizeof(text), "boot.reset=%s (0x%08lx)", tiles_fault_reset_cause(),
+                 (unsigned long)tiles_fault_reset_bits());
+        reply(text);
+        snprintf(text, sizeof(text), "uptime_s=%lu", (unsigned long)(to_ms_since_boot(get_absolute_time()) / 1000u));
         reply(text);
         snprintf(text, sizeof(text), "boot.hang=%s",
                  tiles_boot_stage_last_hang() != NULL ? tiles_boot_stage_last_hang() : "none");

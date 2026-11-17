@@ -66,6 +66,29 @@ static volatile float s_tempo_bpm = 120.0f;
 static volatile uint8_t s_voices;
 static volatile uint8_t s_drum_voices;
 static volatile uint8_t s_load_pct;
+static volatile uint8_t s_load_peak_pct;
+
+/* Core 1's stack, painted at its start: the paint left is what it never
+ * reached. */
+#define STACK_PAINT 0x5AFEC0DEu
+extern uint32_t __StackOneBottom;
+
+static void __not_in_flash_func(paint_stack)(void) {
+    uint32_t here;
+    uint32_t *p = &__StackOneBottom;
+    while (p < &here - 32) {
+        *p++ = STACK_PAINT;
+    }
+}
+
+static uint32_t stack_free(void) {
+    const uint32_t *p = &__StackOneBottom;
+    uint32_t n = 0;
+    while (n < PICO_CORE1_STACK_SIZE / 4u && p[n] == STACK_PAINT) {
+        n++;
+    }
+    return n * 4u;
+}
 
 #if TILES_DSP_BENCH
 static volatile bool s_bench_request;
@@ -112,6 +135,7 @@ static uint32_t __not_in_flash_func(engine_now_us)(void) {
 }
 
 static void core1_main(void) {
+    paint_stack();
     /* Flash writes on core 0 pause this core (storage_flash.h). */
     multicore_lockout_victim_init();
     if (s_usb_on_core1) {
@@ -185,6 +209,7 @@ static void core1_main(void) {
         uint32_t now = time_us_32();
         if (now - window_start >= 1000000u) {
             s_load_pct = (uint8_t)(busy_us / 10000u);
+            s_load_peak_pct = s_load_pct > s_load_peak_pct ? s_load_pct : s_load_peak_pct;
             busy_us = 0;
             window_start = now;
         }
@@ -305,6 +330,8 @@ tiles_usb_audio_info_t tiles_usb_audio_get_info(void) {
         .usb_gap_us = s_usb_gap_us,
         .fx_cost = tiles_audio_engine_fx_cost(),
         .fx_lent = tiles_fx_memory_lent(),
+        .load_peak_pct = s_load_peak_pct,
+        .stack_free = s_started ? stack_free() : 0u,
     };
     for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
         info.cost[t] = (uint16_t)tiles_audio_engine_track_cost(t);

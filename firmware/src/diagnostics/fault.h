@@ -22,6 +22,13 @@ void tiles_fault_boot(void);
 /* The fault that ended the last boot; false if it ended cleanly. */
 bool tiles_fault_last(tiles_fault_t *out);
 
+/* What reset the chip before this boot, read at tiles_fault_boot():
+ * "watchdog-timer" (a hang, or a restart that lets the watchdog run out:
+ * REBOOT APP, picotool), "watchdog-force" (a caught crash), else POWMAN CHIP_RESET's names ("por", "bor" = brown-out,
+ * "run" = the RUN pin, "glitch", ...), "none" if no bit. */
+const char *tiles_fault_reset_cause(void);
+uint32_t tiles_fault_reset_bits(void);
+
 /* The last boot ended in a caught crash. Its restart goes through
  * watchdog_reboot(), which watchdog_enable_caused_reboot() doesn't count. */
 bool tiles_fault_restarted(void);

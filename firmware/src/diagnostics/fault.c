@@ -2,6 +2,7 @@
 
 #include "hardware/irq.h"
 #include "hardware/regs/addressmap.h"
+#include "hardware/structs/powman.h"
 #include "hardware/structs/scb.h"
 #include "hardware/sync.h"
 #include "hardware/watchdog.h"
@@ -25,6 +26,8 @@ static uint32_t __uninitialized_ram(s_magic);
 static tiles_fault_t __uninitialized_ram(s_record);
 static tiles_fault_t s_last;
 static bool s_have_last;
+static uint32_t s_reset_bits;
+static char s_reset_cause[96];
 
 #define SAVED_VERSION 1u
 static tiles_kv_t s_store;
@@ -33,6 +36,43 @@ static tiles_fault_saved_t s_saved; /* count 0: none */
 extern char __flash_binary_end;
 
 void tiles_fault_boot(void) {
+    s_reset_bits = powman_hw->chip_reset;
+    static const struct {
+        uint32_t bit;
+        const char *name;
+    } k_causes[] = {
+        {POWMAN_CHIP_RESET_HAD_POR_BITS, "por"},
+        {POWMAN_CHIP_RESET_HAD_BOR_BITS, "bor"},
+        {POWMAN_CHIP_RESET_HAD_RUN_LOW_BITS, "run"},
+        {POWMAN_CHIP_RESET_HAD_DP_RESET_REQ_BITS, "debug"},
+        {POWMAN_CHIP_RESET_HAD_RESCUE_BITS, "rescue"},
+        {POWMAN_CHIP_RESET_HAD_WATCHDOG_RESET_POWMAN_ASYNC_BITS | POWMAN_CHIP_RESET_HAD_WATCHDOG_RESET_POWMAN_BITS |
+             POWMAN_CHIP_RESET_HAD_WATCHDOG_RESET_SWCORE_BITS | POWMAN_CHIP_RESET_HAD_WATCHDOG_RESET_PSM_BITS,
+         "watchdog"},
+        {POWMAN_CHIP_RESET_HAD_SWCORE_PD_BITS, "swcore_pd"},
+        {POWMAN_CHIP_RESET_HAD_GLITCH_DETECT_BITS, "glitch"},
+        {POWMAN_CHIP_RESET_HAD_HZD_SYS_RESET_REQ_BITS, "sysresetreq"},
+    };
+    s_reset_cause[0] = '\0';
+    /* The chip's own restarts are the watchdog's; CHIP_RESET keeps "por"
+     * through them. */
+    uint32_t reason = watchdog_hw->reason;
+    if (reason & WATCHDOG_REASON_TIMER_BITS) {
+        strcpy(s_reset_cause, "watchdog-timer");
+    } else if (reason & WATCHDOG_REASON_FORCE_BITS) {
+        strcpy(s_reset_cause, "watchdog-force");
+    }
+    for (uint32_t i = 0; s_reset_cause[0] == '\0' && i < sizeof(k_causes) / sizeof(k_causes[0]); i++) {
+        if (s_reset_bits & k_causes[i].bit) {
+            if (s_reset_cause[0] != '\0') {
+                strncat(s_reset_cause, " ", sizeof(s_reset_cause) - strlen(s_reset_cause) - 1u);
+            }
+            strncat(s_reset_cause, k_causes[i].name, sizeof(s_reset_cause) - strlen(s_reset_cause) - 1u);
+        }
+    }
+    if (s_reset_cause[0] == '\0') {
+        strcpy(s_reset_cause, "none");
+    }
     s_have_last = s_magic == FAULT_MAGIC;
     if (s_have_last) {
         s_last = s_record;
@@ -45,6 +85,14 @@ bool tiles_fault_last(tiles_fault_t *out) {
         *out = s_last;
     }
     return s_have_last;
+}
+
+const char *tiles_fault_reset_cause(void) {
+    return s_reset_cause;
+}
+
+uint32_t tiles_fault_reset_bits(void) {
+    return s_reset_bits;
 }
 
 bool tiles_fault_restarted(void) {

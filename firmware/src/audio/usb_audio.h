@@ -65,6 +65,8 @@ typedef struct {
     uint32_t usb_gap_us;  /* core 1's longest tud_task() to tud_task(), streaming */
     uint32_t fx_cost;     /* the effects' cycles per sample */
     bool fx_lent;         /* their memory lent to the pad capture: quiet */
+    uint8_t load_peak_pct; /* the busiest second since boot */
+    uint32_t stack_free;  /* core 1's stack never reached, bytes (of 4,096) */
 } tiles_usb_audio_info_t;
 
 tiles_usb_audio_info_t tiles_usb_audio_get_info(void);

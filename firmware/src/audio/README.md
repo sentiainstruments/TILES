@@ -100,6 +100,8 @@ standalone mode with USB on core 1.
 | `audio.underruns` | 0 (core 1 never fell behind) |
 | `audio.midi_drops` | 0 |
 | `audio.load_pct` | core 1 time rendering in the last second |
+| `audio.load_peak_pct` | the busiest second since boot |
+| `audio.stack_free` | core 1's stack (4,096 bytes) never reached, painted at its start: under the heaviest stress test (every sound, every effect at 100, all tracks) 2,576 |
 | `audio.drums` | drum samples ringing now |
 | `audio.drum_underruns` | 0 (the stream from flash never ran dry) |
 | `audio.shed` | voices the load guard ended; 0 unless the sounds asked for more than the core has |
