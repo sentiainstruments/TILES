@@ -210,7 +210,15 @@ none (67 before).
 
 ## Known issues
 
-None open. Fixed along the way: late USB packets that made macOS drop
+- **A restart while playing** (unit 2, 2026-11-16, standalone, melodic
+  mode, firmware c901d17): no red pulse, no record (that build kept a
+  caught crash only in RAM, lost at the unplug). Thought to be the synth
+  engine, maybe headroom; to look at first: core 1's 4 KB stack (its
+  deepest use under the heaviest sounds and effects), the load near the
+  guard's 90 % ceiling. Caught crashes now pulse red and stay in flash
+  (INFO `fault.saved`), so the next one says where.
+
+Fixed along the way: late USB packets that made macOS drop
 the stream for up to a second (core 1's USB code ran from flash:
 `firmware/src/midi/HISTORY.md`), and TinyUSB's RP2350 driver panicking
 when a recording app restarted the stream ("ep 85 was already
@@ -218,6 +226,14 @@ available"). Any panic, hard fault or stalled core 1 now restarts the
 board and is reported by INFO (`fault=`).
 
 ## Next, in order
+
+Pinned: **the clock.** 150 MHz now (the RP2350's rating). After the
+restart above is found: 200 MHz on unit 2 with a soak test (full load,
+flash writes, USB audio): about 60 % more room for voices, the effects
+and drums taking the same cycles; the flash stays at half the clock
+(100 MHz). For the First Edition, 230.4 MHz instead: the DAC's bit clock
+divides from it exactly (by 75), which 200 and 250 don't; 250 would need
+more core voltage and the flash slowed to a third.
 
 1. **Try the sound and effects menus on the board** (built 2026-11-15,
    `firmware/src/services/sound_menu.c`): diamond = sounds, circle +
