@@ -8,6 +8,7 @@
 #include "device_mode.h"
 #include "diagnostics/capture.h"
 #include "diagnostics/boot_stage.h"
+#include "diagnostics/chip.h"
 #include "diagnostics/fault.h"
 #include "diagnostics/loop_stats.h"
 #include "drum_seq.h"
@@ -1159,6 +1160,12 @@ static void handle_line(char *line) {
         reply(text);
         snprintf(text, sizeof(text), "uptime_s=%lu", (unsigned long)(to_ms_since_boot(get_absolute_time()) / 1000u));
         reply(text);
+        snprintf(text, sizeof(text), "clk_khz=%lu", (unsigned long)tiles_chip_clk_khz());
+        reply(text);
+        snprintf(text, sizeof(text), "vreg_mv=%lu", (unsigned long)tiles_chip_vreg_mv());
+        reply(text);
+        snprintf(text, sizeof(text), "temp_c=%.1f", (double)tiles_chip_temp_c());
+        reply(text);
         snprintf(text, sizeof(text), "boot.hang=%s",
                  tiles_boot_stage_last_hang() != NULL ? tiles_boot_stage_last_hang() : "none");
         reply(text);
@@ -1303,6 +1310,20 @@ static void handle_line(char *line) {
 
     /* Saves any pending change now instead of waiting for the debounced,
      * pads-idle save. The write pauses the firmware for tens of ms. */
+    /* FLASH CRC: the program read back uncached (diagnostics/chip.h). */
+    if (strcmp(cmd, "FLASH") == 0) {
+        char *what = strtok(NULL, " ");
+        if (what == NULL || strcmp(what, "CRC") != 0) {
+            reply_err("unknown-key");
+            return;
+        }
+        uint32_t bytes;
+        uint32_t crc = tiles_chip_image_crc(&bytes);
+        snprintf(text, sizeof(text), "crc=%08lx bytes=%lu", (unsigned long)crc, (unsigned long)bytes);
+        reply(text);
+        return;
+    }
+
     /* FAULT CLEAR: forgets the saved crash (INFO fault.saved). */
     if (strcmp(cmd, "FAULT") == 0) {
         char *what = strtok(NULL, " ");

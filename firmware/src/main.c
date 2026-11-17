@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 
+#include "hardware/clocks.h"
 #include "hardware/watchdog.h"
 #include "pico/stdlib.h"
 
@@ -75,6 +76,11 @@ static void timing_tick(void) {
 #define BOOT_WATCHDOG_MS 8000u
 
 int main(void) {
+    /* Above the 150 MHz rating the UART and SPI run from the USB PLL's
+     * 48 MHz (I2C and PIO follow the system clock either way). */
+    if (clock_get_hz(clk_sys) > 150000000u) {
+        clock_configure_undivided(clk_peri, 0, CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB, USB_CLK_HZ);
+    }
     /* Read once, first: a crash-recovery boot skips the boot prints (each can
      * block on the stdio timeout) and the animation. */
     bool crash_recovered = watchdog_enable_caused_reboot();

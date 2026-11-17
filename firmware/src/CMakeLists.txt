@@ -6,6 +6,7 @@ add_executable(sentia_tiles_firmware
     diagnostics/capture.c
     diagnostics/calibration.c
     diagnostics/boot_stage.c
+    diagnostics/chip.c
     diagnostics/fault.c
     diagnostics/loop_stats.c
     drivers/sk6805.c
@@ -172,6 +173,55 @@ if(DEFINED TILES_UNIT)
 endif()
 
 pico_add_extra_outputs(sentia_tiles_firmware)
+
+# The system clock: 150 MHz (the RP2350's rating) unless qualified
+# otherwise; 230.4 MHz is the target, the steps above it margin tests
+# (docs/architecture/synth-engines.md, "Next"). Each step's PLL and core
+# voltage; above 160 MHz the flash runs at a third of the clock, sampled 3
+# half-cycles late: about the timing 150 MHz gives (75 MHz, 6.7 ns).
+set(TILES_CLK_KHZ 150000 CACHE STRING "System clock in kHz: 150000, 153600, 230400, 268800 or 288000")
+set(TILES_VREG "" CACHE STRING "Core voltage as a VREG_VOLTAGE_ suffix (1_15, 1_20); empty: the step's own")
+if(NOT TILES_CLK_KHZ EQUAL 150000)
+    if(TILES_CLK_KHZ EQUAL 153600)
+        set(tiles_vco 768000000)
+        set(tiles_pd1 5)
+        set(tiles_pd2 1)
+        set(tiles_vreg 1_10)
+    elseif(TILES_CLK_KHZ EQUAL 230400)
+        set(tiles_vco 1152000000)
+        set(tiles_pd1 5)
+        set(tiles_pd2 1)
+        set(tiles_vreg 1_15)
+    elseif(TILES_CLK_KHZ EQUAL 268800)
+        set(tiles_vco 1344000000)
+        set(tiles_pd1 5)
+        set(tiles_pd2 1)
+        set(tiles_vreg 1_20)
+    elseif(TILES_CLK_KHZ EQUAL 288000)
+        set(tiles_vco 864000000)
+        set(tiles_pd1 3)
+        set(tiles_pd2 1)
+        set(tiles_vreg 1_20)
+    else()
+        message(FATAL_ERROR "TILES_CLK_KHZ=${TILES_CLK_KHZ}: not one of the steps")
+    endif()
+    if(TILES_VREG)
+        set(tiles_vreg ${TILES_VREG})
+    endif()
+    message(STATUS "System clock ${TILES_CLK_KHZ} kHz, core VREG_VOLTAGE_${tiles_vreg}")
+    target_compile_definitions(sentia_tiles_firmware PRIVATE
+        SYS_CLK_KHZ=${TILES_CLK_KHZ}
+        PLL_SYS_VCO_FREQ_HZ=${tiles_vco}
+        PLL_SYS_POSTDIV1=${tiles_pd1}
+        PLL_SYS_POSTDIV2=${tiles_pd2}
+        SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST=1
+        SYS_CLK_VREG_VOLTAGE_MIN=VREG_VOLTAGE_${tiles_vreg})
+    if(TILES_CLK_KHZ GREATER 160000)
+        pico_define_boot_stage2(tiles_boot2 ${PICO_DEFAULT_BOOT_STAGE2_FILE})
+        target_compile_definitions(tiles_boot2 PRIVATE PICO_FLASH_SPI_CLKDIV=3 PICO_FLASH_SPI_RXDELAY=3)
+        pico_set_boot_stage2(sentia_tiles_firmware tiles_boot2)
+    endif()
+endif()
 
 # Core 1's USB path and the engine's note handling run from RAM
 # (link/default_text_excludes.incl says why).

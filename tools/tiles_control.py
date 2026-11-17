@@ -28,6 +28,7 @@ Usage:
     python3 tools/tiles_control.py save                  # write unsaved changes to flash now
     python3 tools/tiles_control.py info                  # flash-store status
     python3 tools/tiles_control.py fault clear           # forget the saved crash (INFO fault.saved)
+    python3 tools/tiles_control.py flash crc firmware.bin # read the program back from flash, compare with the build's
     python3 tools/tiles_control.py reboot bootsel         # reboot into the ROM bootloader (for picotool)
     python3 tools/tiles_control.py reboot app             # plain warm restart back into this firmware
     TILES_SERIAL=F1A60E66E44C9D4B python3 tools/tiles_control.py info   # one of several boards (serial = chip ID)
@@ -381,6 +382,21 @@ def main():
         request, multi = "SAVE", False
     elif command == "fault" and argc == 3 and sys.argv[2].lower() == "clear":
         request, multi = "FAULT CLEAR", False
+    elif command == "flash" and argc in (3, 4) and sys.argv[2].lower() == "crc":
+        # The device reads its program back uncached; given the build's .bin, a mismatch is a flash read error.
+        reply = session.command("FLASH CRC")[0]
+        print(reply)
+        if argc == 4:
+            import zlib
+            with open(sys.argv[3], "rb") as f:
+                data = f.read()
+            fields = dict(kv.split("=", 1) for kv in reply.split() if "=" in kv)
+            n = int(fields.get("bytes", "0"))
+            want = zlib.crc32(data[:n]) & 0xFFFFFFFF
+            same = fields.get("crc") == f"{want:08x}" and n <= len(data)
+            print(f"build: crc={want:08x} bytes={len(data)} -> {'MATCH' if same else 'MISMATCH'}")
+            sys.exit(0 if same else 1)
+        sys.exit(0)
     elif command == "get" and argc == 3:
         request, multi = f"GET {sys.argv[2]}", False
     elif command == "set" and argc == 4:
