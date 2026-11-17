@@ -27,9 +27,9 @@ export const mockDevice = {
   manufacturerName: 'Sentia Instruments',
 }
 
-const VERSIONS = ['0.2.0', '0.3.6', 'alpha.6.5'] as const
+const VERSIONS = ['0.2.0', '0.3.6', 'alpha.6.5', 'alpha.6.9'] as const
 type Version = (typeof VERSIONS)[number]
-let firmware: Version = 'alpha.6.5'
+let firmware: Version = 'alpha.6.9'
 let settings = new Map<string, Setting>()
 const scales = new Map<number, Scale>()
 
@@ -38,11 +38,13 @@ const toWire = (value: string | number | boolean) =>
 
 function loadVersion(next: Version) {
   firmware = next
-  const list = next === 'alpha.6.5'
-    ? [...fixture.settings, ...fixture.alphaSettings]
-    : next === '0.3.6'
-      ? fixture.settings
-      : [...fixture.settings.filter(s => !s.key.startsWith('color.')), ...fixture.legacySettings]
+  const list = next === 'alpha.6.9'
+    ? [...fixture.settings, ...fixture.alphaSettings, ...fixture.currentSettings]
+    : next === 'alpha.6.5'
+      ? [...fixture.settings, ...fixture.alphaSettings]
+      : next === '0.3.6'
+        ? fixture.settings
+        : [...fixture.settings.filter(s => !s.key.startsWith('color.')), ...fixture.legacySettings]
   settings = new Map<string, Setting>(list.map((s): [string, Setting] => [s.key, {
     ...s,
     value: toWire(s.default),
@@ -153,7 +155,7 @@ function handleScale(parts: string[]): string[] {
  * Multiline responses omit the terminal OK because the real USB adapter
  * consumes it before returning lines to the renderer.
  */
-export async function mockCommand(command: string, _multiLine = false): Promise<string[]> {
+async function mockCommandUntagged(command: string): Promise<string[]> {
   const parts = command.trim().split(/\s+/)
   const [action, key, ...rest] = parts
   console.log('[SIM]', command)
@@ -234,4 +236,20 @@ export async function mockCommand(command: string, _multiLine = false): Promise<
       return ['OK']
   }
   return ['ERR unsupported-command']
+}
+
+
+/** Firmware 0.3.7+ request tags. The Electron IPC API already consumes
+ * the final multiline OK, so tag each returned data line, not a fabricated
+ * terminator. Legacy mock profiles intentionally reject tagged requests.
+ */
+export async function mockCommand(command: string, _multiLine = false): Promise<string[]> {
+  const trimmed = command.trim()
+  if (!trimmed.startsWith('@')) return mockCommandUntagged(command)
+  const match = /^@([A-Za-z0-9_-]{1,16})\s+(.+)$/.exec(trimmed)
+  if (!match) return ['ERR bad-tag']
+  if (firmware === '0.2.0' || firmware === '0.3.6') return ['ERR unknown-command']
+  const [, tag, cmd] = match
+  const reply = await mockCommandUntagged(cmd)
+  return reply.map(line => `@${tag} ${line}`)
 }
