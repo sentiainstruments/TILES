@@ -593,6 +593,9 @@ void tiles_fx_busses(const float *chorus_in, const float *delay_in, const float 
 }
 
 TILES_AUDIO_COLD uint32_t tiles_fx_bench(uint32_t which, uint32_t frames, uint32_t (*cycles)(void)) {
+    if (s_bypass) {
+        return 0u; /* the memory is the pad capture's */
+    }
     float in[TILES_FX_BLOCK_MAX], l[TILES_FX_BLOCK_MAX], r[TILES_FX_BLOCK_MAX], rev[TILES_FX_BLOCK_MAX];
     tiles_fx_amounts_t a;
     memset(&a, 0, sizeof(a));
@@ -629,5 +632,6 @@ TILES_AUDIO_COLD uint32_t tiles_fx_bench(uint32_t which, uint32_t frames, uint32
         total += cycles() - t0;
         done += TILES_FX_BLOCK_MAX;
     }
+    tiles_fx_init(s_rv.tank); /* its noise out of the rings, or the next stream starts with it */
     return (uint32_t)(total / done);
 }
