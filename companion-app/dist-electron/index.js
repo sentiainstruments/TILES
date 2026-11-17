@@ -10,6 +10,8 @@ var controlInterface = null;
 var controlIn = null;
 var controlOut = null;
 var receiveBuffer = "";
+var nextTag = 1;
+var tagsSupported = true;
 var commandQueue = Promise.resolve();
 async function listUsbDevices() {
 	return (await usb.getDevices()).map((device) => ({
@@ -42,6 +44,7 @@ async function connectUsbDevice(vendorId, productId) {
 	controlOut = out.endpointNumber;
 	controlIn = input.endpointNumber;
 	receiveBuffer = "";
+	tagsSupported = true;
 	console.log("TILES ready:", {
 		interface: controlInterface,
 		outEndpoint: controlOut,
@@ -102,13 +105,26 @@ function sendTilesCommand(command, multiLine = false) {
 */
 async function sendTilesCommandNow(command, multiLine = false) {
 	if (!activeDevice || controlOut === null) throw new Error("TILES is not connected");
-	console.log(`→ TILES: ${command}`);
-	const write = await activeDevice.transferOut(controlOut, new TextEncoder().encode(`${command}\n`));
+	const tag = tagsSupported ? `@${nextTag} ` : "";
+	nextTag = nextTag >= 99999 ? 1 : nextTag + 1;
+	console.log(`→ TILES: ${tag}${command}`);
+	const write = await activeDevice.transferOut(controlOut, new TextEncoder().encode(`${tag}${command}\n`));
 	if (write.status !== "ok") throw new Error(`USB write failed: ${write.status}`);
 	const lines = [];
 	while (true) {
-		const line = await readLine();
-		console.log(`← TILES: ${line}`);
+		const raw = await readLine();
+		console.log(`← TILES: ${raw}`);
+		let line = raw;
+		if (tag) {
+			if (!raw.startsWith(tag)) {
+				if (raw === "ERR unknown-command" && lines.length === 0) {
+					tagsSupported = false;
+					return sendTilesCommandNow(command, multiLine);
+				}
+				continue;
+			}
+			line = raw.slice(tag.length);
+		}
 		if (multiLine && line === "OK") return lines;
 		lines.push(line);
 		if (!multiLine || line.startsWith("ERR ")) return lines;
@@ -118,8 +134,8 @@ function hex(value) {
 	return `0x${value.toString(16).padStart(4, "0")}`;
 }
 var tiles_settings_default = {
-	_comment: "Mock catalog: base v0.3.6 plus 21 alpha.6.5 settings from sentiainstruments/TILES firmware/board-bringup at a52f515fffa0c025c4d7900096920cbb309bc8ea. Not measured against hardware. In-memory simulator; old versions remain selectable.",
-	firmware: "alpha.6.5",
+	_comment: "Simulator catalog based on current official main protocol/settings table, identified as Alpha 6.9 in firmware/src/midi/product_identity.h (checked 2026-11-09). Alpha 6.9 extends the Alpha 6.5 settings with expression.pitch_bend_mode. Not tested against hardware; simulation does not emulate physical sensing.",
+	firmware: "alpha.6.9",
 	settings: [
 		{
 			"id": 256,
@@ -837,7 +853,52 @@ var tiles_settings_default = {
 			"persist": true,
 			"values": ["off", "bar"]
 		}
-	]
+	],
+	scales: {
+		"_comment": "SCALES output (custom slots 1-9; empty slots aren't listed). Example data, not from a board.",
+		"slots": 9,
+		"items": [{
+			"slot": 1,
+			"name": "Hirajoshi",
+			"intervals": [
+				0,
+				2,
+				3,
+				7,
+				8
+			],
+			"pack": "japan",
+			"item": "hirajoshi",
+			"version": 1
+		}, {
+			"slot": 4,
+			"name": "My_Blues",
+			"intervals": [
+				0,
+				3,
+				5,
+				6,
+				7,
+				10
+			],
+			"pack": "",
+			"item": "",
+			"version": 0
+		}]
+	},
+	currentSettings: [{
+		"id": 515,
+		"key": "expression.pitch_bend_mode",
+		"type": "enum",
+		"values": [
+			"legacy",
+			"cosine",
+			"path"
+		],
+		"default": "path",
+		"value": "path",
+		"persist": true
+	}]
 };
 //#endregion
 //#region src/main/mockUsb.ts
@@ -850,15 +911,20 @@ var mockDevice = {
 var VERSIONS = [
 	"0.2.0",
 	"0.3.6",
-	"alpha.6.5"
+	"alpha.6.5",
+	"alpha.6.9"
 ];
-var firmware = "alpha.6.5";
+var firmware = "alpha.6.9";
 var settings = /* @__PURE__ */ new Map();
 var scales = /* @__PURE__ */ new Map();
 var toWire = (value) => typeof value === "boolean" ? value ? "1" : "0" : String(value);
 function loadVersion(next) {
 	firmware = next;
-	const list = next === "alpha.6.5" ? [...tiles_settings_default.settings, ...tiles_settings_default.alphaSettings] : next === "0.3.6" ? tiles_settings_default.settings : [...tiles_settings_default.settings.filter((s) => !s.key.startsWith("color.")), ...tiles_settings_default.legacySettings];
+	const list = next === "alpha.6.9" ? [
+		...tiles_settings_default.settings,
+		...tiles_settings_default.alphaSettings,
+		...tiles_settings_default.currentSettings
+	] : next === "alpha.6.5" ? [...tiles_settings_default.settings, ...tiles_settings_default.alphaSettings] : next === "0.3.6" ? tiles_settings_default.settings : [...tiles_settings_default.settings.filter((s) => !s.key.startsWith("color.")), ...tiles_settings_default.legacySettings];
 	settings = new Map(list.map((s) => [s.key, {
 		...s,
 		value: toWire(s.default)
@@ -965,7 +1031,7 @@ function handleScale(parts) {
 * Multiline responses omit the terminal OK because the real USB adapter
 * consumes it before returning lines to the renderer.
 */
-async function mockCommand(command, _multiLine = false) {
+async function mockCommandUntagged(command) {
 	const [action, key, ...rest] = command.trim().split(/\s+/);
 	console.log("[SIM]", command);
 	if (action === "SIM" && key === "VERSION") {
@@ -1047,6 +1113,19 @@ async function mockCommand(command, _multiLine = false) {
 		].includes(rest[0])) return ["OK"];
 	}
 	return ["ERR unsupported-command"];
+}
+/** Firmware 0.3.7+ request tags. The Electron IPC API already consumes
+* the final multiline OK, so tag each returned data line, not a fabricated
+* terminator. Legacy mock profiles intentionally reject tagged requests.
+*/
+async function mockCommand(command, _multiLine = false) {
+	const trimmed = command.trim();
+	if (!trimmed.startsWith("@")) return mockCommandUntagged(command);
+	const match = /^@([A-Za-z0-9_-]{1,16})\s+(.+)$/.exec(trimmed);
+	if (!match) return ["ERR bad-tag"];
+	if (firmware === "0.2.0" || firmware === "0.3.6") return ["ERR unknown-command"];
+	const [, tag, cmd] = match;
+	return (await mockCommandUntagged(cmd)).map((line) => `@${tag} ${line}`);
 }
 var record = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 var text = (v, max) => typeof v === "string" && v.length > 0 && v.length <= max;

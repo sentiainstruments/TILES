@@ -1,6 +1,6 @@
 {
-  "_comment": "Mock catalog: base v0.3.6 plus 21 alpha.6.5 settings from sentiainstruments/TILES firmware/board-bringup at a52f515fffa0c025c4d7900096920cbb309bc8ea. Not measured against hardware. In-memory simulator; old versions remain selectable.",
-  "firmware": "alpha.6.5",
+  "_comment": "Simulator catalog based on current official main protocol/settings table, identified as Alpha 6.9 in firmware/src/midi/product_identity.h (checked 2026-11-09). Alpha 6.9 extends the Alpha 6.5 settings with expression.pitch_bend_mode. Not tested against hardware; simulation does not emulate physical sensing.",
+  "firmware": "alpha.6.9",
   "settings": [
     {
       "id": 256,
@@ -771,5 +771,20 @@
         "version": 0
       }
     ]
-  }
+  },
+  "currentSettings": [
+    {
+      "id": 515,
+      "key": "expression.pitch_bend_mode",
+      "type": "enum",
+      "values": [
+        "legacy",
+        "cosine",
+        "path"
+      ],
+      "default": "path",
+      "value": "path",
+      "persist": true
+    }
+  ]
 }

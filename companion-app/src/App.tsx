@@ -1,14 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Pedal } from './pedal'
-import { Cvgate } from './cvGate'
-import { Expression } from './expression'
-import { Midi } from './midi'
-import { Lighting } from './lighting'
-import { FeaturesHarmonics } from './featuresHarmonics'
 import { TilesVisualizer } from './TilesVisualizer'
 import { CustomScales } from './CustomScales'
-import { FirmwareControls } from './FirmwareControls'
 import { ProjectWorkspace } from './project/ProjectWorkspace'
+import { SchemaSettings } from './SchemaSettings'
 
 const TILES_IDS = [
   [0x1209, 0x0001],
@@ -78,7 +72,8 @@ function App() {
             <select value={simFirmware} onChange={e => void changeSimFirmware(e.currentTarget.value)}>
               <option value="0.2.0">0.2.0 — legacy</option>
               <option value="0.3.6">0.3.6 — main</option>
-              <option value="alpha.6.5">Alpha 6.5 — board-bringup</option>
+              <option value="alpha.6.5">Alpha 6.5 — previous</option>
+              <option value="alpha.6.9">Alpha 6.9 — official main</option>
             </select>
           </label>
           <p>Switching firmware versions resets the simulated device, not saved project files.</p>
@@ -86,14 +81,8 @@ function App() {
         {error && <p role="alert">{error}</p>}
         <div key={simFirmware ?? 'real-device'}>
           <TilesVisualizer />
-          <Lighting />
+          <SchemaSettings />
           <CustomScales />
-          <FirmwareControls />
-          <Pedal />
-          <Cvgate />
-          <Expression />
-          <Midi />
-          <FeaturesHarmonics />
         </div>
       </>}
     </section>}
