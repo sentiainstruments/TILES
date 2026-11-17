@@ -106,7 +106,7 @@ standalone mode with USB on core 1.
 | `audio.cost` | each track's measured cycles per voice-sample (150 until it has played) |
 | `flash.lockout_fails` | 0 |
 | `audio.patch` | each track's sound |
-| `fault` | `none`; else the last boot ended in a panic or hard fault (`fault.message`, `fault.callers`; `diagnostics/fault.h`) |
+| `fault` | `none`; else the last boot ended in a panic or hard fault (`fault.message`, `fault.callers`; `diagnostics/fault.h`); `fault.saved` keeps the last one across power cycles |
 
 On a Mac: Audio MIDI Setup shows "SENTIA TILES N" with 2 inputs at
 48 kHz. In Live, pick it as the audio input device, arm an audio track

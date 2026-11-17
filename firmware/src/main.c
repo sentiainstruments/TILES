@@ -14,6 +14,7 @@
 #include "board/unit_id.h"
 #include "diagnostics/boot_stage.h"
 #include "diagnostics/fault.h"
+#include "midi/product_identity.h"
 #include "diagnostics/calibration.h"
 #include "diagnostics/i2c_scan.h"
 #include "diagnostics/loop_stats.h"
@@ -277,9 +278,10 @@ int main(void) {
     tiles_boot_stage("debug_mode");
     tiles_debug_mode_init();
 
-    /* Crash indicator: red underglow after a crash-recovery boot, since the
-     * boot animation that would have shown it was skipped. */
-    tiles_crash_indicator_init(crash_recovered);
+    /* Crash indicator: red underglow after a crash-recovery boot (the
+     * animation that would have shown it was skipped), and after a crash
+     * the firmware caught itself (fault.c). */
+    tiles_crash_indicator_init(crash_recovered || tiles_fault_restarted());
 
     /* Settings table: captures each module's defaults, then applies what was
      * saved to flash. Must follow every module init. */
@@ -295,16 +297,25 @@ int main(void) {
      * so a saved "MPE off" announces a withdrawn zone. */
     tiles_expression_announce_mpe_zone();
 
-    /* Core 1: TILES's own sound for USB audio. Last before the loop, so no
-     * boot-time flash write runs before it can be paused. */
+    /* The last caught crash into flash: last before the loop, with core 1
+     * (started with USB in standalone mode) able to be paused. */
+    tiles_boot_stage("fault_store");
+    char firmware[16];
+    if (TILES_FW_POINT == 0u) {
+        snprintf(firmware, sizeof(firmware), "%s.%u", TILES_FW_STAGE_NAME, (unsigned)TILES_FW_BUILD);
+    } else {
+        snprintf(firmware, sizeof(firmware), "%s.%u.%u", TILES_FW_STAGE_NAME, (unsigned)TILES_FW_BUILD,
+                 (unsigned)TILES_FW_POINT);
+    }
+    tiles_fault_store_init(tiles_storage_fault_region_safe() ? tiles_storage_fault_ops() : NULL, firmware);
 
     /* Between the slower services: USB, MIDI in, clock and playback again, so a
      * Clock arriving mid-pass is stepped within a fraction of a pass. */
     /* After a crash restart, notes a host or a DIN synth was holding never get
      * their Note-Off: all notes off now (DIN, and USB if it's back already)
      * and again once USB mounts. */
-    bool panic_on_mount = crash_recovered;
-    if (crash_recovered) {
+    bool panic_on_mount = crash_recovered || tiles_fault_restarted();
+    if (panic_on_mount) {
         tiles_midi_send_panic();
     }
     tiles_boot_stage("loop");

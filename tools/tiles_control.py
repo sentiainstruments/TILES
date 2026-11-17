@@ -27,6 +27,7 @@ Usage:
     python3 tools/tiles_control.py reset ALL
     python3 tools/tiles_control.py save                  # write unsaved changes to flash now
     python3 tools/tiles_control.py info                  # flash-store status
+    python3 tools/tiles_control.py fault clear           # forget the saved crash (INFO fault.saved)
     python3 tools/tiles_control.py reboot bootsel         # reboot into the ROM bootloader (for picotool)
     python3 tools/tiles_control.py reboot app             # plain warm restart back into this firmware
     TILES_SERIAL=F1A60E66E44C9D4B python3 tools/tiles_control.py info   # one of several boards (serial = chip ID)
@@ -378,6 +379,8 @@ def main():
         request, multi = command.upper(), True
     elif command == "save" and argc == 2:
         request, multi = "SAVE", False
+    elif command == "fault" and argc == 3 and sys.argv[2].lower() == "clear":
+        request, multi = "FAULT CLEAR", False
     elif command == "get" and argc == 3:
         request, multi = f"GET {sys.argv[2]}", False
     elif command == "set" and argc == 4:

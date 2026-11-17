@@ -49,6 +49,10 @@ const tiles_kv_ops_t *tiles_storage_drum_ops(void);
 bool tiles_storage_state_region_safe(void);
 const tiles_kv_ops_t *tiles_storage_state_ops(void);
 
-/* And for the sequencer's autosave (services/op_mode.c), lowest. */
+/* And for the sequencer's autosave (services/op_mode.c). */
 bool tiles_storage_seq_region_safe(void);
 const tiles_kv_ops_t *tiles_storage_seq_ops(void);
+
+/* And for the last caught crash (diagnostics/fault.c), lowest. */
+bool tiles_storage_fault_region_safe(void);
+const tiles_kv_ops_t *tiles_storage_fault_ops(void);

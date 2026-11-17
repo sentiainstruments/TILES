@@ -1130,6 +1130,26 @@ static void handle_line(char *line) {
             snprintf(text, sizeof(text), "fault=none");
         }
         reply(text);
+        tiles_fault_saved_t saved;
+        if (tiles_fault_saved(&saved)) {
+            snprintf(text, sizeof(text), "fault.saved=%s image=%lu count=%lu", saved.firmware,
+                     (unsigned long)saved.image_bytes, (unsigned long)saved.count);
+            reply(text);
+            snprintf(text, sizeof(text),
+                     "fault.saved_at=core%lu pc=%08lx lr=%08lx cfsr=%08lx hfsr=%08lx bfar=%08lx sp=%08lx",
+                     (unsigned long)saved.fault.core, (unsigned long)saved.fault.pc, (unsigned long)saved.fault.lr,
+                     (unsigned long)saved.fault.cfsr, (unsigned long)saved.fault.hfsr,
+                     (unsigned long)saved.fault.bfar, (unsigned long)saved.fault.sp);
+            reply(text);
+            snprintf(text, sizeof(text), "fault.saved_callers=%08lx,%08lx,%08lx,%08lx",
+                     (unsigned long)saved.fault.callers[0], (unsigned long)saved.fault.callers[1],
+                     (unsigned long)saved.fault.callers[2], (unsigned long)saved.fault.callers[3]);
+            reply(text);
+            snprintf(text, sizeof(text), "fault.saved_message=%s", saved.fault.message);
+        } else {
+            snprintf(text, sizeof(text), "fault.saved=none");
+        }
+        reply(text);
         snprintf(text, sizeof(text), "boot.hang=%s",
                  tiles_boot_stage_last_hang() != NULL ? tiles_boot_stage_last_hang() : "none");
         reply(text);
@@ -1274,6 +1294,19 @@ static void handle_line(char *line) {
 
     /* Saves any pending change now instead of waiting for the debounced,
      * pads-idle save. The write pauses the firmware for tens of ms. */
+    /* FAULT CLEAR: forgets the saved crash (INFO fault.saved). */
+    if (strcmp(cmd, "FAULT") == 0) {
+        char *what = strtok(NULL, " ");
+        if (what == NULL || strcmp(what, "CLEAR") != 0) {
+            reply_err("unknown-key");
+        } else if (tiles_fault_clear()) {
+            reply_ok();
+        } else {
+            reply_err("flash");
+        }
+        return;
+    }
+
     if (strcmp(cmd, "SAVE") == 0) {
         tiles_kv_result_t r = tiles_settings_persist_save_now();
         if (r == TILES_KV_OK) {

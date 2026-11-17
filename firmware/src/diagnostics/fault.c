@@ -1,6 +1,7 @@
 #include "fault.h"
 
 #include "hardware/irq.h"
+#include "hardware/regs/addressmap.h"
 #include "hardware/structs/scb.h"
 #include "hardware/sync.h"
 #include "hardware/watchdog.h"
@@ -25,6 +26,12 @@ static tiles_fault_t __uninitialized_ram(s_record);
 static tiles_fault_t s_last;
 static bool s_have_last;
 
+#define SAVED_VERSION 1u
+static tiles_kv_t s_store;
+static bool s_store_ready;
+static tiles_fault_saved_t s_saved; /* count 0: none */
+extern char __flash_binary_end;
+
 void tiles_fault_boot(void) {
     s_have_last = s_magic == FAULT_MAGIC;
     if (s_have_last) {
@@ -38,6 +45,51 @@ bool tiles_fault_last(tiles_fault_t *out) {
         *out = s_last;
     }
     return s_have_last;
+}
+
+bool tiles_fault_restarted(void) {
+    return s_have_last;
+}
+
+void tiles_fault_store_init(const tiles_kv_ops_t *ops, const char *firmware) {
+    if (ops == NULL) {
+        return;
+    }
+    tiles_kv_init(&s_store, ops);
+    s_store_ready = true;
+    uint16_t len = 0, version = 0;
+    if (!tiles_kv_read(&s_store, (uint8_t *)&s_saved, sizeof(s_saved), &len, &version) ||
+        version != SAVED_VERSION || len != sizeof(s_saved)) {
+        memset(&s_saved, 0, sizeof(s_saved));
+    }
+    if (!s_have_last) {
+        return;
+    }
+    uint32_t count = s_saved.count;
+    memset(&s_saved, 0, sizeof(s_saved));
+    s_saved.fault = s_last;
+    s_saved.count = count + 1u;
+    s_saved.image_bytes = (uint32_t)((uintptr_t)&__flash_binary_end - XIP_BASE);
+    strncpy(s_saved.firmware, firmware, sizeof(s_saved.firmware) - 1u);
+    (void)tiles_kv_write(&s_store, (const uint8_t *)&s_saved, sizeof(s_saved), SAVED_VERSION);
+}
+
+bool tiles_fault_saved(tiles_fault_saved_t *out) {
+    *out = s_saved;
+    return s_saved.count > 0u;
+}
+
+bool tiles_fault_clear(void) {
+    if (!s_store_ready) {
+        return false;
+    }
+    tiles_fault_saved_t none;
+    memset(&none, 0, sizeof(none));
+    if (tiles_kv_write(&s_store, (const uint8_t *)&none, sizeof(none), SAVED_VERSION) != TILES_KV_OK) {
+        return false;
+    }
+    s_saved = none;
+    return true;
 }
 
 /* Return addresses (odd, in the program's flash or RAM code) above sp. */

@@ -5,6 +5,8 @@
  * to leave USB dead with core 0 running). The next boot reports it in
  * INFO (fault.*). */
 
+#include "kv_store.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -19,6 +21,26 @@ void tiles_fault_boot(void);
 
 /* The fault that ended the last boot; false if it ended cleanly. */
 bool tiles_fault_last(tiles_fault_t *out);
+
+/* The last boot ended in a caught crash. Its restart goes through
+ * watchdog_reboot(), which watchdog_enable_caused_reboot() doesn't count. */
+bool tiles_fault_restarted(void);
+
+/* The last caught crash, also in flash, so it outlives unplugging (until
+ * FAULT CLEAR). */
+typedef struct {
+    tiles_fault_t fault;
+    uint32_t count;       /* caught crashes saved since the last clear */
+    uint32_t image_bytes; /* the build it happened in, by its size */
+    char firmware[16];    /* "alpha.7" */
+} tiles_fault_saved_t;
+
+/* Before the main loop (a flash write when the last boot crashed): reads
+ * the saved record and saves this boot's. ops NULL: RAM record only. */
+void tiles_fault_store_init(const tiles_kv_ops_t *ops, const char *firmware);
+bool tiles_fault_saved(tiles_fault_saved_t *out);
+/* Forgets it: a flash write (~50 ms, the sound paused). */
+bool tiles_fault_clear(void);
 
 /* Core 1's pulse, bumped by its loop every pass. */
 extern volatile uint32_t g_tiles_core1_beat;
