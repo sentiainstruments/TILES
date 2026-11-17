@@ -60,7 +60,7 @@ typedef struct {
 } tiles_fm_patch_t;
 
 typedef struct {
-    int32_t level, target, inc; /* log2, Q24 */
+    int32_t level, target, inc; /* log2, Q24; inc a 16-sample block's step */
     uint8_t ix;                 /* stage 0-3; 4 = done */
     bool rising, down;
 } tiles_fm_env_t;
@@ -68,11 +68,12 @@ typedef struct {
 typedef struct {
     uint32_t phase, inc;
     int32_t gain;      /* Q24 at the end of the last block */
-    int32_t logfreq;   /* Q24 log2 Hz, before pitch modulation */
+    float ratio;       /* its frequency over the note's (a fixed one: inc never changes) */
     int32_t outlevel;  /* output level with scaling and velocity, microsteps */
     int32_t rate_scaling;
     tiles_fm_env_t env;
     bool fixed;
+    bool silent;       /* no stage of its envelope is audible: never computed */
 } tiles_fm_op_t;
 
 typedef struct {

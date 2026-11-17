@@ -114,11 +114,37 @@ static const int8_t k_peg_level[100] = {
 /* The sine, 12 bits of phase, 16-bit amplitude: the DX7's own resolution. */
 #define SINE_BITS 12u
 static int16_t s_sine[1u << SINE_BITS];
+/* 2^(i/64), Q30: the gains from the envelopes' log levels. */
+static uint32_t s_exp2_q30[65];
 
 TILES_AUDIO_COLD void tiles_fm_init(void) {
     for (uint32_t i = 0; i < (1u << SINE_BITS); i++) {
         s_sine[i] = (int16_t)(32767.0f * sinf(2.0f * SYNTH_PI * ((float)i + 0.5f) / (float)(1u << SINE_BITS)));
     }
+    for (uint32_t i = 0; i <= 64u; i++) {
+        s_exp2_q30[i] = (uint32_t)(synth_exp2((float)i / 64.0f) * 1073741824.0f + 0.5f);
+    }
+}
+
+/* A frequency in Hz as a phase step (above 2^32, clamped: it aliases
+ * anyway). */
+static inline uint32_t to_inc(float hz) {
+    float f = hz * (4294967296.0f / FS);
+    return f < 4294967040.0f ? (uint32_t)f : 4294967040u;
+}
+
+/* 2^(level - 14 octaves) in Q24 (level: Q24 octaves; below 1 octave, 0):
+ * the table, linearly interpolated (error ~1e-5). */
+INLINE int32_t gain_of(int32_t level) {
+    if (level < Q24) {
+        return 0;
+    }
+    level = level < (20 << 24) ? level : (20 << 24) - 1;
+    uint32_t f = (uint32_t)level & 0xFFFFFFu;
+    uint32_t i = f >> 18, t = (f >> 10) & 0xFFu;
+    uint32_t a = s_exp2_q30[i];
+    uint32_t m = a + (((s_exp2_q30[i + 1u] - a) * t) >> 8);
+    return (int32_t)(m >> (20 - (level >> 24)));
 }
 
 /* ---- Voice data ------------------------------------------------------- */
@@ -195,7 +221,7 @@ static void env_stage(tiles_fm_env_t *e, const uint8_t *op, int32_t outlevel, in
     e->rising = e->target > e->level;
     int32_t q = ((op[ix] * 41) >> 6) + rate_scaling;
     q = q > 63 ? 63 : q;
-    e->inc = (4 + (q & 3)) << (2 + (q >> 2));
+    e->inc = (int32_t)((float)((4 + (q & 3)) << (2 + (q >> 2))) * (RATE_44K1 * (float)BLOCK_MAX));
 }
 
 /* One block of n samples. Attack: up from at least -40 dB, faster the
@@ -204,7 +230,7 @@ static void env_step(tiles_fm_env_t *e, const uint8_t *op, int32_t outlevel, int
     if (!(e->ix < 3u || (e->ix < 4u && !e->down))) {
         return;
     }
-    int32_t inc = (int32_t)((float)e->inc * (float)n * RATE_44K1);
+    int32_t inc = n == BLOCK_MAX ? e->inc : (e->inc * (int32_t)n) / (int32_t)BLOCK_MAX;
     if (e->rising) {
         const int32_t jump = 1716 << 16;
         e->level = e->level < jump ? jump : e->level;
@@ -324,7 +350,15 @@ void tiles_fm_voice_start(tiles_fm_voice_t *v, const tiles_fm_patch_t *patch, co
         x = x < 0 ? 0 : x > 31 ? 31 : x;
         o->rate_scaling = (op[13] * x) >> 3;
         o->fixed = op[17] != 0u;
-        o->logfreq = (int32_t)(op_pitch(op, note_oct) * (float)Q24);
+        o->ratio = synth_exp2(op_pitch(op, o->fixed ? 0.0f : note_oct));
+        if (o->fixed) {
+            o->inc = to_inc(o->ratio); /* op_pitch gave log2 Hz */
+        }
+        /* Audible only if a stage reaches 1 octave up from silence (gain_of). */
+        o->silent = true;
+        for (uint32_t ix = 0; ix < 4u; ix++) {
+            o->silent = o->silent && ((scale_level(op[4 + ix]) >> 1) << 6) + o->outlevel - 4256 < 256;
+        }
         if (!legato) {
             if (!was) {
                 o->env.level = 0;
@@ -375,7 +409,7 @@ void tiles_fm_voice_kill(tiles_fm_voice_t *v) {
         e->ix = 3u;
         e->target = 16 << 16;
         e->rising = false;
-        e->inc = 7 << 17; /* the fastest rate: silent in ~5 ms */
+        e->inc = (int32_t)((float)(7 << 17) * (RATE_44K1 * (float)BLOCK_MAX)); /* the fastest: ~5 ms */
     }
 }
 
@@ -443,6 +477,14 @@ INLINE void op_run(uint32_t *phase_p, uint32_t inc, int32_t g, int32_t dg, const
     }
 }
 
+/* The same with the flags at run time, any n: a block shorter than 16
+ * (the engine renders 16 at a time). */
+static __attribute__((noinline)) void op_run_any(uint32_t *phase, uint32_t inc, int32_t g, int32_t dg,
+                                                 const int32_t *in, int32_t *out, bool has_in, bool add,
+                                                 bool feedback, int32_t *fb, uint32_t fb_shift, uint32_t n) {
+    op_run(phase, inc, g, dg, in, out, has_in, add, feedback, fb, fb_shift, n);
+}
+
 /* Unipolar LFO 0..1 at phase (32-bit), its six DX7 waves. */
 static float lfo_value(tiles_fm_voice_t *v, uint8_t wave, bool wrapped) {
     float t = (float)v->lfo_phase * (1.0f / 4294967296.0f);
@@ -480,53 +522,64 @@ void TILES_AUDIO_HOT(tiles_fm_voice_render)(tiles_fm_voice_t *v, const tiles_fm_
     float note = in->note + (float)((int32_t)d[TILES_DX7_TRANSPOSE] - 24);
     v->pitch += (note - v->pitch) * v->glide_coef;
 
+    /* The LFO, when the voice uses it. */
     uint32_t before = v->lfo_phase;
     v->lfo_phase += v->lfo_inc * n;
-    bool wrapped = v->lfo_phase < before;
-    float lfo = lfo_value(v, d[TILES_DX7_LFO_WAVE] % 6u, wrapped);
-    uint32_t dl = v->lfo_delay;
-    v->lfo_delay = v->lfo_delay_inc == 0xFFFFFFFFu || dl > 0xFFFFFFFFu - v->lfo_delay_inc * n
-                       ? 0xFFFFFFFFu
-                       : dl + v->lfo_delay_inc * n;
-    float delay = v->lfo_delay < 0x80000000u ? 0.0f : (float)(v->lfo_delay - 0x80000000u) * (1.0f / 2147483648.0f);
-    float pmd = (float)((d[TILES_DX7_LFO_PMD] * 165) >> 6) * (1.0f / 255.0f);
-    float pms = (float)k_pitch_mod_sens[d[TILES_DX7_PITCH_MOD_SENS] & 7u] * (1.0f / 255.0f);
-    float amd = (float)((d[TILES_DX7_LFO_AMD] * 165) >> 6) * (1.0f / 255.0f) * delay * (1.0f - lfo);
+    float pitch_lfo = 0.0f, amd = 0.0f;
+    if ((d[TILES_DX7_LFO_PMD] | d[TILES_DX7_LFO_AMD]) != 0u) {
+        float lfo = lfo_value(v, d[TILES_DX7_LFO_WAVE] % 6u, v->lfo_phase < before);
+        uint32_t dl = v->lfo_delay;
+        v->lfo_delay = v->lfo_delay_inc == 0xFFFFFFFFu || dl > 0xFFFFFFFFu - v->lfo_delay_inc * n
+                           ? 0xFFFFFFFFu
+                           : dl + v->lfo_delay_inc * n;
+        float delay =
+            v->lfo_delay < 0x80000000u ? 0.0f : (float)(v->lfo_delay - 0x80000000u) * (1.0f / 2147483648.0f);
+        float pmd = (float)((d[TILES_DX7_LFO_PMD] * 165) >> 6) * (1.0f / 255.0f);
+        float pms = (float)k_pitch_mod_sens[d[TILES_DX7_PITCH_MOD_SENS] & 7u] * (1.0f / 255.0f);
+        pitch_lfo = pmd * pms * delay * (2.0f * lfo - 1.0f) * 0.99f;
+        amd = (float)((d[TILES_DX7_LFO_AMD] * 165) >> 6) * (1.0f / 255.0f) * delay * (1.0f - lfo);
+    }
 
     peg_step(v, n);
     /* Pitch: the note (glided, bent) plus the pitch envelope and the LFO's
-     * up to an octave. */
-    float mod_oct = (float)v->peg_level * (1.0f / (float)Q24) + pmd * pms * delay * (2.0f * lfo - 1.0f) * 0.99f;
+     * up to an octave; one exponential, each operator its ratio of it. */
     float note_oct = 8.781360f + (v->pitch - 69.0f) * (1.0f / 12.0f);
-    float boost = (patch->pressure_db * v->pressure_s + patch->slide_db * v->slide_s) * (1.0f / 6.0206f);
+    float note_hz = synth_exp2(note_oct + (float)v->peg_level * (1.0f / (float)Q24) + pitch_lfo);
+    int32_t boost = (int32_t)((patch->pressure_db * v->pressure_s + patch->slide_db * v->slide_s) *
+                              ((float)Q24 / 6.0206f));
 
     int32_t g_from[6], g_step[6];
     bool any = false;
     for (uint32_t k = 0; k < 6u; k++) {
         tiles_fm_op_t *o = &v->op[k];
+        any = any || o->env.down;
+        if (o->silent) {
+            g_from[k] = 0;
+            continue;
+        }
         const uint8_t *op = &d[k * TILES_DX7_OP_BYTES];
-        /* A fixed operator keeps its frequency: no note, bend or LFO. */
-        float oct = o->fixed ? (float)o->logfreq * (1.0f / (float)Q24)
-                             : note_oct + (float)o->logfreq * (1.0f / (float)Q24) + mod_oct;
-        o->inc = (uint32_t)(synth_exp2(oct) * (4294967296.0f / FS));
+        if (!o->fixed) {
+            o->inc = to_inc(note_hz * o->ratio);
+        }
         env_step(&o->env, op, o->outlevel, o->rate_scaling, n);
-        float level = (float)o->env.level * (1.0f / (float)Q24);
+        int32_t level = o->env.level;
         uint8_t ams = op[14] & 3u;
         if (ams != 0u) {
             /* Amp mod takes a share of the level (measured: an exponential
              * of depth x sensitivity). */
             float s = amd * k_amp_mod_sens[ams] * 64.0f;
-            level -= level * synth_exp2(1.442695f * (12.2f + 0.07f * s)) * (16.0f / 268435456.0f);
+            level = (int32_t)((float)level *
+                              (1.0f - synth_exp2(1.442695f * (12.2f + 0.07f * s)) * (16.0f / 268435456.0f)));
         }
-        if (!is_carrier(alg[k]) && level >= 1.0f) {
+        bool carrier = is_carrier(alg[k]);
+        if (!carrier && level >= Q24) {
             level += boost; /* a silent modulator stays silent (and skipped) */
         }
-        int32_t g = level < 1.0f ? 0 : (int32_t)(synth_exp2(level - 14.0f) * (float)Q24);
+        int32_t g = gain_of(level);
         g_from[k] = o->gain;
-        g_step[k] = (g - o->gain) / (int32_t)n;
+        g_step[k] = n == BLOCK_MAX ? (g - o->gain) / (int32_t)BLOCK_MAX : (g - o->gain) / (int32_t)n;
         o->gain = g;
-        bool carrier_left = is_carrier(alg[k]) && g >= LEVEL_THRESHOLD;
-        any = any || carrier_left || o->env.down;
+        any = any || (carrier && g >= LEVEL_THRESHOLD);
     }
 
     /* The operators, 6 first, through two buses into the output. */
@@ -549,22 +602,24 @@ void TILES_AUDIO_HOT(tiles_fm_voice_render)(tiles_fm_voice_t *v, const tiles_fm_
         int32_t *out = bus[outb];
         bool has_in = inb != 0u && full[inb];
         bool fb = (flags & FB) == FB && fb_shift < 16u;
-        if (fb) {
+        if (n != BLOCK_MAX) {
+            op_run_any(&o->phase, o->inc, g0, g_step[k], bus[inb], out, has_in, add, fb, v->fb, fb_shift, n);
+        } else if (fb) {
             if (add) {
-                op_run(&o->phase, o->inc, g0, g_step[k], NULL, out, false, true, true, v->fb, fb_shift, n);
+                op_run(&o->phase, o->inc, g0, g_step[k], NULL, out, false, true, true, v->fb, fb_shift, BLOCK_MAX);
             } else {
-                op_run(&o->phase, o->inc, g0, g_step[k], NULL, out, false, false, true, v->fb, fb_shift, n);
+                op_run(&o->phase, o->inc, g0, g_step[k], NULL, out, false, false, true, v->fb, fb_shift, BLOCK_MAX);
             }
         } else if (has_in) {
             if (add) {
-                op_run(&o->phase, o->inc, g0, g_step[k], bus[inb], out, true, true, false, NULL, 0u, n);
+                op_run(&o->phase, o->inc, g0, g_step[k], bus[inb], out, true, true, false, NULL, 0u, BLOCK_MAX);
             } else {
-                op_run(&o->phase, o->inc, g0, g_step[k], bus[inb], out, true, false, false, NULL, 0u, n);
+                op_run(&o->phase, o->inc, g0, g_step[k], bus[inb], out, true, false, false, NULL, 0u, BLOCK_MAX);
             }
         } else if (add) {
-            op_run(&o->phase, o->inc, g0, g_step[k], NULL, out, false, true, false, NULL, 0u, n);
+            op_run(&o->phase, o->inc, g0, g_step[k], NULL, out, false, true, false, NULL, 0u, BLOCK_MAX);
         } else {
-            op_run(&o->phase, o->inc, g0, g_step[k], NULL, out, false, false, false, NULL, 0u, n);
+            op_run(&o->phase, o->inc, g0, g_step[k], NULL, out, false, false, false, NULL, 0u, BLOCK_MAX);
         }
         full[outb] = true;
     }

@@ -158,9 +158,13 @@ How it is built:
   operator below -84 dB isn't computed (a bass using two of its six
   pays for two). Measured on unit 2 (`synth bench`, 2026-11-17): tine
   191, chime 194, solid 157 cycles a voice (solid plays 4 operators).
-  The operator loops are ~17 cycles an operator-sample; most of the
-  rest (~90 a sample) is every operator's control each block, silent
-  ones included: the next thing to cut, toward ~100.
+  The operator loops were ~17 cycles an operator-sample and every
+  operator's control each block ~90 a sample; cut since (one pitch
+  exponential a voice, each operator its ratio of it; integer gains from
+  a 64-step table; envelope steps per block precomputed; operators no
+  stage of which is audible never computed; the loop fixed at 16 samples,
+  a shorter block taking a generic path). Same sound (loudness within
+  0.3 dB of before). Board numbers to come.
 - **Any sound is wavetable or FM:** `synth_patch_t.engine`; an FM sound
   points at its DX7 voice and keeps from the patch only the voice mode,
   glide, levels and effects. The engine's voices are a union of the two
