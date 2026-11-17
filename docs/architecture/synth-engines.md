@@ -216,7 +216,13 @@ none (67 before).
   engine, maybe headroom; to look at first: core 1's 4 KB stack (its
   deepest use under the heaviest sounds and effects), the load near the
   guard's 90 % ceiling. Caught crashes now pulse red and stay in flash
-  (INFO `fault.saved`), so the next one says where.
+  (INFO `fault.saved`), so the next one says where; `boot.reset` and
+  `uptime_s` tell a crash from a power dip (`bor`) or the reset pin
+  (`run`). Not reproduced on 2026-11-17 (firmware with FM): 9.5 minutes
+  of stress while streaming (10 sounds, all four tracks, every effect at
+  100, full-range MPE bends, note storms; load up to 97 %) and 2.5
+  minutes of melodic playing: no restart, no voice shed, no underrun;
+  core 1's stack at most 1,584 of 4,096 bytes, so not the stack.
 
 Fixed along the way: late USB packets that made macOS drop
 the stream for up to a second (core 1's USB code ran from flash:
