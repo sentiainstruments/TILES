@@ -76,6 +76,8 @@ TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
 TEST MOTOR <pad> [duty%]\n bench only: one pad's motor (1-24) for 1 s
 TEST MODE <name>\n        bench only: switch mode (melodic duet sequencer bass song ableton drums volca prism bounce ripples sand orbits cradle)
 TEST OFF\n                bench only: back to normal
+FAULT CLEAR\n             forget the crash INFO reports as fault.saved (a flash write, the sound
+                          paused ~50 ms): OK / ERR flash
 CAPTURE START <pad>\n     record pad 1-24's raw Hall readings, one per pass (~8 s max): OK
 CAPTURE WATCH <pad>\n     the same, never stopping: keeps the newest 4000, skips passes that
                           only repeat the last (the studio): OK
@@ -452,7 +454,11 @@ sequencer's autosave `seq.storage`, `seq.saved_bytes`, `seq.saves`,
 the last boot (`none` when it booted cleanly); `fault`, the panic or hard
 fault that ended the last boot (`none`, or `core<n> pc=... lr=...
 cfsr=... hfsr=... bfar=... sp=...`, then `fault.callers=` four code
-addresses and `fault.message=` a panic's text); drum mode's store `drums.storage`,
+addresses and `fault.message=` a panic's text); `fault.saved`, the last such
+crash kept in flash until `FAULT CLEAR` (`none`, or `<firmware> image=<bytes>
+count=<n>`, the build by its image size and the crashes saved since the
+last clear, then `fault.saved_at=`, `fault.saved_callers=` and
+`fault.saved_message=` as above); drum mode's store `drums.storage`,
 `drums.saved_bytes`, `drums.saves`, `drums.pending`; the play state (mode,
 scale, key, octave kept across power cycles) `state.storage`,
 `state.saved=mode:<n> scale:<n> octave:<n> key:<n>` (once something is
