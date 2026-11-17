@@ -76,6 +76,8 @@ TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
 TEST MOTOR <pad> [duty%]\n bench only: one pad's motor (1-24) for 1 s
 TEST MODE <name>\n        bench only: switch mode (melodic duet sequencer bass song ableton drums volca prism bounce ripples sand orbits cradle)
 TEST OFF\n                bench only: back to normal
+FLASH CRC\n               the program read back from flash uncached (~0.1 s): crc=<zlib CRC-32 hex>
+                          bytes=<n>; equal to the build's .bin's while the flash timing holds
 FAULT CLEAR\n             forget the crash INFO reports as fault.saved (a flash write, the sound
                           paused ~50 ms): OK / ERR flash
 CAPTURE START <pad>\n     record pad 1-24's raw Hall readings, one per pass (~8 s max): OK
@@ -450,6 +452,8 @@ second) and `loop.max_ever_us`; sensor health `hall.rezeros`,
 `tune.changed` (live tuning values away from their defaults); the
 sequencer's autosave `seq.storage`, `seq.saved_bytes`, `seq.saves`,
 `seq.pending`, `seq.truncated`; `uptime_s` (seconds since this boot);
+`clk_khz`, `vreg_mv`, `temp_c` (the system clock, the core regulator's
+setting, the chip's sensor);
 `boot.reset=<cause> (0x<CHIP_RESET>)`, what reset the chip before this boot:
 `watchdog-timer` (a hang, or a restart that lets the watchdog run out:
 REBOOT APP, picotool), `watchdog-force` (a caught crash), else `por`
