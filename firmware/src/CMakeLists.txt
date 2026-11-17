@@ -174,12 +174,15 @@ endif()
 
 pico_add_extra_outputs(sentia_tiles_firmware)
 
-# The system clock: 150 MHz (the RP2350's rating) unless qualified
-# otherwise; 230.4 MHz is the target, the steps above it margin tests
-# (docs/architecture/synth-engines.md, "Next"). Each step's PLL and core
-# voltage; above 160 MHz the flash runs at a third of the clock, sampled 3
-# half-cycles late: about the timing 150 MHz gives (75 MHz, 6.7 ns).
-set(TILES_CLK_KHZ 150000 CACHE STRING "System clock in kHz: 150000, 153600, 230400, 268800 or 288000")
+# The system clock: 230.4 MHz on every unit (owner, 2026-11-17; qualified
+# on unit 2 with margin to 288 MHz: docs/architecture/synth-engines.md,
+# "Next"); 150 MHz is the RP2350's rating, 268.8 / 288 margin steps. Each
+# step's PLL and core voltage; above 160 MHz the flash runs at a third of
+# the clock, sampled 3 half-cycles late: about the timing 150 MHz gives
+# (75 MHz, 6.7 ns). A build folder keeps the value it was configured with:
+# reconfigure with -DTILES_CLK_KHZ=230400 (or start it fresh) after this
+# default changed.
+set(TILES_CLK_KHZ 230400 CACHE STRING "System clock in kHz: 230400 (default), 150000, 153600, 268800 or 288000")
 set(TILES_VREG "" CACHE STRING "Core voltage as a VREG_VOLTAGE_ suffix (1_15, 1_20); empty: the step's own")
 if(NOT TILES_CLK_KHZ EQUAL 150000)
     if(TILES_CLK_KHZ EQUAL 153600)

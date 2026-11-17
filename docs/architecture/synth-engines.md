@@ -245,8 +245,9 @@ it, then a soak (full load, streaming, flash writes, read-back).
 the program read back every 30 s): 230.4 MHz at 1.15 V 10 min, 268.8 and
 288 MHz at 1.20 V 10 min each (25 % margin), then a 30 min soak at 230.4:
 no restart, no read-back error, nothing shed, no underrun; up to 20
-voices at 96-98 % peak load (6 at 150 MHz), 28-33 C. Unit 2 now runs
-230.4 MHz; unit 1 is still to test.
+voices at 96-98 % peak load (6 at 150 MHz), 28-33 C. **Every unit runs
+230.4 MHz from now on** (the owner, 2026-11-17: no further per-unit test);
+it is the build's default.
 
 1. **Try the sound and effects menus on the board** (built 2026-11-15,
    `firmware/src/services/sound_menu.c`): diamond = sounds, circle +

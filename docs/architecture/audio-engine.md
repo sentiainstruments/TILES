@@ -301,12 +301,12 @@ settling a voice count.
   clock: I2S paces core 1, and USB audio switches to true asynchronous
   packets (48 +- 1 frames by the ring level, TinyUSB's flow control), so
   the jack and the recording stay in step. Both get the same mix.
-- **System clock on v1: 230.4 MHz** (48 kHz x 4,800) once qualified, for
-  an exact I2S divider and twice the voices' budget; **153.6 MHz** the
-  fallback (also exact). They are the only two exact clocks from 150 to
-  300 MHz (`../hardware/audio-output.md`, "Firmware"). The RP2350 is rated
-  150 MHz, so the chosen clock is qualified on the units first (stress,
-  soak, flash read-back). DIN MIDI, the LED chains, I2C, SPI and the UART
+- **System clock: 230.4 MHz** (48 kHz x 4,800) on Rev A0 and v1, the
+  build's default: an exact I2S divider and twice the voices' budget;
+  **153.6 MHz** the fallback (also exact). They are the only two exact
+  clocks from 150 to 300 MHz (`../hardware/audio-output.md`, "Firmware").
+  The RP2350 is rated 150 MHz; 230.4 was qualified on unit 2 with margin
+  to 288 MHz (`synth-engines.md`, "Next"). DIN MIDI, the LED chains, I2C, SPI and the UART
   compute their dividers from `clock_get_hz()` and follow; timers run
   from the 1 MHz reference, USB and the ADC from their own PLL.
 - **Volume** is digital, before the DAC, and starts low at power-up for
