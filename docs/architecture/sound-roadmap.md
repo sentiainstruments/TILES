@@ -34,24 +34,51 @@ banks, 48 kHz / 24-bit. Worth adding with the presets:
   slide already), 91 reverb, 93 chorus, ...), so a DAW automates TILES's
   sound like any synth's.
 
-## Presets: 96 in 4 pages
+## Presets: 96 slots in 4 pages (decided 2026-11-17)
 
-- **A preset** = the engine and its settings (a wavetable sound's ~50
-  values, or an FM sound's DX7 voice), its expression amounts (pressure,
-  slide), its effect amounts, a 10-character name. At most ~512 bytes.
+- **96 slots, flat:** no rows or columns by family. 4 pages of 24 pads,
+  "-"/"+" step through the pages in the sound menu (the underglow says
+  which); a press loads the slot into the track with a preview.
+- **Every slot is editable from the computer:** the companion app names,
+  edits, replaces and loads presets, up to 96. No save gesture on the
+  device for now.
+- **Shipped ready:** the first boot writes the factory presets into the
+  slots (the 16 sounds today, more as engines arrive); they can all be
+  replaced. A reset writes them back.
+- **A preset** = the engine and its settings (a wavetable sound's values,
+  or an FM sound's DX7 voice), the envelope, the expression amounts, the
+  effect amounts, a 10-character name. At most ~512 bytes.
 - **Storage:** its own flash region in the free image area: 12 sectors
-  (8 presets a sector) for 96, twice that for a power-cut-safe copy
-  (96 KB). Saving one rewrites its sector (~60 ms, the sound paused:
-  saved when the track is quiet, like the other stores).
-- **Pages:** 4 x 24 pads. Page 1 could start as the factory sounds (16,
-  8 free) and pages 2-4 empty; a reset puts page 1 back.
-- **On the device:** the sound menu shows one page; a key steps the pages
-  (the underglow says which); a press loads the preset into the track
-  with a preview; a long hold saves the track's sound into that pad; a
-  longer hold with circle clears it. Names come from the companion app
-  (no screen).
-- **Later:** presets as files for the companion app (a `shared/`
-  format).
+  (8 presets a sector), twice that for a power-cut-safe copy (96 KB).
+  Writes come from the computer, sector by sector, only while the track
+  is quiet.
+- **Program Change 0-95** on a track's channel loads its slot.
+
+## What Teenage Engineering does (internal reference, 2026-11-17)
+
+- **Every engine has exactly four parameters** (the four colour encoders):
+  OP-XY's wavetable: table, position, warp, drift; Prism: shape, ratio,
+  detune, stereo; Dissolve (tonal noise, pads): swarm, AM, FM, detune;
+  Hardsync (stabs, basses): freq, sub, noise, lowcut; Epiano: tone,
+  texture, punch, tine. Around the engine, the same pages for every
+  sound: envelope (ADSR on the four encoders, plus play mode: poly, mono,
+  legato, unison, portamento), effect, LFO. Changing the engine keeps
+  those pages; changing the preset sets all of them.
+- **Presets are files** with a 10-character name, kept in folders and
+  managed over USB; 8 sound slots per mode on the device, Program Change
+  0-7 for them, CC 46-49 for the four engine parameters; holding a slot
+  key saves a snapshot; shift + a key browses the library; a randomize.
+- **Drums are two engines side by side:** a sampler laid across the keys
+  (each key a part of a sample: pitch, direction, in, out, play mode,
+  level) and DBOX, a dual-oscillator drum synth (pitch, waveform,
+  envelope, cross-modulation or filter); OP-XY's Drumline: ten
+  percussion models, four parameters each, plus type, tune (random),
+  pan, volume.
+- **What TILES takes:** four named macros per engine (what the First
+  Edition's encoders and the app move, and the standard CCs carry), the
+  same envelope / effects / LFO around every engine, presets as named
+  files from the app, a drum synth beside the sampler. Their engines'
+  names and sounds stay theirs; TILES's are its own.
 
 ## New engines, for the focus
 
@@ -65,40 +92,41 @@ estimates per voice at 48 kHz, to be benched.
 
 | Engine | For | Pressure / slide | Cycles a voice | RAM | Priority |
 |---|---|---|---|---|---|
-| **Break slicer** (the drum track's sampler) | breakbeat: a break in a slot, sliced on the computer at its hits, a slice a pad, at the clock's tempo, choke and reverse | pressure: filter / drive; slide: pitch or reverse | ~65 (a drum voice) | none new | 1 |
+| **Drum synth** (beside the sampler: each of the 8 drum pads a sample or a model: kick, snare, hat, clap, tom, rim, cymbal, zap; four parameters each) | breakbeat kits without samples, tuned and shaped live | pressure: decay / drive; slide: tone | ~40-80 a hit | none | 1 |
+| Break slicer (the sampler, a break sliced across pads) | breakbeat | pressure: filter / drive | ~65 (a drum voice) | none new | later (breaks set aside 2026-11-17) |
 | **Superwave** (up to 7 detuned saws a voice, drift, spread) | swelling pads, trance stacks | pressure opens and widens; slide: detune | ~250 with its filter | none | 1 |
 | **Modal** (8-12 resonant modes struck by a click or noise) | bubbly: marimba, kalimba, glass, water | pressure: strike brightness and damping; slide: the material (mode ratios) | ~150 | none | 1 |
 | **Plucked string** (a delay line, damping, dispersion) | bubbly plucks, harps, arps | pressure: brightness and sustain; slide: pluck position | ~50 | a line a voice, 1-2 KB (a pool) | 2 |
 | **Drops** (a sine or high-Q filter pinged, a fast falling pitch, a breath of noise) | bubbles, blips, water drops | pressure: pitch drop depth; slide: resonance | ~40 | none | 2 (first as wavetable patches) |
 | **Formant** (a pulse through 3-5 formant filters, vowels morphing) | choirs, "aah" pads | slide: the vowel; pressure opens | ~120 | none | 2 |
-| **Granular cloud** (grains from a drum slot or a wavetable, a window in RAM) | huge evolving pads, textures | density, size, spray, pitch scatter | ~300 (16 grains), a cloud a track | a 16-32 KB window | 2, once RAM is found |
+| **Granular cloud** (grains from a drum slot or a wavetable, in a window borrowed from the effects' memory: the delay's 96 KB ring is 1 s stereo / 2 s mono) | huge evolving pads, textures | density, size, spray, pitch scatter | ~300 (16 grains), a cloud a track | the delay's ring, while a granular sound plays (the delay then rests) | 1 |
 | **Waveshaper** (sine / triangle through a folder and an asymmetric shaper) | rubbery bass, bubbly leads | pressure: the fold | ~60 | none | 3 |
 | **Harmonic** (16-24 partials: tilt, odd / even, spread) | organs, glass pads, spectra that move with pressure | pressure: the tilt | ~150 | none | 3 |
 | Pad effects: shimmer (octave-up feedback in the plate), freeze | swells | - | in the effects | the plate's | 2 |
 
-Breaks need more length than a slot holds today (2 s mono): 2 bars at
-170 BPM are 2.8 s. Options: slots stored at 24 kHz mono (4 s, the grainy
-rate breakbeat grew up with), or two slots joined.
+Breaks are set aside for now (they need more length than a slot holds:
+2 bars at 170 BPM are 2.8 s; 24 kHz mono slots or joined slots later).
 
 ## Order of work (a proposal)
 
-1. **Presets**: the store, the sound menu's pages, Program Change. Every
-   new engine then has somewhere to keep its sounds.
-2. **Superwave and modal**: no RAM, the pads and the bubbles.
-3. **Break slicer**: the breakbeat core.
-4. **Plucked string, formant, drops.**
-5. **The RAM plan**, then granular.
-6. **Waveshaper, harmonic, shimmer.**
+1. **The engine interface:** four named macros per engine, the shared
+   envelope / effects / LFO; the wavetable and FM engines mapped onto it.
+2. **Presets:** the 96-slot store, factory presets at first boot, the
+   sound menu's 4 pages on "-"/"+", Program Change; loading from the
+   computer (the companion app's side with Sam, a `shared/` format).
+3. **Granular** in the delay's memory, **superwave**, **modal**.
+4. **The drum synth** beside the sampler.
+5. **Plucked string, formant, drops**; then waveshaper, harmonic, shimmer.
 
 Each engine: tests on the computer (pitch, level, expression, no NaN),
-the bench, 3-4 factory sounds in its family's row, the docs.
+the bench, factory presets, the docs.
 
 ## Open questions
 
-1. Page 1 = editable copies of the factory sounds, or the factory sounds
-   fixed and 96 user slots besides?
-2. The page key and the track key in the sound menu.
-3. The save gesture; names only from the companion app?
-4. Breaks: 24 kHz mono 4 s slots, or joined slots?
-5. Granular: borrow the effects' memory, or wait for a board with PSRAM?
-6. Which engines first, by ear.
+1. The four macros of the wavetable and FM engines (which of their
+   settings each moves).
+2. The track key in the sound menu, now that "-"/"+" are the pages.
+3. The preset file format with Sam (`shared/`).
+4. When a granular sound plays, the delay rests: acceptable, or keep a
+   short delay?
+5. The drum synth's models, and how a pad chooses sample or model.
