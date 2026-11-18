@@ -66,7 +66,17 @@ uint32_t tiles_audio_engine_shed_count(void);
 /* Each track's sound: one of the factory patches (synth_patches.c). A
  * change ends the track's notes. */
 void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch);
+/* tiles_audio_engine_patch() for a track playing a bank voice. */
+#define TILES_AUDIO_PATCH_BANK 0xFFu
 uint8_t tiles_audio_engine_patch(uint8_t track);
+/* The track's sound's name (a factory sound's, or the bank voice's). */
+const char *tiles_audio_engine_track_name(uint8_t track);
+/* A DX7 voice (unpacked, fm_voice.h) for a track, in two steps: core 0
+ * fills the track's free slot (false while the last one is still to be
+ * switched to), then core 1 switches the track to it, ending the old
+ * sound's voices in 5 ms (tiles_audio_engine_fm_use(), via usb_audio). */
+bool tiles_audio_engine_fm_load(uint8_t track, const uint8_t voice[155], const char *name);
+void tiles_audio_engine_fm_use(uint8_t track);
 const char *tiles_audio_engine_patch_name(uint8_t patch);
 uint8_t tiles_audio_engine_patch_count(void);
 

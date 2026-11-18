@@ -91,6 +91,10 @@ bool tiles_storage_fault_region_safe(void) {
     return region_safe(TILES_FLASH_FAULT_OFFSET);
 }
 
+bool tiles_storage_fm_bank_region_safe(void) {
+    return region_safe(TILES_FLASH_FM_BANK_OFFSET);
+}
+
 bool tiles_storage_sample_region_safe(void) {
     return region_safe(TILES_FLASH_SAMPLE_OFFSET);
 }
@@ -188,6 +192,7 @@ REGION_OPS(drum, TILES_FLASH_DRUM_OFFSET)
 REGION_OPS(state, TILES_FLASH_STATE_OFFSET)
 REGION_OPS(seq, TILES_FLASH_SEQ_OFFSET)
 REGION_OPS(fault, TILES_FLASH_FAULT_OFFSET)
+REGION_OPS(fm_bank, TILES_FLASH_FM_BANK_OFFSET)
 
 const tiles_kv_ops_t *tiles_storage_settings_ops(void) {
     return &settings_ops;
@@ -211,4 +216,8 @@ const tiles_kv_ops_t *tiles_storage_seq_ops(void) {
 
 const tiles_kv_ops_t *tiles_storage_fault_ops(void) {
     return &fault_ops;
+}
+
+const tiles_kv_ops_t *tiles_storage_fm_bank_ops(void) {
+    return &fm_bank_ops;
 }

@@ -52,6 +52,7 @@
 #include "services/touch.h"
 #include "storage/storage_flash.h"
 #include "usb_vendor/usb_vendor.h"
+#include "audio/fm_bank.h"
 #include "audio/sample_stream.h"
 #include "audio/usb_audio.h"
 
@@ -306,6 +307,9 @@ int main(void) {
      * map's CUSTOM_1..9 (after tiles_note_map_init()). */
     tiles_boot_stage("content");
     tiles_content_init(tiles_storage_content_region_safe() ? tiles_storage_content_ops() : NULL);
+
+    /* The DX7 bank, if one was loaded (SYNTH BANK PUT). */
+    tiles_fm_bank_init(tiles_storage_fm_bank_region_safe() ? tiles_storage_fm_bank_ops() : NULL);
 
     /* MPE zone declaration for DIN (USB repeats it on mount), after settings,
      * so a saved "MPE off" announces a withdrawn zone. */

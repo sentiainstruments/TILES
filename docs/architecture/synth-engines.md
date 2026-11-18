@@ -183,9 +183,20 @@ How it is built:
 - **RAM:** ~21 KB (the sine, the render loop's eight operator variants,
   the voices' larger union); ~22 KB stays free.
 
-Next: `SYNTH BANK` uploads a bank (the `SAMPLE BEGIN` raw path) into a
-2-sector flash region below the sequencer autosave, and a track picks
-one of its voices; more factory FM sounds (a pluck, a stab).
+- **DX7 banks** (built 2026-11-17): `tiles_control.py synth bank put
+  file.syx` loads a 32-voice bank (the 4,104-byte sysex, checked here and
+  on the board: header, DX7 checksum, CRC-32) into its own 2-sector
+  region (`firmware/src/audio/fm_bank.c`, the voices first, the header
+  last); `synth bank` lists the names, `synth voice 2 11` gives track 2
+  voice 11. A track's bank voice is unpacked into one of two RAM slots it
+  owns (the old sound's voices keep the other while they fade): ~3 KB.
+  Its level follows its carrier count (0.6 / sqrt(carriers), first
+  guess), pressure and slide brighten as on the factory FM sounds. The
+  bank stays across restarts; which voice a track plays doesn't yet (nor
+  does a factory choice).
+
+Next: more factory FM sounds (a pluck, a stab); bank voices in the sound
+menu; the tracks' choices saved.
 
 ## Measured on unit 2
 

@@ -59,6 +59,9 @@ Usage:
     python3 tools/tiles_control.py synth list            # the synth sounds and each track's (standalone mode)
     python3 tools/tiles_control.py synth patch 2 haze    # track 2 plays "haze"
     python3 tools/tiles_control.py synth bench           # cycles per sample of one voice of each sound
+    python3 tools/tiles_control.py synth bank put rom1a.syx # load a DX7 32-voice bank (standalone mode)
+    python3 tools/tiles_control.py synth bank             # the bank's voices
+    python3 tools/tiles_control.py synth voice 2 11       # track 2 plays the bank's voice 11
     python3 tools/tiles_control.py synth fx              # each track's effects and the shared ones' settings
     python3 tools/tiles_control.py synth fx 2 reverb 60  # track 2's reverb send to 60 %
     python3 tools/tiles_control.py synth fx bus decay 80 # the plate's decay
@@ -298,10 +301,40 @@ def sample_put(session, slot, path, options):
 LANE_CHANNEL = {1: 15, 2: 14, 3: 13, 4: 12}
 
 
+def dx7_bank(path):
+    """A DX7 32-voice bank (.syx) checked here first: (the 4,104 bytes, the voices' names)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    start = data.find(bytes([0xF0, 0x43]))
+    if start < 0 or len(data) - start < 4104 or data[start + 3:start + 6] != bytes([0x09, 0x20, 0x00]):
+        sys.exit("synth bank put: not a DX7 32-voice bank (4,104-byte sysex: F0 43 0n 09 20 00 ...)")
+    data = data[start:start + 4104]
+    if data[-1] != 0xF7 or (128 - sum(data[6:4102]) % 128) % 128 != data[4102]:
+        sys.exit("synth bank put: its checksum doesn't match (a damaged file?)")
+    names = [data[6 + n * 128 + 118:6 + n * 128 + 128].decode("ascii", "replace").rstrip() for n in range(32)]
+    return data, names
+
+
 def synth(session, args):
     if len(args) == 1 and args[0].lower() in ("list", "bench"):
         for line in session.command("SYNTH " + args[0].upper(), multi_line=True):
             print(line)
+    elif len(args) == 1 and args[0].lower() == "bank":
+        for line in session.command("SYNTH BANK", multi_line=True):
+            print(line)
+    elif len(args) == 3 and args[0].lower() == "bank" and args[1].lower() == "put":
+        import zlib
+        data, names = dx7_bank(args[2])
+        reply = session.command(f"SYNTH BANK PUT {zlib.crc32(data) & 0xFFFFFFFF:08x}")
+        if not reply or not reply[0].startswith("OK "):
+            sys.exit(f"synth bank put: {' '.join(reply)}" + (" (stop playback first)" if reply == ["ERR playing"] else ""))
+        session.ep_out.write(data, timeout=10000)
+        verdict = session.read_line("SYNTH BANK PUT")
+        if verdict != "OK":
+            sys.exit(f"synth bank put: {verdict}")
+        print("bank loaded: " + ", ".join(f"{n + 1} {name}" for n, name in enumerate(names)))
+    elif len(args) == 3 and args[0].lower() == "voice":
+        print(session.command(f"SYNTH VOICE {args[1]} {args[2]}")[0])
     elif len(args) == 3 and args[0].lower() == "patch":
         print(session.command(f"SYNTH PATCH {args[1]} {args[2]}")[0])
     elif len(args) >= 3 and args[0].lower() == "play":

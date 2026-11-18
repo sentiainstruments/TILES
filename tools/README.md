@@ -166,7 +166,14 @@ sample at 150 MHz) and is the number to check after any engine change:
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth fx
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth fx 3 reverb 60
 ~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth fx bus decay 80
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth bank put rom1a.syx
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth bank
+~/.venvs/tiles-tools/bin/python tools/tiles_control.py synth voice 2 11
 ```
+
+`synth bank put` takes a DX7 32-voice bank (.syx, 4,104 bytes; checked
+before sending); `synth voice <track> <n>` plays one of its voices on a
+track.
 
 `synth fx` lists each track's effects (sends, drive, dark, crush, pump,
 0-100; a sound change resets them to the sound's) and the shared ones'

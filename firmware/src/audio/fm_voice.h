@@ -45,6 +45,12 @@ enum {
 /* Unpacks one 128-byte voice of a bank. */
 void tiles_dx7_unpack(const uint8_t packed[TILES_DX7_PACKED_BYTES], uint8_t voice[TILES_DX7_VOICE_BYTES]);
 
+/* The other way (tests, and voices sent back out). */
+void tiles_dx7_pack(const uint8_t voice[TILES_DX7_VOICE_BYTES], uint8_t packed[TILES_DX7_PACKED_BYTES]);
+
+/* How many of its operators reach the output (its algorithm's carriers). */
+uint8_t tiles_fm_carriers(const uint8_t voice[TILES_DX7_VOICE_BYTES]);
+
 /* A bank's 4,096 voice bytes from its sysex (NULL: not a DX7 32-voice
  * bank, or its checksum is wrong). */
 const uint8_t *tiles_dx7_bank_voices(const uint8_t *sysex, uint32_t bytes);

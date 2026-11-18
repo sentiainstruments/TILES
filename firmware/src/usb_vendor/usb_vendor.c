@@ -22,6 +22,7 @@
 #include "play_state.h"
 #include "power.h"
 #include "product_identity.h"
+#include "fm_bank.h"
 #include "sample_store.h"
 #include "settings.h"
 #include "settings_persist.h"
@@ -71,6 +72,9 @@ static size_t s_rx_len;
 static uint32_t s_raw_left;
 static uint32_t s_raw_last_ms;
 static tiles_sample_result_t s_raw_result;
+/* The raw bytes are a DX7 bank (SYNTH BANK PUT), not a sample. */
+static bool s_raw_bank;
+static tiles_fm_bank_result_t s_raw_bank_result;
 
 /* A partial line (no newline yet) is dropped once nothing has arrived for
  * this long while the device waits for input. A host that gave up
@@ -597,9 +601,30 @@ static void receive_raw(uint32_t now_ms) {
         s_raw_last_ms = now_ms;
         s_raw_left -= got;
         budget -= got;
-        if (s_raw_result == TILES_SAMPLE_OK) {
+        if (s_raw_bank) {
+            if (s_raw_bank_result == TILES_FM_BANK_OK) {
+                s_raw_bank_result = tiles_fm_bank_write(buf, got);
+            }
+        } else if (s_raw_result == TILES_SAMPLE_OK) {
             s_raw_result = tiles_sample_store_write(buf, got);
         }
+    }
+    if (s_raw_bank) {
+        if (s_raw_left == 0u || now_ms - s_raw_last_ms > USB_VENDOR_RAW_TIMEOUT_MS) {
+            bool timed_out = s_raw_left > 0u;
+            tiles_fm_bank_result_t r = tiles_fm_bank_finish(); /* also ends a failed load */
+            s_raw_left = 0u;
+            s_raw_bank = false;
+            if (timed_out) {
+                reply_err("timeout");
+            } else if (s_raw_bank_result != TILES_FM_BANK_OK) {
+                reply_err(tiles_fm_bank_result_name(s_raw_bank_result));
+            } else {
+                r == TILES_FM_BANK_OK ? reply_ok() : reply_err(tiles_fm_bank_result_name(r));
+            }
+            pump_out();
+        }
+        return;
     }
     if (s_raw_left == 0u) {
         if (s_raw_result == TILES_SAMPLE_OK) {
@@ -676,11 +701,72 @@ static void handle_synth_fx(void) {
     reply_err("unknown-fx");
 }
 
+/* SYNTH BANK: the DX7 bank's voices; BANK PUT <crc32 hex>, then the
+ * 4,104-byte sysex as raw bytes (replies OK 4104, then OK or ERR once it
+ * is in); VOICE <track 1-4> <voice 1-32>: a bank voice as the track's
+ * sound. */
+static void handle_synth_bank(bool voice) {
+    char text[USB_VENDOR_LINE_MAX];
+    if (voice) {
+        char *track_arg = strtok(NULL, " ");
+        char *voice_arg = strtok(NULL, " ");
+        int track = track_arg != NULL ? atoi(track_arg) : 0;
+        int n = voice_arg != NULL ? atoi(voice_arg) : 0;
+        uint8_t v[TILES_DX7_VOICE_BYTES];
+        char name[11];
+        if (track < 1 || track > (int)TILES_AUDIO_TRACKS || n < 1 || n > (int)TILES_DX7_BANK_VOICES) {
+            reply_err("track-1-4-voice-1-32");
+        } else if (!tiles_fm_bank_voice((uint8_t)(n - 1), v)) {
+            reply_err("no-bank");
+        } else {
+            tiles_dx7_name(v, name);
+            tiles_usb_audio_set_fm_voice((uint8_t)(track - 1), v, name) ? reply_ok() : reply_err("busy");
+        }
+        return;
+    }
+    char *put = strtok(NULL, " ");
+    if (put == NULL) {
+        if (!tiles_fm_bank_present()) {
+            reply_err("no-bank");
+            return;
+        }
+        for (uint8_t n = 0; n < TILES_DX7_BANK_VOICES; n++) {
+            char name[11];
+            (void)tiles_fm_bank_name(n, name);
+            snprintf(text, sizeof(text), "%u %s", (unsigned)n + 1u, name);
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+    char *crc = strtok(NULL, " ");
+    if (strcmp(put, "PUT") != 0 || crc == NULL) {
+        reply_err("unknown-key");
+        return;
+    }
+    /* Erasing pauses the sound: never while playing. */
+    if (tiles_midi_clock_is_running() || !tiles_usb_audio_is_quiet()) {
+        reply_err("playing");
+        return;
+    }
+    tiles_fm_bank_result_t r = tiles_fm_bank_begin((uint32_t)strtoul(crc, NULL, 16));
+    if (r != TILES_FM_BANK_OK) {
+        reply_err(tiles_fm_bank_result_name(r));
+        return;
+    }
+    s_raw_bank = true;
+    s_raw_bank_result = TILES_FM_BANK_OK;
+    s_raw_left = tiles_fm_bank_remaining();
+    s_raw_last_ms = to_ms_since_boot(get_absolute_time());
+    snprintf(text, sizeof(text), "OK %lu", (unsigned long)s_raw_left);
+    reply(text);
+}
+
 /* SYNTH LIST (the sounds, then each track's) | PATCH <track 1-4>
  * <number|name> | MIDI <status hex> <data1> <data2>: a message to the
  * engine only (not sent out), to play it from the computer | FX (above) |
- * BENCH: each sound's cycles per sample for one voice. Standalone mode
- * only. */
+ * BENCH: each sound's cycles per sample for one voice | BANK, VOICE
+ * (above). Standalone mode only. */
 static void handle_synth(void) {
     char *what = strtok(NULL, " ");
     char text[USB_VENDOR_LINE_MAX];
@@ -694,8 +780,7 @@ static void handle_synth(void) {
             reply(text);
         }
         for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
-            snprintf(text, sizeof(text), "track %u %s", (unsigned)t + 1u,
-                     tiles_audio_engine_patch_name(tiles_audio_engine_patch(t)));
+            snprintf(text, sizeof(text), "track %u %s", (unsigned)t + 1u, tiles_audio_engine_track_name(t));
             reply(text);
         }
         reply_ok();
@@ -727,6 +812,10 @@ static void handle_synth(void) {
     }
     if (what != NULL && strcmp(what, "FX") == 0) {
         handle_synth_fx();
+        return;
+    }
+    if (what != NULL && (strcmp(what, "BANK") == 0 || strcmp(what, "VOICE") == 0)) {
+        handle_synth_bank(strcmp(what, "VOICE") == 0);
         return;
     }
     if (what != NULL && strcmp(what, "BENCH") == 0) {
@@ -1080,11 +1169,9 @@ static void handle_line(char *line) {
                  (unsigned)audio.cost[2], (unsigned)audio.cost[3]);
         reply(text);
         if (tiles_usb_audio_started()) {
-            snprintf(text, sizeof(text), "audio.patch=%s,%s,%s,%s",
-                     tiles_audio_engine_patch_name(tiles_audio_engine_patch(0)),
-                     tiles_audio_engine_patch_name(tiles_audio_engine_patch(1)),
-                     tiles_audio_engine_patch_name(tiles_audio_engine_patch(2)),
-                     tiles_audio_engine_patch_name(tiles_audio_engine_patch(3)));
+            snprintf(text, sizeof(text), "audio.patch=%s,%s,%s,%s", tiles_audio_engine_track_name(0),
+                     tiles_audio_engine_track_name(1), tiles_audio_engine_track_name(2),
+                     tiles_audio_engine_track_name(3));
             reply(text);
         }
         tiles_buttons_pca_health_t pca = tiles_buttons_pca_health();
@@ -1438,7 +1525,12 @@ void tiles_usb_vendor_scan(void) {
         s_listing = LISTING_NONE;
         s_rx_len = 0u;
         if (s_raw_left > 0u) {
-            tiles_sample_store_abort();
+            if (s_raw_bank) {
+                (void)tiles_fm_bank_finish();
+                s_raw_bank = false;
+            } else {
+                tiles_sample_store_abort();
+            }
             s_raw_left = 0u;
         }
         return;

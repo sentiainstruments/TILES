@@ -5,6 +5,7 @@
 
 #include "audio_engine.h"
 #include "audio_ring.h"
+#include "fm_voice.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -342,7 +343,33 @@ static void test_ring(void) {
     CHECK(tiles_spsc_pop(&r, out, 1u) == 0u, "pop from empty");
 }
 
+/* A DX7 voice as track 2's sound: the two-step switch, its name, its
+ * sound, the next one into the other slot, back to a factory sound. */
+static void test_bank_voice(void) {
+    reset();
+    uint8_t v[TILES_DX7_VOICE_BYTES];
+    memcpy(v, g_fm_factory[TILES_FM_TINE].dx7, sizeof(v));
+    CHECK(tiles_audio_engine_fm_load(1u, v, "MY PIANO"), "track 2 refused a voice");
+    CHECK(!tiles_audio_engine_fm_load(1u, v, "AGAIN"), "a second voice taken before the switch");
+    CHECK(strcmp(tiles_audio_engine_track_name(1u), "pure") == 0, "the track switched before fm_use");
+    tiles_audio_engine_fm_use(1u);
+    CHECK(strcmp(tiles_audio_engine_track_name(1u), "MY PIANO") == 0 &&
+              tiles_audio_engine_patch(1u) == TILES_AUDIO_PATCH_BANK,
+          "track 2 is '%s' (%u)", tiles_audio_engine_track_name(1u), (unsigned)tiles_audio_engine_patch(1u));
+    tiles_audio_engine_midi((uint8_t)(0x90u | MELODIC), 69u, 100u);
+    render(SECOND / 4u);
+    double level = rms(SECOND / 4u);
+    CHECK(level > 0.005, "the bank voice is silent (%.4f RMS)", level);
+    CHECK(tiles_audio_engine_fm_load(1u, v, "SECOND") , "the next voice refused");
+    tiles_audio_engine_fm_use(1u);
+    CHECK(strcmp(tiles_audio_engine_track_name(1u), "SECOND") == 0, "the second voice isn't the track's");
+    render(SECOND / 10u);
+    tiles_audio_engine_set_patch(1u, 0u);
+    CHECK(tiles_audio_engine_patch(1u) == 0u, "back to a factory sound failed");
+}
+
 int main(void) {
+    test_bank_voice();
     test_silence_and_format();
     test_pitch_and_bend();
     test_release_and_sustain();

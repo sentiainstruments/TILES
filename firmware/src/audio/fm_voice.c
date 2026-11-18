@@ -180,6 +180,40 @@ TILES_AUDIO_COLD void tiles_dx7_unpack(const uint8_t p[TILES_DX7_PACKED_BYTES], 
     memcpy(&v[TILES_DX7_NAME], &p[118], 10u);
 }
 
+TILES_AUDIO_COLD void tiles_dx7_pack(const uint8_t v[TILES_DX7_VOICE_BYTES], uint8_t p[TILES_DX7_PACKED_BYTES]) {
+    for (uint32_t op = 0; op < 6u; op++) {
+        const uint8_t *s = &v[op * TILES_DX7_OP_BYTES];
+        uint8_t *d = &p[op * 17u];
+        memcpy(d, s, 11u);
+        d[11] = (uint8_t)((s[11] & 3u) | (s[12] & 3u) << 2);
+        d[12] = (uint8_t)((s[13] & 7u) | (s[20] & 15u) << 3);
+        d[13] = (uint8_t)((s[14] & 3u) | (s[15] & 7u) << 2);
+        d[14] = s[16];
+        d[15] = (uint8_t)((s[17] & 1u) | (s[18] & 31u) << 1);
+        d[16] = s[19];
+    }
+    memcpy(&p[102], &v[TILES_DX7_PEG_RATE], 8u);
+    p[110] = v[TILES_DX7_ALGORITHM] & 31u;
+    p[111] = (uint8_t)((v[TILES_DX7_FEEDBACK] & 7u) | (v[TILES_DX7_OSC_SYNC] & 1u) << 3);
+    p[112] = v[TILES_DX7_LFO_SPEED];
+    p[113] = v[TILES_DX7_LFO_DELAY];
+    p[114] = v[TILES_DX7_LFO_PMD];
+    p[115] = v[TILES_DX7_LFO_AMD];
+    p[116] = (uint8_t)((v[TILES_DX7_LFO_SYNC] & 1u) | (v[TILES_DX7_LFO_WAVE] & 7u) << 1 |
+                       (v[TILES_DX7_PITCH_MOD_SENS] & 7u) << 4);
+    p[117] = v[TILES_DX7_TRANSPOSE];
+    memcpy(&p[118], &v[TILES_DX7_NAME], 10u);
+}
+
+TILES_AUDIO_COLD uint8_t tiles_fm_carriers(const uint8_t v[TILES_DX7_VOICE_BYTES]) {
+    const uint8_t *alg = k_alg[v[TILES_DX7_ALGORITHM] & 31u];
+    uint8_t n = 0;
+    for (uint32_t k = 0; k < 6u; k++) {
+        n += is_carrier(alg[k]) ? 1u : 0u;
+    }
+    return n;
+}
+
 TILES_AUDIO_COLD const uint8_t *tiles_dx7_bank_voices(const uint8_t *s, uint32_t bytes) {
     if (bytes < TILES_DX7_BANK_SYSEX_BYTES || s[0] != 0xF0u || s[1] != 0x43u || (s[2] & 0xF0u) != 0u ||
         s[3] != 0x09u || s[4] != 0x20u || s[5] != 0x00u || s[TILES_DX7_BANK_SYSEX_BYTES - 1u] != 0xF7u) {

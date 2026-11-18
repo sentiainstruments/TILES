@@ -12,6 +12,7 @@ and what they measure:
 |---|---|
 | `audio_engine.c/.h` | The four tracks, a sound (patch) each, with the guardrails: voices admitted by measured cost, at most 8 a track, the stealing order and the live load guard (`../../../docs/architecture/audio-engine.md`, "Guardrails"); MPE, mono/legato note stacks, the stereo mix. Plain C, no Pico code, tested on the computer (`test/test_audio_engine.c`). |
 | `synth_voice.c/.h`, `synth_patches.c` | The wavetable voice (up to 3 unison copies, drive/fold, SVF or ladder, two envelopes, LFO, glide) and the factory sounds. Tested on the computer (`test/test_synth.c`). |
+| `fm_bank.c/.h` | The DX7 bank in flash: a 32-voice sysex streamed in by `SYNTH BANK PUT`, checked (header, DX7 checksum, CRC-32), voices first and the header last; names and unpacked voices for `SYNTH BANK` / `SYNTH VOICE`. Core 0; tested on the computer (`test/test_fm_bank.c`). |
 | `fm_voice.c/.h`, `fm_patches.c` | The FM voice: six operators playing DX7 voice data (32 algorithms, envelopes, scaling, LFO, pitch envelope), pressure and slide brightening the modulators; DX7 bank and voice unpacking; the factory FM voices. Tested on the computer (`test/test_fm.c`). |
 | `synth_dsp.h` | The building blocks: filters, envelope, LFO, shapers, fast maths. |
 | `fx.c/.h` | The effects (`../../../docs/architecture/synth-engines.md`, "Effects"): per track overdrive (anti-aliased), bit-crush and the sidechain pump; shared plate reverb, ping-pong delay and ensemble fed by sends. Plain C, tested on the computer (`test/test_fx.c`). |

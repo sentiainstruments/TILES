@@ -61,7 +61,20 @@ static float s_slide[16];    /* CC74 0..1 */
 static bool s_sustain[16];
 static float s_bend_range;
 static uint32_t s_age;
-static uint8_t s_track_patch[TILES_AUDIO_TRACKS];
+static uint8_t s_track_patch[TILES_AUDIO_TRACKS]; /* a factory sound, or TILES_AUDIO_PATCH_BANK */
+static const synth_patch_t *s_track_sound[TILES_AUDIO_TRACKS];
+
+/* Each track's voice from the DX7 bank: two slots, so voices still fading
+ * from the last one keep theirs while core 0 fills the other
+ * (tiles_audio_engine_fm_load()). */
+typedef struct {
+    tiles_fm_patch_t fm;
+    synth_patch_t patch;
+    char name[11];
+} bank_sound_t;
+static bank_sound_t s_bank_sound[TILES_AUDIO_TRACKS][2];
+static volatile uint8_t s_bank_next[TILES_AUDIO_TRACKS];    /* the slot the next load fills */
+static volatile bool s_bank_pending[TILES_AUDIO_TRACKS];    /* filled, not yet switched to */
 static held_note_t s_mono_held[TILES_AUDIO_TRACKS][MONO_STACK];
 static uint8_t s_mono_count[TILES_AUDIO_TRACKS];
 
@@ -197,9 +210,11 @@ TILES_AUDIO_COLD void tiles_audio_engine_init(uint8_t bend_range_semitones, uint
     s_ceiling = s_core_cycles * (float)TILES_AUDIO_CEILING_PCT / 100.0f - (float)TILES_AUDIO_RESERVE_CYCLES;
     for (uint32_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
         s_track_patch[t] = g_synth_track_default[t];
-        s_cost[t] = patch_cost(&g_synth_patches[s_track_patch[t]]);
-        s_track_fx[t] = g_synth_patches[s_track_patch[t]].fx;
+        s_track_sound[t] = &g_synth_patches[s_track_patch[t]];
+        s_cost[t] = patch_cost(s_track_sound[t]);
+        s_track_fx[t] = s_track_sound[t]->fx;
         tiles_fx_insert_reset(&s_insert[t]);
+        s_bank_pending[t] = false;
     }
     s_over_blocks = 0;
     s_load = 0.0f;
@@ -220,10 +235,7 @@ uint32_t tiles_audio_engine_shed_count(void) {
     return s_shed;
 }
 
-TILES_AUDIO_COLD void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch) {
-    if (track >= TILES_AUDIO_TRACKS || patch >= g_synth_patch_count || s_track_patch[track] == patch) {
-        return;
-    }
+TILES_AUDIO_COLD static void assign_sound(uint8_t track, const synth_patch_t *p, uint8_t patch) {
     for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
         if (s_voice[i].state != VOICE_OFF && s_voice[i].track == track) {
             s_voice[i].state = VOICE_RELEASE;
@@ -231,9 +243,59 @@ TILES_AUDIO_COLD void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch)
         }
     }
     s_track_patch[track] = patch;
+    s_track_sound[track] = p;
     s_mono_count[track] = 0u;
-    s_cost[track] = patch_cost(&g_synth_patches[patch]);
-    s_track_fx[track] = g_synth_patches[patch].fx;
+    s_cost[track] = patch_cost(p);
+    s_track_fx[track] = p->fx;
+}
+
+TILES_AUDIO_COLD void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch) {
+    if (track >= TILES_AUDIO_TRACKS || patch >= g_synth_patch_count || s_track_patch[track] == patch) {
+        return;
+    }
+    assign_sound(track, &g_synth_patches[patch], patch);
+}
+
+TILES_AUDIO_COLD bool tiles_audio_engine_fm_load(uint8_t track, const uint8_t voice[TILES_DX7_VOICE_BYTES],
+                                                 const char *name) {
+    if (track >= TILES_AUDIO_TRACKS || __atomic_load_n(&s_bank_pending[track], __ATOMIC_ACQUIRE)) {
+        return false;
+    }
+    bank_sound_t *b = &s_bank_sound[track][s_bank_next[track]];
+    memcpy(b->fm.dx7, voice, TILES_DX7_VOICE_BYTES);
+    b->fm.pressure_db = 9.0f; /* as the factory FM sounds: brighter with pressure and slide */
+    b->fm.slide_db = 6.0f;
+    strncpy(b->name, name, sizeof(b->name) - 1u);
+    b->name[sizeof(b->name) - 1u] = '\0';
+    memset(&b->patch, 0, sizeof(b->patch));
+    b->patch.name = b->name;
+    b->patch.engine = SYNTH_ENGINE_FM;
+    b->patch.fm = &b->fm;
+    b->patch.voice_mode = SYNTH_POLY;
+    /* Carriers add up: level by their count, about the factory sounds'
+     * loudness (first guess). */
+    uint8_t carriers = tiles_fm_carriers(voice);
+    b->patch.level = 0.6f / sqrtf((float)(carriers < 1u ? 1u : carriers));
+    b->patch.velocity_level = 0.2f;
+    b->patch.pressure_level = 0.15f;
+    b->patch.fx.reverb = 0.2f;
+    b->patch.fx.delay = 0.1f;
+    __atomic_store_n(&s_bank_pending[track], true, __ATOMIC_RELEASE);
+    return true;
+}
+
+TILES_AUDIO_COLD void tiles_audio_engine_fm_use(uint8_t track) {
+    if (track >= TILES_AUDIO_TRACKS || !__atomic_load_n(&s_bank_pending[track], __ATOMIC_ACQUIRE)) {
+        return;
+    }
+    uint8_t slot = s_bank_next[track];
+    assign_sound(track, &s_bank_sound[track][slot].patch, TILES_AUDIO_PATCH_BANK);
+    s_bank_next[track] = (uint8_t)(1u - slot);
+    __atomic_store_n(&s_bank_pending[track], false, __ATOMIC_RELEASE);
+}
+
+const char *tiles_audio_engine_track_name(uint8_t track) {
+    return track < TILES_AUDIO_TRACKS && s_track_sound[track] != NULL ? s_track_sound[track]->name : "";
 }
 
 TILES_AUDIO_COLD static float *track_fx_field(tiles_fx_amounts_t *fx, uint8_t param) {
@@ -554,7 +616,7 @@ static void start_voice(voice_t *v, uint8_t channel, uint8_t note, uint8_t veloc
     v->poly = 0.0f;
     v->age = ++s_age;
     synth_input_t in = voice_input(v);
-    const synth_patch_t *patch = &g_synth_patches[s_track_patch[track]];
+    const synth_patch_t *patch = s_track_sound[track];
     if (v->patch == NULL || v->patch->engine != patch->engine) {
         memset(&v->u, 0, sizeof(v->u)); /* the slot last played the other engine */
     }
@@ -597,7 +659,7 @@ static void note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
     if (track == TILES_AUDIO_TRACK_DRUMS) {
         return; /* drums are the sampler's (usb_audio.c) */
     }
-    const synth_patch_t *patch = &g_synth_patches[s_track_patch[track]];
+    const synth_patch_t *patch = s_track_sound[track];
     if (patch->voice_mode != SYNTH_POLY) {
         /* Mono: the newest held note sounds; legato glides into it while
          * another is still held. */
@@ -623,7 +685,7 @@ static void note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
 static void note_off(uint8_t channel, uint8_t note) {
     bool lane;
     uint8_t track = tiles_audio_engine_track(channel, &lane);
-    if (track < TILES_AUDIO_TRACKS && g_synth_patches[s_track_patch[track]].voice_mode != SYNTH_POLY) {
+    if (track < TILES_AUDIO_TRACKS && s_track_sound[track]->voice_mode != SYNTH_POLY) {
         mono_forget(track, channel, note);
         voice_t *v = mono_voice(track);
         if (v != NULL && v->channel == channel && v->note == note && v->state == VOICE_ON && s_mono_count[track] > 0u) {

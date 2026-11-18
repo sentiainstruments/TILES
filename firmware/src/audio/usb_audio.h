@@ -35,6 +35,10 @@ void tiles_usb_audio_drum_hit(uint8_t slot, uint8_t velocity);
 /* A track's sound (0-3, a factory patch), in order with the notes around
  * it; false outside standalone mode. */
 bool tiles_usb_audio_set_patch(uint8_t track, uint8_t patch);
+/* A DX7 voice (unpacked) as a track's sound, the same way; false outside
+ * standalone mode or while the track's last one is still being switched
+ * to. */
+bool tiles_usb_audio_set_fm_voice(uint8_t track, const uint8_t voice[155], const char *name);
 
 /* The tempo the synced LFOs follow; the main loop passes it on. */
 void tiles_usb_audio_set_tempo(float beats_per_minute);

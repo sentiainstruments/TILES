@@ -31,6 +31,7 @@
 /* In the MIDI ring, words with these statuses aren't MIDI: a patch change,
  * an effect setting (target 3 bits, param 5, value x 1000 in 16), a beat. */
 #define PATCH_WORD 0xF5u
+#define FM_VOICE_WORD 0xF6u
 #define FX_WORD 0xF4u
 #define BEAT_WORD 0xF9u
 /* Drum slot 1 is the kick: it keys the pump. */
@@ -172,6 +173,9 @@ static void core1_main(void) {
             case PATCH_WORD:
                 tiles_audio_engine_set_patch((uint8_t)(word >> 8), (uint8_t)(word >> 16));
                 break;
+            case FM_VOICE_WORD:
+                tiles_audio_engine_fm_use((uint8_t)(word >> 8));
+                break;
             case FX_WORD:
                 tiles_audio_engine_set_fx((uint8_t)((word >> 8) & 7u), (uint8_t)((word >> 11) & 31u),
                                           (float)(word >> 16) * 0.001f);
@@ -276,6 +280,14 @@ bool tiles_usb_audio_set_patch(uint8_t track, uint8_t patch) {
     }
     uint32_t word = PATCH_WORD | ((uint32_t)track << 8) | ((uint32_t)patch << 16);
     return tiles_spsc_push(&s_midi_ring, &word, 1u);
+}
+
+bool tiles_usb_audio_set_fm_voice(uint8_t track, const uint8_t voice[155], const char *name) {
+    if (!s_started || tiles_spsc_space(&s_midi_ring) < 1u || !tiles_audio_engine_fm_load(track, voice, name)) {
+        return false;
+    }
+    uint32_t word = FM_VOICE_WORD | ((uint32_t)track << 8);
+    return tiles_spsc_push(&s_midi_ring, &word, 1u); /* room checked: core 0 is the only writer */
 }
 
 void tiles_usb_audio_set_tempo(float beats_per_minute) {

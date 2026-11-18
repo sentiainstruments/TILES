@@ -53,6 +53,11 @@ const tiles_kv_ops_t *tiles_storage_state_ops(void);
 bool tiles_storage_seq_region_safe(void);
 const tiles_kv_ops_t *tiles_storage_seq_ops(void);
 
-/* And for the last caught crash (diagnostics/fault.c), lowest. */
+/* And for the last caught crash (diagnostics/fault.c). */
 bool tiles_storage_fault_region_safe(void);
 const tiles_kv_ops_t *tiles_storage_fault_ops(void);
+
+/* And for the DX7 bank (audio/fm_bank.c), lowest: its two sectors as the
+ * two slots. */
+bool tiles_storage_fm_bank_region_safe(void);
+const tiles_kv_ops_t *tiles_storage_fm_bank_ops(void);

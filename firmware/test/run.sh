@@ -57,6 +57,9 @@ cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio test/test
 # The FM engine: DX7 voice data, pitch, modulation, feedback, envelopes, velocity.
 cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio test/test_fm.c src/audio/fm_voice.c -lm -o /tmp/sentia_tiles_test_fm
 /tmp/sentia_tiles_test_fm
+# The DX7 bank store: a bank streamed in over a fake flash, a reload, the bad loads.
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio -Isrc/storage test/test_fm_bank.c src/audio/fm_bank.c src/audio/fm_voice.c src/audio/fm_patches.c src/storage/kv_store.c -lm -o /tmp/sentia_tiles_test_fm_bank
+/tmp/sentia_tiles_test_fm_bank
 
 # The drum sampler: slot header, loading over a flash that loses power,
 # voices streaming back what was loaded.

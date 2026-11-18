@@ -125,6 +125,9 @@ static void test_data(void) {
     char name[11];
     tiles_dx7_name(v, name);
     CHECK(strcmp(name, "GLASS TINE") == 0, "name '%s'", name);
+    uint8_t again[TILES_DX7_PACKED_BYTES];
+    tiles_dx7_pack(v, again);
+    CHECK(memcmp(again, packed, sizeof(again)) == 0, "packing the unpacked voice changed it");
 
     /* A bank: its checksum guards it. */
     static uint8_t bank[TILES_DX7_BANK_SYSEX_BYTES];
