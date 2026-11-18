@@ -62,6 +62,12 @@ SAMPLE PLAY <slot> [velocity]\n  hit a slot in TILES's own sound: OK
 SYNTH LIST\n              the synth sounds (`<n> <name>`), then each track's (`track <t> <name>`), then OK
 SYNTH PATCH <track> <n|name>\n  give track 1-4 a sound: OK, or ERR unknown-patch / track-1-4
 SYNTH MIDI <status hex> <data1> [data2]\n  a channel message (80-EF) to the synth only, not sent out: OK
+SYNTH BANK\n              the DX7 bank's voices (`<n> <name>`, 1-32), then OK; ERR no-bank
+SYNTH BANK PUT <crc32 hex>\n  load a DX7 32-voice bank: OK 4104, then the 4,104-byte sysex as raw
+                          bytes (F0 43 0n 09 20 00 ... checksum F7; crc32 = zlib's of all of them),
+                          then OK or ERR not-a-dx7-bank / checksum / crc / flash / timeout;
+                          ERR playing while the clock runs or TILES sounds
+SYNTH VOICE <track> <n>\n  track 1-4 plays the bank's voice n (1-32): OK, ERR no-bank / busy
 SYNTH BENCH\n              one voice of each sound timed: `<name> <cycles per sample>` lines, then each effect's
                           (`fx-<chorus|delay|reverb|drive|crush|pump> <cycles>`, only while no app streams), then OK
                           (core 0 pauses ~5 ms an item)
