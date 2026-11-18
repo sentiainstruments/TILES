@@ -1,0 +1,44 @@
+.melodic-editor {
+  background: #20222c;
+  border: 1px solid #45485a;
+  border-radius: 16px;
+  color: #edeefa;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  align-self: start;
+}
+.melodic-editor-heading { padding: 17px 19px 10px; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.melodic-eyebrow { font-size: 10px; letter-spacing: 1.8px; color: #ff71d6; font-weight: 700; }
+.melodic-editor h3 { margin: 4px 0 3px; font-size: 20px; }
+.melodic-editor-heading p { margin: 0; font-size: 12px; color: #9da2b5; }
+.melodic-editor-heading button, .melodic-reset { color: #dce0ee; border: 1px solid #52566a; background: #303544; border-radius: 7px; padding: 7px 10px; cursor: pointer; }
+.melodic-editor button:disabled { opacity: .45; cursor: not-allowed; }
+.melodic-status { display: flex; align-items: center; gap: 8px; color: #b7bbd0; font-size: 11px; border-bottom: 1px solid #45485a; padding: 9px 19px 15px; }
+.melodic-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #60cba0; }
+.melodic-error { margin: 10px 15px; padding: 9px; border: 1px solid #a05f60; background: #452629; color: #ffc9c9; border-radius: 7px; font-size: 12px; }
+.melodic-editor-scroll { max-height: 700px; overflow-y: auto; overscroll-behavior: contain; }
+.melodic-editor-group { border-bottom: 1px solid #414457; padding: 12px 16px 16px; }
+.melodic-editor-group h4 { margin: 0 0 10px; font-size: 13px; }
+.melodic-muted { font-size: 11px; color: #aaaec0; line-height: 1.5; margin: -2px 0 10px; }
+.melodic-setting-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 6px; padding: 10px 0; border-bottom: 1px solid #363948; align-items: center; }
+.melodic-setting-row:last-child { border-bottom: 0; }
+.melodic-setting-label { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.melodic-setting-label strong { font-size: 12px; font-weight: 600; }
+.melodic-setting-label small { max-width: 140px; font-size: 10px; color: #8a8e9f; text-align: right; overflow-wrap: anywhere; }
+.melodic-setting-input { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.melodic-setting-input select, .melodic-picker-label select, .melodic-number-edit input[type='number'] { border: 1px solid #51566b; border-radius: 7px; color: #f4f5ff; background: #2e3240; padding: 7px 8px; min-width: 0; }
+.melodic-setting-input select { max-width: 195px; width: 100%; }
+.melodic-number-edit { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; width: 100%; }
+.melodic-number-edit input[type='range'] { width: min(110px, 55%); accent-color: #ff00ff; }
+.melodic-number-edit input[type='number'] { width: 80px; }
+.melodic-color-edit { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+.melodic-color-edit input[type='color'] { background: transparent; border: 0; width: 32px; height: 32px; padding: 0; cursor: pointer; }
+.melodic-color-hex { font-size: 11px; color: #c5c8d9; }
+.melodic-checkbox-label { display: flex; align-items: center; gap: 3px; font-size: 11px; }
+.melodic-picker-label { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 9px 0; }
+.melodic-picker-label select { width: 140px; }
+.melodic-disabled-note { opacity: .6; }
+.melodic-reset { font-size: 11px; padding: 6px 9px; }
+.melodic-footer { font-size: 10px; color: #b6bacb; line-height: 1.6; margin: 0; padding: 12px 17px 16px; }
+.melodic-editor :focus-visible { outline: 2px solid #ff74f4; outline-offset: 2px; }

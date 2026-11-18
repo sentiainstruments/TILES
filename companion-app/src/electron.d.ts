@@ -11,6 +11,15 @@ type UsbDeviceInfo = {
 declare global {
   interface Window {
     tiles: {
+      project: {
+        open(): Promise<{
+          project: import('./project/model').TilesProject
+          fileName: string
+        } | null>
+        save(project: import('./project/model').TilesProject, saveAs?: boolean):
+          Promise<{ fileName: string } | null>
+        reset(): Promise<boolean>
+      }
       usb: {
         list(): Promise<UsbDeviceInfo[]>
 
