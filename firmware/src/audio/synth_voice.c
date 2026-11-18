@@ -377,7 +377,7 @@ INLINE void filter(synth_voice_t *v, int kind, bool stereo, const float *bl, con
 }
 
 void TILES_AUDIO_HOT(synth_voice_render)(synth_voice_t *v, const synth_context_t *ctx, const synth_input_t *in,
-                                         float *l, float *r, uint32_t n) {
+                                         float *restrict l, float *restrict r, uint32_t n) {
     const synth_patch_t *p = v->patch;
     const tiles_wt_bank_t *bank = ctx->banks[p->bank < TILES_WT_BANK_COUNT ? p->bank : 0u];
     if (bank == NULL) {

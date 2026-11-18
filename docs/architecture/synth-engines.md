@@ -164,7 +164,12 @@ How it is built:
   a 64-step table; envelope steps per block precomputed; operators no
   stage of which is audible never computed; the loop fixed at 16 samples,
   a shorter block taking a generic path). Same sound (loudness within
-  0.3 dB of before). Board numbers to come.
+  0.3 dB of before). Then (bit-identical): an unbent held note keeps its
+  steps, a held level its gain, and the output loop knows left and right
+  don't overlap. Unit 2, 2026-11-17: tine 158, solid 125, chime 160 (from
+  191 / 157 / 194). Per sample, profiled (tine): operator loops ~95,
+  their control ~39, output ~18, pitch and LFO 7; at 230.4 MHz about 17
+  voices fit, so FM no longer limits a track.
 - **Any sound is wavetable or FM:** `synth_patch_t.engine`; an FM sound
   points at its DX7 voice and keeps from the patch only the voice mode,
   glide, levels and effects. The engine's voices are a union of the two
@@ -199,6 +204,15 @@ Next: more factory FM sounds (a pluck, a stab); bank voices in the sound
 menu; the tracks' choices saved.
 
 ## Measured on unit 2
+
+Where a wavetable voice's cycles go, per sample (profiled 2026-11-17 at
+230.4 MHz): control (envelopes, LFO, pitch, filter settings every 8
+samples) 20-50 on every sound; each unison copy ~32; drive ~15 a
+channel, the folder ~50 a channel; the SVF ~31 mono / 46 stereo, the
+ladder ~81 / 99 (bound by its chain's FPU latency). What's left would
+change the sound, so it waits for listening: the control step every 16
+samples (about -20 on every sound), a cheaper ladder saturation or
+folder (acid, reese, wobble).
 
 One voice of each sound, cycles per sample (`synth bench`: core 0,
 interrupts off, a note held 50 ms; core 1 at 150 MHz has 3,125 a sample,

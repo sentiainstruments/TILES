@@ -50,11 +50,10 @@ static inline float synth_exp2(float x) {
  * turn (1.6e-4 at worst): LFOs and the wavefolder. */
 static inline float synth_sin_turns(float t) {
     t -= floorf(t + 0.5f);
-    if (t > 0.25f) {
-        t = 0.5f - t;
-    } else if (t < -0.25f) {
-        t = -0.5f - t;
-    }
+    /* The fold to a quarter turn without branches (each costs this core a
+     * stall): the same values, -0.5 - t being -(0.5 - |t|) exactly. */
+    float a = __builtin_fabsf(t);
+    t = __builtin_copysignf(__builtin_fminf(a, 0.5f - a), t);
     float x = t * (2.0f * SYNTH_PI), x2 = x * x;
     return x * (1.0f - x2 * (1.0f / 6.0f) * (1.0f - x2 * (1.0f / 20.0f) * (1.0f - x2 * (1.0f / 42.0f))));
 }

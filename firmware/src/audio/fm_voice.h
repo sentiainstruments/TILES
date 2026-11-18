@@ -74,6 +74,7 @@ typedef struct {
 typedef struct {
     uint32_t phase, inc;
     int32_t gain;      /* Q24 at the end of the last block */
+    int32_t gain_level; /* the level that gain is for (unchanged: not worked out again) */
     float ratio;       /* its frequency over the note's (a fixed one: inc never changes) */
     int32_t outlevel;  /* output level with scaling and velocity, microsteps */
     int32_t rate_scaling;
@@ -96,6 +97,7 @@ typedef struct {
     float glide_coef;
     float pressure_s, slide_s;
     float level;      /* last block's output level */
+    float hz;         /* the pitch the operators' steps are for */
     bool sounding;
 } tiles_fm_voice_t;
 

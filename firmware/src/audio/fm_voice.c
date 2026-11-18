@@ -260,7 +260,7 @@ static void env_stage(tiles_fm_env_t *e, const uint8_t *op, int32_t outlevel, in
 
 /* One block of n samples. Attack: up from at least -40 dB, faster the
  * quieter; decay: steady in dB. Stage 3 waits for the key to lift. */
-static void env_step(tiles_fm_env_t *e, const uint8_t *op, int32_t outlevel, int32_t rate_scaling, uint32_t n) {
+INLINE void env_step(tiles_fm_env_t *e, const uint8_t *op, int32_t outlevel, int32_t rate_scaling, uint32_t n) {
     if (!(e->ix < 3u || (e->ix < 4u && !e->down))) {
         return;
     }
@@ -418,6 +418,10 @@ void tiles_fm_voice_start(tiles_fm_voice_t *v, const tiles_fm_patch_t *patch, co
     /* The LFO's delay: waits, then fades in over as long again. */
     int32_t a = 99 - (d[TILES_DX7_LFO_DELAY] > 99 ? 99 : d[TILES_DX7_LFO_DELAY]);
     v->lfo_delay_inc = a == 99 ? 0xFFFFFFFFu : (uint32_t)(((16 + (a & 15)) << (1 + (a >> 4))) * (25190424.0f / FS));
+    v->hz = 0.0f; /* the steps from the new ratios */
+    for (uint32_t k = 0; k < 6u; k++) {
+        v->op[k].gain_level = -1;
+    }
     v->sounding = true;
 }
 
@@ -541,8 +545,8 @@ static float lfo_value(tiles_fm_voice_t *v, uint8_t wave, bool wrapped) {
     }
 }
 
-void TILES_AUDIO_HOT(tiles_fm_voice_render)(tiles_fm_voice_t *v, const tiles_fm_input_t *in, float gain, float *l,
-                                            float *r, uint32_t n) {
+void TILES_AUDIO_HOT(tiles_fm_voice_render)(tiles_fm_voice_t *v, const tiles_fm_input_t *in, float gain,
+                                            float *restrict l, float *restrict r, uint32_t n) {
     if (!v->sounding || n == 0u || n > BLOCK_MAX) {
         return;
     }
@@ -579,6 +583,8 @@ void TILES_AUDIO_HOT(tiles_fm_voice_render)(tiles_fm_voice_t *v, const tiles_fm_
      * up to an octave; one exponential, each operator its ratio of it. */
     float note_oct = 8.781360f + (v->pitch - 69.0f) * (1.0f / 12.0f);
     float note_hz = synth_exp2(note_oct + (float)v->peg_level * (1.0f / (float)Q24) + pitch_lfo);
+    bool repitch = note_hz != v->hz; /* a held, unbent note keeps its steps */
+    v->hz = note_hz;
     int32_t boost = (int32_t)((patch->pressure_db * v->pressure_s + patch->slide_db * v->slide_s) *
                               ((float)Q24 / 6.0206f));
 
@@ -592,7 +598,7 @@ void TILES_AUDIO_HOT(tiles_fm_voice_render)(tiles_fm_voice_t *v, const tiles_fm_
             continue;
         }
         const uint8_t *op = &d[k * TILES_DX7_OP_BYTES];
-        if (!o->fixed) {
+        if (repitch && !o->fixed) {
             o->inc = to_inc(note_hz * o->ratio);
         }
         env_step(&o->env, op, o->outlevel, o->rate_scaling, n);
@@ -609,7 +615,8 @@ void TILES_AUDIO_HOT(tiles_fm_voice_render)(tiles_fm_voice_t *v, const tiles_fm_
         if (!carrier && level >= Q24) {
             level += boost; /* a silent modulator stays silent (and skipped) */
         }
-        int32_t g = gain_of(level);
+        int32_t g = level == o->gain_level ? o->gain : gain_of(level); /* held: as it was */
+        o->gain_level = level;
         g_from[k] = o->gain;
         g_step[k] = n == BLOCK_MAX ? (g - o->gain) / (int32_t)BLOCK_MAX : (g - o->gain) / (int32_t)n;
         o->gain = g;
@@ -659,12 +666,13 @@ void TILES_AUDIO_HOT(tiles_fm_voice_render)(tiles_fm_voice_t *v, const tiles_fm_
     }
 
     if (full[0]) {
-        float lvl = v->level, step = (gain - v->level) / (float)n;
+        float a = v->level * OUT_SCALE, da = (gain - v->level) * OUT_SCALE / (float)n;
+#pragma GCC unroll 2
         for (uint32_t i = 0; i < n; i++) {
-            float y = (float)bus[0][i] * OUT_SCALE * lvl;
+            float y = (float)bus[0][i] * a;
             l[i] += y;
             r[i] += y;
-            lvl += step;
+            a += da;
         }
     }
     v->level = gain;
