@@ -1,0 +1,9 @@
+/* The SDK's list, plus what core 1 runs between render blocks: TinyUSB,
+ * its RP2350 driver and our USB-on-core-1 code, the engine's note
+ * handling, the float maths it calls. From flash these wait behind
+ * core 0's fetches through the shared XIP cache (up to 0.3 ms a
+ * tud_task(), late audio packets); left out here, they land in RAM
+ * (section_default_data.incl takes every .text not placed in flash). */
+*(EXCLUDE_FILE(*libgcc.a: *libc.a: *lib*_a-mem*.o *libm.a: *tinyusb/src/*.o *pico_usb_reset/*.o *pico_float/float_sci_m33_vfp.S.o *pico_float/float_math.c.o *audio/usb_audio.c.o *audio/audio_engine.c.o *audio/synth_voice.c.o *audio/fm_voice.c.o *audio/fx.c.o *audio/fx_memory.c.o *audio/sampler.c.o *audio/sample_stream.c.o *midi/usb_device.c.o *midi/usb_descriptors.c.o) .text*)
+/* TILES_AUDIO_COLD (audio/audio_hot.h): rare code from those files, kept in flash. */
+*(.coldtext*)

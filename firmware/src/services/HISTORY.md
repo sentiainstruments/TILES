@@ -10582,3 +10582,91 @@ change. Search it by file or feature name.
   far more saturated; the wake is water. The water, the mode's menu colour, is
   unchanged. test_ripples_look checks a lying stone has no green against the
   pond's 0.7. Manual's stone colour and the cover's first ring match.
+- `show_link.c` (2026-11-10) — "do the tiles led takeover mode. when
+  clicked on computer it overrides all and makes the underglow a beat
+  strobe light style and the top 24 pad grid into different music
+  related animations we can select including one thats like a vu meter
+  like the screensaver". Show Control (the Mac light-show app in the
+  LMD9020 repo) streams kick, accent, loudness and six bands as SysEx
+  (`7D 02`); the lighting module got a takeover path of its own above
+  the standby path, since many modes switch that path and would have
+  taken the LEDs back. SysEx rather than the USB settings protocol: the
+  show is live music data at ~30 Hz, and every host can send MIDI
+  without a USB driver. Built and host-tested; not yet run on a board.
+
+## 2026-11-13: pads without haptics
+
+Real feedback: "there's a glitch somewhere that's making some pads not
+give haptics when pressing them." The pad-to-motor table matched the
+board's routing table for all 24 pads, and no button LED shares a motor
+channel, so the search went to what drives the motors. Three faults:
+
+- **A motor chip that lost power stayed asleep.** One PCA9685 drives
+  every motor in columns 1-3 (0x40), the other columns 4-6 (0x41). A
+  rail dip (motor inrush, a cable) can reset one without the RP2350:
+  it comes back asleep, its 12 motors stopped, until a power-mode change
+  set it up again (the earlier "pulling the plug killed haptics" fix only
+  ran then). `buttons.c` now reads both chips' MODE1 every 250 ms and
+  sets a sleeping one up again, then `haptics.c` rewrites the motors;
+  INFO counts it (`pca.resets`, `pca.read_fails`, `pca.mode1`).
+- **The kick queue had no end.** Kick starts are 15 ms apart against
+  inrush, chained on one global slot; with the sequencer, drum steps or
+  a physics mode kicking, a player's strike could be queued past the
+  tap that made it, and the tap's note-off cancelled it unfelt. No kick
+  now waits more than 30 ms.
+- **Kicks no note-off ends.** Game mode's menu, playback and feedback
+  kicks and the Feel menu's pick used the full kick, whose sustain never
+  ends without a stop: the motor stayed at ~13 % and held one of the
+  four USB voices (the same class as the menu fix above). They are now
+  `tiles_haptics_trigger_click()`: the kick, then idle.
+
+`TEST MOTOR <pad> [duty%]` runs one motor for 1 s, to tell a dead motor
+from a firmware fault. Not yet run on a board (unit 2 was unplugged).
+
+## 2026-11-14: mode colours, triangle switch, Feel menu on a hold
+
+Asked: "make the underglow of melodic mode match the boot mode color and
+make it so that holding triangle when on for 10 seconds changes the mode
+even when on. also remove the quick view of expression button, and now
+that menu opens with 2 seconds of hold not more."
+
+- Controller mode's colour went from periwinkle (#94abf9, near white on
+  the LEDs: "the blue is not blue enough") to a deep blue (0, 0.08, 1).
+  `tiles_device_mode_color()` holds both modes' colours; the boot pulse
+  and melodic mode's underglow use it.
+- Triangle held alone for 10 s while playing switches controller and
+  standalone: the new mode's colour rises on the pads and underglow
+  (0.6 s), then the save and restart. Any other button ends the hold; a
+  press carried over from the boot animation doesn't count.
+- Square no longer shows the Feel menu while held. A 2 s hold opens it
+  and it stays open until a click or a key press; "-"/"+" with square
+  held still step haptics.
+- Then: "reduce the hold for the feel menu to 1s". The hold that opens it
+  is now 1 s (`EXPRESSION_SUBMENU_TOGGLE_HOLD_MS`); circle + square for
+  MPE stays at 2 s.
+- Then: "to exit it should trigger as well with the one second hold. in
+  the animations menu the preview feels too fast and not previewing well.
+  it should be something like touch the pad and the preview happens on
+  all the pads like a demo of what it would look like." A 1 s hold now
+  closes the Feel menu too. The Light effects preview struck only the
+  touched pad, eight hits in 1.8 s, so it stayed around the finger and
+  the fades overlapped. It now plays a 6 s phrase over the grid: single
+  hits soft to hard at ~0.55 s spacing, a held note, two pads together,
+  then a 2 s rest for the fades and cooling; held pads show the pressed
+  look as in play.
+
+## 2026-11-15: RAM for the effects
+
+- **Song and pattern saves stage less.** The song save built a full 12 KB
+  copy of the store before writing it sector by sector; it now writes the
+  13-byte head and then the patterns straight from `s_song_pattern`
+  (they sit in RAM exactly as the store lays them out: same bytes in
+  flash, no format change). The pattern save, the song save and
+  `profiles/content.c` share one 4 KB staging buffer
+  (`storage/flash_staging.h`): each builds and writes within one call.
+  Together with the capture lending its buffer to the effects, this let
+  TILES's reverb, delay and ensemble in with ~45 KB of RAM still free.
+- **`tiles_midi_clock_song_pulse()`**: the song position without
+  `get_state()`'s side effect (its `start_edge` is the sequencers'), for
+  the effects' beat-locked pump.
+

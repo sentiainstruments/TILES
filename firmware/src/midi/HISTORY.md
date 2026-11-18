@@ -551,3 +551,53 @@ owner's feedback that prompted each change.
   bcdDevice 0xSNPP (N 0-9, P 0-99, a static assert guards it); Identity
   Reply stage, N, P, 0. Alpha 1-4 keep their numbers (unit 2 had already
   reported alpha.3, so renumbering would have gone backwards).
+- **USB audio, Alpha 7 (2026-11-06).** Asked: "implement usb c audio into
+  computers for recording into daw even if we havent made the sound
+  design or synth engines" (and a headphone DAC for the first release,
+  docs/hardware/audio-output.md). TILES now enumerates a UAC2 audio
+  input, stereo 48 kHz / 24-bit, after the reset interface so MIDI,
+  vendor and reset keep their interface numbers (0x85 isochronous IN,
+  768-byte packets). A placeholder MPE test voice runs on core 1
+  (audio/), fed by a copy of every channel message midi_out.c sends
+  (not channel 10, not Parts-routed Song/Volca). TinyUSB only re-arms the
+  endpoint in tud_task(), which the ~2 ms main loop calls about five
+  times a pass, so packets carry 48 frames per USB frame since the last
+  one: a missed frame is made up in the next packet rather than lost
+  (INFO audio.late_frames). Flash writes now pause core 1 through
+  tiles_flash_write_begin/end (multicore lockout; XIP is off during an
+  erase). Built and host-tested, not yet run on a board: no unit was
+  connected. To check on hardware: enumeration on macOS, a clean
+  recording in Live, audio.late_frames/underruns, and that MIDI timing
+  and settings saves are unchanged.
+- **picotool froze a standalone board (2026-11-14).** `tools/flash.sh`
+  left unit 2 dead twice in a row: USB gone, lights on, same USB session.
+  In standalone mode tud_task() runs on core 1, so the reset interface's
+  BOOTSEL (and reboot) request ran there; the ROM arms the watchdog for
+  the reboot, and core 0, still looping, fed it, so the reboot never
+  came and core 1 sat in the ROM's wait. Now `usb_device.c` wraps
+  `rom_reset_usb_boot_extra` and `watchdog_reboot` (`--wrap`): on core 1
+  it hands the request to core 0, which carries it out in
+  `tiles_usb_task()` (a 0 ms reboot, as the fault recorder uses, passes
+  straight through). Behind a hub the board can reach BOOTSEL after
+  picotool stops waiting (~9 s), so `flash.sh` now waits 20 s more for
+  it. Found with a new watch (`diagnostics/fault.c`): core 1 still for a
+  second is recorded and restarts the chip, so a hang like this now
+  reports itself instead of needing a replug.
+- **Recordings lost a second at a time (2026-11-14).** A recorded tour of
+  the synth's sounds had gaps of ~1 s of digital silence: macOS restarting
+  the stream after missed packets (`audio.late_frames` +44 in 46 s at
+  6-57 % load). Timing core 1 showed its loop never went 1 ms without
+  `tud_task()` (0.73 ms at worst), but one `tud_task()` took up to
+  0.34 ms, one called right after another as long, and the packet
+  callback 0.17 ms: TinyUSB and core 1's USB code ran from flash, and
+  core 0's ~2 ms loop keeps the shared 16 KB XIP cache full of its own
+  code. Moving them to RAM (`src/link/default_text_excludes.incl`, the
+  SDK's `pico_add_linker_script_override_path`, 38 KB) brought
+  `tud_task()` to ~30 us at most, the callback to 15 us, note handling
+  0.48 -> 0.11 ms and core 1's load 15 -> 8 %: no late frame since,
+  through the tour, four busy tracks, the voice budget full with drums,
+  and five stream restarts. Core 1 also stopped using `sleep_us()`, whose
+  wake-up is an alarm interrupt on core 0. The ~8 "late" frames at every
+  stream start were the host starting to poll a few frames after
+  choosing the interface: no longer counted. INFO `audio.usb_gap_us`
+  keeps the longest stretch between `tud_task()` calls.

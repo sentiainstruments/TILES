@@ -137,3 +137,20 @@ bool tiles_mpr121_running(tiles_mpr121_t *dev) {
     uint8_t ecr;
     return read_regs(dev->bus, dev->addr, REG_ECR, &ecr, 1) && ecr == ECR_RUN;
 }
+
+#define REG_ELE0_FILTERED_L 0x04u
+#define REG_ELE0_BASELINE 0x1Eu
+
+bool tiles_mpr121_read_electrodes(tiles_mpr121_t *dev, uint16_t filtered[12], uint16_t baseline[12]) {
+    uint8_t data[2u * NUM_ELECTRODES];
+    uint8_t base[NUM_ELECTRODES];
+    if (!read_regs(dev->bus, dev->addr, REG_ELE0_FILTERED_L, data, sizeof(data)) ||
+        !read_regs(dev->bus, dev->addr, REG_ELE0_BASELINE, base, sizeof(base))) {
+        return false;
+    }
+    for (uint8_t e = 0; e < NUM_ELECTRODES; e++) {
+        filtered[e] = (uint16_t)((data[2u * e] | (data[2u * e + 1u] << 8)) & 0x3FFu);
+        baseline[e] = (uint16_t)(base[e] << 2);
+    }
+    return true;
+}

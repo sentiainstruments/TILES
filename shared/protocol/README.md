@@ -54,14 +54,44 @@ SCALE PUT <slot> <name> <intervals> [pack=<id>] [item=<id>] [version=<n>]\n
 SCALE DELETE <slot>\n     empty a slot: OK (also when already empty)
 CONTENT LIST\n            every record in the content store, one line each, then OK
 CONTENT CLEAR\n           wipe the content store (every custom scale): OK
+SAMPLE LIST\n             the drum sampler's 8 slots, one line each, then OK (see "Drum samples")
+SAMPLE BEGIN <slot> <channels> <frames> <crc32> <name>\n
+                          load a slot: OK <bytes>, then the audio as raw bytes, then OK / ERR
+SAMPLE DELETE <slot>\n    empty a slot: OK (also when already empty)
+SAMPLE PLAY <slot> [velocity]\n  hit a slot in TILES's own sound: OK
+SYNTH LIST\n              the synth sounds (`<n> <name>`), then each track's (`track <t> <name>`), then OK
+SYNTH PATCH <track> <n|name>\n  give track 1-4 a sound: OK, or ERR unknown-patch / track-1-4
+SYNTH MIDI <status hex> <data1> [data2]\n  a channel message (80-EF) to the synth only, not sent out: OK
+SYNTH BANK\n              the DX7 bank's voices (`<n> <name>`, 1-32), then OK; ERR no-bank
+SYNTH BANK PUT <crc32 hex>\n  load a DX7 32-voice bank: OK 4104, then the 4,104-byte sysex as raw
+                          bytes (F0 43 0n 09 20 00 ... checksum F7; crc32 = zlib's of all of them),
+                          then OK or ERR not-a-dx7-bank / checksum / crc / flash / timeout;
+                          ERR playing while the clock runs or TILES sounds
+SYNTH VOICE <track> <n>\n  track 1-4 plays the bank's voice n (1-32): OK, ERR no-bank / busy
+SYNTH BENCH\n              one voice of each sound timed: `<name> <cycles per sample>` lines, then each effect's
+                          (`fx-<chorus|delay|reverb|drive|crush|pump> <cycles>`, only while no app streams), then OK
+                          (core 0 pauses ~5 ms an item)
+SYNTH FX\n                 each track's effects (`track <t> reverb=<0-100> delay= chorus= drive= dark= crush= pump=`),
+                          then the shared ones' settings (`bus <name>=<value>`), then OK
+SYNTH FX <t|BUS> <name> <value>\n  set one: a track 1-4's (reverb delay chorus drive dark crush pump, 0-100; its
+                          sound's again when the sound changes) or the shared ones' (decay damping mod tone
+                          feedback echo-verb chorus-rate chorus-depth pump-release 0-100, predelay in ms,
+                          time in sixteenths): OK, or ERR unknown-fx / busy
 TEST LEDS <0-100>\n       bench only: every LED white at that % (current measurement)
 TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
+TEST MOTOR <pad> [duty%]\n bench only: one pad's motor (1-24) for 1 s
 TEST MODE <name>\n        bench only: switch mode (melodic duet sequencer bass song ableton drums volca prism bounce ripples sand orbits cradle)
 TEST OFF\n                bench only: back to normal
+FLASH CRC\n               the program read back from flash uncached (~0.1 s): crc=<zlib CRC-32 hex>
+                          bytes=<n>; equal to the build's .bin's while the flash timing holds
+FAULT CLEAR\n             forget the crash INFO reports as fault.saved (a flash write, the sound
+                          paused ~50 ms): OK / ERR flash
 CAPTURE START <pad>\n     record pad 1-24's raw Hall readings, one per pass (~8 s max): OK
 CAPTURE WATCH <pad>\n     the same, never stopping: keeps the newest 4000, skips passes that
                           only repeat the last (the studio): OK
-CAPTURE STOP\n            stop recording: OK
+CAPTURE STOP\n            stop recording: OK (the records stay readable)
+CAPTURE RELEASE\n         the records' memory back to TILES's reverb and delay, quiet since the first
+                          START/WATCH (START/WATCH answer ERR memory-busy if they couldn't have it): OK
 CAPTURE STATUS\n          pad=<p> running=<0|1> count=<n> max=<m> watching=<0|1> total=<seq>
                           bend mode=<m> sensitivity=<s> bx=<b> by=<b> strokes=<n>
                           (the pad's bend setup when recording started), then OK
@@ -230,6 +260,7 @@ refused, not clamped); the default is whatever the owning module boots with --
 | 0x080C | `modes.orbits` | bool | | `1` | yes |
 | 0x0900 | `layout.melodic` | enum | `rows` (the default), `columns`, `fourths`, `keys`, `fifths`, `tonnetz`, `quarter_tones` (melodic mode's note layout; Feel menu, circle + triangle; firmware/src/services/note_map.h) | `rows` | yes |
 | 0x0A00 | `seq.lock` | enum | `off`, `bar`: a sequencer lane or the drums started while others play joins on the next step at the step it would be on had it played from the song's top, and stays there (16-step patterns share the bar line). No hardware gesture (firmware/src/services/op_mode.h) | `off` | yes |
+| 0x0B00 | `device.mode` | enum | `controller` (MIDI/MPE, settings, console; TILES's own sound off), `standalone` (adds TILES's own sound and a stereo USB audio input). A change saves the settings and restarts TILES (the USB descriptor differs); tapping triangle during the boot animation switches it too. Read from flash before USB starts, so the id must never change (firmware/src/services/device_mode.h) | `controller` | yes |
 
 Ids `0x0401`-`0x0404` (`look.natural_pad_percent`, `look.root_pad_percent`,
 `look.fifth_pad_percent`, `look.fifth_red_tint_percent`) were retired in
@@ -349,6 +380,46 @@ OK
 Built-in scales aren't listed: they're fixed per firmware version (pads
 1-15 of the picker, `SCALE_GRID_ORDER` in `firmware/src/services/note_map.c`).
 
+### Drum samples
+
+The drum sampler's 8 slots (`firmware/src/audio/sample_slot.h`), slot
+`n` = drum `n` of drum mode's first bank. A slot holds 16-bit
+little-endian audio at 48 kHz, mono or stereo (interleaved L/R), up to
+96,000 frames mono (2 s) or 48,000 stereo (1 s). The sender converts
+(rate, depth, trimming); the device stores and plays what arrives.
+
+```
+SAMPLE LIST
+1 kick mono 23990
+2 crash-long mono 96000
+3 empty
+...
+OK
+```
+
+Loading:
+
+```
+SAMPLE BEGIN 1 1 23990 cee3e54f kick     -> OK 47980
+<47980 raw bytes>                        -> OK
+```
+
+- `BEGIN`'s arguments: slot 1-8, channels 1 or 2, frames, the CRC-32
+  (zlib's) of the audio bytes in hex, and a name (1-23 printable ASCII,
+  no spaces). The slot reads empty from here on.
+- After `OK <bytes>`, the next `<bytes>` bytes on the interface are the
+  audio, not commands. Then the device reads the slot back from flash,
+  checks the CRC, writes the slot's header last and answers `OK`; or
+  `ERR crc` / `flash` / `size` and the slot stays empty. A sender silent
+  for 3 s mid-load gets `ERR timeout`. A power cut mid-load leaves the
+  slot empty, never half-filled.
+- Errors on `BEGIN`: `slot-1-8`, `missing-arg`, `bad-format` (channels,
+  length or name), `busy`, `no-storage`, and `playing`: loading erases
+  flash (tens of ms a sector), so it waits for the clock to stop and
+  TILES's own sound to be silent.
+- About 3 s for a full slot. `tools/tiles_control.py sample put` does the
+  conversion and the load.
+
 ### Content store
 
 Custom scales live in the **content store**: its own two-sector flash region
@@ -386,12 +457,36 @@ second) and `loop.max_ever_us`; sensor health `hall.rezeros`,
 `hall.unconfirmed`, `hall.reinits`, `hall.dead`, `touch.recoveries`;
 `tune.changed` (live tuning values away from their defaults); the
 sequencer's autosave `seq.storage`, `seq.saved_bytes`, `seq.saves`,
-`seq.pending`, `seq.truncated`; boot timing `boot.ms` (power-on to the main loop) and
-`boot.sensors_ms`; drum mode's store `drums.storage`,
+`seq.pending`, `seq.truncated`; `uptime_s` (seconds since this boot);
+`clk_khz`, `vreg_mv`, `temp_c` (the system clock, the core regulator's
+setting, the chip's sensor);
+`boot.reset=<cause> (0x<CHIP_RESET>)`, what reset the chip before this boot:
+`watchdog-timer` (a hang, or a restart that lets the watchdog run out:
+REBOOT APP, picotool), `watchdog-force` (a caught crash), else `por`
+(power on), `bor` (brown-out), `run` (the RUN pin), `glitch`, ...; boot timing `boot.ms` (power-on to the main loop) and
+`boot.sensors_ms`; `boot.hang`, the init step a watchdog reset cut short on
+the last boot (`none` when it booted cleanly); `fault`, the panic or hard
+fault that ended the last boot (`none`, or `core<n> pc=... lr=...
+cfsr=... hfsr=... bfar=... sp=...`, then `fault.callers=` four code
+addresses and `fault.message=` a panic's text); `fault.saved`, the last such
+crash kept in flash until `FAULT CLEAR` (`none`, or `<firmware> image=<bytes>
+count=<n>`, the build by its image size and the crashes saved since the
+last clear, then `fault.saved_at=`, `fault.saved_callers=` and
+`fault.saved_message=` as above); drum mode's store `drums.storage`,
 `drums.saved_bytes`, `drums.saves`, `drums.pending`; the play state (mode,
 scale, key, octave kept across power cycles) `state.storage`,
 `state.saved=mode:<n> scale:<n> octave:<n> key:<n>` (once something is
-saved), `state.saves`, `state.pending`. New keys may be added;
+saved), `state.saves`, `state.pending`; `device.mode=controller|standalone`;
+the motor chips' health `pca.mode1=<0x40>,<0x41>` (hex, `00` when
+awake), `pca.resets` (chips found asleep after losing power and set up
+again) and `pca.read_fails`; TILES's own sound `audio.*`
+(`firmware/src/audio/README.md`), with the drum sampler's `audio.drums`
+(ringing now) and `audio.drum_underruns`, the effects' `audio.fx=on|lent` (lent: the
+pad capture holds their memory) and `audio.fx_cost` (cycles per sample), `audio.usb_gap_us` (core 1's
+longest stretch between USB task calls while streaming, in us: under
+1,000 or packets miss frames), and each track's synth sound
+`audio.patch=<t1>,<t2>,<t3>,<t4>` (standalone mode). The SYNTH commands
+answer `ERR standalone-only` in controller mode. New keys may be added;
 ignore ones you don't know.
 
 ## Persistence

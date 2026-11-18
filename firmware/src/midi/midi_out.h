@@ -20,6 +20,11 @@ bool tiles_midi_out_get_parts_separate(void);
 void tiles_midi_out_parts_begin(void);
 void tiles_midi_out_parts_end(void);
 
+/* Sends between drums_begin and drums_end (nestable) are drum hits, on any
+ * channel (Volca mode): TILES's own sound keeps them for its drum track. */
+void tiles_midi_out_drums_begin(void);
+void tiles_midi_out_drums_end(void);
+
 /* Messages between begin and end (nestable) leave USB in one transfer: wrap
  * anything that sounds at once. Nothing goes out until end. */
 void tiles_midi_out_batch_begin(void);

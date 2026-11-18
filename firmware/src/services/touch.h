@@ -22,6 +22,10 @@ void tiles_touch_scan(void);
  * controller failed init. */
 bool tiles_touch_is_touched(uint8_t logical_pad);
 
+/* One pad's electrode now, for TOUCH over the settings link: its filtered
+ * reading and baseline (10-bit). False if its controller didn't answer. */
+bool tiles_touch_read_electrode(uint8_t logical_pad, uint16_t *filtered, uint16_t *baseline);
+
 /* For INFO: controllers set up again since boot (one that reset, or came
  * back after failing). */
 typedef struct {

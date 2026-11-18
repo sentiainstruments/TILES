@@ -121,6 +121,28 @@ int main(void) {
     make(buf, 40, 9); assert(tiles_log_append(&g_log, buf, 40, 2, false) == TILES_LOG_OK);
     reboot(); assert(newest_is(40, 9));
 
+    /* 6. a page at a time: one program per call, the magic page last; busy
+     * until done, and prepare never erases under it; a reboot midway keeps
+     * the old record */
+    blank(); reboot();
+    for (int i = 1; i <= 16; i++) { make(buf, 100, (uint8_t)i); assert(tiles_log_append(&g_log, buf, 100, 2, false) == TILES_LOG_OK); }
+    make(buf, 900, 7);                                                  /* 4 pages, into the blank sector 1 */
+    int before = g_programs;
+    assert(tiles_log_append_start(&g_log, buf, 900, 2, false) == TILES_LOG_PENDING && g_programs == before + 1);
+    assert(g_mem[1][0] == 0xFF);                                      /* not the magic page yet */
+    assert(tiles_log_append_start(&g_log, buf, 900, 2, false) == TILES_LOG_ERR_BUSY);
+    assert(!tiles_log_prepare(&g_log) && g_erases == 0);
+    assert(tiles_log_append_step(&g_log) == TILES_LOG_PENDING);
+    assert(tiles_log_append_step(&g_log) == TILES_LOG_PENDING);
+    assert(tiles_log_append_step(&g_log) == TILES_LOG_OK && g_programs == before + 4);
+    assert(newest_is(900, 7) && g_log.newest_slot == 1);
+    make(buf, 900, 8);
+    assert(tiles_log_append_start(&g_log, buf, 900, 2, false) == TILES_LOG_PENDING);
+    assert(tiles_log_append_step(&g_log) == TILES_LOG_PENDING);
+    reboot(); assert(newest_is(900, 7));
+    make(buf, 100, 9); assert(tiles_log_append(&g_log, buf, 100, 2, false) == TILES_LOG_OK);
+    reboot(); assert(newest_is(100, 9));
+
     printf("log_store: all tests pass\n");
     return 0;
 }

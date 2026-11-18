@@ -18,6 +18,11 @@ void tiles_standby_init(void);
  * after the button, touch and pedal scans. */
 void tiles_standby_scan(void);
 
+/* Called instead of tiles_standby_scan() while a mode, menu or game owns
+ * the display: it counts as activity, so the idle minute starts when it
+ * closes, not at the last touch before it opened. */
+void tiles_standby_hold_off(void);
+
 /* True for the animated standby state only (not deep sleep). */
 bool tiles_standby_is_active(void);
 

@@ -27,11 +27,16 @@ Usage:
     python3 tools/tiles_control.py reset ALL
     python3 tools/tiles_control.py save                  # write unsaved changes to flash now
     python3 tools/tiles_control.py info                  # flash-store status
+    python3 tools/tiles_control.py fault clear           # forget the saved crash (INFO fault.saved)
+    python3 tools/tiles_control.py flash crc firmware.bin # read the program back from flash, compare with the build's
     python3 tools/tiles_control.py reboot bootsel         # reboot into the ROM bootloader (for picotool)
     python3 tools/tiles_control.py reboot app             # plain warm restart back into this firmware
     TILES_SERIAL=F1A60E66E44C9D4B python3 tools/tiles_control.py info   # one of several boards (serial = chip ID)
     python3 tools/tiles_control.py test leds 50          # bench: every LED white at 50% (current tests)
     python3 tools/tiles_control.py test motors 4 100     # bench: pads 1-4's motors at 100% for 8 s
+    python3 tools/tiles_control.py test motor 17 80      # one pad's motor (17) at 80% for 1 s
+    python3 tools/tiles_control.py haptics               # per-pad haptic counts: asked, started, stopped... (haptics reset clears)
+    python3 tools/tiles_control.py touch                 # every pad's touch electrode: reading, baseline, delta (a touch needs > 12)
     python3 tools/tiles_control.py test mode drums       # bench: switch mode (loop.* timing per mode)
     python3 tools/tiles_control.py test off              # bench: back to normal
     python3 tools/tiles_control.py scales                # custom scales on the device (picker pads 16-24)
@@ -44,6 +49,23 @@ Usage:
     python3 tools/tiles_control.py tune                  # live tuning: every key, value, default, range
     python3 tools/tiles_control.py tune set bend.deadzone 0.03   # until power-off (the studio does this)
     python3 tools/tiles_control.py tune reset            # all keys back to their defaults (or: tune reset <key>)
+    python3 tools/tiles_control.py bench                 # DSP stress test (a -DTILES_DSP_BENCH=ON build only)
+    python3 tools/tiles_control.py mode                  # controller or standalone mode (TILES's own sound)
+    python3 tools/tiles_control.py mode standalone       # switch: TILES restarts into it (or tap triangle during the boot animation)
+    python3 tools/tiles_control.py sample list           # the drum sampler's 8 slots
+    python3 tools/tiles_control.py sample put 1 kick.wav # load slot 1 (drum 1); --mono --normalize --keep-silence --name NAME
+    python3 tools/tiles_control.py sample play 1 100     # hear slot 1 at velocity 100 (TILES's own sound)
+    python3 tools/tiles_control.py sample delete 1
+    python3 tools/tiles_control.py synth list            # the synth sounds and each track's (standalone mode)
+    python3 tools/tiles_control.py synth patch 2 haze    # track 2 plays "haze"
+    python3 tools/tiles_control.py synth bench           # cycles per sample of one voice of each sound
+    python3 tools/tiles_control.py synth bank put rom1a.syx # load a DX7 32-voice bank (standalone mode)
+    python3 tools/tiles_control.py synth bank             # the bank's voices
+    python3 tools/tiles_control.py synth voice 2 11       # track 2 plays the bank's voice 11
+    python3 tools/tiles_control.py synth fx              # each track's effects and the shared ones' settings
+    python3 tools/tiles_control.py synth fx 2 reverb 60  # track 2's reverb send to 60 %
+    python3 tools/tiles_control.py synth fx bus decay 80 # the plate's decay
+    python3 tools/tiles_control.py synth play 2 60,64,67 100 2 [pressure]  # notes on track 2's lane for 2 s
 
 Changes apply immediately and are saved to flash automatically a couple of
 seconds after the last one (only while no pad is being touched); `save` just
@@ -203,6 +225,7 @@ def capture(session, pad, seconds, path):
             if row.startswith("key=")]
     changed = " ".join(f"{t['key']}={t['value']}" for t in tune if float(t["value"]) != float(t["default"]))
     rows = session.command("CAPTURE READ", multi_line=True)
+    session.command("CAPTURE RELEASE")  # its memory back to TILES's reverb and delay
     with open(path, "w") as f:
         # Alpha 6.7: the bend mode and pad's learned path at the start, so a replay starts there too.
         f.writelines("# " + line + "\n" for line in status if line.startswith("bend "))
@@ -211,6 +234,170 @@ def capture(session, pad, seconds, path):
         f.write(CAPTURE_COLUMNS + "\n")
         f.writelines(row + "\n" for row in rows)
     print(f"{len(rows)} samples saved to {path} ({status[0] if status else ''})")
+
+
+def bench(session):
+    """Runs the DSP stress test on core 1 (docs/architecture/audio-engine.md) and prints
+    every kernel's cycles per sample; only a firmware built with -DTILES_DSP_BENCH=ON has it."""
+    reply = session.command("BENCH START")
+    if reply != ["OK"]:
+        sys.exit(f"bench: {' '.join(reply)} (not a TILES_DSP_BENCH build?)")
+    deadline = time.time() + 180
+    while time.time() < deadline:
+        time.sleep(1.0)
+        lines = session.command("BENCH", multi_line=True)
+        if lines and lines[0] != "running":
+            print("\n".join(lines))
+            break
+    else:
+        sys.exit("bench: no result after 180 s")
+    # Core 0's loop while core 1 streams the 8 sample slots from flash in real time
+    # (loop.* is the last whole second).
+    def loop_now():
+        info = dict(line.split("=", 1) for line in session.command("INFO", multi_line=True) if "=" in line)
+        return f"avg {info.get('loop.avg_us')} us, max {info.get('loop.max_us')} us"
+    time.sleep(2.2)
+    print(f"core0_loop idle: {loop_now()}")
+    for cached, label in ((1, "cached"), (0, "uncached")):
+        session.command(f"BENCH SOAK 3500 {cached}")
+        time.sleep(2.6)
+        print(f"core0_loop streaming {label}: {loop_now()}")
+        time.sleep(1.4)
+
+
+def sample_put(session, slot, path, options):
+    """Converts a WAV (tiles_sample.py), then loads it: SAMPLE BEGIN, the
+    audio as raw bytes, and the device's verdict once it has checked them."""
+    import tiles_sample
+
+    name = None
+    if "--name" in options:
+        at = options.index("--name")
+        if at + 1 >= len(options):
+            sys.exit("sample put: --name needs a name")
+        name = options[at + 1]
+    try:
+        channels, frames, data, name, notes = tiles_sample.prepare(
+            path, mono="--mono" in options, normalize="--normalize" in options,
+            keep_silence="--keep-silence" in options, name=name)
+    except (OSError, tiles_sample.SampleError) as exc:
+        sys.exit(f"sample put: {exc}")
+    crc = tiles_sample.crc32(data)
+    reply = session.command(f"SAMPLE BEGIN {slot} {channels} {frames} {crc:08x} {name}")
+    if not reply or not reply[0].startswith("OK "):
+        sys.exit(f"sample put: {' '.join(reply)}" + (" (stop playback first)" if reply == ["ERR playing"] else ""))
+    started = time.time()
+    for i in range(0, len(data), 4096):
+        session.ep_out.write(data[i:i + 4096], timeout=10000)
+    verdict = session.read_line("SAMPLE BEGIN")
+    if verdict != "OK":
+        sys.exit(f"sample put: {verdict}")
+    kind = "stereo" if channels == 2 else "mono"
+    print(f"slot {slot}: {name}, {kind}, {frames / tiles_sample.RATE:.3f} s, {len(data) // 1024} KB "
+          f"in {time.time() - started:.1f} s ({'; '.join(notes)})")
+
+
+# A track's sequencer lane channel (firmware/src/services/midi_channels.h): lane N is track N.
+LANE_CHANNEL = {1: 15, 2: 14, 3: 13, 4: 12}
+
+
+def dx7_bank(path):
+    """A DX7 32-voice bank (.syx) checked here first: (the 4,104 bytes, the voices' names)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    start = data.find(bytes([0xF0, 0x43]))
+    if start < 0 or len(data) - start < 4104 or data[start + 3:start + 6] != bytes([0x09, 0x20, 0x00]):
+        sys.exit("synth bank put: not a DX7 32-voice bank (4,104-byte sysex: F0 43 0n 09 20 00 ...)")
+    data = data[start:start + 4104]
+    if data[-1] != 0xF7 or (128 - sum(data[6:4102]) % 128) % 128 != data[4102]:
+        sys.exit("synth bank put: its checksum doesn't match (a damaged file?)")
+    names = [data[6 + n * 128 + 118:6 + n * 128 + 128].decode("ascii", "replace").rstrip() for n in range(32)]
+    return data, names
+
+
+def synth(session, args):
+    if len(args) == 1 and args[0].lower() in ("list", "bench"):
+        for line in session.command("SYNTH " + args[0].upper(), multi_line=True):
+            print(line)
+    elif len(args) == 1 and args[0].lower() == "bank":
+        for line in session.command("SYNTH BANK", multi_line=True):
+            print(line)
+    elif len(args) == 3 and args[0].lower() == "bank" and args[1].lower() == "put":
+        import zlib
+        data, names = dx7_bank(args[2])
+        reply = session.command(f"SYNTH BANK PUT {zlib.crc32(data) & 0xFFFFFFFF:08x}")
+        if not reply or not reply[0].startswith("OK "):
+            sys.exit(f"synth bank put: {' '.join(reply)}" + (" (stop playback first)" if reply == ["ERR playing"] else ""))
+        session.ep_out.write(data, timeout=10000)
+        verdict = session.read_line("SYNTH BANK PUT")
+        if verdict != "OK":
+            sys.exit(f"synth bank put: {verdict}")
+        print("bank loaded: " + ", ".join(f"{n + 1} {name}" for n, name in enumerate(names)))
+    elif len(args) == 3 and args[0].lower() == "voice":
+        print(session.command(f"SYNTH VOICE {args[1]} {args[2]}")[0])
+    elif len(args) == 3 and args[0].lower() == "patch":
+        print(session.command(f"SYNTH PATCH {args[1]} {args[2]}")[0])
+    elif len(args) >= 3 and args[0].lower() == "play":
+        channel = LANE_CHANNEL.get(int(args[1]))
+        if channel is None:
+            sys.exit("synth play: track 1-4")
+        notes = [int(n) for n in args[2].split(",")]
+        velocity = int(args[3]) if len(args) > 3 else 100
+        seconds = float(args[4]) if len(args) > 4 else 1.0
+        pressure = int(args[5]) if len(args) > 5 else 0
+        for n in notes:
+            session.command(f"SYNTH MIDI {0x90 | channel:02X} {n} {velocity}")
+        if pressure:
+            session.command(f"SYNTH MIDI {0xD0 | channel:02X} {pressure} 0")
+        time.sleep(seconds)
+        for n in notes:
+            session.command(f"SYNTH MIDI {0x80 | channel:02X} {n} 0")
+        if pressure:
+            session.command(f"SYNTH MIDI {0xD0 | channel:02X} 0 0")
+        print("OK")
+    elif len(args) == 1 and args[0].lower() == "fx":
+        for line in session.command("SYNTH FX", multi_line=True):
+            print(line)
+    elif len(args) == 4 and args[0].lower() == "fx":
+        print(session.command(f"SYNTH FX {args[1].upper()} {args[2].lower()} {args[3]}")[0])
+    elif len(args) in (3, 4) and args[0].lower() == "midi":
+        print(session.command("SYNTH MIDI " + " ".join(args[1:]))[0])
+    else:
+        sys.exit("synth: list | bench | fx [<1-4|bus> <name> <value>] | patch <track> <name> | play <track> <notes,...> [velocity] [seconds] [pressure] | midi <status hex> <d1> [d2]")
+
+
+def sample(session, args):
+    verb = args[0].lower() if args else ""
+    if verb == "list" and len(args) == 1:
+        for line in session.command("SAMPLE LIST", multi_line=True):
+            parts = line.split()
+            if len(parts) == 4:
+                print(f"{parts[0]}  {parts[1]:<24}{parts[2]:<8}{int(parts[3]) / 48000:.3f} s")
+            else:
+                print("  ".join(parts))
+    elif verb == "put" and len(args) >= 3:
+        sample_put(session, args[1], args[2], args[3:])
+    elif verb == "play" and len(args) in (2, 3):
+        print(" ".join(session.command(" ".join(["SAMPLE PLAY"] + args[1:]))))
+    elif verb == "delete" and len(args) == 2:
+        print(" ".join(session.command(f"SAMPLE DELETE {args[1]}")))
+    else:
+        print(__doc__)
+        sys.exit(1)
+
+
+def mode(session, want):
+    """Shows or switches controller/standalone mode (firmware services/device_mode.h).
+    A switch restarts TILES, which comes back in the other mode."""
+    info = dict(line.split("=", 1) for line in session.command("INFO", multi_line=True) if "=" in line)
+    now = info.get("device.mode", "controller")
+    if want is None or want == now:
+        print(f"{now} mode")
+        return
+    reply = session.command(f"SET device.mode {want}")
+    if reply != ["OK"]:
+        sys.exit(f"mode: {' '.join(reply)}")
+    print(f"switching to {want} mode: TILES restarts (give it a few seconds)")
 
 
 def main():
@@ -226,6 +413,23 @@ def main():
         request, multi = command.upper(), True
     elif command == "save" and argc == 2:
         request, multi = "SAVE", False
+    elif command == "fault" and argc == 3 and sys.argv[2].lower() == "clear":
+        request, multi = "FAULT CLEAR", False
+    elif command == "flash" and argc in (3, 4) and sys.argv[2].lower() == "crc":
+        # The device reads its program back uncached; given the build's .bin, a mismatch is a flash read error.
+        reply = session.command("FLASH CRC")[0]
+        print(reply)
+        if argc == 4:
+            import zlib
+            with open(sys.argv[3], "rb") as f:
+                data = f.read()
+            fields = dict(kv.split("=", 1) for kv in reply.split() if "=" in kv)
+            n = int(fields.get("bytes", "0"))
+            want = zlib.crc32(data[:n]) & 0xFFFFFFFF
+            same = fields.get("crc") == f"{want:08x}" and n <= len(data)
+            print(f"build: crc={want:08x} bytes={len(data)} -> {'MATCH' if same else 'MISMATCH'}")
+            sys.exit(0 if same else 1)
+        sys.exit(0)
     elif command == "get" and argc == 3:
         request, multi = f"GET {sys.argv[2]}", False
     elif command == "set" and argc == 4:
@@ -238,6 +442,11 @@ def main():
         # Bench tests: test leds 37 | test motors 4 [duty%] | test mode drums | test off. The mode
         # name stays lowercase (the device matches it as written).
         request, multi = " ".join(["TEST", sys.argv[2].upper()] + sys.argv[3:]), sys.argv[2].lower() == "motors"
+    elif command == "touch" and argc == 2:
+        request, multi = "TOUCH", True
+    elif command == "haptics" and argc in (2, 3):
+        request = "HAPTICS RESET" if argc == 3 and sys.argv[2].lower() == "reset" else "HAPTICS"
+        multi = request == "HAPTICS"
     elif command == "scales" and argc == 2:
         request, multi = "SCALES", True
     elif command == "scale" and argc >= 4 and sys.argv[2].lower() in ("get", "put", "delete"):
@@ -252,6 +461,21 @@ def main():
         request, multi = f"TUNE SET {sys.argv[3]} {sys.argv[4]}", False
     elif command == "tune" and argc in (3, 4) and sys.argv[2].lower() == "reset":
         request, multi = " ".join(["TUNE RESET"] + sys.argv[3:]), False
+    elif command == "bench" and argc == 2:
+        bench(session)
+        return
+    elif command == "mode" and argc in (2, 3):
+        want = sys.argv[2].lower() if argc == 3 else None
+        if want not in (None, "standalone", "controller"):
+            sys.exit("mode: standalone or controller")
+        mode(session, want)
+        return
+    elif command == "sample":
+        sample(session, sys.argv[2:])
+        return
+    elif command == "synth":
+        synth(session, sys.argv[2:])
+        return
     elif command == "capture" and argc == 5:
         capture(session, int(sys.argv[2]), float(sys.argv[3]), sys.argv[4])
         return

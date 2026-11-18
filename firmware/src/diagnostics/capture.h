@@ -36,11 +36,15 @@ typedef struct {
     uint16_t peak_depth; /* NOTE_ON: deepest point of the strike */
 } tiles_capture_record_t;
 
-/* Clears and starts recording pad 1-24. START stops by itself when full;
- * WATCH never stops, keeping the newest TILES_CAPTURE_MAX. */
-void tiles_capture_start(uint8_t pad);
-void tiles_capture_watch(uint8_t pad);
+/* Clears and starts recording pad 1-24 (false: the memory wasn't free).
+ * START stops by itself when full; WATCH never stops, keeping the newest
+ * TILES_CAPTURE_MAX. */
+bool tiles_capture_start(uint8_t pad);
+bool tiles_capture_watch(uint8_t pad);
 void tiles_capture_stop(void);
+/* The records' memory back to the effects (audio/fx_memory.h): they were
+ * quiet from the first start until now. */
+void tiles_capture_release(void);
 bool tiles_capture_running(void);
 bool tiles_capture_watching(void);
 uint8_t tiles_capture_pad(void); /* 0 = never started */

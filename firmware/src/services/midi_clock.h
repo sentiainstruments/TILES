@@ -70,6 +70,10 @@ bool tiles_midi_clock_restart(void);
 /* Running state from either source; doesn't consume start_edge. */
 bool tiles_midi_clock_is_running(void);
 
+/* song_pulse without get_state()'s side effect (start_edge is the
+ * sequencers'): the effects follow the beat with it. */
+uint32_t tiles_midi_clock_song_pulse(void);
+
 /* Clock lead in ms (midi.clock_lead_ms): 15 = measured recording into Live
  * 12 (64-sample buffer, 48 kHz); 0 = off. */
 #define TILES_MIDI_CLOCK_LEAD_MS_DEFAULT 15u

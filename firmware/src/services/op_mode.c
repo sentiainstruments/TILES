@@ -5,6 +5,7 @@
 #include "buttons.h"
 #include "cv_gate.h"
 #include "debug_mode.h"
+#include "device_mode.h"
 #include "drum_seq.h"
 #include "harmony.h"
 #include "bounce.h"
@@ -28,8 +29,11 @@
 #include "product_identity.h"
 #include "seq_pattern.h"
 #include "standby.h"
+#include "sound_menu.h"
 #include "storage_flash.h"
+#include "flash_staging.h"
 #include "touch.h"
+#include "usb_audio.h"
 
 #include "flash_map.h"
 
@@ -43,6 +47,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 
 /* Modes, in the order they were added. (An arpeggiator stub was replaced
@@ -1220,6 +1225,7 @@ static bool mode_owns_standby_grid(tiles_op_mode_t mode) {
 /* ---- Mode menu ------------------------------------------------------------ */
 
 static void menu_enter(void) {
+    tiles_sound_menu_close();
     if (s_active_mode == OP_MODE_HARMONY) {
         tiles_harmony_leave(); /* the menu takes the grid: end the held chord */
     }
@@ -1310,12 +1316,26 @@ static const menu_slot_t *slot_for(tiles_op_mode_t mode, bool volca) {
     return NULL;
 }
 
+/* A mode's underglow: its menu colour, except melodic's, which is the
+ * device mode's (controller or standalone). */
+static void slot_underglow(const menu_slot_t *slot, float *r, float *g, float *b) {
+    if (slot == NULL) {
+        *r = *g = *b = 1.0f;
+    } else if (slot->mode == OP_MODE_MELODIC) {
+        tiles_device_mode_color(tiles_device_mode(), r, g, b);
+    } else {
+        *r = slot->r;
+        *g = slot->g;
+        *b = slot->b;
+    }
+}
+
 /* The active mode's colour on the underglow, for the views that draw it
  * (sequencer, Song); the others draw it themselves, and lighting.c shows it
  * outside standby (set in set_active_mode()). */
 static void mode_underglow(void) {
-    const menu_slot_t *slot = slot_for(s_active_mode, s_volca_mode);
-    float r = slot != NULL ? slot->r : 1.0f, g = slot != NULL ? slot->g : 1.0f, b = slot != NULL ? slot->b : 1.0f;
+    float r, g, b;
+    slot_underglow(slot_for(s_active_mode, s_volca_mode), &r, &g, &b);
     for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
         tiles_lighting_set_standby_underglow_rgb(i, r, g, b);
     }
@@ -1602,12 +1622,11 @@ static void pattern_store_unpack_slot_saved(uint32_t mask) {
 }
 
 /* Rewrites the whole store from RAM every time: flash erases whole sectors
- * anyway, and RAM is the complete picture. Static buffer: 4 KB is too much
- * for the main loop's stack. */
+ * anyway, and RAM is the complete picture. */
 static void pattern_store_write_all(void) {
-    static uint8_t s_write_buf[FLASH_SECTOR_SIZE];
-    memset(s_write_buf, 0, sizeof(s_write_buf));
-    tiles_pattern_store_t *store = (tiles_pattern_store_t *)s_write_buf;
+    uint8_t *buf = tiles_flash_staging(); /* storage/flash_staging.h */
+    memset(buf, 0, FLASH_SECTOR_SIZE);
+    tiles_pattern_store_t *store = (tiles_pattern_store_t *)buf;
     store->magic = TILES_PATTERN_STORE_MAGIC;
     store->version = TILES_PATTERN_STORE_VERSION;
     store->slot_saved_mask = pattern_store_pack_slot_saved();
@@ -1618,10 +1637,13 @@ static void pattern_store_write_all(void) {
     }
 
     watchdog_update();
-    uint32_t prev_interrupts = save_and_disable_interrupts();
+    uint32_t prev_interrupts;
+    if (!tiles_flash_write_begin(&prev_interrupts)) {
+        return;
+    }
     flash_range_erase(TILES_PATTERN_FLASH_OFFSET, FLASH_SECTOR_SIZE);
-    flash_range_program(TILES_PATTERN_FLASH_OFFSET, s_write_buf, sizeof(s_write_buf));
-    restore_interrupts(prev_interrupts);
+    flash_range_program(TILES_PATTERN_FLASH_OFFSET, buf, FLASH_SECTOR_SIZE);
+    tiles_flash_write_end(prev_interrupts);
     watchdog_update();
 }
 
@@ -1697,6 +1719,9 @@ static uint32_t s_seq_next_check_ms;
 static uint32_t s_seq_retry_after_ms;
 static uint32_t s_seq_saves;
 static uint16_t s_seq_saved_bytes;
+static uint16_t s_seq_saving_len; /* the record going out */
+static bool s_seq_saving_truncated;
+static uint32_t s_seq_page_ms; /* when its last page went out */
 static bool s_seq_truncated;
 static uint8_t s_seq_blob[TILES_LOG_MAX_PAYLOAD];
 
@@ -1727,7 +1752,27 @@ static void seq_autosave_init(bool crash_recovered) {
     s_seq_fingerprint = seq_fingerprint_now();
 }
 
-static void seq_autosave_service(uint32_t now_ms, bool clock_running, bool pads_touched) {
+/* What a page-at-a-time save reports when it ends. */
+static void seq_save_result(tiles_log_result_t r, uint32_t now_ms) {
+    if (r == TILES_LOG_PENDING) {
+        return;
+    }
+    if (r != TILES_LOG_OK) {
+        s_seq_dirty = true;
+        s_seq_retry_after_ms = (now_ms + SEQ_SAVE_RETRY_MS) | 1u;
+        return;
+    }
+    if (s_seq_saving_truncated && !s_seq_truncated) {
+        printf("[op_mode] sequencer autosave full: kept %u bytes\n", (unsigned)s_seq_saving_len);
+    }
+    s_seq_truncated = s_seq_saving_truncated;
+    s_seq_retry_after_ms = 0u;
+    s_seq_saves++;
+    s_seq_saved_bytes = s_seq_saving_len;
+}
+
+/* playing: the clock runs or TILES's own sound rings, so no erase. */
+static void seq_autosave_service(uint32_t now_ms, bool playing, bool pads_touched) {
     bool step_entered = s_seq_step_entered;
     s_seq_step_entered = false;
     if (!s_seq_storage) {
@@ -1742,10 +1787,18 @@ static void seq_autosave_service(uint32_t now_ms, bool clock_running, bool pads_
             s_seq_changed_ms = now_ms;
         }
     }
+    /* A record goes out a page at a time (under a millisecond each). */
+    if (s_seq_log.pending) {
+        if (now_ms - s_seq_page_ms >= TILES_LOG_PAGE_GAP_MS) {
+            s_seq_page_ms = now_ms;
+            seq_save_result(tiles_log_append_step(&s_seq_log), now_ms);
+        }
+        return;
+    }
     if (!s_seq_dirty) {
-        /* Idle and stopped: erase the spare sector now, so saves while
-         * playing never need to. */
-        if (!clock_running && !pads_touched && s_seq_log.have_newest && !s_seq_log.blank[1u - s_seq_log.newest_slot]) {
+        /* Stopped, silent and idle: erase the spare sector now, so saves
+         * while playing never need to. */
+        if (!playing && !pads_touched && s_seq_log.have_newest && !s_seq_log.blank[1u - s_seq_log.newest_slot]) {
             (void)tiles_log_prepare(&s_seq_log);
         }
         return;
@@ -1754,28 +1807,21 @@ static void seq_autosave_service(uint32_t now_ms, bool clock_running, bool pads_
         (s_seq_retry_after_ms != 0u && (int32_t)(now_ms - s_seq_retry_after_ms) < 0)) {
         return;
     }
-    if (clock_running && any_lane_running() && !step_entered) {
+    if (playing && any_lane_running() && !step_entered) {
         return; /* playing: right after a step starts */
     }
-    bool truncated = false;
-    uint16_t len = tiles_seq_encode(s_seq_pattern, s_seq_active_alt, s_seq_edit_lane, s_seq_blob, sizeof(s_seq_blob),
-                                    &truncated);
-    tiles_log_result_t r = tiles_log_append(&s_seq_log, s_seq_blob, len, TILES_SEQ_BLOB_VERSION, !clock_running);
+    s_seq_saving_truncated = false;
+    s_seq_saving_len = tiles_seq_encode(s_seq_pattern, s_seq_active_alt, s_seq_edit_lane, s_seq_blob,
+                                        sizeof(s_seq_blob), &s_seq_saving_truncated);
+    s_seq_dirty = false; /* a change from here on marks it again */
+    s_seq_page_ms = now_ms;
+    tiles_log_result_t r =
+        tiles_log_append_start(&s_seq_log, s_seq_blob, s_seq_saving_len, TILES_SEQ_BLOB_VERSION, !playing);
     if (r == TILES_LOG_ERR_NEEDS_ERASE) {
-        return; /* saved once the clock stops */
+        s_seq_dirty = true;
+        return; /* saved once the clock stops and the sound is silent */
     }
-    if (r != TILES_LOG_OK) {
-        s_seq_retry_after_ms = (now_ms + SEQ_SAVE_RETRY_MS) | 1u;
-        return;
-    }
-    if (truncated && !s_seq_truncated) {
-        printf("[op_mode] sequencer autosave full: kept %u bytes\n", (unsigned)len);
-    }
-    s_seq_truncated = truncated;
-    s_seq_dirty = false;
-    s_seq_retry_after_ms = 0u;
-    s_seq_saves++;
-    s_seq_saved_bytes = len;
+    seq_save_result(r, now_ms);
 }
 
 tiles_op_mode_seq_store_info_t tiles_op_mode_get_seq_store_info(void) {
@@ -2074,7 +2120,10 @@ static void set_volca(bool volca) {
     tiles_drum_seq_set_volca(volca);
 }
 
+static void sound_menu_close(void); /* with the diamond, below */
+
 static void set_active_mode(tiles_op_mode_t mode) {
+    sound_menu_close();
     if (mode != s_active_mode) {
         tiles_fx_set(tiles_fx_get()); /* the last mode's light, gone */
     }
@@ -2179,7 +2228,9 @@ static void set_active_mode(tiles_op_mode_t mode) {
      * guitar); the modes drawing through standby draw the same colour. */
     const menu_slot_t *slot = slot_for(mode, s_volca_mode);
     if (slot != NULL) {
-        tiles_lighting_set_mode_underglow(slot->r, slot->g, slot->b);
+        float ur, ug, ub;
+        slot_underglow(slot, &ur, &ug, &ub);
+        tiles_lighting_set_mode_underglow(ur, ug, ub);
     }
     printf("[op_mode] active mode -> %d\n", (int)mode);
 }
@@ -2606,6 +2657,56 @@ static float transport_led_level(uint32_t now_ms) {
     return led_level;
 }
 
+/* The synth track (0-3) a mode plays on (audio_engine.h's channel map):
+ * where the sound menus open. */
+static uint8_t mode_track(void) {
+    switch (s_active_mode) {
+    case OP_MODE_CHORD:
+    case OP_MODE_HARMONY:
+        return 2u;
+    case OP_MODE_BOUNCE:
+    case OP_MODE_RIPPLES:
+    case OP_MODE_SAND:
+    case OP_MODE_ORBITS:
+    case OP_MODE_CRADLE:
+        return 3u;
+    case OP_MODE_DRUM:
+        return 0u;
+    default:
+        return 1u;
+    }
+}
+
+/* The sound menus draw through standby, like the mode menu; closing hands
+ * the pads and keys back unless the mode draws them itself. */
+static void sound_menu_open(bool effects) {
+    if (s_active_mode == OP_MODE_HARMONY) {
+        tiles_harmony_leave(); /* the menu takes the grid: end the held chord */
+    }
+    tiles_sound_menu_open(effects, mode_track());
+    tiles_lighting_set_standby_active(true);
+    tiles_buttons_set_standby_active(true);
+}
+
+static void sound_menu_close(void) {
+    if (!tiles_sound_menu_is_open()) {
+        return;
+    }
+    tiles_sound_menu_close();
+    if (!mode_owns_standby_grid(s_active_mode)) {
+        tiles_lighting_set_standby_active(false);
+        tiles_buttons_set_standby_active(false);
+    }
+}
+
+/* Standalone mode outside the sequencer: diamond is the sound menu,
+ * circle + diamond the effects menu (services/sound_menu.h), no DAW
+ * transport. Song's step editor keeps its diamond (back). */
+static bool diamond_opens_sound_menus(void) {
+    return tiles_device_mode_is_standalone() && s_active_mode != OP_MODE_SEQUENCER &&
+           !(s_active_mode == OP_MODE_SONG && s_song_edit_active) && !s_ableton_capture_active;
+}
+
 static void handle_diamond_transport(uint32_t now_ms) {
     bool held = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID);
     bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
@@ -2629,8 +2730,9 @@ static void handle_diamond_transport(uint32_t now_ms) {
         }
     }
     /* Record arm only outside the sequencer. */
-    if (held && !sequencer_active && !s_diamond_press_had_conflict && !s_diamond_press_was_shift &&
-        !s_diamond_record_armed && (now_ms - s_diamond_press_start_ms) >= OP_TRANSPORT_RECORD_ARM_HOLD_MS) {
+    if (held && !sequencer_active && !diamond_opens_sound_menus() && !s_diamond_press_had_conflict &&
+        !s_diamond_press_was_shift && !s_diamond_record_armed &&
+        (now_ms - s_diamond_press_start_ms) >= OP_TRANSPORT_RECORD_ARM_HOLD_MS) {
         s_diamond_record_armed = true;
     }
 
@@ -2652,6 +2754,14 @@ static void handle_diamond_transport(uint32_t now_ms) {
                     pattern_bank_exit();
                 } else {
                     pattern_bank_enter();
+                }
+            } else if (diamond_opens_sound_menus()) {
+                /* The same key again closes; the other menu's key switches. */
+                bool effects = s_diamond_press_was_shift;
+                if (tiles_sound_menu_is_open() && tiles_sound_menu_is_effects() == effects) {
+                    sound_menu_close();
+                } else {
+                    sound_menu_open(effects);
                 }
             } else if (s_ableton_capture_active && s_diamond_press_was_shift) {
                 /* Recording a Live clip from melodic mode (s_ableton_capture_active):
@@ -2739,7 +2849,8 @@ static void handle_diamond_transport(uint32_t now_ms) {
     } else {
         /* Transport LED: armed beats recording beats playing. Playing follows the
          * actual clock; s_transport_playing only decides the next click. */
-        tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID, transport_led_level(now_ms));
+        tiles_buttons_set_override_led(TILES_DIAMOND_BUTTON_ID,
+                                       tiles_sound_menu_is_open() ? 1.0f : transport_led_level(now_ms));
     }
 
     s_diamond_was_held = held;
@@ -3215,7 +3326,9 @@ void tiles_op_mode_init(bool crash_recovered) {
      * after). */
     const menu_slot_t *boot_slot = slot_for(s_active_mode, s_volca_mode);
     if (boot_slot != NULL) {
-        tiles_lighting_set_mode_underglow(boot_slot->r, boot_slot->g, boot_slot->b);
+        float ur, ug, ub;
+        slot_underglow(boot_slot, &ur, &ug, &ub);
+        tiles_lighting_set_mode_underglow(ur, ug, ub);
     }
 }
 
@@ -3300,7 +3413,8 @@ void tiles_op_mode_scan(void) {
                          : s_active_mode == OP_MODE_ORBITS              ? OP_PLAY_STATE_ORBITS
                          : s_active_mode == OP_MODE_CRADLE              ? OP_PLAY_STATE_CRADLE
                                                                         : (uint8_t)s_active_mode;
-    tiles_play_state_service(now_ms, saved_mode, tiles_midi_clock_is_running(), !any_pad_touched());
+    tiles_play_state_service(now_ms, saved_mode, tiles_midi_clock_is_running() || !tiles_usb_audio_is_quiet(),
+                             !any_pad_touched());
 
     /* Boot guard: keep triangle's LED off for a moment (see
      * s_boot_relight_guard_until_ms). A no-op while a menu owns the LED. */
@@ -3361,7 +3475,13 @@ void tiles_op_mode_scan(void) {
     handle_triangle_click();
     handle_diamond_transport(now_ms);
     handle_circle_tap(now_ms);
-    handle_transport_and_length(now_ms);
+    if (tiles_sound_menu_is_open()) {
+        /* "-"/"+" step the menu's track (sound_menu.c), nothing else. */
+        s_minus_was_held = tiles_button_is_pressed(TILES_MINUS_BUTTON_ID);
+        s_plus_was_held = tiles_button_is_pressed(TILES_PLUS_BUTTON_ID);
+    } else {
+        handle_transport_and_length(now_ms);
+    }
 
     /* Fetched once per scan (it clears start_edge); playback and the beat
      * flash share it. A Start a tick already stepped playback on still
@@ -3397,11 +3517,14 @@ void tiles_op_mode_scan(void) {
     tiles_midi_clock_state_t step_clock = clock;
     step_clock.start_edge = fresh_start_edge;
     advance_playback(step_clock);
-    /* Right after the advance: they save just after a step starts. */
-    tiles_drum_seq_persist_service(now_ms, clock.running);
-    seq_autosave_service(now_ms, clock.running, any_pad_touched());
-    /* Pattern bank and Song saves, once the clock stops. */
-    if (!clock.running && !any_pad_touched()) {
+    /* Right after the advance: they save just after a step starts. An
+     * erase waits for the clock to stop and TILES's own sound to fall
+     * silent (it pauses core 1 for tens of ms). */
+    bool quiet = tiles_usb_audio_is_quiet();
+    tiles_drum_seq_persist_service(now_ms, clock.running || !quiet);
+    seq_autosave_service(now_ms, clock.running || !quiet, any_pad_touched());
+    /* Pattern bank and Song saves (erases), once stopped and silent. */
+    if (!clock.running && quiet && !any_pad_touched()) {
         if (s_pattern_store_pending) {
             s_pattern_store_pending = false;
             pattern_store_write_all();
@@ -3421,6 +3544,11 @@ void tiles_op_mode_scan(void) {
     if (s_scale_menu_visible) {
         handle_scale_menu_taps();
         render_scale_menu(now_ms);
+        return;
+    }
+
+    if (tiles_sound_menu_is_open()) {
+        tiles_sound_menu_scan(now_ms);
         return;
     }
 
@@ -3497,7 +3625,7 @@ void tiles_op_mode_scan(void) {
     }
     /* Chord pads bypass owns_pad() and expression.c's gate, so check the
      * menus here: no chords under an open menu. */
-    if (s_active_mode == OP_MODE_CHORD && !s_menu_visible && !s_scale_menu_visible) {
+    if (s_active_mode == OP_MODE_CHORD && !s_menu_visible && !s_scale_menu_visible && !tiles_sound_menu_is_open()) {
         handle_chord_pad_taps(now_ms);
         chord_pads_pressure();
     }
@@ -3509,14 +3637,15 @@ void tiles_op_mode_scan(void) {
 bool tiles_op_mode_owns_pad_grid(void) {
     /* Menus and whole-grid modes own every pad. Song capture and pitch pick
      * don't: there the grid plays live while the touch is recorded. */
-    return s_menu_visible || s_scale_menu_visible || mode_owns_standby_grid(s_active_mode);
+    return s_menu_visible || s_scale_menu_visible || tiles_sound_menu_is_open() ||
+           mode_owns_standby_grid(s_active_mode);
 }
 
 /* Chord mode claims only its 8 strip pads, unless a menu is open, in which
  * case every pad defers to the blanket answer (menu touches mustn't play,
  * which they did before this check). */
 bool tiles_op_mode_owns_pad(uint8_t logical_pad) {
-    if (s_active_mode == OP_MODE_CHORD && !s_menu_visible && !s_scale_menu_visible) {
+    if (s_active_mode == OP_MODE_CHORD && !s_menu_visible && !s_scale_menu_visible && !tiles_sound_menu_is_open()) {
         return tiles_note_map_is_chord_region_pad(logical_pad);
     }
     return tiles_op_mode_owns_pad_grid();
@@ -3525,7 +3654,8 @@ bool tiles_op_mode_owns_pad(uint8_t logical_pad) {
 /* Wider than owns_pad_grid(): also bass guitar (its notes play, "-"/"+"
  * are frets). Narrower for Ripples, Sand and the cradle ("-"/"+" octave). */
 bool tiles_op_mode_owns_octave_buttons(void) {
-    if (!s_menu_visible && !s_scale_menu_visible && phys_kind_of(s_active_mode) != TILES_PHYS_NONE) {
+    if (!s_menu_visible && !s_scale_menu_visible && !tiles_sound_menu_is_open() &&
+        phys_kind_of(s_active_mode) != TILES_PHYS_NONE) {
         return s_active_mode == OP_MODE_ORBITS;
     }
     return tiles_op_mode_owns_pad_grid() || s_active_mode == OP_MODE_GUITAR;
@@ -3613,7 +3743,8 @@ bool tiles_op_mode_test_set_mode(const char *name) {
 bool tiles_op_mode_has_menu_open(void) {
     /* Sub-views that can sit untouched (menus, pattern bank, step edit,
      * capture waiting for a tempo): standby must not cover them. */
-    return s_menu_visible || s_scale_menu_visible || s_pattern_bank_visible || s_seq_edit_mode != OP_SEQ_EDIT_NONE ||
+    return s_menu_visible || s_scale_menu_visible || tiles_sound_menu_is_open() || s_pattern_bank_visible ||
+           s_seq_edit_mode != OP_SEQ_EDIT_NONE ||
            s_seq_capture_mode_active || (s_active_mode == OP_MODE_BOUNCE && tiles_bounce_mode_is_picking());
 }
 
@@ -3684,39 +3815,56 @@ _Static_assert(sizeof(tiles_song_store_t) <= FLASH_SECTOR_SIZE * TILES_SONG_NUM_
  * persist it. */
 static uint8_t s_song_next_hue_byte;
 
+/* The store's fields before the patterns, laid out as tiles_song_store_t. */
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t occupied_mask;
+    uint8_t next_hue_byte;
+} tiles_song_store_head_t;
+_Static_assert(offsetof(tiles_song_store_t, pattern) == sizeof(uint32_t) * 3u + 1u &&
+                   offsetof(tiles_song_store_head_t, next_hue_byte) + 1u == offsetof(tiles_song_store_t, pattern),
+               "the head is the store's first bytes");
+_Static_assert(sizeof(s_song_pattern) == sizeof(((tiles_song_store_t *)0)->pattern), "the patterns follow as in RAM");
+
 /* Rewrites the whole store from RAM (like pattern_store_write_all()),
- * sector by sector. Static buffers: ~12 KB is far too much for the stack. */
+ * sector by sector: the head, then the patterns straight from
+ * s_song_pattern (a staged copy of the store would be 12 KB). */
 static void song_store_write_all(void) {
-    static tiles_song_store_t s_store;
-    static uint8_t s_write_buf[FLASH_SECTOR_SIZE];
-    memset(&s_store, 0, sizeof(s_store));
-    s_store.magic = TILES_SONG_STORE_MAGIC;
-    s_store.version = TILES_SONG_STORE_VERSION;
-    s_store.next_hue_byte = s_song_next_hue_byte;
-    uint32_t mask = 0u;
+    uint8_t *buf = tiles_flash_staging(); /* storage/flash_staging.h */
+    tiles_song_store_head_t head = {
+        .magic = TILES_SONG_STORE_MAGIC,
+        .version = TILES_SONG_STORE_VERSION,
+        .next_hue_byte = s_song_next_hue_byte,
+    };
     for (uint8_t i = 0; i < OP_SONG_NUM_SLOTS; i++) {
         if (s_song_slot_occupied[i]) {
-            mask |= (uint32_t)1u << i;
+            head.occupied_mask |= (uint32_t)1u << i;
         }
-        s_store.pattern[i] = s_song_pattern[i];
     }
-    s_store.occupied_mask = mask;
-
-    const uint8_t *src = (const uint8_t *)&s_store;
-    size_t total = sizeof(s_store);
+    const size_t head_len = offsetof(tiles_song_store_t, pattern);
+    const size_t patterns_len = sizeof(s_song_pattern);
+    const uint8_t *patterns = (const uint8_t *)s_song_pattern;
     for (uint32_t sector = 0u; sector < TILES_SONG_NUM_FLASH_SECTORS; sector++) {
-        memset(s_write_buf, 0, sizeof(s_write_buf));
-        size_t offset_in_store = (size_t)sector * FLASH_SECTOR_SIZE;
-        size_t remaining = (offset_in_store < total) ? (total - offset_in_store) : 0u;
-        size_t copy_len = (remaining < FLASH_SECTOR_SIZE) ? remaining : FLASH_SECTOR_SIZE;
-        if (copy_len > 0u) {
-            memcpy(s_write_buf, src + offset_in_store, copy_len);
+        memset(buf, 0, FLASH_SECTOR_SIZE);
+        size_t from = (size_t)sector * FLASH_SECTOR_SIZE, to = from + FLASH_SECTOR_SIZE;
+        if (from < head_len) {
+            size_t n = (to < head_len ? to : head_len) - from;
+            memcpy(buf, (const uint8_t *)&head + from, n);
+        }
+        size_t p_from = from > head_len ? from - head_len : 0u;
+        size_t p_to = to - head_len < patterns_len ? to - head_len : patterns_len;
+        if (p_from < p_to) {
+            memcpy(buf + (head_len + p_from - from), patterns + p_from, p_to - p_from);
         }
         watchdog_update();
-        uint32_t prev_interrupts = save_and_disable_interrupts();
+        uint32_t prev_interrupts;
+        if (!tiles_flash_write_begin(&prev_interrupts)) {
+            return;
+        }
         flash_range_erase(TILES_SONG_FLASH_OFFSET + sector * FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE);
-        flash_range_program(TILES_SONG_FLASH_OFFSET + sector * FLASH_SECTOR_SIZE, s_write_buf, FLASH_SECTOR_SIZE);
-        restore_interrupts(prev_interrupts);
+        flash_range_program(TILES_SONG_FLASH_OFFSET + sector * FLASH_SECTOR_SIZE, buf, FLASH_SECTOR_SIZE);
+        tiles_flash_write_end(prev_interrupts);
         watchdog_update();
     }
 }

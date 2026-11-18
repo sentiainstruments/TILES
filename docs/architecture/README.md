@@ -11,6 +11,15 @@ belonging to one module.
   talks to the device (USB vendor interface, the settings table,
   layouts as portable files), what's built, the next steps, and the app
   stack choice.
+- [`audio-engine.md`](audio-engine.md): TILES's own sound -- the CPU,
+  RAM and flash budget, four tracks plus the drum sampler, the
+  guardrails (voices by measured cost, the load guard), the engines,
+  reverb and delay, and the USB and DAC outputs and clocks.
+- [`synth-engines.md`](synth-engines.md): the wavetable and FM engines,
+  the effects, measurements, and the clock plan.
+- [`standalone-recorder.md`](standalone-recorder.md): planning standalone
+  mode as a 5-track recorder (4 synth tracks + drums, clips, scenes,
+  song): research, budgets, open questions.
 - [`content-packs.md`](content-packs.md): how sold packs reach a device --
   data content (scales, later layouts) pushed into the content store, code
   content (modes, games) unlocked per unit by signed entitlements -- and

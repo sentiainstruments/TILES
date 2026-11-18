@@ -21,6 +21,11 @@ typedef bool (*tiles_settings_idle_fn)(void);
  * been initialized and defaults captured. `idle` may be NULL (always idle). */
 void tiles_settings_persist_init(const tiles_kv_ops_t *ops, tiles_settings_idle_fn idle);
 
+/* Before anything else boots (the USB descriptor depends on device.mode):
+ * one setting's saved value straight from flash. False if it isn't saved
+ * (it is at its default) or nothing is. Call before persist_init. */
+bool tiles_settings_persist_peek(const tiles_kv_ops_t *ops, uint16_t id, uint32_t *value);
+
 /* Call every main-loop iteration; does real work at most every
  * TILES_SETTINGS_POLL_MS. */
 void tiles_settings_persist_service(uint32_t now_ms);

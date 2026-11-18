@@ -1,8 +1,9 @@
 #pragma once
 
 /* Append-only log over two sectors: saves are page programs only (under a
- * millisecond), so they're never heard. Erasing the other sector is
- * separate (tiles_log_prepare()), done when a stall doesn't matter.
+ * millisecond each; a record can go out a page at a time), so they're
+ * never heard. Erasing the other sector is separate (tiles_log_prepare()),
+ * done when a stall doesn't matter.
  * Record, page-aligned, little-endian: 0 u32 magic, 4 u32 seq, 8 u16
  * payload_len, 10 u16 payload_version, 12 u32 crc32, then the payload;
  * the first page is programmed last. Tested natively with power cuts. */
@@ -25,6 +26,8 @@ typedef enum {
     TILES_LOG_ERR_ERASE,
     TILES_LOG_ERR_PROGRAM,
     TILES_LOG_ERR_VERIFY,
+    TILES_LOG_PENDING,  /* append_start/step: pages left, step again */
+    TILES_LOG_ERR_BUSY, /* a record is still going out */
 } tiles_log_result_t;
 
 typedef struct {
@@ -39,6 +42,16 @@ typedef struct {
     bool blank[TILES_KV_NUM_SLOTS];            /* the whole sector reads erased */
     uint32_t writes;
     uint32_t erases;
+    /* The record going out a page at a time. */
+    bool pending;
+    const uint8_t *pend_payload;
+    uint8_t pend_hdr[TILES_LOG_HEADER_SIZE];
+    uint32_t pend_seq;
+    uint16_t pend_len;
+    uint16_t pend_version;
+    uint8_t pend_slot;
+    uint8_t pend_page;
+    uint8_t pend_left;
 } tiles_log_t;
 
 /* Scans both sectors. Safe with blank or foreign data. */
@@ -51,6 +64,19 @@ bool tiles_log_read(tiles_log_t *log, uint8_t *out, uint16_t cap, uint16_t *len,
  * TILES_LOG_ERR_NEEDS_ERASE if it would have to). */
 tiles_log_result_t tiles_log_append(tiles_log_t *log, const uint8_t *payload, uint16_t len, uint16_t payload_version,
                                     bool allow_erase);
+
+/* The same append one page per call, for saves while sound plays: start
+ * programs the first page (after any erase it is allowed), then step at
+ * most every TILES_LOG_PAGE_GAP_MS while it returns TILES_LOG_PENDING. The payload must
+ * stay unchanged until it returns something else. A power cut between
+ * steps leaves the previous record, as with append. */
+tiles_log_result_t tiles_log_append_start(tiles_log_t *log, const uint8_t *payload, uint16_t len,
+                                          uint16_t payload_version, bool allow_erase);
+tiles_log_result_t tiles_log_append_step(tiles_log_t *log);
+
+/* A page program pauses core 1 (~0.5 ms); this far apart, core 1 refills
+ * its 3 ms of audio between them even at the 90 % ceiling. */
+#define TILES_LOG_PAGE_GAP_MS 8u
 
 /* True if a record of `len` bytes would be appended without an erase. */
 bool tiles_log_fits_without_erase(const tiles_log_t *log, uint16_t len);

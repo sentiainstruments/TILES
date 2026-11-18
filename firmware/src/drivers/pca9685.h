@@ -29,3 +29,8 @@ bool tiles_pca9685_set_channel_full(tiles_pca9685_t *dev, uint8_t channel, bool 
  * off_count (0-4095) is the ticks the pin stays high per 4096-tick cycle.
  * False on I2C failure, a bad channel or a count above 4095. */
 bool tiles_pca9685_set_pwm(tiles_pca9685_t *dev, uint8_t channel, uint16_t on_count, uint16_t off_count);
+
+/* MODE1 as the chip holds it now: 0x00 after init; a chip that lost power
+ * comes back asleep (SLEEP, bit 4). False on I2C failure. */
+bool tiles_pca9685_read_mode1(tiles_pca9685_t *dev, uint8_t *mode1);
+#define TILES_PCA9685_MODE1_SLEEP 0x10u

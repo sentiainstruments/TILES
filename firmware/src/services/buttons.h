@@ -58,3 +58,17 @@ void tiles_buttons_set_led_intensity(float intensity_0_to_1);
  * haptics). Re-runs their setup and repaints the key LEDs; called before
  * tiles_haptics_resync_hardware(). */
 void tiles_buttons_resync_pca9685(void);
+
+/* Every pass: every 250 ms reads both chips' MODE1. One found asleep lost
+ * power on its own (a rail dip; the RP2350 didn't reset) and has all its
+ * motors and key LEDs stopped: both are set up again and true is
+ * returned, so the caller rewrites the motors
+ * (tiles_haptics_resync_hardware()). */
+bool tiles_buttons_check_pca9685(uint32_t now_ms);
+
+typedef struct {
+    uint32_t resets;     /* chips found asleep and set up again */
+    uint32_t read_fails; /* checks that got no answer */
+    uint8_t mode1[2];    /* last read, chip 0x40 then 0x41 */
+} tiles_buttons_pca_health_t;
+tiles_buttons_pca_health_t tiles_buttons_pca_health(void);

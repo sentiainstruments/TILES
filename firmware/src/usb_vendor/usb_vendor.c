@@ -3,26 +3,41 @@
 #include "bend_core.h"
 #include "board/unit_id.h"
 #include "board_pins.h"
+#include "buttons.h"
 #include "content.h"
+#include "device_mode.h"
 #include "diagnostics/capture.h"
+#include "diagnostics/boot_stage.h"
+#include "diagnostics/chip.h"
+#include "diagnostics/fault.h"
 #include "diagnostics/loop_stats.h"
 #include "drum_seq.h"
 #include "expression.h"
 #include "hall.h"
 #include "haptics.h"
 #include "lighting.h"
+#include "midi_clock.h"
 #include "note_map.h"
 #include "op_mode.h"
 #include "play_state.h"
 #include "power.h"
 #include "product_identity.h"
+#include "fm_bank.h"
+#include "sample_store.h"
 #include "settings.h"
 #include "settings_persist.h"
+#include "storage_flash.h"
 #include "touch.h"
+#include "audio_engine.h"
+#include "fx.h"
+#include "usb_audio.h"
+#include "usb_device.h"
 #include "tune.h"
 
 #include "tusb.h"
 
+#include "hardware/structs/m33.h"
+#include "hardware/sync.h"
 #include "hardware/watchdog.h"
 #include "pico/bootrom.h"
 #include "pico/time.h"
@@ -45,6 +60,21 @@
 
 static char s_rx_line[USB_VENDOR_LINE_MAX];
 static size_t s_rx_len;
+
+/* SAMPLE BEGIN switches the input to raw audio bytes until the announced
+ * count has arrived (a failed load keeps taking them, so nothing is read
+ * as a command). Up to 4 KB per pass (16 page programs and one sector
+ * erase, ~55 ms), pumping USB for up to 6 ms to get it: one 64-byte packet
+ * per pass would take 9 s a slot. A sender silent this long is dropped. */
+#define USB_VENDOR_RAW_PER_PASS 4096u
+#define USB_VENDOR_RAW_PASS_US 6000u
+#define USB_VENDOR_RAW_TIMEOUT_MS 3000u
+static uint32_t s_raw_left;
+static uint32_t s_raw_last_ms;
+static tiles_sample_result_t s_raw_result;
+/* The raw bytes are a DX7 bank (SYNTH BANK PUT), not a sample. */
+static bool s_raw_bank;
+static tiles_fm_bank_result_t s_raw_bank_result;
 
 /* A partial line (no newline yet) is dropped once nothing has arrived for
  * this long while the device waits for input. A host that gave up
@@ -477,6 +507,357 @@ static bool take_tag(char **line) {
     return true;
 }
 
+/* SAMPLE LIST | BEGIN <slot> <channels> <frames> <crc32 hex> <name>, then
+ * the audio as raw bytes (16-bit LE, 48 kHz, stereo interleaved; replies
+ * OK <bytes>, then OK or ERR once they are in) | DELETE <slot> |
+ * PLAY <slot> [velocity]. Slots 1-8: the first bank's drums. */
+static void handle_sample(void) {
+    char *what = strtok(NULL, " ");
+    char text[USB_VENDOR_LINE_MAX];
+    if (what != NULL && strcmp(what, "LIST") == 0) {
+        for (uint8_t slot = 0; slot < TILES_SAMPLE_SLOT_COUNT; slot++) {
+            tiles_sample_info_t info;
+            if (tiles_sample_store_info(slot, &info)) {
+                snprintf(text, sizeof(text), "%u %s %s %lu", (unsigned)slot + 1u, info.name,
+                         info.channels == 2u ? "stereo" : "mono", (unsigned long)info.frames);
+            } else {
+                snprintf(text, sizeof(text), "%u empty", (unsigned)slot + 1u);
+            }
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+    char *slot_arg = strtok(NULL, " ");
+    int slot = slot_arg != NULL ? atoi(slot_arg) : 0;
+    if (slot < 1 || slot > (int)TILES_SAMPLE_SLOT_COUNT) {
+        reply_err("slot-1-8");
+        return;
+    }
+    if (what != NULL && strcmp(what, "PLAY") == 0) {
+        char *vel = strtok(NULL, " ");
+        int velocity = vel != NULL ? atoi(vel) : 100;
+        tiles_usb_audio_drum_hit((uint8_t)(slot - 1), (uint8_t)(velocity < 1 ? 1 : velocity > 127 ? 127 : velocity));
+        reply_ok();
+        return;
+    }
+    if (what != NULL && strcmp(what, "DELETE") == 0) {
+        tiles_sample_result_t r = tiles_sample_store_delete((uint8_t)(slot - 1));
+        r == TILES_SAMPLE_OK ? reply_ok() : reply_err(tiles_sample_result_name(r));
+        return;
+    }
+    if (what == NULL || strcmp(what, "BEGIN") != 0) {
+        reply_err("unknown-key");
+        return;
+    }
+    char *channels = strtok(NULL, " ");
+    char *frames = strtok(NULL, " ");
+    char *crc = strtok(NULL, " ");
+    char *name = strtok(NULL, " ");
+    if (channels == NULL || frames == NULL || crc == NULL || name == NULL) {
+        reply_err("missing-arg");
+        return;
+    }
+    /* Loading erases flash (tens of ms each sector): never while playing. */
+    if (tiles_midi_clock_is_running() || !tiles_usb_audio_is_quiet()) {
+        reply_err("playing");
+        return;
+    }
+    tiles_sample_info_t info;
+    memset(&info, 0, sizeof(info));
+    info.channels = (uint8_t)atoi(channels);
+    info.frames = (uint32_t)strtoul(frames, NULL, 10);
+    info.audio_crc = (uint32_t)strtoul(crc, NULL, 16);
+    strncpy(info.name, name, TILES_SAMPLE_NAME_MAX);
+    tiles_sample_result_t r = tiles_sample_store_begin((uint8_t)(slot - 1), &info);
+    if (r != TILES_SAMPLE_OK) {
+        reply_err(tiles_sample_result_name(r));
+        return;
+    }
+    s_raw_left = tiles_sample_store_remaining();
+    s_raw_result = TILES_SAMPLE_OK;
+    s_raw_last_ms = to_ms_since_boot(get_absolute_time());
+    snprintf(text, sizeof(text), "OK %lu", (unsigned long)s_raw_left);
+    reply(text);
+}
+
+/* The audio after SAMPLE BEGIN: into the store as it arrives, then the
+ * load's result. */
+static void receive_raw(uint32_t now_ms) {
+    uint32_t budget = USB_VENDOR_RAW_PER_PASS;
+    uint32_t start_us = time_us_32();
+    while (s_raw_left > 0u && budget > 0u && time_us_32() - start_us < USB_VENDOR_RAW_PASS_US) {
+        if (!tud_vendor_available()) {
+            tiles_usb_task(); /* re-arms the endpoint: the next packet */
+            continue;
+        }
+        uint8_t buf[256];
+        uint32_t want = s_raw_left < sizeof(buf) ? s_raw_left : sizeof(buf);
+        want = want < budget ? want : budget;
+        uint32_t got = tud_vendor_read(buf, want);
+        if (got == 0u) {
+            break;
+        }
+        s_raw_last_ms = now_ms;
+        s_raw_left -= got;
+        budget -= got;
+        if (s_raw_bank) {
+            if (s_raw_bank_result == TILES_FM_BANK_OK) {
+                s_raw_bank_result = tiles_fm_bank_write(buf, got);
+            }
+        } else if (s_raw_result == TILES_SAMPLE_OK) {
+            s_raw_result = tiles_sample_store_write(buf, got);
+        }
+    }
+    if (s_raw_bank) {
+        if (s_raw_left == 0u || now_ms - s_raw_last_ms > USB_VENDOR_RAW_TIMEOUT_MS) {
+            bool timed_out = s_raw_left > 0u;
+            tiles_fm_bank_result_t r = tiles_fm_bank_finish(); /* also ends a failed load */
+            s_raw_left = 0u;
+            s_raw_bank = false;
+            if (timed_out) {
+                reply_err("timeout");
+            } else if (s_raw_bank_result != TILES_FM_BANK_OK) {
+                reply_err(tiles_fm_bank_result_name(s_raw_bank_result));
+            } else {
+                r == TILES_FM_BANK_OK ? reply_ok() : reply_err(tiles_fm_bank_result_name(r));
+            }
+            pump_out();
+        }
+        return;
+    }
+    if (s_raw_left == 0u) {
+        if (s_raw_result == TILES_SAMPLE_OK) {
+            s_raw_result = tiles_sample_store_finish();
+        } else {
+            tiles_sample_store_abort();
+        }
+        s_raw_result == TILES_SAMPLE_OK ? reply_ok() : reply_err(tiles_sample_result_name(s_raw_result));
+        pump_out();
+    } else if (now_ms - s_raw_last_ms > USB_VENDOR_RAW_TIMEOUT_MS) {
+        tiles_sample_store_abort();
+        s_raw_left = 0u;
+        reply_err("timeout");
+        pump_out();
+    }
+}
+
+static uint32_t bench_cycles(void) {
+    return m33_hw->dwt_cyccnt;
+}
+
+/* SYNTH FX names, in audio_engine.h's TILES_FX_* order. Values are typed
+ * as 0-100, except the bus's predelay (ms) and time (sixteenths). */
+static const char *const k_fx_track_names[TILES_FX_TRACK_PARAMS] = {"reverb", "delay", "chorus", "drive",
+                                                                     "dark",   "crush", "pump"};
+static const char *const k_fx_bus_names[TILES_FX_BUS_PARAMS] = {
+    "decay", "damping", "predelay", "mod", "time", "feedback", "tone", "echo-verb", "chorus-rate",
+    "chorus-depth", "pump-release"};
+
+static float fx_unit(uint8_t target, uint8_t param) {
+    bool literal = target == TILES_FX_TARGET_BUS &&
+                   (param == TILES_FX_BUS_PREDELAY_MS || param == TILES_FX_BUS_SIXTEENTHS);
+    return literal ? 1.0f : 0.01f;
+}
+
+/* SYNTH FX: every track's effects, then the shared ones' settings. SYNTH FX
+ * <track 1-4|BUS> <name> <value>: sets one. */
+static void handle_synth_fx(void) {
+    char text[USB_VENDOR_LINE_MAX];
+    char *target_arg = strtok(NULL, " ");
+    if (target_arg == NULL) {
+        for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
+            int n = snprintf(text, sizeof(text), "track %u", (unsigned)t + 1u);
+            for (uint8_t p = 0; p < TILES_FX_TRACK_PARAMS && n < (int)sizeof(text); p++) {
+                n += snprintf(text + n, sizeof(text) - (size_t)n, " %s=%d", k_fx_track_names[p],
+                              (int)(tiles_audio_engine_fx(t, p) / fx_unit(t, p) + 0.5f));
+            }
+            reply(text);
+        }
+        for (uint8_t p = 0; p < TILES_FX_BUS_PARAMS; p++) {
+            float v = tiles_audio_engine_fx(TILES_FX_TARGET_BUS, p) / fx_unit(TILES_FX_TARGET_BUS, p);
+            snprintf(text, sizeof(text), "bus %s=%d", k_fx_bus_names[p], (int)(v + 0.5f));
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+    char *name = strtok(NULL, " ");
+    char *value_arg = strtok(NULL, " ");
+    uint8_t target = strcmp(target_arg, "BUS") == 0 ? TILES_FX_TARGET_BUS : (uint8_t)(atoi(target_arg) - 1);
+    if (target > TILES_FX_TARGET_BUS || name == NULL || value_arg == NULL) {
+        reply_err("fx-<1-4|BUS>-<name>-<value>");
+        return;
+    }
+    const char *const *names = target == TILES_FX_TARGET_BUS ? k_fx_bus_names : k_fx_track_names;
+    uint8_t count = target == TILES_FX_TARGET_BUS ? TILES_FX_BUS_PARAMS : TILES_FX_TRACK_PARAMS;
+    for (uint8_t p = 0; p < count; p++) {
+        if (strcmp(name, names[p]) == 0) {
+            float v = (float)atof(value_arg) * fx_unit(target, p);
+            tiles_usb_audio_set_fx(target, p, v) ? reply_ok() : reply_err("busy");
+            return;
+        }
+    }
+    reply_err("unknown-fx");
+}
+
+/* SYNTH BANK: the DX7 bank's voices; BANK PUT <crc32 hex>, then the
+ * 4,104-byte sysex as raw bytes (replies OK 4104, then OK or ERR once it
+ * is in); VOICE <track 1-4> <voice 1-32>: a bank voice as the track's
+ * sound. */
+static void handle_synth_bank(bool voice) {
+    char text[USB_VENDOR_LINE_MAX];
+    if (voice) {
+        char *track_arg = strtok(NULL, " ");
+        char *voice_arg = strtok(NULL, " ");
+        int track = track_arg != NULL ? atoi(track_arg) : 0;
+        int n = voice_arg != NULL ? atoi(voice_arg) : 0;
+        uint8_t v[TILES_DX7_VOICE_BYTES];
+        char name[11];
+        if (track < 1 || track > (int)TILES_AUDIO_TRACKS || n < 1 || n > (int)TILES_DX7_BANK_VOICES) {
+            reply_err("track-1-4-voice-1-32");
+        } else if (!tiles_fm_bank_voice((uint8_t)(n - 1), v)) {
+            reply_err("no-bank");
+        } else {
+            tiles_dx7_name(v, name);
+            tiles_usb_audio_set_fm_voice((uint8_t)(track - 1), v, name) ? reply_ok() : reply_err("busy");
+        }
+        return;
+    }
+    char *put = strtok(NULL, " ");
+    if (put == NULL) {
+        if (!tiles_fm_bank_present()) {
+            reply_err("no-bank");
+            return;
+        }
+        for (uint8_t n = 0; n < TILES_DX7_BANK_VOICES; n++) {
+            char name[11];
+            (void)tiles_fm_bank_name(n, name);
+            snprintf(text, sizeof(text), "%u %s", (unsigned)n + 1u, name);
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+    char *crc = strtok(NULL, " ");
+    if (strcmp(put, "PUT") != 0 || crc == NULL) {
+        reply_err("unknown-key");
+        return;
+    }
+    /* Erasing pauses the sound: never while playing. */
+    if (tiles_midi_clock_is_running() || !tiles_usb_audio_is_quiet()) {
+        reply_err("playing");
+        return;
+    }
+    tiles_fm_bank_result_t r = tiles_fm_bank_begin((uint32_t)strtoul(crc, NULL, 16));
+    if (r != TILES_FM_BANK_OK) {
+        reply_err(tiles_fm_bank_result_name(r));
+        return;
+    }
+    s_raw_bank = true;
+    s_raw_bank_result = TILES_FM_BANK_OK;
+    s_raw_left = tiles_fm_bank_remaining();
+    s_raw_last_ms = to_ms_since_boot(get_absolute_time());
+    snprintf(text, sizeof(text), "OK %lu", (unsigned long)s_raw_left);
+    reply(text);
+}
+
+/* SYNTH LIST (the sounds, then each track's) | PATCH <track 1-4>
+ * <number|name> | MIDI <status hex> <data1> <data2>: a message to the
+ * engine only (not sent out), to play it from the computer | FX (above) |
+ * BENCH: each sound's cycles per sample for one voice | BANK, VOICE
+ * (above). Standalone mode only. */
+static void handle_synth(void) {
+    char *what = strtok(NULL, " ");
+    char text[USB_VENDOR_LINE_MAX];
+    if (!tiles_usb_audio_started()) {
+        reply_err("standalone-only");
+        return;
+    }
+    if (what != NULL && strcmp(what, "LIST") == 0) {
+        for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
+            snprintf(text, sizeof(text), "%u %s", (unsigned)p, tiles_audio_engine_patch_name(p));
+            reply(text);
+        }
+        for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
+            snprintf(text, sizeof(text), "track %u %s", (unsigned)t + 1u, tiles_audio_engine_track_name(t));
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+    if (what != NULL && strcmp(what, "PATCH") == 0) {
+        char *track_arg = strtok(NULL, " ");
+        char *patch_arg = strtok(NULL, " ");
+        int track = track_arg != NULL ? atoi(track_arg) : 0;
+        if (track < 1 || track > (int)TILES_AUDIO_TRACKS || patch_arg == NULL) {
+            reply_err("track-1-4");
+            return;
+        }
+        int patch = -1;
+        for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
+            if (strcmp(patch_arg, tiles_audio_engine_patch_name(p)) == 0) {
+                patch = p;
+            }
+        }
+        if (patch < 0 && patch_arg[0] >= '0' && patch_arg[0] <= '9') {
+            patch = atoi(patch_arg);
+        }
+        if (patch < 0 || patch >= (int)tiles_audio_engine_patch_count()) {
+            reply_err("unknown-patch");
+            return;
+        }
+        tiles_usb_audio_set_patch((uint8_t)(track - 1), (uint8_t)patch) ? reply_ok() : reply_err("busy");
+        return;
+    }
+    if (what != NULL && strcmp(what, "FX") == 0) {
+        handle_synth_fx();
+        return;
+    }
+    if (what != NULL && (strcmp(what, "BANK") == 0 || strcmp(what, "VOICE") == 0)) {
+        handle_synth_bank(strcmp(what, "VOICE") == 0);
+        return;
+    }
+    if (what != NULL && strcmp(what, "BENCH") == 0) {
+        /* On core 0 with its interrupts off, ~5 ms a sound. */
+        m33_hw->demcr |= M33_DEMCR_TRCENA_BITS;
+        m33_hw->dwt_ctrl |= M33_DWT_CTRL_CYCCNTENA_BITS;
+        for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
+            uint32_t irq = save_and_disable_interrupts();
+            uint32_t c = tiles_audio_engine_bench(p, 2400u, bench_cycles);
+            restore_interrupts(irq);
+            snprintf(text, sizeof(text), "%s %lu", tiles_audio_engine_patch_name(p), (unsigned long)c);
+            reply(text);
+        }
+        /* The effects share core 1's state: only while it isn't rendering. */
+        static const char *const k_fx_bench_names[TILES_FX_BENCH_COUNT] = {"chorus", "delay", "reverb",
+                                                                          "drive",  "crush", "pump"};
+        for (uint32_t f = 0; f < TILES_FX_BENCH_COUNT && !tiles_usb_audio_get_info().streaming; f++) {
+            uint32_t irq = save_and_disable_interrupts();
+            uint32_t c = tiles_fx_bench(f, 2400u, bench_cycles);
+            restore_interrupts(irq);
+            snprintf(text, sizeof(text), "fx-%s %lu", k_fx_bench_names[f], (unsigned long)c);
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+    if (what != NULL && strcmp(what, "MIDI") == 0) {
+        char *st = strtok(NULL, " ");
+        char *d1 = strtok(NULL, " ");
+        char *d2 = strtok(NULL, " ");
+        unsigned long status = st != NULL ? strtoul(st, NULL, 16) : 0u;
+        if (status < 0x80u || status > 0xEFu || d1 == NULL) {
+            reply_err("status-80-ef");
+            return;
+        }
+        tiles_usb_audio_midi((uint8_t)status, (uint8_t)(atoi(d1) & 0x7F), (uint8_t)(d2 != NULL ? atoi(d2) & 0x7F : 0));
+        reply_ok();
+        return;
+    }
+    reply_err("unknown-key");
+}
+
 static void handle_line(char *line) {
     if (!take_tag(&line)) {
         reply_err("bad-tag");
@@ -509,10 +890,19 @@ static void handle_line(char *line) {
         start_listing(LISTING_SCALES);
         return;
     }
+    if (strcmp(cmd, "SYNTH") == 0) {
+        handle_synth();
+        return;
+    }
+    if (strcmp(cmd, "SAMPLE") == 0) {
+        handle_sample();
+        return;
+    }
     /* Sensor capture (diagnostics/capture.h): START <pad> records one pad
-     * (~8 s), WATCH <pad> keeps recording (the studio), STOP ends it, STATUS
-     * reports, READ streams every record held, READ <from> the live rows
-     * from that sequence number on. */
+     * (~8 s), WATCH <pad> keeps recording (the studio), STOP ends it,
+     * RELEASE gives its memory back to the effects (quiet until then),
+     * STATUS reports, READ streams every record held, READ <from> the live
+     * rows from that sequence number on. */
     if (strcmp(cmd, "CAPTURE") == 0) {
         char *what = strtok(NULL, " ");
         char *arg = strtok(NULL, " ");
@@ -527,14 +917,13 @@ static void handle_line(char *line) {
             s_capture_setup.sensitivity = tiles_expression_get_pitch_bend_sensitivity();
             tiles_expression_get_press_path((uint8_t)pad, &s_capture_setup.bx, &s_capture_setup.by,
                                             &s_capture_setup.strokes);
-            if (watch) {
-                tiles_capture_watch((uint8_t)pad);
-            } else {
-                tiles_capture_start((uint8_t)pad);
-            }
-            reply_ok();
+            bool started = watch ? tiles_capture_watch((uint8_t)pad) : tiles_capture_start((uint8_t)pad);
+            started ? reply_ok() : reply_err("memory-busy");
         } else if (what != NULL && strcmp(what, "STOP") == 0) {
             tiles_capture_stop();
+            reply_ok();
+        } else if (what != NULL && strcmp(what, "RELEASE") == 0) {
+            tiles_capture_release();
             reply_ok();
         } else if (what != NULL && strcmp(what, "STATUS") == 0) {
             snprintf(text, sizeof(text), "pad=%u running=%u count=%u max=%u watching=%u total=%lu",
@@ -566,7 +955,7 @@ static void handle_line(char *line) {
             s_listing_next = from;
             fill_listing();
         } else {
-            reply_err("capture-start|watch|stop|status|read");
+            reply_err("capture-start|watch|stop|release|status|read");
         }
         return;
     }
@@ -646,6 +1035,46 @@ static void handle_line(char *line) {
     }
 
     /* Unit, firmware version, then flash-store status (for "did it save?"). */
+#if TILES_DSP_BENCH
+    /* BENCH START runs the DSP stress test on core 1; BENCH reports it
+     * (one line per kernel: cycles per sample per voice), or "running".
+     * BENCH SOAK <ms> <cached 0|1> streams the sample slots from flash. */
+    if (strcmp(cmd, "BENCH") == 0) {
+        char *what = strtok(NULL, " ");
+        if (what != NULL && strcmp(what, "START") == 0) {
+            tiles_usb_audio_bench_start();
+            reply_ok();
+            return;
+        }
+        if (what != NULL && strcmp(what, "SOAK") == 0) {
+            char *ms = strtok(NULL, " ");
+            char *cached = strtok(NULL, " ");
+            if (ms == NULL || cached == NULL) {
+                reply_err("missing-arg");
+                return;
+            }
+            uint32_t soak_ms = (uint32_t)strtoul(ms, NULL, 10);
+            tiles_usb_audio_bench_soak(soak_ms > 60000u ? 60000u : soak_ms, cached[0] == '1');
+            reply_ok();
+            return;
+        }
+        const tiles_dsp_bench_t *b = tiles_usb_audio_bench_result();
+        if (b == NULL) {
+            reply("running");
+        } else {
+            snprintf(text, sizeof(text), "clk_mhz=%lu", (unsigned long)b->clk_mhz);
+            reply(text);
+            for (uint32_t i = 0; i < b->count; i++) {
+                snprintf(text, sizeof(text), "%s units=%lu cycles=%lu.%03lu peak=%ld", b->item[i].name,
+                         (unsigned long)b->item[i].units, (unsigned long)(b->item[i].milli_cycles / 1000u),
+                         (unsigned long)(b->item[i].milli_cycles % 1000u), (long)b->item[i].peak_milli);
+                reply(text);
+            }
+        }
+        reply_ok();
+        return;
+    }
+#endif
     if (strcmp(cmd, "INFO") == 0) {
         tiles_settings_persist_info_t info = tiles_settings_persist_get_info();
         snprintf(text, sizeof(text), "unit=%u/%u", (unsigned)TILES_UNIT_NUMBER, (unsigned)TILES_UNIT_COUNT);
@@ -703,6 +1132,57 @@ static void handle_line(char *line) {
         reply(text);
         snprintf(text, sizeof(text), "content.last_result=%s", kv_result_name(content.kv.last_result));
         reply(text);
+        tiles_usb_audio_info_t audio = tiles_usb_audio_get_info();
+        snprintf(text, sizeof(text), "device.mode=%s", tiles_device_mode_is_standalone() ? "standalone" : "controller");
+        reply(text);
+        snprintf(text, sizeof(text), "audio.streaming=%d", audio.streaming ? 1 : 0);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.packets=%lu", (unsigned long)audio.packets);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.late_frames=%lu", (unsigned long)audio.late_frames);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.underruns=%lu", (unsigned long)audio.underruns);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.usb_gap_us=%lu", (unsigned long)audio.usb_gap_us);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.fx=%s", audio.fx_lent ? "lent" : "on");
+        reply(text);
+        snprintf(text, sizeof(text), "audio.fx_cost=%lu", (unsigned long)audio.fx_cost);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.midi_drops=%lu", (unsigned long)audio.midi_drops);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.voices=%u", (unsigned)audio.voices);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.load_pct=%u", (unsigned)audio.load_pct);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.load_peak_pct=%u", (unsigned)audio.load_peak_pct);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.stack_free=%lu", (unsigned long)audio.stack_free);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.shed=%lu", (unsigned long)audio.shed);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.drums=%u", (unsigned)audio.drum_voices);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.drum_underruns=%lu", (unsigned long)audio.drum_underruns);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.cost=%u,%u,%u,%u", (unsigned)audio.cost[0], (unsigned)audio.cost[1],
+                 (unsigned)audio.cost[2], (unsigned)audio.cost[3]);
+        reply(text);
+        if (tiles_usb_audio_started()) {
+            snprintf(text, sizeof(text), "audio.patch=%s,%s,%s,%s", tiles_audio_engine_track_name(0),
+                     tiles_audio_engine_track_name(1), tiles_audio_engine_track_name(2),
+                     tiles_audio_engine_track_name(3));
+            reply(text);
+        }
+        tiles_buttons_pca_health_t pca = tiles_buttons_pca_health();
+        snprintf(text, sizeof(text), "pca.mode1=%02x,%02x", (unsigned)pca.mode1[0], (unsigned)pca.mode1[1]);
+        reply(text);
+        snprintf(text, sizeof(text), "pca.resets=%lu", (unsigned long)pca.resets);
+        reply(text);
+        snprintf(text, sizeof(text), "pca.read_fails=%lu", (unsigned long)pca.read_fails);
+        reply(text);
+        snprintf(text, sizeof(text), "flash.lockout_fails=%lu", (unsigned long)tiles_flash_lockout_fails());
+        reply(text);
         tiles_loop_stats_t loop = tiles_loop_stats_get();
         snprintf(text, sizeof(text), "loop.avg_us=%lu", (unsigned long)loop.avg_us);
         reply(text);
@@ -725,6 +1205,56 @@ static void handle_line(char *line) {
         snprintf(text, sizeof(text), "tune.changed=%u", (unsigned)tiles_tune_changed());
         reply(text);
         snprintf(text, sizeof(text), "boot.ms=%lu", (unsigned long)loop.boot_ms);
+        reply(text);
+        tiles_fault_t fault;
+        if (tiles_fault_last(&fault)) {
+            snprintf(text, sizeof(text), "fault=core%lu pc=%08lx lr=%08lx cfsr=%08lx hfsr=%08lx bfar=%08lx sp=%08lx",
+                     (unsigned long)fault.core, (unsigned long)fault.pc, (unsigned long)fault.lr,
+                     (unsigned long)fault.cfsr, (unsigned long)fault.hfsr, (unsigned long)fault.bfar,
+                     (unsigned long)fault.sp);
+            reply(text);
+            snprintf(text, sizeof(text), "fault.callers=%08lx,%08lx,%08lx,%08lx", (unsigned long)fault.callers[0],
+                     (unsigned long)fault.callers[1], (unsigned long)fault.callers[2],
+                     (unsigned long)fault.callers[3]);
+            reply(text);
+            snprintf(text, sizeof(text), "fault.message=%s", fault.message);
+        } else {
+            snprintf(text, sizeof(text), "fault=none");
+        }
+        reply(text);
+        tiles_fault_saved_t saved;
+        if (tiles_fault_saved(&saved)) {
+            snprintf(text, sizeof(text), "fault.saved=%s image=%lu count=%lu", saved.firmware,
+                     (unsigned long)saved.image_bytes, (unsigned long)saved.count);
+            reply(text);
+            snprintf(text, sizeof(text),
+                     "fault.saved_at=core%lu pc=%08lx lr=%08lx cfsr=%08lx hfsr=%08lx bfar=%08lx sp=%08lx",
+                     (unsigned long)saved.fault.core, (unsigned long)saved.fault.pc, (unsigned long)saved.fault.lr,
+                     (unsigned long)saved.fault.cfsr, (unsigned long)saved.fault.hfsr,
+                     (unsigned long)saved.fault.bfar, (unsigned long)saved.fault.sp);
+            reply(text);
+            snprintf(text, sizeof(text), "fault.saved_callers=%08lx,%08lx,%08lx,%08lx",
+                     (unsigned long)saved.fault.callers[0], (unsigned long)saved.fault.callers[1],
+                     (unsigned long)saved.fault.callers[2], (unsigned long)saved.fault.callers[3]);
+            reply(text);
+            snprintf(text, sizeof(text), "fault.saved_message=%s", saved.fault.message);
+        } else {
+            snprintf(text, sizeof(text), "fault.saved=none");
+        }
+        reply(text);
+        snprintf(text, sizeof(text), "boot.reset=%s (0x%08lx)", tiles_fault_reset_cause(),
+                 (unsigned long)tiles_fault_reset_bits());
+        reply(text);
+        snprintf(text, sizeof(text), "uptime_s=%lu", (unsigned long)(to_ms_since_boot(get_absolute_time()) / 1000u));
+        reply(text);
+        snprintf(text, sizeof(text), "clk_khz=%lu", (unsigned long)tiles_chip_clk_khz());
+        reply(text);
+        snprintf(text, sizeof(text), "vreg_mv=%lu", (unsigned long)tiles_chip_vreg_mv());
+        reply(text);
+        snprintf(text, sizeof(text), "temp_c=%.1f", (double)tiles_chip_temp_c());
+        reply(text);
+        snprintf(text, sizeof(text), "boot.hang=%s",
+                 tiles_boot_stage_last_hang() != NULL ? tiles_boot_stage_last_hang() : "none");
         reply(text);
         snprintf(text, sizeof(text), "boot.sensors_ms=%lu", (unsigned long)rest.boot_ms);
         reply(text);
@@ -764,10 +1294,49 @@ static void handle_line(char *line) {
         return;
     }
 
+    /* TOUCH: every pad's electrode: touched, filtered reading, baseline and
+     * how far below the baseline it is (a touch needs more than 12). */
+    if (strcmp(cmd, "TOUCH") == 0) {
+        for (uint8_t pad = 1u; pad <= 24u; pad++) {
+            uint16_t filtered = 0, baseline = 0;
+            bool ok = tiles_touch_read_electrode(pad, &filtered, &baseline);
+            snprintf(text, sizeof(text), "pad=%u touched=%d filtered=%u baseline=%u delta=%d%s", (unsigned)pad,
+                     tiles_touch_is_touched(pad) ? 1 : 0, (unsigned)filtered, (unsigned)baseline,
+                     (int)baseline - (int)filtered, ok ? "" : " read=fail");
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+
+    /* HAPTICS: per-pad counts (haptics.h) and the global state; HAPTICS
+     * RESET clears the counts. */
+    if (strcmp(cmd, "HAPTICS") == 0) {
+        char *what = strtok(NULL, " ");
+        if (what != NULL && strcmp(what, "RESET") == 0) {
+            tiles_haptics_reset_stats();
+            reply_ok();
+            return;
+        }
+        snprintf(text, sizeof(text), "intensity=%.2f silenced=%d voices=%u", (double)tiles_haptics_get_intensity(),
+                 tiles_haptics_is_silenced() ? 1 : 0, (unsigned)tiles_power_get_state().max_haptic_voices);
+        reply(text);
+        for (uint8_t pad = 1u; pad <= 24u; pad++) {
+            tiles_haptics_pad_stats_t st = tiles_haptics_pad_stats(pad);
+            snprintf(text, sizeof(text), "pad=%u asked=%u started=%u pulses=%u stops=%u cancelled=%u stolen=%u dropped=%u phase=%u",
+                     (unsigned)pad, (unsigned)st.asked, (unsigned)st.started, (unsigned)st.pulses, (unsigned)st.stops,
+                     (unsigned)st.cancelled, (unsigned)st.stolen, (unsigned)st.dropped, (unsigned)st.phase);
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+
     /* Bench tests for measuring current (tools/README.md "Current tests"):
      *   TEST LEDS <0-100>         every LED white at that % of full scale
      *   TEST MOTORS <n> [duty%]   pads 1..n's motors (capped at the power
      *                             mode's voices) for 8 s; duty default 100
+     *   TEST MOTOR <pad> [duty%]  one pad's motor for 1 s
      *   TEST OFF                  both off, normal rendering back */
     if (strcmp(cmd, "TEST") == 0) {
         char *what = strtok(NULL, " ");
@@ -796,6 +1365,17 @@ static void handle_line(char *line) {
             reply_ok();
             return;
         }
+        if (what != NULL && strcmp(what, "MOTOR") == 0 && arg != NULL) {
+            int pad = atoi(arg);
+            int duty = arg2 != NULL ? atoi(arg2) : 100;
+            if (pad < 1 || pad > 24 || duty < 0 || duty > 100) {
+                reply_err("pad-1-24-duty-0-100");
+                return;
+            }
+            tiles_haptics_test_motor((uint8_t)pad, (float)duty / 100.0f);
+            reply_ok();
+            return;
+        }
         if (what != NULL && strcmp(what, "OFF") == 0) {
             tiles_haptics_test_stop();
             tiles_lighting_set_test_white(0u);
@@ -817,6 +1397,33 @@ static void handle_line(char *line) {
 
     /* Saves any pending change now instead of waiting for the debounced,
      * pads-idle save. The write pauses the firmware for tens of ms. */
+    /* FLASH CRC: the program read back uncached (diagnostics/chip.h). */
+    if (strcmp(cmd, "FLASH") == 0) {
+        char *what = strtok(NULL, " ");
+        if (what == NULL || strcmp(what, "CRC") != 0) {
+            reply_err("unknown-key");
+            return;
+        }
+        uint32_t bytes;
+        uint32_t crc = tiles_chip_image_crc(&bytes);
+        snprintf(text, sizeof(text), "crc=%08lx bytes=%lu", (unsigned long)crc, (unsigned long)bytes);
+        reply(text);
+        return;
+    }
+
+    /* FAULT CLEAR: forgets the saved crash (INFO fault.saved). */
+    if (strcmp(cmd, "FAULT") == 0) {
+        char *what = strtok(NULL, " ");
+        if (what == NULL || strcmp(what, "CLEAR") != 0) {
+            reply_err("unknown-key");
+        } else if (tiles_fault_clear()) {
+            reply_ok();
+        } else {
+            reply_err("flash");
+        }
+        return;
+    }
+
     if (strcmp(cmd, "SAVE") == 0) {
         tiles_kv_result_t r = tiles_settings_persist_save_now();
         if (r == TILES_KV_OK) {
@@ -838,7 +1445,7 @@ static void handle_line(char *line) {
             reply_ok();
             uint32_t deadline_ms = to_ms_since_boot(get_absolute_time()) + 50u;
             while (to_ms_since_boot(get_absolute_time()) < deadline_ms) {
-                tud_task();
+                tiles_usb_task();
                 pump_out();
             }
             if (bootsel) {
@@ -917,6 +1524,15 @@ void tiles_usb_vendor_scan(void) {
         s_out_sent = 0u;
         s_listing = LISTING_NONE;
         s_rx_len = 0u;
+        if (s_raw_left > 0u) {
+            if (s_raw_bank) {
+                (void)tiles_fm_bank_finish();
+                s_raw_bank = false;
+            } else {
+                tiles_sample_store_abort();
+            }
+            s_raw_left = 0u;
+        }
         return;
     }
     pump_out();
@@ -927,7 +1543,14 @@ void tiles_usb_vendor_scan(void) {
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
     if (s_out_len > 0u || s_listing != LISTING_NONE) {
         s_rx_idle_since_ms = now_ms; /* not reading: no partial-line timeout */
+        if (s_raw_left > 0u) {
+            s_raw_last_ms = now_ms;
+        }
         return; /* still sending the previous reply: wait before the next command */
+    }
+    if (s_raw_left > 0u) {
+        receive_raw(now_ms);
+        return;
     }
     while (tud_vendor_available()) {
         uint8_t byte;

@@ -1,8 +1,14 @@
 #include "capture.h"
 
+#include "audio/fx_memory.h"
+
 #include <stddef.h>
 
-static tiles_capture_record_t s_records[TILES_CAPTURE_MAX];
+/* Borrowed from the effects (audio/fx_memory.h) at the first start, kept
+ * (still readable after a stop) until tiles_capture_release(). */
+static tiles_capture_record_t *s_records;
+_Static_assert(sizeof(tiles_capture_record_t) * TILES_CAPTURE_MAX <= TILES_FX_MEMORY_BYTES,
+               "the capture fits the effects' memory");
 static uint32_t s_total; /* records since start; the newest is at (s_total - 1) % MAX */
 static uint8_t s_pad;
 static bool s_running;
@@ -10,20 +16,33 @@ static bool s_watching;
 static tiles_capture_record_t s_current; /* the pass being recorded */
 static bool s_open;
 
-static void begin(uint8_t pad, bool watching) {
+static bool begin(uint8_t pad, bool watching) {
     s_total = 0u;
     s_open = false;
     s_pad = pad;
-    s_running = pad >= 1u && pad <= 24u;
+    if (s_records == NULL) {
+        s_records = (tiles_capture_record_t *)tiles_fx_memory_borrow();
+    }
+    s_running = s_records != NULL && pad >= 1u && pad <= 24u;
     s_watching = s_running && watching;
+    return s_records != NULL;
 }
 
-void tiles_capture_start(uint8_t pad) {
-    begin(pad, false);
+bool tiles_capture_start(uint8_t pad) {
+    return begin(pad, false);
 }
 
-void tiles_capture_watch(uint8_t pad) {
-    begin(pad, true);
+bool tiles_capture_watch(uint8_t pad) {
+    return begin(pad, true);
+}
+
+void tiles_capture_release(void) {
+    tiles_capture_stop();
+    s_total = 0u;
+    if (s_records != NULL) {
+        s_records = NULL;
+        tiles_fx_memory_return();
+    }
 }
 
 void tiles_capture_stop(void) {
@@ -53,7 +72,7 @@ uint32_t tiles_capture_total(void) {
 }
 
 const tiles_capture_record_t *tiles_capture_get(uint32_t seq) {
-    if (seq >= s_total || s_total - seq > TILES_CAPTURE_MAX) {
+    if (s_records == NULL || seq >= s_total || s_total - seq > TILES_CAPTURE_MAX) {
         return NULL;
     }
     return &s_records[seq % TILES_CAPTURE_MAX];

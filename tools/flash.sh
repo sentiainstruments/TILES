@@ -49,6 +49,18 @@ if [ -n "${TILES_SERIAL:-}" ]; then
         done
         exec picotool load --ser "$TILES_SERIAL" -x -v --ignore-partitions "$UF2"
     fi
+    # Not running (or not plugged in): never fall through to picotool -f,
+    # which would send whichever other TILES is running to BOOTSEL. Only
+    # wait for this one to arrive in BOOTSEL by hand.
+    for _ in $(seq 1 20); do
+        if picotool info --ser "$TILES_SERIAL" >/dev/null 2>&1; then
+            echo "Board $TILES_SERIAL is in BOOTSEL -- flashing it."
+            exec picotool load --ser "$TILES_SERIAL" -x -v --ignore-partitions "$UF2"
+        fi
+        sleep 0.5
+    done
+    echo "Board $TILES_SERIAL not found running or in BOOTSEL. Is it plugged in? (Other boards were left alone.)" >&2
+    exit 1
 fi
 
 for id in "${IDS[@]}"; do
@@ -57,6 +69,16 @@ for id in "${IDS[@]}"; do
     if picotool load -f --vid "$vid" --pid "$pid" ${SER_ARGS[@]+"${SER_ARGS[@]}"} -x -v --ignore-partitions "$UF2"; then
         exit 0
     fi
+done
+
+# picotool -f stops waiting after ~9 s; a board behind a hub can reach
+# BOOTSEL later than that.
+for _ in $(seq 1 40); do
+    if picotool info ${SER_ARGS[@]+"${SER_ARGS[@]}"} >/dev/null 2>&1; then
+        echo "Board reached BOOTSEL late -- flashing it."
+        exec picotool load ${SER_ARGS[@]+"${SER_ARGS[@]}"} -x -v --ignore-partitions "$UF2"
+    fi
+    sleep 0.5
 done
 
 echo "No running TILES board found. Is it plugged in (and not frozen)? As a last resort, hold BOOTSEL while plugging in and run this again." >&2
