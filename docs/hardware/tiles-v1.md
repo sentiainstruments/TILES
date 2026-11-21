@@ -2,18 +2,25 @@
 
 Internal name for production run 1, also called the First Edition. It is
 Rev A0 (`SENTIA_TILES_FIRMWARE_HANDOFF.md`, `sentia_tiles_board_map_v1.json`)
-with three changes; everything not listed here stays as on Rev A0.
+with these changes; everything not listed here stays as on Rev A0.
+Concept views: `mockups/`.
 
 1. **Stereo audio out:** a DAC, a headphone amplifier and one phones/line
-   jack on the back panel (`audio-output.md`).
-2. **Two rotary encoders** (maybe three). In standalone mode they will be
-   assignable to sound and effect parameters
-   (`../architecture/synth-engines.md`, "Next").
-3. **The six function buttons move to an I2C expander,** freeing their
+   jack in the right side, where the pedal jack was, with a push-to-pop
+   volume knob beside it (`audio-output.md`). The pedal moves to a 3.5 mm
+   jack on the back.
+2. **Two rotary encoders** (maybe three), both with a push. Encoder 1
+   takes the circle key's place on the top, its push is circle (shift);
+   encoder 2 is a ribbed thumb wheel in the left side that clicks (it
+   records in standalone mode, `../architecture/standalone-recorder.md`).
+   They also move sound and effect parameters
+   (`../architecture/synth-engines.md`, "Next"). No other keys are added.
+3. **The function buttons move to an I2C expander,** freeing their
    GPIOs for the encoders. Rev A0 has only three unused GPIOs (GP9, GP27,
    GP28) and the DAC needs all three.
 
-Status: decided 2026-11-11, not yet drawn. The board map JSON stays the
+Status: decided 2026-11-11 (audio, encoders, expander), 2026-11-17 (where
+the jacks and knobs go); not yet drawn. The board map JSON stays the
 Rev A0 truth until v1 has its own.
 
 ## GPIO changes
@@ -48,6 +55,8 @@ knob turns.
   (the TCA9554's internal ones are weak for switch lines).
 - One read per pass is a 1-byte I2C transfer, about 70 us at 400 kHz;
   buttons answer as fast as Rev A0's polled GPIOs.
+- Encoder 1 keeps a light beside it on the circle key's channel: shift
+  glows there while latched.
 - The buttons now share I2C1 with haptics and the LED mux. The bounded
   I2C layer and bus recovery cover them; the button LEDs stay on the
   PCA9685s.
@@ -60,10 +69,14 @@ knob turns.
   standalone mode. Relative steps, so a knob moved to another parameter
   never jumps the sound to where the knob happens to sit. Until then the
   firmware reports their counts and pushes (INFO, settings shell).
+- In standalone mode (`../architecture/standalone-recorder.md`): encoder
+  1 turns the tempo (a held step's pitch in a tape), its push is shift
+  and a double click the metronome; the wheel scrolls the Deck's rows and
+  a tape's pages, and its click records.
 - **If a third is added** (not decided): its A/B need two adjacent free
   GPIOs, and after the changes above only GP19 is free. GP18 + GP19 work
-  if the audio mute moves to a spare PCA9685 channel (`audio-output.md`
-  allows either) and headphone detect is dropped; its push needs a ninth
+  if the audio mute moves to a spare PCA9685 channel (6 and 10 on `0x40`
+  are free) and headphone detect is dropped; its push needs a ninth
   expander input (a 16-pin TCA9555 in place of the TCA9554, or an
   encoder without a push). Decide before the board is drawn.
 

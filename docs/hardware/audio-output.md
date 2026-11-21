@@ -29,7 +29,7 @@ headphones and mixers).
 |---|---|---|
 | **TI PCM5102A** | Stereo I2S DAC | 112 dB dynamic range, ground-centred 2.1 Vrms output (no coupling capacitors, no DC), internal PLL so it needs no master clock (3-wire I2S), single 3.3 V supply, configured by pins (no I2C). Widely used with the Pico. |
 | **TI TPA6132A2** | Stereo headphone amplifier | Ground-centred (DirectPath) output, built-in pop suppression, 25 mW into 16 Ohm, gain set by two pins, an enable pin. Drives headphones and line inputs from one jack. |
-| 3.5 mm TRS jack | PHONES / LINE (decided: one jack) | On the back panel with the others. A switched jack lets GP19 sense headphones. |
+| 3.5 mm TRS jack | PHONES / LINE (decided: one jack) | In the right side, where the pedal jack was, beside the volume knob (2026-11-17, `mockups/`). A switched jack lets GP19 sense headphones. |
 | Low-noise 3.3 V LDO | Analog supply for both | Keeps the LED and motor PWM off the audio rail. |
 
 About 23 placements: the three chips, the jack and about 19 small

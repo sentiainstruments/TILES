@@ -19,9 +19,10 @@ belonging to one module.
   the effects, measurements, and the clock plan.
 - [`sound-roadmap.md`](sound-roadmap.md): planning 96 presets in 4 pages
   and new engines for breakbeat, bubbly sounds and pads; the headroom.
-- [`standalone-recorder.md`](standalone-recorder.md): planning standalone
-  mode as a 5-track recorder (4 synth tracks + drums, clips, scenes,
-  song): research, budgets, open questions.
+- [`standalone-recorder.md`](standalone-recorder.md): the design of
+  standalone mode as a tape recorder: the Deck (4 synth tracks + drums),
+  tapes of 16-step pages, recording on the wheel, the shift latch, the
+  metronome.
 - [`content-packs.md`](content-packs.md): how sold packs reach a device --
   data content (scales, later layouts) pushed into the content store, code
   content (modes, games) unlocked per unit by signed entitlements -- and
