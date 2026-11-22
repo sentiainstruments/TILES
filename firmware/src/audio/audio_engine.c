@@ -3,6 +3,7 @@
 #include "audio_hot.h"
 #include "fx.h"
 #include "fx_memory.h"
+#include "grain_voice.h"
 #include "midi_channels.h"
 #include "sampler.h"
 #include "synth_voice.h"
@@ -47,6 +48,7 @@ typedef struct {
     union {
         synth_voice_t sv; /* SYNTH_ENGINE_WAVETABLE */
         tiles_fm_voice_t fm;
+        tiles_grain_voice_t gr;
     } u;
 } voice_t;
 
@@ -93,6 +95,29 @@ static tiles_fx_insert_t s_insert[TILES_AUDIO_TRACKS];
 static float s_track_l[TILES_AUDIO_TRACKS][BLOCK_FRAMES], s_track_r[TILES_AUDIO_TRACKS][BLOCK_FRAMES];
 static float s_fx_cost;
 
+/* The granular tape: a drum slot, mixed to mono, in the delay's line while
+ * a track's sound wants it (the delay rests meanwhile). The last such sound
+ * chosen picks the slot; tracks with tape sounds share it. */
+static struct {
+    int16_t *buf;    /* the delay's line, lent (NULL: not) */
+    uint32_t room;   /* its samples */
+    uint32_t fx_gen; /* the effects' memory it was lent from */
+    int32_t slot;    /* copied in (-1: none) */
+    uint32_t slot_gen;
+} s_tape;
+static uint8_t s_tape_tracks; /* a bit a track whose sound is a tape sound */
+static uint8_t s_tape_slot;   /* the slot the last one asked for */
+
+/* The tape's memory is going (lent to the pad capture, or cleared): its
+ * copy stops first, so no chunk lands in it after. */
+static void tape_drop(void) {
+    tiles_sampler_copy_stop();
+    s_tape.buf = NULL;
+    s_tape.slot = -1;
+    s_ctx.tape = NULL;
+    s_ctx.tape_frames = 0u;
+}
+
 /* The budget, in cycles per output sample. */
 static uint32_t (*s_now_us)(void);
 static float s_clk_mhz;
@@ -104,38 +129,67 @@ static uint32_t s_over_blocks;
 static float s_load; /* cycles a sample, fading voices left out, smoothed */
 static uint32_t s_shed;
 
-/* A voice of either engine. */
+/* A voice of any engine. */
+static inline uint8_t engine_of(const voice_t *v) {
+    return v->patch != NULL ? v->patch->engine : SYNTH_ENGINE_WAVETABLE;
+}
+
 static inline bool is_fm(const voice_t *v) {
-    return v->patch != NULL && v->patch->engine == SYNTH_ENGINE_FM;
+    return engine_of(v) == SYNTH_ENGINE_FM;
 }
 
 static void voice_release(voice_t *v) {
-    if (is_fm(v)) {
+    switch (engine_of(v)) {
+    case SYNTH_ENGINE_FM:
         tiles_fm_voice_release(&v->u.fm);
-    } else {
+        break;
+    case SYNTH_ENGINE_GRAIN:
+        tiles_grain_voice_release(&v->u.gr);
+        break;
+    default:
         synth_voice_release(&v->u.sv);
+        break;
     }
 }
 
 static void voice_kill(voice_t *v) {
-    if (is_fm(v)) {
+    switch (engine_of(v)) {
+    case SYNTH_ENGINE_FM:
         tiles_fm_voice_kill(&v->u.fm);
-    } else {
+        break;
+    case SYNTH_ENGINE_GRAIN:
+        tiles_grain_voice_kill(&v->u.gr);
+        break;
+    default:
         synth_voice_kill(&v->u.sv);
+        break;
     }
 }
 
-/* 0..~1 in both engines (an FM carrier's gain goes to 2). */
+/* 0..~1 in every engine (an FM carrier's gain goes to 2). */
 static float voice_level(const voice_t *v) {
-    return is_fm(v) ? 0.5f * tiles_fm_voice_level(&v->u.fm) : synth_voice_level(&v->u.sv);
+    switch (engine_of(v)) {
+    case SYNTH_ENGINE_FM:
+        return 0.5f * tiles_fm_voice_level(&v->u.fm);
+    case SYNTH_ENGINE_GRAIN:
+        return tiles_grain_voice_level(&v->u.gr);
+    default:
+        return synth_voice_level(&v->u.sv);
+    }
 }
 
 /* Silent now: its slot is taken. */
 static void voice_cut(voice_t *v) {
-    if (is_fm(v)) {
+    switch (engine_of(v)) {
+    case SYNTH_ENGINE_FM:
         v->u.fm.sounding = false;
-    } else {
+        break;
+    case SYNTH_ENGINE_GRAIN:
+        v->u.gr.amp.stage = SYNTH_ENV_IDLE;
+        break;
+    default:
         v->u.sv.amp.stage = SYNTH_ENV_IDLE;
+        break;
     }
 }
 
@@ -170,6 +224,10 @@ TILES_AUDIO_COLD static float patch_cost(const synth_patch_t *p) {
             ops += p->fm->dx7[k * TILES_DX7_OP_BYTES + 16u] > 0u ? 1u : 0u;
         }
         return 30.0f + 22.0f * (float)ops;
+    }
+    if (p->engine == SYNTH_ENGINE_GRAIN) {
+        /* First guess: each grain ~20 a sample, the stereo filter ~45. */
+        return p->grain != NULL ? 60.0f + 20.0f * tiles_grain_overlap(p->grain) + 45.0f : 100.0f;
     }
     float copies = (float)(p->unison < 1u ? 1u : p->unison);
     bool stereo = p->unison > 1u && p->width > 0.0f;
@@ -219,6 +277,10 @@ TILES_AUDIO_COLD void tiles_audio_engine_init(uint8_t bend_range_semitones, uint
     s_over_blocks = 0;
     s_load = 0.0f;
     s_shed = 0;
+    memset(&s_tape, 0, sizeof(s_tape));
+    tape_drop();
+    s_tape_tracks = 0u;
+    tiles_fx_memory_set_lend_hook(tape_drop);
 }
 
 TILES_AUDIO_COLD void tiles_audio_engine_set_track_cost(uint8_t track, uint32_t cycles) {
@@ -247,6 +309,11 @@ TILES_AUDIO_COLD static void assign_sound(uint8_t track, const synth_patch_t *p,
     s_mono_count[track] = 0u;
     s_cost[track] = patch_cost(p);
     s_track_fx[track] = p->fx;
+    bool tape = p->engine == SYNTH_ENGINE_GRAIN && p->grain != NULL && p->grain->source == TILES_GRAIN_SRC_TAPE;
+    s_tape_tracks = (uint8_t)(tape ? s_tape_tracks | (1u << track) : s_tape_tracks & ~(1u << track));
+    if (tape) {
+        s_tape_slot = p->grain->slot;
+    }
 }
 
 TILES_AUDIO_COLD void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch) {
@@ -411,6 +478,8 @@ TILES_AUDIO_COLD uint32_t tiles_audio_engine_bench(uint8_t patch, uint32_t frame
     tiles_fm_input_t fin = fm_input(&in);
     if (is_fm(&v)) {
         tiles_fm_voice_start(&v.u.fm, p->fm, &fin, 0.0f, false);
+    } else if (p->engine == SYNTH_ENGINE_GRAIN) {
+        tiles_grain_voice_start(&v.u.gr, p, &in, 12345u, false, false);
     } else {
         synth_voice_start(&v.u.sv, p, &in, 12345u, false);
     }
@@ -423,6 +492,8 @@ TILES_AUDIO_COLD uint32_t tiles_audio_engine_bench(uint8_t patch, uint32_t frame
         uint32_t t0 = cycles();
         if (is_fm(&v)) {
             tiles_fm_voice_render(&v.u.fm, &fin, fm_gain(&v, &in), l, r, BLOCK_FRAMES);
+        } else if (p->engine == SYNTH_ENGINE_GRAIN) {
+            tiles_grain_voice_render(&v.u.gr, p, &s_ctx, &in, l, r, BLOCK_FRAMES);
         } else {
             synth_voice_render(&v.u.sv, &s_ctx, &in, l, r, BLOCK_FRAMES);
         }
@@ -617,14 +688,18 @@ static void start_voice(voice_t *v, uint8_t channel, uint8_t note, uint8_t veloc
     v->age = ++s_age;
     synth_input_t in = voice_input(v);
     const synth_patch_t *patch = s_track_sound[track];
+    bool same_sound = v->patch == patch;
     if (v->patch == NULL || v->patch->engine != patch->engine) {
-        memset(&v->u, 0, sizeof(v->u)); /* the slot last played the other engine */
+        memset(&v->u, 0, sizeof(v->u)); /* the slot last played another engine */
     }
     v->patch = patch;
     if (patch->engine == SYNTH_ENGINE_FM) {
         tiles_fm_input_t fin = fm_input(&in);
         bool glide = legato || patch->voice_mode == SYNTH_MONO; /* as the wavetable voice */
         tiles_fm_voice_start(&v->u.fm, patch->fm, &fin, glide ? patch->glide_ms : 0.0f, legato);
+    } else if (patch->engine == SYNTH_ENGINE_GRAIN) {
+        bool sounding = same_sound && tiles_grain_voice_active(&v->u.gr);
+        tiles_grain_voice_start(&v->u.gr, patch, &in, s_age * 2654435761u, sounding, legato);
     } else {
         synth_voice_start(&v->u.sv, patch, &in, s_age * 2654435761u, legato);
     }
@@ -772,6 +847,13 @@ void tiles_audio_engine_midi(uint8_t status, uint8_t data1, uint8_t data2) {
 
 static void TILES_AUDIO_HOT(render_voice)(voice_t *v, float *l, float *r, uint32_t n) {
     synth_input_t in = voice_input(v);
+    if (engine_of(v) == SYNTH_ENGINE_GRAIN) {
+        tiles_grain_voice_render(&v->u.gr, v->patch, &s_ctx, &in, l, r, n);
+        if (!tiles_grain_voice_active(&v->u.gr)) {
+            v->state = VOICE_OFF;
+        }
+        return;
+    }
     if (is_fm(v)) {
         tiles_fm_input_t fin = fm_input(&in);
         tiles_fm_voice_render(&v->u.fm, &fin, fm_gain(v, &in), l, r, n);
@@ -908,7 +990,44 @@ static void TILES_AUDIO_HOT(render_block)(int32_t *out_lr, uint32_t n) {
     }
 }
 
+/* Lends the delay's line to the tape while a track wants it, keeps the
+ * wanted slot copied in (again after a reload, or the effects' memory
+ * coming back from the pad capture), and gives it back after. */
+static void tape_service(void) {
+    if (s_tape.buf != NULL && (tiles_fx_memory_lent() || tiles_fx_generation() != s_tape.fx_gen)) {
+        tape_drop(); /* the memory went: nothing to give back */
+    }
+    if (s_tape_tracks == 0u) {
+        if (s_tape.buf != NULL) {
+            tape_drop();
+            tiles_fx_delay_return();
+        }
+    } else if (s_tape.buf == NULL && !tiles_fx_memory_lent()) {
+        s_tape.buf = tiles_fx_delay_lend(&s_tape.room);
+        s_tape.fx_gen = tiles_fx_generation();
+        s_tape.slot = -1;
+    }
+    if (s_tape.buf != NULL) {
+        int32_t slot = tiles_sampler_loaded_slot(s_tape_slot);
+        if (slot < 0) {
+            tiles_sampler_copy_stop();
+            s_tape.slot = -1;
+        } else if (slot != s_tape.slot || tiles_sampler_slot_gen((uint8_t)slot) != s_tape.slot_gen) {
+            s_tape.slot = slot;
+            s_tape.slot_gen = tiles_sampler_slot_gen((uint8_t)slot);
+            tiles_sampler_copy_start((uint8_t)slot, s_tape.buf, s_tape.room);
+        }
+    }
+    s_ctx.tape = s_tape.buf;
+    s_ctx.tape_frames = s_tape.buf != NULL ? tiles_sampler_copy_frames() : 0u;
+}
+
+uint32_t tiles_audio_engine_tape_frames(void) {
+    return s_ctx.tape_frames;
+}
+
 void tiles_audio_engine_render(int32_t *out_lr, uint32_t frames) {
+    tape_service();
     while (frames > 0u) {
         uint32_t n = frames < BLOCK_FRAMES ? frames : BLOCK_FRAMES;
         render_block(out_lr, n);

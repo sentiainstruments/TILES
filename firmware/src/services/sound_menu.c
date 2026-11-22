@@ -30,8 +30,8 @@
 static const char *const k_rows[ROWS][COLS] = {
     {"acid", "reese", "wobble", "sub", "solid"},
     {"pluck", "lead", "stab", "hoover", "tine"},
-    {"haze", "air", "choir"},
-    {"glass", "pure", "chime"},
+    {"haze", "air", "choir", "cloud", "dust", "scatter"},
+    {"glass", "pure", "chime", "shimmer"},
 };
 static const float k_row_rgb[ROWS][3] = {
     {1.0f, 0.0f, 0.3f},   /* basses */

@@ -43,15 +43,46 @@ static uint32_t s_underruns;
 
 static struct {
     bool active;
+    bool copy; /* the tape's chunk, not a voice's */
     uint8_t voice;
     uint32_t serial;
     uint32_t bytes;
 } s_inflight;
 
+/* The granular tape's copy: `fetched` source bytes have landed and been
+ * mixed down into `frames` mono samples at dst. */
+static struct {
+    bool active;
+    uint8_t slot;
+    uint8_t channels;
+    uint32_t gen;
+    uint32_t serial;
+    uint32_t flash_offset;
+    uint32_t bytes; /* source bytes to copy */
+    uint32_t fetched;
+    uint32_t frames;
+    int16_t *dst;
+} s_copy;
+
+/* A stereo chunk lands at dst + frames as it is in flash, then folds down
+ * in place: each mono sample is written at or before the pair it reads. */
+static void copy_mix(uint32_t src_bytes) {
+    int16_t *d = s_copy.dst + s_copy.frames;
+    uint32_t n = src_bytes / (2u * s_copy.channels);
+    if (s_copy.channels == 2u) {
+        for (uint32_t i = 0; i < n; i++) {
+            d[i] = (int16_t)(((int32_t)d[2u * i] + (int32_t)d[2u * i + 1u]) / 2);
+        }
+    }
+    s_copy.frames += n;
+    s_copy.fetched += src_bytes;
+}
+
 void tiles_sampler_init(const tiles_sampler_fetch_t *fetch) {
     memset(s_slot, 0, sizeof(s_slot));
     memset(s_voice, 0, sizeof(s_voice));
     memset(&s_inflight, 0, sizeof(s_inflight));
+    memset(&s_copy, 0, sizeof(s_copy));
     s_fetch = fetch;
     s_age = 0;
     s_underruns = 0;
@@ -82,7 +113,7 @@ void tiles_sampler_slot_set(uint8_t slot, uint8_t channels, uint32_t frames, uin
 }
 
 /* Lands the chunk in flight, then starts one for the voice with the least
- * audio waiting that has room for a chunk. */
+ * audio waiting that has room for a chunk; with none, one of the tape's. */
 static void TILES_AUDIO_HOT(service_fetch)(void) {
     if (s_fetch == NULL) {
         return;
@@ -91,9 +122,15 @@ static void TILES_AUDIO_HOT(service_fetch)(void) {
         if (s_fetch->busy()) {
             return;
         }
-        voice_t *v = &s_voice[s_inflight.voice];
-        if (v->active && v->serial == s_inflight.serial) {
-            v->fetched += s_inflight.bytes;
+        if (s_inflight.copy) {
+            if (s_copy.active && s_copy.serial == s_inflight.serial) {
+                copy_mix(s_inflight.bytes);
+            }
+        } else {
+            voice_t *v = &s_voice[s_inflight.voice];
+            if (v->active && v->serial == s_inflight.serial) {
+                v->fetched += s_inflight.bytes;
+            }
         }
         s_inflight.active = false;
     }
@@ -111,6 +148,17 @@ static void TILES_AUDIO_HOT(service_fetch)(void) {
         }
     }
     if (best == NULL) {
+        if (s_copy.active && s_copy.fetched < s_copy.bytes) {
+            uint32_t bytes = s_copy.bytes - s_copy.fetched;
+            bytes = bytes < TILES_SAMPLER_CHUNK_BYTES ? bytes : TILES_SAMPLER_CHUNK_BYTES;
+            if (s_fetch->start(s_copy.flash_offset + s_copy.fetched, (uint32_t *)(void *)(s_copy.dst + s_copy.frames),
+                               bytes / 4u)) {
+                s_inflight.active = true;
+                s_inflight.copy = true;
+                s_inflight.serial = s_copy.serial;
+                s_inflight.bytes = bytes;
+            }
+        }
         return;
     }
     uint32_t bytes = best->bytes - best->fetched;
@@ -118,6 +166,7 @@ static void TILES_AUDIO_HOT(service_fetch)(void) {
     uint32_t *dst = &best->ring[(best->fetched % TILES_SAMPLER_RING_BYTES) / 4u];
     if (s_fetch->start(best->flash_offset + best->fetched, dst, bytes / 4u)) {
         s_inflight.active = true;
+        s_inflight.copy = false;
         s_inflight.voice = (uint8_t)(best - s_voice);
         s_inflight.serial = best->serial;
         s_inflight.bytes = bytes;
@@ -149,7 +198,7 @@ void tiles_sampler_hit(uint8_t slot, uint8_t velocity) {
         v = free_voice != NULL ? free_voice : oldest;
     }
     /* A chunk still landing in this voice's ring would overwrite the head. */
-    if (s_inflight.active && &s_voice[s_inflight.voice] == v) {
+    if (s_inflight.active && !s_inflight.copy && &s_voice[s_inflight.voice] == v) {
         while (s_fetch->busy()) {
         }
         s_inflight.active = false;
@@ -228,4 +277,71 @@ uint8_t tiles_sampler_voices(void) {
 
 uint32_t tiles_sampler_underruns(void) {
     return s_underruns;
+}
+
+void tiles_sampler_copy_stop(void) {
+    /* A chunk still landing would write into memory given back. */
+    if (s_inflight.active && s_inflight.copy) {
+        while (s_fetch != NULL && s_fetch->busy()) {
+        }
+        s_inflight.active = false;
+    }
+    s_copy.active = false;
+    s_copy.frames = 0u;
+}
+
+void tiles_sampler_copy_start(uint8_t slot, int16_t *dst, uint32_t room) {
+    tiles_sampler_copy_stop();
+    if (slot >= TILES_SAMPLE_SLOT_COUNT || dst == NULL) {
+        return;
+    }
+    slot_t *s = &s_slot[slot];
+    if (!__atomic_load_n(&s->ready, __ATOMIC_ACQUIRE)) {
+        return;
+    }
+    uint32_t channels = s->channels;
+    uint32_t frames = s->bytes / (2u * channels);
+    /* Stereo lands whole before it folds down: a chunk's spare room. */
+    uint32_t cap = channels == 2u ? room - TILES_SAMPLER_CHUNK_BYTES / 2u : room;
+    frames = (frames < cap ? frames : cap) & ~1u; /* whole words a chunk */
+    s_copy.slot = slot;
+    s_copy.channels = (uint8_t)channels;
+    s_copy.gen = __atomic_load_n(&s->gen, __ATOMIC_ACQUIRE);
+    s_copy.serial++;
+    s_copy.flash_offset = s->flash_offset;
+    s_copy.bytes = frames * 2u * channels;
+    s_copy.dst = dst;
+    s_copy.frames = 0u;
+    s_copy.fetched = 0u;
+    uint32_t head = s_copy.bytes < TILES_SAMPLER_HEAD_BYTES ? s_copy.bytes : TILES_SAMPLER_HEAD_BYTES;
+    memcpy(dst, s_head[slot], head);
+    copy_mix(head);
+    s_copy.active = true;
+}
+
+uint32_t tiles_sampler_copy_frames(void) {
+    if (!s_copy.active) {
+        return 0u;
+    }
+    slot_t *s = &s_slot[s_copy.slot];
+    if (!__atomic_load_n(&s->ready, __ATOMIC_ACQUIRE) || __atomic_load_n(&s->gen, __ATOMIC_ACQUIRE) != s_copy.gen) {
+        return 0u;
+    }
+    return s_copy.frames;
+}
+
+int32_t tiles_sampler_loaded_slot(uint8_t slot) {
+    if (slot < TILES_SAMPLE_SLOT_COUNT && __atomic_load_n(&s_slot[slot].ready, __ATOMIC_ACQUIRE)) {
+        return slot;
+    }
+    for (int32_t i = (int32_t)TILES_SAMPLE_SLOT_COUNT - 1; i >= 0; i--) {
+        if (__atomic_load_n(&s_slot[i].ready, __ATOMIC_ACQUIRE)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+uint32_t tiles_sampler_slot_gen(uint8_t slot) {
+    return slot < TILES_SAMPLE_SLOT_COUNT ? __atomic_load_n(&s_slot[slot].gen, __ATOMIC_ACQUIRE) : 0u;
 }

@@ -19,7 +19,9 @@
 
 enum { SYNTH_FILTER_LP12 = 0, SYNTH_FILTER_BP12, SYNTH_FILTER_HP12, SYNTH_FILTER_LADDER24 };
 enum { SYNTH_POLY = 0, SYNTH_MONO, SYNTH_LEGATO };
-enum { SYNTH_ENGINE_WAVETABLE = 0, SYNTH_ENGINE_FM };
+enum { SYNTH_ENGINE_WAVETABLE = 0, SYNTH_ENGINE_FM, SYNTH_ENGINE_GRAIN };
+
+struct tiles_grain_params; /* grain_voice.h */
 
 /* LFO rate: free in Hz, or synced to the tempo as beats per cycle. */
 typedef struct {
@@ -31,11 +33,14 @@ typedef struct {
 } synth_lfo_cfg_t;
 
 /* A sound. An FM one (engine SYNTH_ENGINE_FM) plays its DX7 voice and
- * uses only voice_mode, glide, the levels and fx from here. */
+ * uses only voice_mode, glide, the levels and fx from here; a granular one
+ * (SYNTH_ENGINE_GRAIN) adds its grain settings and reads `wave` as the
+ * grains' place (grain_voice.h). */
 typedef struct {
     const char *name;
     uint8_t engine;
     const tiles_fm_patch_t *fm;
+    const struct tiles_grain_params *grain;
     uint8_t bank;
     /* Wavetable position 0..1 and what moves it (in table widths). */
     float wave, wave_pressure, wave_slide, wave_env, wave_lfo;
@@ -107,6 +112,8 @@ typedef struct {
 typedef struct {
     const tiles_wt_bank_t *banks[TILES_WT_BANK_COUNT];
     float beats_per_second;
+    const int16_t *tape;  /* the granular tape (NULL: none), full scale 32768 */
+    uint32_t tape_frames; /* of it loaded so far */
 } synth_context_t;
 
 void synth_voice_start(synth_voice_t *v, const synth_patch_t *patch, const synth_input_t *in, uint32_t seed,

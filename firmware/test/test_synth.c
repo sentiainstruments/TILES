@@ -3,6 +3,7 @@
  * through the engine (audio/synth_voice.c, wavetable.c, audio_engine.c). */
 
 #include "audio_engine.h"
+#include "grain_voice.h"
 #include "synth_voice.h"
 #include "wavetable.h"
 
@@ -258,6 +259,10 @@ static double brightness(uint32_t frames) {
 
 static void test_patches(void) {
     for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
+        if (g_synth_patches[p].engine == SYNTH_ENGINE_GRAIN && g_synth_patches[p].grain != NULL &&
+            ((const tiles_grain_params_t *)g_synth_patches[p].grain)->source == TILES_GRAIN_SRC_TAPE) {
+            continue; /* plays a drum slot: test_grain.c loads one */
+        }
         tiles_audio_engine_init(48u, 150u, NULL);
         tiles_audio_engine_set_patch(1u, p);
         /* A chord on three MPE channels (track 2), pressure and slide rising. */

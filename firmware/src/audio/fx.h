@@ -48,6 +48,17 @@ const tiles_fx_bus_t *tiles_fx_bus(void);
  * touch no memory. */
 void tiles_fx_set_bypass(bool bypass);
 
+/* Counts tiles_fx_init(): a change means the memory was cleared (a lend to
+ * the pad capture came back), so anything borrowed from it is gone. */
+uint32_t tiles_fx_generation(void);
+
+/* The granular tape (audio_engine.c) borrows the delay's line, `samples`
+ * int16 long; the delay rests meanwhile. NULL while bypassed. Returning it
+ * clears the line before the delay runs again. */
+int16_t *tiles_fx_delay_lend(uint32_t *samples);
+void tiles_fx_delay_return(void);
+bool tiles_fx_delay_lent(void);
+
 /* A track's insert state. */
 typedef struct {
     float x_prev[2], f_prev[2]; /* the overdrive's last input and antiderivative */

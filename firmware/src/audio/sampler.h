@@ -43,5 +43,18 @@ void tiles_sampler_hit(uint8_t slot, uint8_t velocity);
 void tiles_sampler_render(float *l, float *r, uint32_t n);
 
 uint8_t tiles_sampler_voices(void);
+
+/* Core 1, the granular tape: copies a slot's audio, mixed to mono, into
+ * dst (room for `room` samples, at least TILES_SAMPLER_CHUNK_BYTES / 2 of
+ * them spare for a stereo slot), the head at once and the rest a chunk at
+ * a time when no voice needs one. A new copy replaces the last. */
+void tiles_sampler_copy_start(uint8_t slot, int16_t *dst, uint32_t room);
+void tiles_sampler_copy_stop(void);
+/* Samples copied so far (0: none, or the slot changed under it). */
+uint32_t tiles_sampler_copy_frames(void);
+/* `slot` if it holds audio, else the last slot that does; -1: none. */
+int32_t tiles_sampler_loaded_slot(uint8_t slot);
+/* Changes with every change of a slot's contents. */
+uint32_t tiles_sampler_slot_gen(uint8_t slot);
 /* Blocks where a voice ran out of streamed data (it waits, then goes on). */
 uint32_t tiles_sampler_underruns(void);

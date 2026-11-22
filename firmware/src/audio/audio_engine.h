@@ -1,9 +1,9 @@
 #pragma once
 
-/* The sound TILES makes itself: the wavetable engine (synth_voice.h)
- * playing the MIDI TILES sends, on four tracks plus drums, a sound
- * (patch) per track (docs/architecture/audio-engine.md, "Tracks";
- * synth-engines.md). Plain C with no Pico dependencies, so
+/* The sound TILES makes itself: the wavetable, FM and granular engines
+ * (synth_voice.h, fm_voice.h, grain_voice.h) playing the MIDI TILES
+ * sends, on four tracks plus drums, a sound (patch) per track
+ * (docs/architecture/audio-engine.md, "Tracks"; synth-engines.md). Plain C with no Pico dependencies, so
  * test/test_audio_engine.c runs it on the computer. Runs on core 1
  * (audio/usb_audio.c). */
 
@@ -42,6 +42,10 @@ void tiles_audio_engine_midi(uint8_t status, uint8_t data1, uint8_t data2);
  * audio in the top 24 bits of each int32 (USB audio's 4-byte subslot
  * layout). */
 void tiles_audio_engine_render(int32_t *out_lr, uint32_t frames);
+
+/* The granular tape's samples loaded (0: no tape sound, or its slot is
+ * empty). */
+uint32_t tiles_audio_engine_tape_frames(void);
 
 /* Voices still sounding (releases included). */
 uint8_t tiles_audio_engine_active_voices(void);

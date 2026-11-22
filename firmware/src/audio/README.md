@@ -3,9 +3,9 @@
 TILES's own sound, streamed to the computer over the same USB-C cable as
 MIDI: a stereo 48 kHz / 24-bit USB audio input (UAC2, class compliant on
 macOS, Windows 10+, Linux and iPadOS) that a DAW records like any
-interface input. A sound is the **wavetable engine** or the **FM
-engine** (13 + 3 factory sounds, a sound per track); how they are built
-and what they measure:
+interface input. A sound is the **wavetable**, **FM** or **granular
+engine** (13 + 3 + 4 factory sounds, a sound per track); how they are
+built and what they measure:
 `../../../docs/architecture/synth-engines.md`.
 
 | File | What it is |
@@ -14,12 +14,13 @@ and what they measure:
 | `synth_voice.c/.h`, `synth_patches.c` | The wavetable voice (up to 3 unison copies, drive/fold, SVF or ladder, two envelopes, LFO, glide) and the factory sounds. Tested on the computer (`test/test_synth.c`). |
 | `fm_bank.c/.h` | The DX7 bank in flash: a 32-voice sysex streamed in by `SYNTH BANK PUT`, checked (header, DX7 checksum, CRC-32), voices first and the header last; names and unpacked voices for `SYNTH BANK` / `SYNTH VOICE`. Core 0; tested on the computer (`test/test_fm_bank.c`). |
 | `fm_voice.c/.h`, `fm_patches.c` | The FM voice: six operators playing DX7 voice data (32 algorithms, envelopes, scaling, LFO, pitch envelope), pressure and slide brightening the modulators; DX7 bank and voice unpacking; the factory FM voices. Tested on the computer (`test/test_fm.c`). |
+| `grain_voice.c/.h`, `grain_patches.c` | The granular voice: up to 8 grains a note from a wavetable bank (a frame a grain, band-limited) or the tape (a drum slot in the delay's line, `audio_engine.c`), each its own pitch, place and side; pressure and slide move size, density, spray and place; the factory sounds' grain settings. Tested on the computer (`test/test_grain.c`). |
 | `synth_dsp.h` | The building blocks: filters, envelope, LFO, shapers, fast maths. |
-| `fx.c/.h` | The effects (`../../../docs/architecture/synth-engines.md`, "Effects"): per track overdrive (anti-aliased), bit-crush and the sidechain pump; shared plate reverb, ping-pong delay and ensemble fed by sends. Plain C, tested on the computer (`test/test_fx.c`). |
+| `fx.c/.h` | The effects (`../../../docs/architecture/synth-engines.md`, "Effects"): per track overdrive (anti-aliased), bit-crush and the sidechain pump; shared plate reverb, ping-pong delay and ensemble fed by sends. The delay lends its line to the granular tape and rests meanwhile. Plain C, tested on the computer (`test/test_fx.c`). |
 | `fx_memory.c/.h` | The effects' 182 KB, also the boot-time wavetable build's working space and lent to the pad capture (`diagnostics/capture.c`): core 1 lets go between two blocks and the effects go quiet until `CAPTURE RELEASE`. |
 | `wavetable.c/.h`, `wavetable_banks.c` | Band-limited (mip-mapped) wavetables built at boot from spectra; the three factory banks. |
 | `audio_hot.h` | `TILES_AUDIO_HOT()`: audio code in RAM on the board (and `TILES_AUDIO_COLD`: rare code of a RAM-placed file left in flash). Everything core 1 touches per block is in RAM, data too (patches are not `const`): a flash read from core 1 stalls behind core 0's code fetches, which doubled the voices' cost. |
-| `sampler.c/.h` | The drum sampler's 5 voices on core 1: a slot's first 1 KB waits in RAM so a hit starts at once, the rest streams into a 2 KB ring per voice; a pad's new hit restarts its own voice, a sixth takes the oldest. Plain C, tested on the computer (`test/test_sampler.c`). |
+| `sampler.c/.h` | The drum sampler's 5 voices on core 1: a slot's first 1 KB waits in RAM so a hit starts at once, the rest streams into a 2 KB ring per voice; a pad's new hit restarts its own voice, a sixth takes the oldest. When no voice needs a chunk, it copies a slot (mixed to mono) into the granular tape. Plain C, tested on the computer (`test/test_sampler.c`, `test/test_grain.c`). |
 | `sample_slot.c/.h` | One slot's format in flash: a 256-byte header (written last), then 16-bit 48 kHz audio, mono up to 2 s or stereo up to 1 s. |
 | `sample_store.c/.h` | Loading (page by page, each sector erased as the data reaches it, CRC checked against flash before the header goes on), deleting and finding the 8 slots. Plain C over flash ops, power-cut tested on the computer. |
 | `sample_stream.c/.h` | The board side: the slots' flash ops, and streaming by DMA from the XIP stream FIFO (flash idle cycles, no cache pollution), stopped around every flash write. |

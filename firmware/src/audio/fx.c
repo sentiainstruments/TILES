@@ -156,6 +156,8 @@ static delay_t s_dl;
 static chorus_t s_ch;
 static bool s_bypass = true;
 static bool s_ready;
+static bool s_delay_lent; /* the granular tape has the delay's line */
+static uint32_t s_generation;
 
 /* The pump: seconds since the last duck. */
 static float s_pump_t = 100.0f;
@@ -205,6 +207,8 @@ TILES_AUDIO_COLD void tiles_fx_init(void *memory) {
     apply_bus();
     s_dl.time = -1.0f; /* takes the tempo's at once */
     s_bypass = false;
+    s_delay_lent = false;
+    s_generation++;
 }
 
 _Static_assert((REVERB_TANK + REVERB_FRONT + DELAY_RING) * 2u + CHORUS_LEN * 4u <= TILES_FX_MEMORY_BYTES, "fx memory");
@@ -230,6 +234,36 @@ const tiles_fx_bus_t *tiles_fx_bus(void) {
 
 void tiles_fx_set_bypass(bool bypass) {
     s_bypass = bypass;
+}
+
+uint32_t tiles_fx_generation(void) {
+    return s_generation;
+}
+
+TILES_AUDIO_COLD int16_t *tiles_fx_delay_lend(uint32_t *samples) {
+    if (s_bypass || s_dl.ring.buf == NULL) {
+        return NULL;
+    }
+    s_delay_lent = true;
+    *samples = s_dl.ring.size;
+    return s_dl.ring.buf;
+}
+
+TILES_AUDIO_COLD void tiles_fx_delay_return(void) {
+    if (!s_delay_lent || s_bypass) {
+        return;
+    }
+    int16_t *buf = s_dl.ring.buf;
+    uint32_t size = s_dl.ring.size;
+    memset(buf, 0, size * sizeof(int16_t));
+    memset(&s_dl, 0, sizeof(s_dl));
+    s_dl.ring = (ring_t){buf, size, 0u};
+    s_dl.time = -1.0f;
+    s_delay_lent = false;
+}
+
+bool tiles_fx_delay_lent(void) {
+    return s_delay_lent;
 }
 
 /* ---- The pump ---------------------------------------------------------- */
@@ -446,7 +480,7 @@ static float delay_target(float beats_per_second) {
 
 static void delay_run(const float *in, float *l, float *r, float *to_reverb, uint32_t n, float beats_per_second) {
     delay_t *d = &s_dl;
-    if (!awake(&d->quiet, in, n)) {
+    if (s_delay_lent || !awake(&d->quiet, in, n)) {
         return;
     }
     float target = delay_target(beats_per_second);

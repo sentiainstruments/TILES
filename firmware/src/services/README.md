@@ -181,8 +181,11 @@ lane colour. No DAW transport here.
 
 - **Sounds:** a family a row, top to bottom: basses (acid, reese, wobble,
   sub, solid), plucks and leads (pluck, lead, stab, hoover, tine), pads
-  (haze, air, choir), bells (glass, pure, chime); solid, tine and chime
-  are FM. The track's sound bright, the rest dim; a
+  (haze, air, choir, cloud, dust, scatter), bells (glass, pure, chime,
+  shimmer); solid, tine and chime are FM, cloud, dust, scatter and
+  shimmer granular (scatter plays drum slot 8, or the last slot loaded;
+  the delay rests while it is chosen). The track's sound bright, the rest
+  dim; a
   press past half travel picks and plays a short preview on the track. A
   new sound brings its own effect amounts.
 - **Effects:** a column each: reverb, delay, chorus, drive, crush, pump.

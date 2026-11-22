@@ -101,7 +101,8 @@ What raises it, roughly a voice per ~105-215 cycles freed:
 ## Engines
 
 The engines, their sound direction and techniques, and what they measure:
-`synth-engines.md`. The wavetable engine is built (2026-11-14). The web
+`synth-engines.md`. The wavetable engine is built (2026-11-14), FM
+(2026-11-16) and granular (2026-11-21). The web
 player's sampled grand piano (hundreds of MB) doesn't fit; a modelled or
 FM piano takes its place. Sound names stay Sentia's own (no instrument or
 product names).

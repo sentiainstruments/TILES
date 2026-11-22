@@ -29,3 +29,7 @@ bool tiles_fx_memory_lent(void);
 
 /* Core 1, every pass: lets go of the area, or takes it back cleared. */
 void tiles_fx_memory_service(void);
+
+/* Core 1, just before the area is lent: whatever still writes into it
+ * stops (the granular tape's copy, audio_engine.c). */
+void tiles_fx_memory_set_lend_hook(void (*hook)(void));

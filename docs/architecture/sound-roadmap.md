@@ -9,7 +9,7 @@ long swelling pads**. Nothing here is decided yet.
 | | Now | What it means |
 |---|---|---|
 | CPU (core 1) | 4,800 cycles a sample; the voices get 2,880 (85 % less 1,200 for the effects and 5 drum voices) | Plenty. At the budget: wobble 8 voices, reese 10, pluck 13, tine 18, glass 26 (the engine caps a track at 8 and all at 20). |
-| RAM | **14 KB free** of 512 KB | The constraint. Taken: the effects 178 KB, three wavetable banks 114 KB, code run from RAM ~77 KB, the sampler's heads and rings ~18 KB, Song's library ~12 KB, the FM sine 8 KB, voices ~7 KB. |
+| RAM | **14 KB free** of 512 KB (~6 KB since granular, 2026-11-21) | The constraint. Taken: the effects 178 KB, three wavetable banks 114 KB, code run from RAM ~77 KB (~85 KB with granular), the sampler's heads and rings ~18 KB, Song's library ~12 KB, the FM sine 8 KB, voices ~7 KB. |
 | Flash | 1.85 MB free in the image area (the image is 405 KB of 2.25 MB); the 8 drum slots 1.5 MB; the saved band 256 KB (~76 KB used) | Room for presets, more DX7 banks, longer samples. |
 
 So engines that only compute (modal, superwave, formant, harmonic,
@@ -99,7 +99,7 @@ estimates per voice at 48 kHz, to be benched.
 | **Plucked string** (a delay line, damping, dispersion) | bubbly plucks, harps, arps | pressure: brightness and sustain; slide: pluck position | ~50 | a line a voice, 1-2 KB (a pool) | 2 |
 | **Drops** (a sine or high-Q filter pinged, a fast falling pitch, a breath of noise) | bubbles, blips, water drops | pressure: pitch drop depth; slide: resonance | ~40 | none | 2 (first as wavetable patches) |
 | **Formant** (a pulse through 3-5 formant filters, vowels morphing) | choirs, "aah" pads | slide: the vowel; pressure opens | ~120 | none | 2 |
-| **Granular cloud** (grains from a drum slot or a wavetable, in a window borrowed from the effects' memory: the delay's 96 KB ring is 1 s stereo / 2 s mono) | huge evolving pads, textures | density, size, spray, pitch scatter | ~300 (16 grains), a cloud a track | the delay's ring, while a granular sound plays (the delay then rests) | 1 |
+| **Granular cloud** (built 2026-11-21, `synth-engines.md`: grains from a wavetable, or from a drum slot copied into the delay's line, 1 s mono) | huge evolving pads, textures | density, size, spray, pitch scatter | ~265 (8 grains), estimated | the delay's line, while a tape sound is chosen (the delay then rests) | built |
 | **Waveshaper** (sine / triangle through a folder and an asymmetric shaper) | rubbery bass, bubbly leads | pressure: the fold | ~60 | none | 3 |
 | **Harmonic** (16-24 partials: tilt, odd / even, spread) | organs, glass pads, spectra that move with pressure | pressure: the tilt | ~150 | none | 3 |
 | Pad effects: shimmer (octave-up feedback in the plate), freeze | swells | - | in the effects | the plate's | 2 |
@@ -114,8 +114,8 @@ Breaks are set aside for now (they need more length than a slot holds:
 2. **Presets:** the 96-slot store, factory presets at first boot, the
    sound menu's 4 pages on "-"/"+", Program Change; loading from the
    computer (the companion app's side with Sam, a `shared/` format).
-3. **Granular** in the delay's memory, **superwave**, **modal**. Granular
-   is on the First Edition's spec sheet (owner, 2026-11-21): it ships.
+3. **Granular** (built 2026-11-21; on the First Edition's spec sheet,
+   owner), **superwave**, **modal**.
 4. **The drum synth** beside the sampler.
 5. **Plucked string, formant, drops**; then waveshaper, harmonic, shimmer.
 
@@ -128,6 +128,6 @@ the bench, factory presets, the docs.
    settings each moves).
 2. The track key in the sound menu, now that "-"/"+" are the pages.
 3. The preset file format with Sam (`shared/`).
-4. When a granular sound plays, the delay rests: acceptable, or keep a
-   short delay?
+4. While a tape sound is chosen, the delay rests (built so; wave sounds
+   keep it): acceptable, or keep a short delay?
 5. The drum synth's models, and how a pad chooses sample or model.

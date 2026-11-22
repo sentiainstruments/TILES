@@ -203,6 +203,63 @@ How it is built:
 Next: more factory FM sounds (a pluck, a stab); bank voices in the sound
 menu; the tracks' choices saved.
 
+## Granular (built 2026-11-21)
+
+A cloud of short grains a note (`firmware/src/audio/grain_voice.c`,
+tested on the computer by `test/test_grain.c`): asynchronous granular
+synthesis after C. Roads, *Microsound* (2001), our own code. On the First
+Edition's spec sheet (owner, 2026-11-21).
+
+- **A grain** is a windowed slice of a source at its own pitch, place and
+  side: up to 8 a voice, started at the sound's density (grains a
+  second), the spacing jittered from even to random. The window is a
+  smoothstep on a triangle, a Hann-like bell whose peak `skew` moves
+  forward (a strike and a tail); worked out each control step, ramped
+  between.
+- **Two sources.** *Wave:* a wavetable bank, each grain one of its 8
+  frames (between two, either, by nearness) at the mip level for its own
+  pitch, so octave grains don't alias; no memory needed. *Tape:* a drum
+  slot, mixed to mono, copied into the delay's line (1 s at 48 kHz); the
+  slot plays at its own speed on the sound's root note. The delay rests
+  while a tape sound is chosen on any track (wave sounds keep it); the
+  line goes back cleared. The sampler copies the slot between its own
+  fetches (the head at once, then 512-byte chunks by DMA, ~0.1 s for a
+  second), so the drums never wait. A slot reloaded is copied again; the
+  effects' memory lent to the pad capture takes the tape with it until it
+  comes back. The last tape sound chosen picks the slot; an empty slot
+  falls back to the last one loaded.
+- **The place** is the patch's wave position and everything that moves
+  it (pressure, slide, envelope, LFO), plus `scan`: the tape crossed at a
+  multiple of its own speed (0.25 = stretched four times), or the frames
+  swept so many times a second. `spray` scatters each grain's place.
+- **Each grain's pitch:** `scatter_cents` at random, and chances of an
+  octave up, an octave down, a fifth; a chance of playing backwards. A
+  bend moves grains already playing (a tape grain about to leave the tape
+  turns back).
+- **Expression:** pressure lengthens or shortens grains
+  (`size_pressure`, octaves), thickens the cloud (`density_pressure`),
+  spreads it (`spray_pressure`); slide spreads it and scatters pitch;
+  the filter (SVF, stereo), the envelopes and levels are the wavetable
+  voice's.
+- **Level:** unrelated grains add by power, so the voice is scaled by 1 /
+  sqrt(grains overlapping): measured within 0.1 dB from 1 grain to 7.5.
+- **Factory sounds** (`grain_patches.c`, first guesses to tune by ear):
+  *cloud* (saw and square grains, octaves above and below; pressure
+  shorter and denser), *dust* (short vowel grains at random, drifting),
+  *shimmer* (glass grains, octaves and fifths above), *scatter* (drum
+  slot 8 stretched to a quarter speed; slide scrubs through it). In the
+  sound menu: cloud, dust and scatter on the pads row, shimmer on the
+  bells row.
+- **Cost:** first guess ~20 cycles a grain-sample plus ~105 for the
+  filter and control, so a full cloud ~265; learned live as every sound.
+  Not yet measured on a board (`synth bench`).
+- **RAM:** a grain voice fits the voices' union as it was (364 bytes:
+  8 grains of 28); the code in RAM and the four sounds ~8 KB, the
+  once-a-step code compiled for size. ~6 KB stays free.
+
+Next: measure and listen on unit 2; tune the four sounds; a tape sound
+choosing its slot from the sound menu or the companion app.
+
 ## Measured on unit 2
 
 Where a wavetable voice's cycles go, per sample (profiled 2026-11-17 at
@@ -286,6 +343,8 @@ it is the build's default.
    parameters such as cutoff or the wave position).
 3. **FM:** measure it on the board (`synth bench`), then DX7 bank
    import (`patch put bank.syx`).
-4. The patch format in `shared/` for the companion app.
-5. More voice speed if needed: the ladder (~80 cycles a channel) and the
+4. **Granular** (built 2026-11-21): measure it (`synth bench`), listen,
+   tune cloud, dust, shimmer and scatter.
+5. The patch format in `shared/` for the companion app.
+6. More voice speed if needed: the ladder (~80 cycles a channel) and the
    wavefolder are the dearest parts left.

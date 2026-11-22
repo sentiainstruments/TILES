@@ -12,6 +12,7 @@ static uint32_t s_memory[TILES_FX_MEMORY_BYTES / 4u];
 static volatile bool s_active; /* core 1's effects run: it must let go */
 static volatile bool s_want;   /* core 0 wants the area */
 static volatile bool s_lent;   /* core 1 has let go of it */
+static void (*s_lend_hook)(void);
 
 void *tiles_fx_memory(void) {
     return s_memory;
@@ -51,8 +52,15 @@ bool tiles_fx_memory_lent(void) {
     return s_lent;
 }
 
+void tiles_fx_memory_set_lend_hook(void (*hook)(void)) {
+    s_lend_hook = hook;
+}
+
 void tiles_fx_memory_service(void) {
     if (s_want && !s_lent) {
+        if (s_lend_hook != NULL) {
+            s_lend_hook();
+        }
         tiles_fx_set_bypass(true);
         s_lent = true;
     } else if (!s_want && s_lent) {

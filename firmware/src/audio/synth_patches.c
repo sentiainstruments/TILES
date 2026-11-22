@@ -1,9 +1,11 @@
+#include "grain_voice.h"
 #include "synth_voice.h"
 
 /* The factory sounds (docs/architecture/synth-engines.md, "Sound
  * direction"): glossy by default, grit per patch. Wave positions: CLASSIC
  * frames are sine, triangle, soft saw, saw, square, pulse 30/15/7 %, at
- * 0, 1/7 ... 1. The FM ones play voices from fm_patches.c. */
+ * 0, 1/7 ... 1. The FM ones play voices from fm_patches.c; the granular
+ * ones add their grain settings from grain_patches.c. */
 
 #define F(n) ((float)(n) / 7.0f) /* frame n of 8 */
 
@@ -201,6 +203,54 @@ synth_patch_t g_synth_patches[] = {
         .voice_mode = SYNTH_POLY,
         .level = 0.55f, .velocity_level = 0.2f, .pressure_level = 0.2f,
         .fx = {.reverb = 0.45f, .delay = 0.25f, .chorus = 0.1f},
+    },
+    {
+        .name = "cloud",
+        .engine = SYNTH_ENGINE_GRAIN, .grain = &g_grain_factory[TILES_GRAIN_CLOUD],
+        .bank = TILES_WT_BANK_CLASSIC,
+        .wave = F(3), .wave_pressure = 0.25f, .wave_lfo = 0.1f,
+        .filter = SYNTH_FILTER_LP12, .cutoff_hz = 2500.0f, .resonance = 0.15f, .key_track = 0.3f,
+        .pressure_oct = 1.2f, .slide_oct = 0.8f,
+        .amp = {400.0f, 1500.0f, 0.85f, 2000.0f}, .mod = {1.0f, 100.0f, 1.0f, 100.0f},
+        .lfo = {SYNTH_LFO_SINE, false, 0.2f, false, 0.0f},
+        .voice_mode = SYNTH_POLY,
+        .level = 0.7f, .velocity_level = 0.3f, .pressure_level = 0.35f,
+        .fx = {.reverb = 0.5f, .delay = 0.15f, .chorus = 0.3f},
+    },
+    {
+        .name = "dust",
+        .engine = SYNTH_ENGINE_GRAIN, .grain = &g_grain_factory[TILES_GRAIN_DUST],
+        .bank = TILES_WT_BANK_VOICE,
+        .wave = 0.15f, .wave_slide = 0.3f,
+        .filter = SYNTH_FILTER_LP12, .cutoff_hz = 5000.0f, .resonance = 0.1f, .key_track = 0.2f,
+        .pressure_oct = 0.8f,
+        .amp = {50.0f, 800.0f, 0.8f, 1500.0f}, .mod = {1.0f, 100.0f, 1.0f, 100.0f},
+        .voice_mode = SYNTH_POLY,
+        .level = 0.8f, .velocity_level = 0.4f, .pressure_level = 0.3f,
+        .fx = {.reverb = 0.6f, .delay = 0.3f},
+    },
+    {
+        .name = "shimmer",
+        .engine = SYNTH_ENGINE_GRAIN, .grain = &g_grain_factory[TILES_GRAIN_SHIMMER],
+        .bank = TILES_WT_BANK_GLASS,
+        .wave = 0.5f, .wave_pressure = 0.3f,
+        .filter = SYNTH_FILTER_LP12, .cutoff_hz = 9000.0f, .resonance = 0.05f, .key_track = 0.3f,
+        .pressure_oct = 0.5f,
+        .amp = {150.0f, 3000.0f, 0.7f, 3000.0f}, .mod = {1.0f, 100.0f, 1.0f, 100.0f},
+        .voice_mode = SYNTH_POLY,
+        .level = 0.65f, .velocity_level = 0.4f, .pressure_level = 0.3f,
+        .fx = {.reverb = 0.7f, .delay = 0.1f, .chorus = 0.2f},
+    },
+    {
+        .name = "scatter",
+        .engine = SYNTH_ENGINE_GRAIN, .grain = &g_grain_factory[TILES_GRAIN_SCATTER],
+        .wave = 0.25f, .wave_slide = 0.6f,
+        .filter = SYNTH_FILTER_LP12, .cutoff_hz = 12000.0f, .resonance = 0.0f,
+        .pressure_oct = 0.5f,
+        .amp = {80.0f, 1000.0f, 0.9f, 1500.0f}, .mod = {1.0f, 100.0f, 1.0f, 100.0f},
+        .voice_mode = SYNTH_POLY,
+        .level = 0.8f, .velocity_level = 0.4f, .pressure_level = 0.3f,
+        .fx = {.reverb = 0.4f, .chorus = 0.15f},
     },
 };
 
