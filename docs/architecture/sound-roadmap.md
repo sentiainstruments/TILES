@@ -114,7 +114,8 @@ Breaks are set aside for now (they need more length than a slot holds:
 2. **Presets:** the 96-slot store, factory presets at first boot, the
    sound menu's 4 pages on "-"/"+", Program Change; loading from the
    computer (the companion app's side with Sam, a `shared/` format).
-3. **Granular** in the delay's memory, **superwave**, **modal**.
+3. **Granular** in the delay's memory, **superwave**, **modal**. Granular
+   is on the First Edition's spec sheet (owner, 2026-11-21): it ships.
 4. **The drum synth** beside the sampler.
 5. **Plucked string, formant, drops**; then waveshaper, harmonic, shimmer.
 
