@@ -397,6 +397,9 @@ static void test_factory(void) {
         }
     }
     CHECK(peak > 0.02 && peak < 0.99, "four granular tracks peak %.3f", peak);
+    tiles_audio_master_t m = tiles_audio_engine_master();
+    CHECK(m.peak > 0.02f && m.clips == 0u, "master: peak %.3f before the clip, %u clipped", (double)m.peak,
+          (unsigned)m.clips);
     for (uint8_t t = 0; t < 4u; t++) {
         tiles_audio_engine_midi((uint8_t)(0x80u | ch[t]), (uint8_t)(48u + 5u * t), 0u);
     }

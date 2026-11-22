@@ -107,6 +107,9 @@ standalone mode with USB on core 1.
 | `audio.drums` | drum samples ringing now |
 | `audio.drum_underruns` | 0 (the stream from flash never ran dry) |
 | `audio.shed` | voices the load guard ended; 0 unless the sounds asked for more than the core has |
+| `audio.mix_peak` | the mix's loudest sample before the master's soft clip, since boot (1.000 = full scale); under ~0.7 the clip barely touches it (-0.8 dB there) |
+| `audio.knee` | samples (per channel) over 1.0 before the clip: squeezed audibly; a few on hits is fine, a steady count means the mix runs hot |
+| `audio.clips` | samples at the clip's ceiling (1.875 in, flattened to full scale): 0 |
 | `audio.cost` | each track's measured cycles per voice-sample (150 until it has played) |
 | `flash.lockout_fails` | 0 |
 | `audio.patch` | each track's sound |

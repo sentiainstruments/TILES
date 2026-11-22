@@ -344,6 +344,7 @@ tiles_usb_audio_info_t tiles_usb_audio_get_info(void) {
         .fx_lent = tiles_fx_memory_lent(),
         .load_peak_pct = s_load_peak_pct,
         .stack_free = s_started ? stack_free() : 0u,
+        .master = tiles_audio_engine_master(),
     };
     for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
         info.cost[t] = (uint16_t)tiles_audio_engine_track_cost(t);

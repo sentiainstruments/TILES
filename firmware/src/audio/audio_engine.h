@@ -67,6 +67,15 @@ uint32_t tiles_audio_engine_track_cost(uint8_t track);
 /* Voices the load guard has ended since boot. */
 uint32_t tiles_audio_engine_shed_count(void);
 
+/* The master since boot, per channel: the mix's loudest sample before its
+ * soft clip (1.0 = full scale), samples over 1.0 (squeezed by the clip,
+ * ~1.6 dB down there already) and samples at its ceiling (flattened). */
+typedef struct {
+    float peak;
+    uint32_t knee, clips;
+} tiles_audio_master_t;
+tiles_audio_master_t tiles_audio_engine_master(void);
+
 /* Each track's sound: one of the factory patches (synth_patches.c). A
  * change ends the track's notes. */
 void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch);

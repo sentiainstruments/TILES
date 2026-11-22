@@ -6,6 +6,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "audio_engine.h"
+
 /* Shared with the descriptor (midi/usb_descriptors.c). */
 #define TILES_AUDIO_ENTITY_INPUT 0x01u  /* the test voice, a "synthesizer" terminal */
 #define TILES_AUDIO_ENTITY_OUTPUT 0x03u /* USB streaming */
@@ -71,6 +73,7 @@ typedef struct {
     bool fx_lent;         /* their memory lent to the pad capture: quiet */
     uint8_t load_peak_pct; /* the busiest second since boot */
     uint32_t stack_free;  /* core 1's stack never reached, bytes (of 4,096) */
+    tiles_audio_master_t master; /* the mix before its soft clip, since boot */
 } tiles_usb_audio_info_t;
 
 tiles_usb_audio_info_t tiles_usb_audio_get_info(void);

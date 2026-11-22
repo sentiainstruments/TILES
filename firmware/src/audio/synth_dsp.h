@@ -61,8 +61,9 @@ static inline float synth_sin_turns(float t) {
 /* Soft saturation without a division (per sample on the audio path): odd
  * 5th-order polynomial, slope 1 at 0, flat in slope and curve at +-15/8,
  * where it reaches +-1. */
+#define SYNTH_SAT_CEILING 1.875f
 static inline float synth_sat(float x) {
-    x = synth_clamp(x, -1.875f, 1.875f);
+    x = synth_clamp(x, -SYNTH_SAT_CEILING, SYNTH_SAT_CEILING);
     float x2 = x * x;
     return x * (1.0f + x2 * (-0.18962963f + x2 * 0.016181728f));
 }

@@ -128,6 +128,7 @@ static float s_cost[TILES_AUDIO_TRACKS];
 static uint32_t s_over_blocks;
 static float s_load; /* cycles a sample, fading voices left out, smoothed */
 static uint32_t s_shed;
+static tiles_audio_master_t s_master;
 
 /* A voice of any engine. */
 static inline uint8_t engine_of(const voice_t *v) {
@@ -278,6 +279,7 @@ TILES_AUDIO_COLD void tiles_audio_engine_init(uint8_t bend_range_semitones, uint
     s_over_blocks = 0;
     s_load = 0.0f;
     s_shed = 0;
+    memset(&s_master, 0, sizeof(s_master));
     memset(&s_tape, 0, sizeof(s_tape));
     tape_drop();
     s_tape_tracks = 0u;
@@ -296,6 +298,10 @@ uint32_t tiles_audio_engine_track_cost(uint8_t track) {
 
 uint32_t tiles_audio_engine_shed_count(void) {
     return s_shed;
+}
+
+tiles_audio_master_t tiles_audio_engine_master(void) {
+    return s_master;
 }
 
 TILES_AUDIO_COLD static void assign_sound(uint8_t track, const synth_patch_t *p, uint8_t patch) {
@@ -987,12 +993,22 @@ static void TILES_AUDIO_HOT(render_block)(int32_t *out_lr, uint32_t n) {
     memset(drums_l, 0, sizeof(drums_l));
     memset(drums_r, 0, sizeof(drums_r));
     tiles_sampler_render(drums_l, drums_r, n);
+    float peak = s_master.peak;
+    uint32_t knee = 0, clips = 0;
     for (uint32_t i = 0; i < n; i++) {
-        float yl = synth_sat(mix_l[i] + drums_l[i] * DRUM_GAIN); /* flat at +-1 */
-        float yr = synth_sat(mix_r[i] + drums_r[i] * DRUM_GAIN);
+        float xl = mix_l[i] + drums_l[i] * DRUM_GAIN, xr = mix_r[i] + drums_r[i] * DRUM_GAIN;
+        float al = __builtin_fabsf(xl), ar = __builtin_fabsf(xr);
+        peak = __builtin_fmaxf(peak, __builtin_fmaxf(al, ar));
+        knee += (uint32_t)(al > 1.0f) + (uint32_t)(ar > 1.0f);
+        clips += (uint32_t)(al >= SYNTH_SAT_CEILING) + (uint32_t)(ar >= SYNTH_SAT_CEILING);
+        float yl = synth_sat(xl); /* flat at +-1 */
+        float yr = synth_sat(xr);
         out_lr[2u * i] = (int32_t)(yl * 8388607.0f) * 256; /* 24 bits in the top of the subslot */
         out_lr[2u * i + 1u] = (int32_t)(yr * 8388607.0f) * 256;
     }
+    s_master.peak = peak;
+    s_master.knee += knee;
+    s_master.clips += clips;
 }
 
 /* Lends the delay's line to the tape while a track wants it, keeps the

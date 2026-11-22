@@ -1161,6 +1161,14 @@ static void handle_line(char *line) {
         reply(text);
         snprintf(text, sizeof(text), "audio.shed=%lu", (unsigned long)audio.shed);
         reply(text);
+        uint32_t peak_milli = (uint32_t)(audio.master.peak * 1000.0f + 0.5f);
+        snprintf(text, sizeof(text), "audio.mix_peak=%lu.%03lu", (unsigned long)(peak_milli / 1000u),
+                 (unsigned long)(peak_milli % 1000u));
+        reply(text);
+        snprintf(text, sizeof(text), "audio.knee=%lu", (unsigned long)audio.master.knee);
+        reply(text);
+        snprintf(text, sizeof(text), "audio.clips=%lu", (unsigned long)audio.master.clips);
+        reply(text);
         snprintf(text, sizeof(text), "audio.drums=%u", (unsigned)audio.drum_voices);
         reply(text);
         snprintf(text, sizeof(text), "audio.drum_underruns=%lu", (unsigned long)audio.drum_underruns);
