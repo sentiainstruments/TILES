@@ -226,8 +226,9 @@ TILES_AUDIO_COLD static float patch_cost(const synth_patch_t *p) {
         return 30.0f + 22.0f * (float)ops;
     }
     if (p->engine == SYNTH_ENGINE_GRAIN) {
-        /* First guess: each grain ~20 a sample, the stereo filter ~45. */
-        return p->grain != NULL ? 60.0f + 20.0f * tiles_grain_overlap(p->grain) + 45.0f : 100.0f;
+        /* Unit 2 (synth bench, 2026-11-21): ~80 a voice with its filter,
+         * ~28 a grain. */
+        return p->grain != NULL ? 80.0f + 28.0f * tiles_grain_overlap(p->grain) : 100.0f;
     }
     float copies = (float)(p->unison < 1u ? 1u : p->unison);
     bool stereo = p->unison > 1u && p->width > 0.0f;
@@ -484,6 +485,10 @@ TILES_AUDIO_COLD uint32_t tiles_audio_engine_bench(uint8_t patch, uint32_t frame
         synth_voice_start(&v.u.sv, p, &in, 12345u, false);
     }
     float l[BLOCK_FRAMES], r[BLOCK_FRAMES];
+    /* A cloud takes a while to fill: time it full, after 0.5 s untimed. */
+    for (uint32_t i = 0; p->engine == SYNTH_ENGINE_GRAIN && i < TILES_AUDIO_RATE_HZ / 2u; i += BLOCK_FRAMES) {
+        tiles_grain_voice_render(&v.u.gr, p, &s_ctx, &in, l, r, BLOCK_FRAMES);
+    }
     uint64_t total = 0;
     uint32_t done = 0;
     while (done < frames) {

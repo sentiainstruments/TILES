@@ -50,20 +50,22 @@ typedef struct {
     uint8_t frame, level, fshift, on;
 } tiles_grain_t;
 
+/* 364 bytes on the board: the voices' union's size before it (FM's). */
 typedef struct {
     tiles_grain_t g[TILES_GRAIN_MAX];
     synth_env_t amp, mod;
     synth_svf_t svf;     /* coefficients, and the left channel's state */
     float right[2];      /* the right channel's filter state */
     float oct;           /* the cutoff octaves the coefficients are for */
-    float oct_base;      /* velocity's share, fixed for the note */
-    float level_base;    /* level and velocity, fixed for the note */
     float level;         /* last control step's output level */
     float pressure_s, slide_s;
     float pitch, glide_coef;
-    float lfo_phase, lfo_held, lfo_step;
+    float semis;         /* the pitch `rate` is for */
+    float rate;          /* wave: cycles a sample; tape: its samples a sample */
+    float lfo_phase, lfo_held;
     float next;          /* samples to the next grain */
     float scan_pos;      /* the scan's offset of the place */
+    float norm;          /* 1 / sqrt(grains overlapping), set as grains start */
     uint32_t rng;
 } tiles_grain_voice_t;
 

@@ -250,15 +250,31 @@ Edition's spec sheet (owner, 2026-11-21).
   slot 8 stretched to a quarter speed; slide scrubs through it). In the
   sound menu: cloud, dust and scatter on the pads row, shimmer on the
   bells row.
-- **Cost:** first guess ~20 cycles a grain-sample plus ~105 for the
-  filter and control, so a full cloud ~265; learned live as every sound.
-  Not yet measured on a board (`synth bench`).
+- **Cost, unit 2** (`synth bench`, 2026-11-21, 230.4 MHz; the bench
+  holds a granular note 0.5 s first, its cloud full): ~45 cycles a voice,
+  ~33 more for its filter while grains or their tail sound, ~26 a grain:
+  *cloud* 314, *shimmer* 298 (8 grains each), *dust* 134 (~1.7),
+  *scatter* without its tape 47. At the voices' 2,880 cycles about 9
+  clouds or 20 dusts. How it got there, from 353 / 334 / 145 for a full
+  cloud as first built (measured the same way):
+  - the place, size, density and spray worked out only as a grain
+    starts, the pitch only when it moves, a grain's mip level only then;
+  - 16 samples a step for the grains and the filter (the envelopes still
+    step every 8): each grain's own work a step counts half;
+  - the grains mixed in integers into one buffer of left/right pairs,
+    a grain's two gains packed in one register (SADD16 steps both,
+    SMLABB/SMLABT add the sample): ~30 cycles a grain-sample to ~26;
+  - no filter between grains once it has rung out.
+  Tried and dropped: LDRD/STRD for the pairs (no faster).
 - **RAM:** a grain voice fits the voices' union as it was (364 bytes:
-  8 grains of 28); the code in RAM and the four sounds ~8 KB, the
-  once-a-step code compiled for size. ~6 KB stays free.
+  8 grains of 28); the code in RAM and the four sounds ~9 KB, the code
+  run once a note, a grain or 16 samples compiled for size (3 cycles a
+  voice slower, ~1 KB smaller). ~5 KB stays free.
+- **Levels:** cloud, dust and shimmer within ~1 dB of the other pads and
+  bells (test_synth's chord, loudest 0.1 s).
 
-Next: measure and listen on unit 2; tune the four sounds; a tape sound
-choosing its slot from the sound menu or the companion app.
+Next: listen on unit 2 and tune the four sounds; a tape sound choosing
+its slot from the sound menu or the companion app.
 
 ## Measured on unit 2
 
@@ -343,8 +359,8 @@ it is the build's default.
    parameters such as cutoff or the wave position).
 3. **FM:** measure it on the board (`synth bench`), then DX7 bank
    import (`patch put bank.syx`).
-4. **Granular** (built 2026-11-21): measure it (`synth bench`), listen,
-   tune cloud, dust, shimmer and scatter.
+4. **Granular** (built and measured 2026-11-21): listen, tune cloud,
+   dust, shimmer and scatter.
 5. The patch format in `shared/` for the companion app.
 6. More voice speed if needed: the ladder (~80 cycles a channel) and the
    wavefolder are the dearest parts left.

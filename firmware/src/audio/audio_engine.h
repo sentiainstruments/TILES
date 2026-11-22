@@ -123,5 +123,6 @@ float tiles_audio_engine_fx(uint8_t target, uint8_t param);
 uint32_t tiles_audio_engine_fx_cost(void);
 
 /* A test: cycles per sample of one voice of `patch` held alone for
- * `frames`, away from the playing voices; `cycles` reads a cycle counter. */
+ * `frames` (a granular one after 0.5 s untimed, its cloud full), away from
+ * the playing voices; `cycles` reads a cycle counter. */
 uint32_t tiles_audio_engine_bench(uint8_t patch, uint32_t frames, uint32_t (*cycles)(void));

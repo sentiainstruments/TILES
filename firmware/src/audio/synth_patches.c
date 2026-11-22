@@ -214,7 +214,7 @@ synth_patch_t g_synth_patches[] = {
         .amp = {400.0f, 1500.0f, 0.85f, 2000.0f}, .mod = {1.0f, 100.0f, 1.0f, 100.0f},
         .lfo = {SYNTH_LFO_SINE, false, 0.2f, false, 0.0f},
         .voice_mode = SYNTH_POLY,
-        .level = 0.7f, .velocity_level = 0.3f, .pressure_level = 0.35f,
+        .level = 1.0f, .velocity_level = 0.3f, .pressure_level = 0.35f,
         .fx = {.reverb = 0.5f, .delay = 0.15f, .chorus = 0.3f},
     },
     {
@@ -226,7 +226,7 @@ synth_patch_t g_synth_patches[] = {
         .pressure_oct = 0.8f,
         .amp = {50.0f, 800.0f, 0.8f, 1500.0f}, .mod = {1.0f, 100.0f, 1.0f, 100.0f},
         .voice_mode = SYNTH_POLY,
-        .level = 0.8f, .velocity_level = 0.4f, .pressure_level = 0.3f,
+        .level = 1.1f, .velocity_level = 0.4f, .pressure_level = 0.3f,
         .fx = {.reverb = 0.6f, .delay = 0.3f},
     },
     {
@@ -238,7 +238,7 @@ synth_patch_t g_synth_patches[] = {
         .pressure_oct = 0.5f,
         .amp = {150.0f, 3000.0f, 0.7f, 3000.0f}, .mod = {1.0f, 100.0f, 1.0f, 100.0f},
         .voice_mode = SYNTH_POLY,
-        .level = 0.65f, .velocity_level = 0.4f, .pressure_level = 0.3f,
+        .level = 0.95f, .velocity_level = 0.4f, .pressure_level = 0.3f,
         .fx = {.reverb = 0.7f, .delay = 0.1f, .chorus = 0.2f},
     },
     {
