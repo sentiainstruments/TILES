@@ -338,7 +338,17 @@ none (67 before).
   soft clip, 61 samples into its knee (FM and wobble storms with drive at
   100), none at its ceiling; the output peaked at 0.94. Two possible
   clicks, both in legato basses under storms (sub, solid), none in the
-  granular sounds.
+  granular sounds. **Rerun** (2026-11-23, the same firmware, a USB
+  watcher logging every device every 0.25 s): the full 12 minutes, the
+  board never left USB, no restart, 24 program read-backs matched. Load
+  median 72 %, peak 97 %, up to 24 voices, stack at most 1,680 bytes,
+  29 C; no underrun, late frame, MIDI drop or drum underrun; the
+  recording without a gap or a click. The guard ended 144 voices, all
+  with granular sounds stacked on three or four tracks under storms.
+  The mix peaked at 1.44 before the clip, 58 samples into its knee, none
+  at its ceiling; the output at 0.97. The first run's drop didn't come
+  back: the watcher (`watch.log` beside the stress tool) stays on for
+  the next soaks.
 
 Fixed along the way: late USB packets that made macOS drop
 the stream for up to a second (core 1's USB code ran from flash:
