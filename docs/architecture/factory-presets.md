@@ -1,0 +1,112 @@
+# Factory presets: the sound design (planning)
+
+Status: **planning, 2026-11-23.** The owner's brief: high-quality sounds
+for techno, hard techno, EDM, dubstep, pads, plucks, melodic and harmonic
+playing, with a sound of our own. The slots, store and browsing are
+decided in `sound-roadmap.md` ("Presets: 96 slots in 4 pages"); this note
+is what goes in them and what the engines need first. Nothing here is
+decided yet unless marked.
+
+## The Sentia sound (proposal)
+
+- **Pressure is part of every sound.** Every preset gives pressure a job
+  (opens, thickens, drives, moves the wave, adds grains), slide a colour,
+  bend the pitch. A preset that ignores the hand isn't finished; this is
+  what no other instrument's presets do.
+- **Glossy by default, grit per patch** (decided 2026-11-14): clean and
+  tightly tuned, space from the plate and the ping-pong delay; drive,
+  fold and crush where the genre wants them.
+- **Built for the grid:** a chord on one track stays clear (pads keep
+  their lows in check), basses are mono or legato with glide, leads
+  glide too.
+- **Named in our own words:** one or two plain words, at most 10
+  characters; never an instrument, an artist, a track or a product. Two
+  factory names break this today and get new ones in the preset pass:
+  *hoover* (a brand) and *reese* (an artist's alias).
+
+## The pages (proposal)
+
+The same row is the same role on every page, so the hand learns one map:
+row 1 basses, row 2 chords and stabs, row 3 leads, plucks and arps,
+row 4 pads, textures and effects.
+
+| Page | Genre | Row 1 | Row 2 | Row 3 | Row 4 |
+|---|---|---|---|---|---|
+| 1 | Techno, hard techno | rumble, acid, squelch, offbeat, pound, deep | dub chord, rave stab, hard stab, organ stab, howl, metal | bleep, arp, sync lead, siren, pulse, acid lead | drone, fog, wash, ritual, tunnel, riser |
+| 2 | EDM | house bass, saw bass, pluck bass, sub, bounce, fm bass | supersaw chord, future chord, piano chord, stab, brass, vox chop | supersaw lead, big lead, pluck, bell pluck, arp, glide lead | trance pad, wide pad, air, sweep, riser, impact |
+| 3 | Bass music, dubstep | wobble, growl, yoi, neuro, rift, sub | talk, formant stab, metal stab, horn, chop, tear | screech, laser, fm lead, sync lead, saw lead, siren | dark pad, drone, scatter, dust, noise, downlift |
+| 4 | Pads, keys, melodic, harmonic | sub, round, pluck bass, solid, upright, sine | tine, keys, organ, choir, strings, chord | pluck, harp, glass, chime, kalimba, music box | cloud, shimmer, haze, air, swell, halo |
+
+The names are working titles; the sounds get their own words when made.
+Today's 20 factory sounds fill a third of it already.
+
+## Recipes by genre (what makes each work)
+
+Techniques as widely taught in synthesis (and as read in open projects'
+factory banks, to be studied: Surge XT, Vital's community tables, Helm,
+Odin 2, Mutable Instruments' Plaits; internal only, nothing copied: the
+values are ours, as with the engines).
+
+- **Techno:** basses short and dry, a filter envelope doing the work, the
+  low end mono; *rumble* is a long low sine through the plate, darkened
+  and pumped by the kick; dub chords are a detuned saw stack through a
+  band-pass, short, drowned in delay; stabs bright and percussive.
+- **Hard techno:** everything driven: square and saw through overdrive,
+  fold and a little crush; *pound* a distorted bass on every offbeat;
+  hard stabs with a fast pitch drop; acid at high resonance into drive.
+- **EDM:** the supersaw (7 detuned saws, ~20-50 cents, a high-pass under
+  them, wide); future chords pitch-bending into each note, pumped; plucks
+  with a fast filter envelope into a long reverb; leads in unison with
+  glide.
+- **Dubstep, bass music:** the wobble (an LFO on the filter or the wave
+  position, synced at 1/8, 1/16, triplets); growls from FM and a moving
+  formant (vowel) table through drive and fold; *yoi* a vowel sweep; the
+  sub kept clean and separate from the mid bass.
+- **Pads:** slow attack, unison or grains, a slow LFO on the wave, chorus
+  and plate; pressure opening and thickening them (the granular sounds
+  already do).
+- **Plucks, keys, melodic, harmonic:** short envelopes with velocity to
+  the filter; FM for bells and tines; additive (glass) frames for organs;
+  chords that keep their voicing clear.
+
+## What the engines need first
+
+The presets above can't all be made today. In order of what they unlock:
+
+1. **The preset store** (`sound-roadmap.md`): presets live in flash and
+   a track copies its sound into RAM. Today every factory sound sits in
+   RAM (20 x 212 bytes), so 96 can't; with the store only the tracks'
+   copies do, which also gives back ~2.5 KB.
+2. **Four macros per engine** (decided direction, `sound-roadmap.md`):
+   what the encoders and the app move, set per preset.
+3. **Wavetable engine additions**, cheap ones first:
+   - a noise source mixed in (risers, breath, hats in a texture);
+   - a sub (a sine an octave down) beside the wave;
+   - a second LFO (vibrato and a wobble at once);
+   - unison up to 7 for the supersaw (more voice state and ~2x the cost
+     of 3; or the superwave engine planned in `sound-roadmap.md`);
+   - more wavetables: banks kept in flash and copied into RAM when a
+     track's sound needs them (each bank is 38 KB in RAM today; 3 fit).
+     Growls, vowels and EDM leads want more than our 24 frames.
+4. **The drum synth** (planned): kicks for rumble and hard techno.
+5. **A formant (vowel) filter** for talking and growling basses.
+
+RAM is the limit for 3 and 5 (~5 KB free): the store's 2.5 KB and Song's
+12 KB (the Deck replaces it, `standalone-recorder.md`) come first.
+
+## How a preset is made
+
+1. The recipe in a factory table (our own values).
+2. Rendered on the computer through the engine's own code to a WAV
+   (`scratchpad` render tool, as the granular tuning on 2026-11-23): a
+   phrase per role (chord swell for pads, a line for basses, an arpeggio
+   for plucks), pressure and slide moving.
+3. The owner listens; tuned; then on the board (`synth bench` for its
+   cost, the soak for its load).
+
+## Open questions
+
+1. The page map: genres by page and roles by row, or another order?
+2. Which engine additions first, given the RAM (the store, then noise
+   and sub, then the second LFO and the bank library, then unison 7)?
+3. New names for *hoover* and *reese*.
