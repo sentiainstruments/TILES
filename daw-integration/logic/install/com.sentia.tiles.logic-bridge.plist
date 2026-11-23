@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sentia.tiles.logic-bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__BIN__</string>
+        <!--__HEADLESS__-->
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Relaunch only on an unexpected exit; a clean exit stays stopped. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>__LOGDIR__/tiles-logic-bridge.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOGDIR__/tiles-logic-bridge.err.log</string>
+</dict>
+</plist>
