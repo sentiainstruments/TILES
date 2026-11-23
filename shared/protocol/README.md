@@ -59,8 +59,16 @@ SAMPLE BEGIN <slot> <channels> <frames> <crc32> <name>\n
                           load a slot: OK <bytes>, then the audio as raw bytes, then OK / ERR
 SAMPLE DELETE <slot>\n    empty a slot: OK (also when already empty)
 SAMPLE PLAY <slot> [velocity]\n  hit a slot in TILES's own sound: OK
-SYNTH LIST\n              the synth sounds (`<n> <name>`), then each track's (`track <t> <name>`), then OK
-SYNTH PATCH <track> <n|name>\n  give track 1-4 a sound: OK, or ERR unknown-patch / track-1-4
+SYNTH LIST\n              the preset slots holding a sound (`<slot 1-96> <name>`), then each track's
+                          (`track <t> <name>`), then OK
+SYNTH PATCH <track> <slot|name>\n  give track 1-4 a preset slot's sound: OK, or ERR unknown-patch
+                          (an empty slot) / track-1-4 / busy
+PRESET LIST\n             the preset slots holding a sound (`<slot> <name> factory|stored`), then OK (see "Presets")
+PRESET GET <slot>\n       a slot's record: `bytes=508`, then hex lines (48 bytes each), then OK; ERR empty
+PRESET PUT <slot> <crc32>\n  write a slot: OK 508, then the 508-byte record as raw bytes (crc32 = zlib's of
+                          them), then OK or ERR crc / record / flash / timeout; ERR playing while the
+                          clock runs or TILES sounds
+PRESET CLEAR <slot>\n     a slot back to its factory sound (or empty): OK; ERR playing as PUT
 SYNTH MIDI <status hex> <data1> [data2]\n  a channel message (80-EF) to the synth only, not sent out: OK
 SYNTH BANK\n              the DX7 bank's voices (`<n> <name>`, 1-32), then OK; ERR no-bank
 SYNTH BANK PUT <crc32 hex>\n  load a DX7 32-voice bank: OK 4104, then the 4,104-byte sysex as raw
@@ -419,6 +427,49 @@ SAMPLE BEGIN 1 1 23990 cee3e54f kick     -> OK 47980
   TILES's own sound to be silent.
 - About 3 s for a full slot. `tools/tiles_control.py sample put` does the
   conversion and the load.
+
+### Presets
+
+96 slots, numbered 1-96 here (and in SYNTH LIST / PATCH). A slot holds a
+record written by PRESET PUT, else its factory sound (slots 1-24 hold the
+factory sounds, a page of the sound menu laid out row by row; some are
+empty), else nothing. Records are kept in flash and survive updates and
+power cuts; PRESET CLEAR gives a slot its factory sound back. A track
+playing a slot doesn't change when the slot is written: choose it again
+(SYNTH PATCH) to hear the new record.
+
+**The record** (version 1):
+
+508 bytes, little-endian, fixed offsets; floats are IEEE 754 single.
+Version 1. Bytes past 456 are 0 (later versions add fields there; a
+reader takes 0 as "off"). A record is refused if the marker or version
+is wrong, the name is empty or not printable ASCII, an enum is out of
+range, or a float isn't finite; floats out of their range are clamped
+(the ranges are in `firmware/src/audio/presets.c`).
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 2 | `TP` |
+| 2 | 1 | version (1) |
+| 3 | 1 | engine: 0 wavetable, 1 FM, 2 granular |
+| 4 | 10 | name, ASCII, NUL-padded |
+| 14 | 4 | wavetable bank (0-2), unison (1-7), filter (0 LP, 1 BP, 2 HP, 3 ladder), voice mode (0 poly, 1 mono, 2 legato) |
+| 18 | 1 | flags: 1 phase reset, 2 LFO synced, 4 LFO retrigger |
+| 19 | 1 | LFO shape (0 sine, 1 triangle, 2 saw down, 3 square, 4 random) |
+| 20 | 168 | 42 floats: wave, wave_pressure, wave_slide, wave_env, wave_lfo, detune_cents, width, drive, fold, cutoff_hz, resonance, key_track, env_oct, velocity_oct, pressure_oct, slide_oct, lfo_oct, amp attack/decay/sustain/release (ms, ms, 0-1, ms), mod the same, lfo rate, lfo delay_ms, vibrato_cents, pitch_env_semis, pitch_env_ms, glide_ms, level, velocity_level, pressure_level, drift_cents, effect sends and inserts: reverb, delay, chorus, drive, dark, crush, pump |
+| 188 | 4 | granular: source (0 wave, 1 tape), tape slot (0-7), root note, 0 |
+| 192 | 68 | 17 floats: size_ms, density, jitter, spray, scan, scatter_cents, octave_up, octave_down, fifth, reverse, spread, skew, size_pressure, density_pressure, spray_pressure, spray_slide, scatter_slide |
+| 260 | 155 | FM: the DX7 voice, unpacked (`fm_voice.h`) |
+| 415 | 1 | 0 |
+| 416 | 8 | 2 floats: FM pressure_db, slide_db |
+| 424 | 4 | sub shape (0 sine, 1 square), LFO 2 shape, LFO 2 flags (2 synced, 4 retrigger), 0 |
+| 428 | 28 | 7 floats: noise, sub, LFO 2 rate, lfo2_oct, lfo2_wave, lfo2_cents, lfo2_level |
+| 456 | 52 | 0 |
+
+The fields are the firmware's `synth_patch_t`, `tiles_grain_params_t` and
+`tiles_fm_patch_t` (`firmware/src/audio/synth_voice.h`, `grain_voice.h`,
+`fm_voice.h` say what each means); an engine reads only its own, the rest
+stay as written.
 
 ### Content store
 
