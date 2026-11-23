@@ -322,6 +322,24 @@ none (67 before).
   minutes of melodic playing: no restart, no voice shed, no underrun;
   core 1's stack at most 1,584 of 4,096 bytes, so not the stack.
 
+- **Unit 2 left USB mid-soak** (2026-11-21, firmware 6cec4ad, 230.4
+  MHz, standalone, streaming): 9.5 minutes into a granular soak (the
+  stress tool with cloud, shimmer, dust and scatter alone and mixed,
+  drum hits, every effect at 100) it vanished from USB and only came back
+  at the next power-on, 26 hours later (`boot.reset=por`, no crash
+  record, no watchdog reset). The ROM bootloader entered by itself (Rev
+  A0's weak RUN pull-up), a hang the watchdog misses, or USB power can't
+  be told apart from that run; the next one watches for a BOOTSEL device.
+  Until then it was clean: load median 71 %, peak 98 %; no underrun, late
+  frame, MIDI drop or drum underrun; core 1's stack at most 1,680 of
+  4,096 bytes; the recording without a gap. The guard ended 62 voices,
+  nearly all with cloud or shimmer filling all four tracks under note
+  storms (up to 24 voices). The master: the mix peaked at 1.29 before the
+  soft clip, 61 samples into its knee (FM and wobble storms with drive at
+  100), none at its ceiling; the output peaked at 0.94. Two possible
+  clicks, both in legato basses under storms (sub, solid), none in the
+  granular sounds.
+
 Fixed along the way: late USB packets that made macOS drop
 the stream for up to a second (core 1's USB code ran from flash:
 `firmware/src/midi/HISTORY.md`), and TinyUSB's RP2350 driver panicking
