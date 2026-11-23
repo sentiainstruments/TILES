@@ -95,6 +95,10 @@ static tiles_fx_insert_t s_insert[TILES_AUDIO_TRACKS];
 static float s_track_l[TILES_AUDIO_TRACKS][BLOCK_FRAMES], s_track_r[TILES_AUDIO_TRACKS][BLOCK_FRAMES];
 static float s_fx_cost;
 
+/* The tape's level after its gain: a note of scatter about as loud as
+ * one of the pads' (rendered on the computer, 2026-11-23). */
+#define TAPE_RMS 0.3f
+
 /* The granular tape: a drum slot, mixed to mono, in the delay's line while
  * a track's sound wants it (the delay rests meanwhile). The last such sound
  * chosen picks the slot; tracks with tape sounds share it. */
@@ -1041,6 +1045,10 @@ static void tape_service(void) {
     }
     s_ctx.tape = s_tape.buf;
     s_ctx.tape_frames = s_tape.buf != NULL ? tiles_sampler_copy_frames() : 0u;
+    /* Any slot to one loudness: a quiet one up to 18 dB, a loud one down
+     * to -12 dB (TAPE_RMS by ear against the pads, first guess). */
+    float rms = s_ctx.tape_frames > 0u ? tiles_sampler_copy_rms() : 0.0f;
+    s_ctx.tape_gain = rms > 0.0f ? synth_clamp(TAPE_RMS / rms, 0.25f, 8.0f) : 1.0f;
 }
 
 uint32_t tiles_audio_engine_tape_frames(void) {

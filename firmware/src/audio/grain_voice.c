@@ -434,7 +434,7 @@ void TILES_AUDIO_HOT(tiles_grain_voice_render)(tiles_grain_voice_t *v, const syn
         return;
     }
     /* The mix to float: the source's int16 scale; Q15 sides to Q14 gains. */
-    const float in_scale = (tape ? 1.0f / 32768.0f : bank->gain) * MIX_TO_FLOAT;
+    const float in_scale = (tape ? ctx->tape_gain * (1.0f / 32768.0f) : bank->gain) * MIX_TO_FLOAT;
     const float side_q14 = GAIN_ONE / 32767.0f;
     const float rise = 0.5f - 0.45f * synth_clamp(gp->skew, 0.0f, 1.0f);
     const float fall_ratio = rise / (1.0f - rise);

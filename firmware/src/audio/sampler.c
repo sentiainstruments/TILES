@@ -2,6 +2,7 @@
 
 #include "audio_hot.h"
 
+#include <math.h>
 #include <string.h>
 
 _Static_assert(TILES_SAMPLER_RING_BYTES % TILES_SAMPLER_CHUNK_BYTES == 0u, "chunks never straddle the ring's end");
@@ -61,6 +62,7 @@ static struct {
     uint32_t bytes; /* source bytes to copy */
     uint32_t fetched;
     uint32_t frames;
+    uint64_t energy; /* sum of the mono samples' squares, for its loudness */
     int16_t *dst;
 } s_copy;
 
@@ -74,6 +76,11 @@ static void copy_mix(uint32_t src_bytes) {
             d[i] = (int16_t)(((int32_t)d[2u * i] + (int32_t)d[2u * i + 1u]) / 2);
         }
     }
+    uint64_t e = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        e += (uint64_t)((int32_t)d[i] * (int32_t)d[i]);
+    }
+    s_copy.energy += e;
     s_copy.frames += n;
     s_copy.fetched += src_bytes;
 }
@@ -313,6 +320,7 @@ void tiles_sampler_copy_start(uint8_t slot, int16_t *dst, uint32_t room) {
     s_copy.dst = dst;
     s_copy.frames = 0u;
     s_copy.fetched = 0u;
+    s_copy.energy = 0u;
     uint32_t head = s_copy.bytes < TILES_SAMPLER_HEAD_BYTES ? s_copy.bytes : TILES_SAMPLER_HEAD_BYTES;
     memcpy(dst, s_head[slot], head);
     copy_mix(head);
@@ -328,6 +336,11 @@ uint32_t tiles_sampler_copy_frames(void) {
         return 0u;
     }
     return s_copy.frames;
+}
+
+float tiles_sampler_copy_rms(void) {
+    uint32_t frames = tiles_sampler_copy_frames();
+    return frames > 0u ? sqrtf((float)s_copy.energy / (float)frames) * (1.0f / 32768.0f) : 0.0f;
 }
 
 int32_t tiles_sampler_loaded_slot(uint8_t slot) {

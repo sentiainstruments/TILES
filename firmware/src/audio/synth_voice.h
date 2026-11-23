@@ -114,6 +114,7 @@ typedef struct {
     float beats_per_second;
     const int16_t *tape;  /* the granular tape (NULL: none), full scale 32768 */
     uint32_t tape_frames; /* of it loaded so far */
+    float tape_gain;      /* brings what it holds to one loudness */
 } synth_context_t;
 
 void synth_voice_start(synth_voice_t *v, const synth_patch_t *patch, const synth_input_t *in, uint32_t seed,

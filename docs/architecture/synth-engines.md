@@ -271,7 +271,15 @@ Edition's spec sheet (owner, 2026-11-21).
   run once a note, a grain or 16 samples compiled for size (3 cycles a
   voice slower, ~1 KB smaller). ~5 KB stays free.
 - **Levels:** cloud, dust and shimmer within ~1 dB of the other pads and
-  bells (test_synth's chord, loudest 0.1 s).
+  bells (test_synth's chord, loudest 0.1 s). The tape brings any slot to
+  one loudness: the sampler sums the squares of what it copies, the gain
+  is 0.3 / its RMS, between -12 and +18 dB, so a note of scatter is about
+  as loud as one of a pad's whatever the slot holds.
+- **Tuned on rendered demos** (2026-11-23, the engine run on the
+  computer, `scratchpad/render`): cloud's grains longer and fewer (240 ms
+  at 24 a second), no octave-down grains (muddy), a fifth now and then,
+  less detune, a darker filter; dust a little denser; shimmer and
+  scatter fewer, longer grains. Unit 2: cloud 296, shimmer 294, dust 130.
 
 Next: listen on unit 2 and tune the four sounds; a tape sound choosing
 its slot from the sound menu or the companion app.

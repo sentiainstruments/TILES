@@ -209,7 +209,7 @@ synth_patch_t g_synth_patches[] = {
         .engine = SYNTH_ENGINE_GRAIN, .grain = &g_grain_factory[TILES_GRAIN_CLOUD],
         .bank = TILES_WT_BANK_CLASSIC,
         .wave = F(3), .wave_pressure = 0.25f, .wave_lfo = 0.1f,
-        .filter = SYNTH_FILTER_LP12, .cutoff_hz = 2500.0f, .resonance = 0.15f, .key_track = 0.3f,
+        .filter = SYNTH_FILTER_LP12, .cutoff_hz = 2200.0f, .resonance = 0.15f, .key_track = 0.3f,
         .pressure_oct = 1.2f, .slide_oct = 0.8f,
         .amp = {400.0f, 1500.0f, 0.85f, 2000.0f}, .mod = {1.0f, 100.0f, 1.0f, 100.0f},
         .lfo = {SYNTH_LFO_SINE, false, 0.2f, false, 0.0f},

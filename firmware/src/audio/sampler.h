@@ -52,6 +52,8 @@ void tiles_sampler_copy_start(uint8_t slot, int16_t *dst, uint32_t room);
 void tiles_sampler_copy_stop(void);
 /* Samples copied so far (0: none, or the slot changed under it). */
 uint32_t tiles_sampler_copy_frames(void);
+/* Their RMS level (1.0 = full scale), for the tape's gain. */
+float tiles_sampler_copy_rms(void);
 /* `slot` if it holds audio, else the last slot that does; -1: none. */
 int32_t tiles_sampler_loaded_slot(uint8_t slot);
 /* Changes with every change of a slot's contents. */
