@@ -203,6 +203,22 @@ How it is built:
 Next: more factory FM sounds (a pluck, a stab); bank voices in the sound
 menu; the tracks' choices saved.
 
+## Wavetable extras (built 2026-11-23)
+
+For the genres in `factory-presets.md`: a **sub** (a CLASSIC sine or
+square an octave down, at its own mip level, so it never aliases) and
+**white noise**, both added after the drive so the low end stays clean;
+a **second LFO** (its own shape, rate, sync) to cutoff, wave, pitch and
+level (tremolo); **unison up to 7** (copies evenly from -d to +d; 1-3
+keep their layout and sound). Over 3 copies always go through their
+gains (seven bare Q14 sums would overflow) in one out-of-line loop, a
+copy at a time: specialised like the 1-3 copy loops, it cost ~4 KB of
+RAM. Unit 2 (`synth bench`): *super* (7 saws, wide) 418, *rumble* (sine,
+sub, noise, drive) 209, *throb* (glass, LFO 2 tremolo in eighths) 198;
+sounds without the extras within ~3 % of before (the LFO 2 checks are
+worked out once a note). New factory sounds in the empty slots: rumble
+(basses), super (plucks and leads), throb (bells).
+
 ## Granular (built 2026-11-21)
 
 A cloud of short grains a note (`firmware/src/audio/grain_voice.c`,

@@ -239,7 +239,8 @@ TILES_AUDIO_COLD static float patch_cost(const synth_patch_t *p) {
     float channels = stereo ? 2.0f : 1.0f;
     float filter = p->filter == SYNTH_FILTER_LADDER24 ? (stereo ? 100.0f : 80.0f) : (stereo ? 45.0f : 30.0f);
     float shaped = (p->drive > 0.0f || p->fold > 0.0f ? 15.0f : 0.0f) + (p->fold > 0.0f ? 40.0f : 0.0f);
-    return 45.0f + 38.0f * copies + (stereo ? 10.0f : 0.0f) + filter + shaped * channels;
+    float extras = (p->sub > 0.0f ? 12.0f : 0.0f) + (p->noise > 0.0f ? 6.0f * channels : 0.0f); /* first guesses */
+    return 45.0f + 38.0f * copies + (stereo ? 10.0f : 0.0f) + filter + shaped * channels + extras;
 }
 
 TILES_AUDIO_COLD void tiles_audio_engine_init(uint8_t bend_range_semitones, uint32_t clk_mhz, uint32_t (*now_us)(void)) {

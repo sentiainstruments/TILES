@@ -59,7 +59,7 @@ static void test_round_trip(void) {
         CHECK(strcmp(a.name, b.name) == 0 && b.patch.name == b.name, "%s's name", a.name);
         CHECK((b.patch.engine == SYNTH_ENGINE_FM) == (b.patch.fm == &b.fm), "%s's FM pointer", a.name);
     }
-    CHECK(n == 20u, "%u factory sounds, want 20", n);
+    CHECK(n == 23u, "%u factory sounds, want 23", n);
     tiles_preset_get(0u, &a);
     tiles_preset_encode(&a, s_rec);
     s_rec[2] = 9u;

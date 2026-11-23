@@ -16,7 +16,8 @@
 #define OFF_COMMON 20u  /* 42 floats */
 #define OFF_GRAIN 188u  /* 4 bytes, 17 floats */
 #define OFF_FM 260u     /* the DX7 voice, a pad byte, 2 floats */
-#define RECORD_END 424u /* zeros after, for later versions */
+#define OFF_EXTRA 424u  /* sub shape, LFO 2 shape and flags, a pad byte; 7 floats */
+#define RECORD_END 456u /* zeros after, for later versions */
 
 /* A float field: where it sits, and the range a record may give it (out
  * of range: clamped, so a record can't make a sound that harms ears or
@@ -54,11 +55,19 @@ static const field_t k_grain[] = {
     G(spray_slide, -1.0f, 1.0f),   G(scatter_slide, -2400.0f, 2400.0f),
 };
 #undef G
+#define P(f, lo, hi) {(uint16_t)offsetof(synth_patch_t, f), lo, hi}
+static const field_t k_extra[] = {
+    P(noise, 0.0f, 1.0f),        P(sub, 0.0f, 1.0f),           P(lfo2.rate, 0.0f, 64.0f), P(lfo2_oct, -8.0f, 8.0f),
+    P(lfo2_wave, -2.0f, 2.0f),   P(lfo2_cents, -1200.0f, 1200.0f), P(lfo2_level, 0.0f, 1.0f),
+};
+#undef P
+#define N_EXTRA (sizeof(k_extra) / sizeof(k_extra[0]))
 #define N_COMMON (sizeof(k_common) / sizeof(k_common[0]))
 #define N_GRAIN (sizeof(k_grain) / sizeof(k_grain[0]))
 _Static_assert(OFF_COMMON + 4u * N_COMMON == OFF_GRAIN, "the common floats end where the grain block starts");
 _Static_assert(OFF_GRAIN + 4u + 4u * N_GRAIN == OFF_FM, "the grain block ends where the FM block starts");
-_Static_assert(OFF_FM + TILES_DX7_VOICE_BYTES + 1u + 8u == RECORD_END, "the FM block's end");
+_Static_assert(OFF_FM + TILES_DX7_VOICE_BYTES + 1u + 8u == OFF_EXTRA, "the FM block's end");
+_Static_assert(OFF_EXTRA + 4u + 4u * N_EXTRA == RECORD_END, "the extras' end");
 _Static_assert(RECORD_END <= TILES_PRESET_RECORD_BYTES, "a record fits its slot");
 
 static void put_f32(uint8_t *p, float v) {
@@ -124,6 +133,12 @@ void tiles_preset_encode(const tiles_sound_t *s, uint8_t out[TILES_PRESET_RECORD
     memcpy(&out[OFF_FM], s->fm.dx7, TILES_DX7_VOICE_BYTES);
     put_f32(&out[OFF_FM + TILES_DX7_VOICE_BYTES + 1u], s->fm.pressure_db);
     put_f32(&out[OFF_FM + TILES_DX7_VOICE_BYTES + 5u], s->fm.slide_db);
+    out[OFF_EXTRA + 0u] = p->sub_shape;
+    out[OFF_EXTRA + 1u] = p->lfo2.shape;
+    out[OFF_EXTRA + 2u] = (uint8_t)((p->lfo2.synced ? 2u : 0u) | (p->lfo2.retrigger ? 4u : 0u));
+    for (uint32_t i = 0; i < N_EXTRA; i++) {
+        put_f32(&out[OFF_EXTRA + 4u + 4u * i], *(const float *)((const uint8_t *)p + k_extra[i].at));
+    }
 }
 
 /* A float from the record into `dst` (NULL: only checked), clamped. */
@@ -153,7 +168,8 @@ bool tiles_preset_decode(const uint8_t in[TILES_PRESET_RECORD_BYTES], tiles_soun
     const uint8_t *b = &in[OFF_BYTES];
     if (name_len == 0u || b[0] >= TILES_WT_BANK_COUNT || b[1] > SYNTH_UNISON_MAX || b[2] > SYNTH_FILTER_LADDER24 ||
         b[3] > SYNTH_LEGATO || in[OFF_SHAPE] > SYNTH_LFO_RANDOM || in[OFF_GRAIN] > TILES_GRAIN_SRC_TAPE ||
-        in[OFF_GRAIN + 1u] > 7u || in[OFF_GRAIN + 2u] > 127u) {
+        in[OFF_GRAIN + 1u] > 7u || in[OFF_GRAIN + 2u] > 127u || in[OFF_EXTRA] > SYNTH_SUB_SQUARE ||
+        in[OFF_EXTRA + 1u] > SYNTH_LFO_RANDOM) {
         return false;
     }
     if (out != NULL) {
@@ -172,6 +188,10 @@ bool tiles_preset_decode(const uint8_t in[TILES_PRESET_RECORD_BYTES], tiles_soun
         out->grain.slot = in[OFF_GRAIN + 1u];
         out->grain.root = in[OFF_GRAIN + 2u];
         memcpy(out->fm.dx7, &in[OFF_FM], TILES_DX7_VOICE_BYTES);
+        out->patch.sub_shape = in[OFF_EXTRA];
+        out->patch.lfo2.shape = in[OFF_EXTRA + 1u];
+        out->patch.lfo2.synced = (in[OFF_EXTRA + 2u] & 2u) != 0u;
+        out->patch.lfo2.retrigger = (in[OFF_EXTRA + 2u] & 4u) != 0u;
     }
     uint8_t *patch = out != NULL ? (uint8_t *)&out->patch : NULL;
     uint8_t *grain = out != NULL ? (uint8_t *)&out->grain : NULL;
@@ -182,6 +202,11 @@ bool tiles_preset_decode(const uint8_t in[TILES_PRESET_RECORD_BYTES], tiles_soun
     }
     for (uint32_t i = 0; i < N_GRAIN; i++) {
         if (!take_f32(&in[OFF_GRAIN + 4u + 4u * i], &k_grain[i], grain)) {
+            return false;
+        }
+    }
+    for (uint32_t i = 0; i < N_EXTRA; i++) {
+        if (!take_f32(&in[OFF_EXTRA + 4u + 4u * i], &k_extra[i], patch)) {
             return false;
         }
     }

@@ -15,11 +15,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SYNTH_UNISON_MAX 3u
+#define SYNTH_UNISON_MAX 7u
 
 enum { SYNTH_FILTER_LP12 = 0, SYNTH_FILTER_BP12, SYNTH_FILTER_HP12, SYNTH_FILTER_LADDER24 };
 enum { SYNTH_POLY = 0, SYNTH_MONO, SYNTH_LEGATO };
 enum { SYNTH_ENGINE_WAVETABLE = 0, SYNTH_ENGINE_FM, SYNTH_ENGINE_GRAIN };
+/* The sub's wave: CLASSIC frames 0 and 4. */
+enum { SYNTH_SUB_SINE = 0, SYNTH_SUB_SQUARE };
 
 struct tiles_grain_params; /* grain_voice.h */
 
@@ -44,7 +46,7 @@ typedef struct {
     uint8_t bank;
     /* Wavetable position 0..1 and what moves it (in table widths). */
     float wave, wave_pressure, wave_slide, wave_env, wave_lfo;
-    uint8_t unison;     /* 1..3 */
+    uint8_t unison;     /* 1..7 */
     float detune_cents; /* outer copies, +- */
     float width;        /* their stereo spread 0..1 */
     bool phase_reset;   /* every note starts in phase (plucks, basses) */
@@ -69,6 +71,14 @@ typedef struct {
     float pressure_level; /* 0..1: pressure adds this much level */
     float drift_cents;    /* slow random pitch wander, 0 = tight */
     tiles_fx_amounts_t fx; /* its effects: sends, inserts, pump */
+    /* The wavetable voice's extras: white noise and a sub an octave down
+     * into the filter (0..1 against the wave), not driven; a second LFO
+     * to cutoff (octaves), wave, pitch (cents) and level (0..1 tremolo). */
+    float noise;
+    float sub;
+    uint8_t sub_shape;
+    synth_lfo_cfg_t lfo2;
+    float lfo2_oct, lfo2_wave, lfo2_cents, lfo2_level;
 } synth_patch_t;
 
 /* Per-note inputs, updated by the engine from MIDI. */
@@ -95,7 +105,7 @@ typedef struct {
     float oct;              /* the cutoff octaves the coefficients are for */
     float oct_base;         /* velocity's share, fixed for the note */
     float level_base;       /* level and velocity, fixed for the note */
-    bool lfo_used, mod_used;
+    bool lfo_used, mod_used, lfo2_used;
     float lfo_phase, lfo_held, lfo_fade, lfo_step;
     uint32_t lfo_delay_steps, elapsed_steps;
     float pitch_env, pitch_env_k; /* semitones now, decay per step */
@@ -106,6 +116,9 @@ typedef struct {
     float wave_pos;         /* last control step's frame position */
     float drift, drift_target;
     uint32_t rng;
+    uint32_t sub_phase, sub_inc;
+    uint32_t sub_offset, sub_fshift; /* its mip level for the pitch */
+    float lfo2_phase, lfo2_held, lfo2_step;
 } synth_voice_t;
 
 /* The engine's shared state the voices read. */

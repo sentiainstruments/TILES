@@ -4,14 +4,15 @@ TILES's own sound, streamed to the computer over the same USB-C cable as
 MIDI: a stereo 48 kHz / 24-bit USB audio input (UAC2, class compliant on
 macOS, Windows 10+, Linux and iPadOS) that a DAW records like any
 interface input. A sound is the **wavetable**, **FM** or **granular
-engine** (13 + 3 + 4 factory sounds, a sound per track); how they are
+engine** (23 factory sounds in the 96 preset slots, a sound per track); how they are
 built and what they measure:
 `../../../docs/architecture/synth-engines.md`.
 
 | File | What it is |
 |---|---|
 | `audio_engine.c/.h` | The four tracks, a sound (patch) each, with the guardrails: voices admitted by measured cost, at most 8 a track, the stealing order and the live load guard (`../../../docs/architecture/audio-engine.md`, "Guardrails"); MPE, mono/legato note stacks, the stereo mix. Plain C, no Pico code, tested on the computer (`test/test_audio_engine.c`). |
-| `synth_voice.c/.h`, `synth_patches.c` | The wavetable voice (up to 3 unison copies, drive/fold, SVF or ladder, two envelopes, LFO, glide) and the factory sounds. Tested on the computer (`test/test_synth.c`). |
+| `synth_voice.c/.h` | The wavetable voice: up to 7 unison copies, drive/fold, a sub an octave down and white noise (not driven), SVF or ladder, two envelopes, two LFOs, glide. Tested on the computer (`test/test_synth.c`). |
+| `presets.c/.h`, `factory_presets.c` | The 96 preset slots: a slot written from the computer holds its record (below) in flash, one never written plays its factory sound (`factory_presets.c`, const, in flash, page 1 laid out as the sound menu shows it), the rest are empty. 8 records a `kv_store` group (two sectors, power-cut safe), 12 groups (`storage/flash_map.h`). A track plays a RAM copy (`tiles_sound_t`): core 0 copies the preset into the track's free one, core 1 switches. Tested on the computer (`test/test_presets.c`). |
 | `fm_bank.c/.h` | The DX7 bank in flash: a 32-voice sysex streamed in by `SYNTH BANK PUT`, checked (header, DX7 checksum, CRC-32), voices first and the header last; names and unpacked voices for `SYNTH BANK` / `SYNTH VOICE`. Core 0; tested on the computer (`test/test_fm_bank.c`). |
 | `fm_voice.c/.h`, `fm_patches.c` | The FM voice: six operators playing DX7 voice data (32 algorithms, envelopes, scaling, LFO, pitch envelope), pressure and slide brightening the modulators; DX7 bank and voice unpacking; the factory FM voices. Tested on the computer (`test/test_fm.c`). |
 | `grain_voice.c/.h`, `grain_patches.c` | The granular voice: up to 8 grains a note from a wavetable bank (a frame a grain, band-limited) or the tape (a drum slot in the delay's line, `audio_engine.c`), each its own pitch, place and side; pressure and slide move size, density, spray and place; the factory sounds' grain settings. Tested on the computer (`test/test_grain.c`). |
@@ -27,6 +28,38 @@ built and what they measure:
 | `audio_ring.h` | The lock-free single-producer/single-consumer ring the two cores talk through. |
 | `usb_audio.c/.h` | Starts core 1, feeds it TILES's MIDI, and answers TinyUSB's audio callbacks. The descriptor is in `midi/usb_descriptors.c`, the TinyUSB options in `midi/tusb_config.h`. |
 | `dsp_bench.c/.h` | The DSP stress test: high-quality prototypes of every planned engine, drum and effect, timed on core 1. Only in `-DTILES_DSP_BENCH=ON` builds (`tools/tiles_control.py bench`); results in `../../../docs/architecture/audio-engine.md`. |
+
+## Preset record
+
+508 bytes, little-endian, fixed offsets; floats are IEEE 754 single.
+Version 1. Bytes past 456 are 0 (later versions add fields there; a
+reader takes 0 as "off"). A record is refused if the marker or version
+is wrong, the name is empty or not printable ASCII, an enum is out of
+range, or a float isn't finite; floats out of their range are clamped
+(the ranges are in `presets.c`).
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 2 | `TP` |
+| 2 | 1 | version (1) |
+| 3 | 1 | engine: 0 wavetable, 1 FM, 2 granular |
+| 4 | 10 | name, ASCII, NUL-padded |
+| 14 | 4 | wavetable bank (0-2), unison (1-7), filter (0 LP, 1 BP, 2 HP, 3 ladder), voice mode (0 poly, 1 mono, 2 legato) |
+| 18 | 1 | flags: 1 phase reset, 2 LFO synced, 4 LFO retrigger |
+| 19 | 1 | LFO shape (0 sine, 1 triangle, 2 saw down, 3 square, 4 random) |
+| 20 | 168 | 42 floats: wave, wave_pressure, wave_slide, wave_env, wave_lfo, detune_cents, width, drive, fold, cutoff_hz, resonance, key_track, env_oct, velocity_oct, pressure_oct, slide_oct, lfo_oct, amp attack/decay/sustain/release (ms, ms, 0-1, ms), mod the same, lfo rate, lfo delay_ms, vibrato_cents, pitch_env_semis, pitch_env_ms, glide_ms, level, velocity_level, pressure_level, drift_cents, effect sends and inserts: reverb, delay, chorus, drive, dark, crush, pump |
+| 188 | 4 | granular: source (0 wave, 1 tape), tape slot (0-7), root note, 0 |
+| 192 | 68 | 17 floats: size_ms, density, jitter, spray, scan, scatter_cents, octave_up, octave_down, fifth, reverse, spread, skew, size_pressure, density_pressure, spray_pressure, spray_slide, scatter_slide |
+| 260 | 155 | FM: the DX7 voice, unpacked (`fm_voice.h`) |
+| 415 | 1 | 0 |
+| 416 | 8 | 2 floats: FM pressure_db, slide_db |
+| 424 | 4 | sub shape (0 sine, 1 square), LFO 2 shape, LFO 2 flags (2 synced, 4 retrigger), 0 |
+| 428 | 28 | 7 floats: noise, sub, LFO 2 rate, lfo2_oct, lfo2_wave, lfo2_cents, lfo2_level |
+| 456 | 52 | 0 |
+
+The fields are `synth_patch_t`'s, `tiles_grain_params_t`'s and
+`tiles_fm_patch_t`'s (their headers say what each means); an engine reads
+only its own, the rest stay as written.
 
 ## How it runs
 

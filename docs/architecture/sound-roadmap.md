@@ -34,7 +34,13 @@ banks, 48 kHz / 24-bit. Worth adding with the presets:
   slide already), 91 reverb, 93 chorus, ...), so a DAW automates TILES's
   sound like any synth's.
 
-## Presets: 96 slots in 4 pages (decided 2026-11-17)
+## Presets: 96 slots in 4 pages (decided 2026-11-17; the store built 2026-11-23)
+
+Built: `firmware/src/audio/presets.c` (the record: `firmware/src/audio/
+README.md`, "Preset record"). A slot never written plays its factory
+sound instead of a first boot writing them all; a reset clears the
+slots. Writing from the computer: the PRESET commands
+(`shared/protocol/README.md`).
 
 - **96 slots, flat:** no rows or columns by family. 4 pages of 24 pads,
   "-"/"+" step through the pages in the sound menu (the underglow says

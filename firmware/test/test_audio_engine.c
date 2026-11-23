@@ -376,7 +376,7 @@ static void test_bank_voice(void) {
     tiles_audio_engine_sound_use(1u);
     CHECK(tiles_audio_engine_patch(1u) == 6u && strcmp(tiles_audio_engine_track_name(1u), "pluck") == 0,
           "track 2 is '%s'", tiles_audio_engine_track_name(1u));
-    CHECK(!tiles_audio_engine_sound_load(1u, 5u), "an empty slot loaded");
+    CHECK(!tiles_audio_engine_sound_load(1u, 23u), "an empty slot loaded");
 }
 
 int main(void) {

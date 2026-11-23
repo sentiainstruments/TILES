@@ -346,8 +346,112 @@ static void test_expression(void) {
     CHECK(tiles_audio_engine_track_voices(0u) == 0u, "acid kept sounding");
 }
 
+/* ---- the voice's extras: sub, noise, the second LFO, wide unison ---- */
+
+static float s_xl[48000], s_xr[48000];
+
+static synth_patch_t plain(void) {
+    synth_patch_t p;
+    memset(&p, 0, sizeof(p));
+    p.name = "t";
+    p.bank = TILES_WT_BANK_CLASSIC;
+    p.unison = 1;
+    p.filter = SYNTH_FILTER_LP12;
+    p.cutoff_hz = 20000.0f;
+    p.amp = (synth_adsr_t){1.0f, 100.0f, 1.0f, 100.0f};
+    p.mod = p.amp;
+    p.level = 1.0f;
+    return p;
+}
+
+static void voice_run(const synth_patch_t *p, float note, uint32_t n) {
+    static synth_voice_t v;
+    synth_input_t in = {note, 0.8f, 0.0f, 0.0f};
+    memset(&v, 0, sizeof(v));
+    synth_voice_start(&v, p, &in, 99u, false);
+    memset(s_xl, 0, n * sizeof(float));
+    memset(s_xr, 0, n * sizeof(float));
+    for (uint32_t i = 0; i < n; i += 16u) {
+        synth_voice_render(&v, &s_ctx, &in, &s_xl[i], &s_xr[i], 16u);
+    }
+}
+
+static double goertzel(const float *x, uint32_t n, double f) {
+    double k = 2.0 * cos(2.0 * M_PI * f / FS), s1 = 0, s2 = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        double s0 = x[i] + k * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    return sqrt(s1 * s1 + s2 * s2 - k * s1 * s2) / n;
+}
+
+static void test_extras(void) {
+    /* A sine at A4 with a sine sub: 220 Hz appears, as loud as the wave. */
+    synth_patch_t p = plain();
+    voice_run(&p, 69.0f, 24000u);
+    double a440 = goertzel(&s_xl[4800], 19200u, 440.0), a220 = goertzel(&s_xl[4800], 19200u, 220.0);
+    p.sub = 1.0f;
+    voice_run(&p, 69.0f, 24000u);
+    double b220 = goertzel(&s_xl[4800], 19200u, 220.0);
+    CHECK(a220 < 0.01 * a440 && b220 > 0.5 * a440 && b220 < 2.0 * a440, "sub: 220 Hz %.4f -> %.4f (wave %.4f)", a220,
+          b220, a440);
+
+    /* Noise: the high band fills in. */
+    p = plain();
+    voice_run(&p, 45.0f, 24000u);
+    double quiet = goertzel(&s_xl[4800], 19200u, 9000.0);
+    p.noise = 0.5f;
+    voice_run(&p, 45.0f, 24000u);
+    double loud = goertzel(&s_xl[4800], 19200u, 9000.0);
+    CHECK(loud > 20.0 * quiet, "noise at 9 kHz %.6f -> %.6f", quiet, loud);
+
+    /* The second LFO's tremolo: 10 ms levels swing. */
+    p = plain();
+    p.lfo2 = (synth_lfo_cfg_t){SYNTH_LFO_SINE, false, 4.0f, true, 0.0f};
+    p.lfo2_level = 1.0f;
+    voice_run(&p, 60.0f, 48000u);
+    double lo = 1e9, hi = 0.0;
+    for (uint32_t w = 10u; w < 100u; w++) {
+        double e = 0.0;
+        for (uint32_t i = 0; i < 480u; i++) {
+            e += s_xl[w * 480u + i] * s_xl[w * 480u + i];
+        }
+        lo = e < lo ? e : lo;
+        hi = e > hi ? e : hi;
+    }
+    CHECK(hi > 20.0 * lo, "tremolo: 10 ms energy %.5f .. %.5f", lo, hi);
+
+    /* Seven saws, wide and mono: in range, at the pitch. */
+    for (int wide = 0; wide < 2; wide++) {
+        p = plain();
+        p.wave = 3.0f / 7.0f;
+        p.unison = 7;
+        p.detune_cents = 25.0f;
+        p.width = wide ? 1.0f : 0.0f;
+        voice_run(&p, 57.0f, 24000u);
+        float peak = 0.0f;
+        bool finite = true;
+        for (uint32_t i = 0; i < 24000u; i++) {
+            finite = finite && isfinite(s_xl[i]) && isfinite(s_xr[i]);
+            peak = fabsf(s_xl[i]) > peak ? fabsf(s_xl[i]) : peak;
+        }
+        /* The copies beat: the fundamental's band (+-25 cents) against the
+         * band a semitone up. */
+        double f0 = 0.0, off = 0.0;
+        for (double f = 214.0; f <= 226.0; f += 1.0) {
+            f0 += pow(goertzel(&s_xl[4800], 19200u, f), 2.0);
+            off += pow(goertzel(&s_xl[4800], 19200u, f + 18.0), 2.0);
+        }
+        CHECK(finite && peak > 0.05f && peak < 2.0f, "7 saws (%s): peak %.3f", wide ? "wide" : "mono", (double)peak);
+        CHECK(f0 > 3.0 * off, "7 saws (%s): fundamental band %.6f, a semitone up %.6f", wide ? "wide" : "mono", f0, off);
+    }
+    printf("  extras: sub at half the pitch, noise, tremolo, 7 saws wide and mono\n");
+}
+
 int main(void) {
     build_banks();
+    test_extras();
     test_levels();
     test_aliasing();
     test_filters();

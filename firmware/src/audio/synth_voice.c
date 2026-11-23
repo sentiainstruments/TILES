@@ -14,7 +14,7 @@
 /* Frame crossfade: Q24 ramp, read as Q14. */
 #define FF_ONE 16777216.0f
 /* Unison copies sum louder: keep a chord's level whatever the count. */
-static const float k_unison_norm[SYNTH_UNISON_MAX + 1u] = {1.0f, 1.0f, 0.78f, 0.66f};
+static const float k_unison_norm[SYNTH_UNISON_MAX + 1u] = {1.0f, 1.0f, 0.78f, 0.66f, 0.57f, 0.51f, 0.47f, 0.43f};
 
 #define INLINE static inline __attribute__((always_inline))
 /* Fully unrolled, a step's loops spill registers; by 2 is as fast. */
@@ -50,8 +50,12 @@ void synth_voice_start(synth_voice_t *v, const synth_patch_t *patch, const synth
         v->rng = seed | 1u;
         uint32_t copies = copies_of(patch);
         for (uint32_t i = 0; i < SYNTH_UNISON_MAX; i++) {
-            /* Copies at -d, +d and 0 (the centre last: one copy plays straight). */
-            float spread = copies == 1u ? 0.0f : i == 0u ? -1.0f : i == 1u ? 1.0f : 0.0f;
+            /* Up to 3: copies at -d, +d and 0 (the centre last: one copy
+             * plays straight); more: evenly from -d to +d (a supersaw). */
+            float spread = copies == 1u   ? 0.0f
+                           : copies <= 3u ? (i == 0u ? -1.0f : i == 1u ? 1.0f : 0.0f)
+                           : i < copies   ? -1.0f + 2.0f * (float)i / (float)(copies - 1u)
+                                          : 0.0f;
             v->ratio[i] = exp2f(spread * patch->detune_cents / 1200.0f);
             float pan = 0.5f + 0.5f * spread * patch->width;
             float norm = i < copies ? k_unison_norm[copies] : 0.0f;
@@ -66,6 +70,8 @@ void synth_voice_start(synth_voice_t *v, const synth_patch_t *patch, const synth
         v->oct = UNSET;
         v->lfo_used = patch->lfo_oct != 0.0f || patch->wave_lfo != 0.0f || patch->vibrato_cents != 0.0f;
         v->mod_used = patch->env_oct != 0.0f || patch->wave_env != 0.0f;
+        v->lfo2_used = patch->lfo2_oct != 0.0f || patch->lfo2_wave != 0.0f || patch->lfo2_cents != 0.0f ||
+                       patch->lfo2_level != 0.0f;
         float rate = patch->lfo.rate > 0.0f ? patch->lfo.rate : 1.0f;
         v->lfo_step = patch->lfo.synced ? 1.0f / (rate * STEPS_PER_S) : rate / STEPS_PER_S;
         v->lfo_delay_steps = (uint32_t)(patch->lfo.delay_ms / STEP_MS);
@@ -82,6 +88,11 @@ void synth_voice_start(synth_voice_t *v, const synth_patch_t *patch, const synth
         v->lfo_phase = 0.0f;
         v->lfo_held = 0.0f;
         v->pitch = in->note;
+        v->sub_phase = patch->phase_reset ? 0u : synth_rand(&v->rng);
+        float rate2 = patch->lfo2.rate > 0.0f ? patch->lfo2.rate : 1.0f;
+        v->lfo2_step = patch->lfo2.synced ? 1.0f / (rate2 * STEPS_PER_S) : rate2 / STEPS_PER_S;
+        v->lfo2_phase = 0.0f;
+        v->lfo2_held = 0.0f;
     }
     /* Glide on a legato step, or always in mono mode. */
     bool glide = legato || (sounding && patch->voice_mode == SYNTH_MONO);
@@ -97,6 +108,9 @@ void synth_voice_start(synth_voice_t *v, const synth_patch_t *patch, const synth
         v->elapsed_steps = 0;
         if (patch->lfo.retrigger) {
             v->lfo_phase = 0.0f;
+        }
+        if (patch->lfo2.retrigger) {
+            v->lfo2_phase = 0.0f;
         }
         v->lfo_fade = patch->lfo.delay_ms > 0.0f ? 0.0f : 1.0f;
         v->pitch_env = patch->pitch_env_semis;
@@ -146,10 +160,22 @@ INLINE void control(synth_voice_t *v, const synth_context_t *ctx, const synth_in
         lfo = synth_lfo_shape(p->lfo.shape, v->lfo_phase, v->lfo_held) * v->lfo_fade;
     }
     v->elapsed_steps++;
+    float lfo2 = 0.0f;
+    if (v->lfo2_used) {
+        v->lfo2_phase += p->lfo2.synced ? ctx->beats_per_second * v->lfo2_step : v->lfo2_step;
+        if (v->lfo2_phase >= 1.0f) {
+            v->lfo2_phase -= floorf(v->lfo2_phase);
+            v->lfo2_held = synth_rand_bipolar(&v->rng);
+        }
+        lfo2 = synth_lfo_shape(p->lfo2.shape, v->lfo2_phase, v->lfo2_held);
+    }
 
     /* Pitch: glide, pitch envelope, vibrato, drift. */
     v->pitch += (in->note - v->pitch) * v->glide_coef;
     float semis = v->pitch + p->vibrato_cents * 0.01f * lfo;
+    if (v->lfo2_used) {
+        semis += p->lfo2_cents * 0.01f * lfo2;
+    }
     if (v->pitch_env != 0.0f) {
         semis += v->pitch_env;
         v->pitch_env = __builtin_fabsf(v->pitch_env) > 0.001f ? v->pitch_env * v->pitch_env_k : 0.0f;
@@ -173,11 +199,21 @@ INLINE void control(synth_voice_t *v, const synth_context_t *ctx, const synth_in
         uint32_t level = tiles_wt_level(f_max); /* the top copy decides */
         v->fshift = 32u - tiles_wt_level_bits(level) - 14u;
         v->table_offset = tiles_wt_level_offset(level) * TILES_WT_FRAMES;
+        if (p->sub > 0.0f) {
+            float fs = synth_clamp(0.5f * f, 0.0f, 0.49f);
+            uint32_t sub_level = tiles_wt_level(fs);
+            v->sub_inc = (uint32_t)(fs * 4294967296.0f);
+            v->sub_fshift = 32u - tiles_wt_level_bits(sub_level) - 14u;
+            v->sub_offset = tiles_wt_level_offset(sub_level) * TILES_WT_FRAMES;
+        }
     }
 
     /* Wave position: the frame pair holding the step's middle; the share
      * ramps across it (a step crossing a frame edge rounds at the edge). */
     float wave = p->wave + p->wave_pressure * pressure + p->wave_slide * slide + p->wave_env * mod + p->wave_lfo * lfo;
+    if (v->lfo2_used) {
+        wave += p->lfo2_wave * lfo2;
+    }
     wave = synth_clamp(wave, 0.0f, 1.0f) * (float)(TILES_WT_FRAMES - 1u);
     float from = v->wave_pos;
     v->wave_pos = wave;
@@ -192,6 +228,9 @@ INLINE void control(synth_voice_t *v, const synth_context_t *ctx, const synth_in
     /* Filter */
     float oct = v->oct_base + p->env_oct * mod + p->pressure_oct * pressure + p->slide_oct * slide + p->lfo_oct * lfo +
                 p->key_track * (1.0f / 12.0f) * (semis - 60.0f);
+    if (v->lfo2_used) {
+        oct += p->lfo2_oct * lfo2;
+    }
     if (oct != v->oct) {
         v->oct = oct;
         float cutoff = synth_clamp(p->cutoff_hz * synth_exp2(synth_clamp(oct, -12.0f, 12.0f)), 20.0f, 20000.0f);
@@ -204,6 +243,9 @@ INLINE void control(synth_voice_t *v, const synth_context_t *ctx, const synth_in
 
     /* Level: envelope, velocity, pressure. */
     float target = amp * v->level_base * (1.0f + p->pressure_level * pressure);
+    if (v->lfo2_used) {
+        target *= 1.0f - p->lfo2_level * (0.5f - 0.5f * lfo2);
+    }
     c->level_from = v->level;
     c->level_step = (target - v->level) * (1.0f / (float)SYNTH_CTRL);
     v->level = target;
@@ -261,12 +303,17 @@ INLINE int32_t read_copy(const int16_t *t, uint32_t fs, uint32_t ph, uint32_t w)
 /* Every copy's step in one loop, sums in registers, into al (and ar).
  * Spread copies are summed at Q31 gains (Q14 samples times gain / 2);
  * copies not spread share one gain, applied later: Q14 samples summed. */
-INLINE void osc(synth_voice_t *v, const ctrl_t *c, const int32_t *gl, const int32_t *gr, const uint32_t copies,
-                const bool stereo, int32_t *al, int32_t *ar) {
+INLINE void osc(synth_voice_t *v, const ctrl_t *c, const int32_t *gl, const int32_t *gr, const uint32_t base,
+                const uint32_t copies, const bool gained, const bool stereo, const bool accumulate, int32_t *al,
+                int32_t *ar) {
     const int16_t *t = c->table;
     const uint32_t fs = v->fshift;
-    uint32_t p0 = v->phase[0], p1 = v->phase[1], p2 = v->phase[2];
-    const uint32_t i0 = v->inc[0], i1 = v->inc[1], i2 = v->inc[2];
+    uint32_t p0 = v->phase[base], p1 = copies > 1u ? v->phase[base + 1u] : 0u,
+             p2 = copies > 2u ? v->phase[base + 2u] : 0u;
+    const uint32_t i0 = v->inc[base], i1 = copies > 1u ? v->inc[base + 1u] : 0u,
+                   i2 = copies > 2u ? v->inc[base + 2u] : 0u;
+    gl += base;
+    gr += base;
     int32_t ffa = c->ff;
     const int32_t ffs = c->ff_step;
     UNROLL
@@ -274,33 +321,93 @@ INLINE void osc(synth_voice_t *v, const ctrl_t *c, const int32_t *gl, const int3
         /* The second frame's share Q14 in the top half, the first's below. */
         uint32_t w = 16384u + (uint32_t)(ffa >> 10) * 65535u;
         int32_t x = read_copy(t, fs, p0, w);
-        int32_t sl = stereo ? smmul(x, gl[0]) : x;
+        int32_t sl = gained ? smmul(x, gl[0]) : x;
         int32_t sr = stereo ? smmul(x, gr[0]) : 0;
         if (copies > 1u) {
             x = read_copy(t, fs, p1, w);
-            sl = stereo ? smmla(x, gl[1], sl) : sl + x;
+            sl = gained ? smmla(x, gl[1], sl) : sl + x;
             sr = stereo ? smmla(x, gr[1], sr) : 0;
         }
         if (copies > 2u) {
             x = read_copy(t, fs, p2, w);
-            sl = stereo ? smmla(x, gl[2], sl) : sl + x;
+            sl = gained ? smmla(x, gl[2], sl) : sl + x;
             sr = stereo ? smmla(x, gr[2], sr) : 0;
         }
-        al[s] = sl;
+        al[s] = accumulate ? al[s] + sl : sl;
         if (stereo) {
-            ar[s] = sr;
+            ar[s] = accumulate ? ar[s] + sr : sr;
         }
         p0 += i0;
         p1 += i1;
         p2 += i2;
         ffa += ffs;
     }
-    v->phase[0] = p0;
+    v->phase[base] = p0;
     if (copies > 1u) {
-        v->phase[1] = p1;
+        v->phase[base + 1u] = p1;
     }
     if (copies > 2u) {
-        v->phase[2] = p2;
+        v->phase[base + 2u] = p2;
+    }
+}
+
+/* 4-7 copies (a supersaw): one copy at a time, each added in through its
+ * gains. One loop for every count: specialised like the 1-3 copy loops,
+ * eleven copies of it cost ~4 KB of RAM. */
+static __attribute__((noinline)) void osc_wide(synth_voice_t *v, const ctrl_t *c, const int32_t *gl,
+                                               const int32_t *gr, uint32_t copies, bool stereo, int32_t *al,
+                                               int32_t *ar) {
+    const int16_t *t = c->table;
+    const uint32_t fs = v->fshift;
+    for (uint32_t s = 0; s < SYNTH_CTRL; s++) {
+        al[s] = 0;
+        ar[s] = 0;
+    }
+    for (uint32_t u = 0; u < copies; u++) {
+        uint32_t ph = v->phase[u];
+        const uint32_t inc = v->inc[u];
+        const int32_t g_l = gl[u], g_r = gr[u];
+        int32_t ffa = c->ff;
+        UNROLL
+        for (uint32_t s = 0; s < SYNTH_CTRL; s++) {
+            uint32_t w = 16384u + (uint32_t)(ffa >> 10) * 65535u;
+            int32_t x = read_copy(t, fs, ph, w);
+            al[s] = smmla(x, g_l, al[s]);
+            ar[s] = stereo ? smmla(x, g_r, ar[s]) : 0;
+            ph += inc;
+            ffa += c->ff_step;
+        }
+        v->phase[u] = ph;
+    }
+}
+
+/* The sub (a CLASSIC frame an octave down, its own mip level) and white
+ * noise into the filter's input, after the drive: a clean low end. */
+INLINE void extras(synth_voice_t *v, const synth_context_t *ctx, const synth_patch_t *p, bool stereo, float *bl,
+                   float *br) {
+    if (p->sub > 0.0f) {
+        const tiles_wt_bank_t *classic = ctx->banks[TILES_WT_BANK_CLASSIC];
+        const int16_t *t = &classic->data[v->sub_offset + (p->sub_shape == SYNTH_SUB_SQUARE ? 4u : 0u)];
+        const float k = classic->gain * 0.70710678f * (1.0f / 16384.0f) * p->sub;
+        uint32_t ph = v->sub_phase;
+        UNROLL
+        for (uint32_t s = 0; s < SYNTH_CTRL; s++) {
+            float x = (float)read_copy(t, v->sub_fshift, ph, 16384u) * k;
+            bl[s] += x;
+            br[s] += stereo ? x : 0.0f;
+            ph += v->sub_inc;
+        }
+        v->sub_phase = ph;
+    }
+    if (p->noise > 0.0f) {
+        const float k = 0.70710678f * p->noise;
+        UNROLL
+        for (uint32_t s = 0; s < SYNTH_CTRL; s++) {
+            bl[s] += synth_rand_bipolar(&v->rng) * k;
+            if (stereo) {
+                br[s] += synth_rand_bipolar(&v->rng) * k;
+            }
+        }
     }
 }
 
@@ -385,16 +492,20 @@ void TILES_AUDIO_HOT(synth_voice_render)(synth_voice_t *v, const synth_context_t
     }
     const uint32_t copies = copies_of(p);
     const bool stereo = copies > 1u && p->width > 0.0f;
+    /* Over 3 copies always through their gains: summed bare, 7 Q14
+     * samples would overflow. */
+    const bool gained = stereo || copies > 3u;
     const bool shaped = p->drive > 0.0f || p->fold > 0.0f;
-    /* Q14 samples (at half the Q31 gains when spread) in, the bank's scale
+    const bool extra = p->sub > 0.0f || p->noise > 0.0f;
+    /* Q14 samples (at half the Q31 gains when gained) in, the bank's scale
      * (and the drive) out. */
     const float drive = shaped ? 1.0f + p->drive : 1.0f;
-    const float scale = stereo ? bank->gain * (1.0f / 8192.0f) * drive
+    const float scale = gained ? bank->gain * (1.0f / 8192.0f) * drive
                                : bank->gain * v->gain_l[0] * (1.0f / 16384.0f) * drive;
     const float fold = p->fold;
     const int kind = p->filter;
     int32_t gl[SYNTH_UNISON_MAX], gr[SYNTH_UNISON_MAX];
-    for (uint32_t u = 0; u < SYNTH_UNISON_MAX; u++) {
+    for (uint32_t u = 0; u < copies; u++) {
         gl[u] = (int32_t)(synth_clamp(v->gain_l[u], 0.0f, 0.9999f) * 2147483648.0f);
         gr[u] = (int32_t)(synth_clamp(v->gain_r[u], 0.0f, 0.9999f) * 2147483648.0f);
     }
@@ -406,24 +517,33 @@ void TILES_AUDIO_HOT(synth_voice_render)(synth_voice_t *v, const synth_context_t
         control(v, ctx, in, bank, copies, &c);
         switch (copies * 2u + (stereo ? 1u : 0u)) {
         case 4u:
-            osc(v, &c, gl, gr, 2u, false, al, ar);
+            osc(v, &c, gl, gr, 0u, 2u, false, false, false, al, ar);
             break;
         case 5u:
-            osc(v, &c, gl, gr, 2u, true, al, ar);
+            osc(v, &c, gl, gr, 0u, 2u, true, true, false, al, ar);
             break;
         case 6u:
-            osc(v, &c, gl, gr, 3u, false, al, ar);
+            osc(v, &c, gl, gr, 0u, 3u, false, false, false, al, ar);
             break;
         case 7u:
-            osc(v, &c, gl, gr, 3u, true, al, ar);
+            osc(v, &c, gl, gr, 0u, 3u, true, true, false, al, ar);
+            break;
+        case 2u:
+        case 3u:
+            osc(v, &c, gl, gr, 0u, 1u, false, false, false, al, ar);
             break;
         default:
-            osc(v, &c, gl, gr, 1u, false, al, ar);
+            osc_wide(v, &c, gl, gr, copies, stereo, al, ar);
             break;
         }
         to_float(al, bl, scale, shaped, fold);
         if (stereo) {
             to_float(ar, br, scale, shaped, fold);
+        }
+        if (extra) {
+            extras(v, ctx, p, stereo, bl, br);
+        }
+        if (stereo) {
             filter(v, kind, true, bl, br, &l[base], &r[base], &c);
         } else {
             filter(v, kind, false, bl, br, &l[base], &r[base], &c);

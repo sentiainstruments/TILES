@@ -73,18 +73,13 @@ values are ours, as with the engines).
 
 The presets above can't all be made today. In order of what they unlock:
 
-1. **The preset store** (`sound-roadmap.md`): presets live in flash and
-   a track copies its sound into RAM. Today every factory sound sits in
-   RAM (20 x 212 bytes), so 96 can't; with the store only the tracks'
-   copies do, which also gives back ~2.5 KB.
+1. **The preset store** (built 2026-11-23): presets live in flash and a
+   track plays a RAM copy; ~5 KB of RAM came back.
 2. **Four macros per engine** (decided direction, `sound-roadmap.md`):
    what the encoders and the app move, set per preset.
 3. **Wavetable engine additions**, cheap ones first:
-   - a noise source mixed in (risers, breath, hats in a texture);
-   - a sub (a sine an octave down) beside the wave;
-   - a second LFO (vibrato and a wobble at once);
-   - unison up to 7 for the supersaw (more voice state and ~2x the cost
-     of 3; or the superwave engine planned in `sound-roadmap.md`);
+   - noise, a sub, a second LFO, unison up to 7: built 2026-11-23
+     (`synth-engines.md`, "Wavetable extras"; *super* costs 418 cycles);
    - more wavetables: banks kept in flash and copied into RAM when a
      track's sound needs them (each bank is 38 KB in RAM today; 3 fit).
      Growls, vowels and EDM leads want more than our 24 frames.
