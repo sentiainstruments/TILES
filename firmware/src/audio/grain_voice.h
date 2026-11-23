@@ -94,4 +94,4 @@ float tiles_grain_overlap(const tiles_grain_params_t *g);
 
 /* The granular factory sounds' settings (audio/grain_patches.c). */
 enum { TILES_GRAIN_CLOUD = 0, TILES_GRAIN_DUST, TILES_GRAIN_SHIMMER, TILES_GRAIN_SCATTER, TILES_GRAIN_FACTORY_COUNT };
-extern tiles_grain_params_t g_grain_factory[TILES_GRAIN_FACTORY_COUNT];
+extern const tiles_grain_params_t g_grain_factory[TILES_GRAIN_FACTORY_COUNT];

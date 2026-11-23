@@ -78,15 +78,16 @@ add_executable(sentia_tiles_firmware
     audio/fm_bank.c
     audio/fm_patches.c
     audio/fm_voice.c
+    audio/factory_presets.c
     audio/grain_patches.c
     audio/grain_voice.c
+    audio/presets.c
     audio/sample_slot.c
     audio/sample_store.c
     audio/sample_stream.c
     audio/sampler.c
     audio/fx.c
     audio/fx_memory.c
-    audio/synth_patches.c
     audio/synth_voice.c
     audio/usb_audio.c
     audio/wavetable.c

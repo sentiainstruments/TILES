@@ -30,6 +30,7 @@
 #include "touch.h"
 #include "audio_engine.h"
 #include "fx.h"
+#include "presets.h"
 #include "usb_audio.h"
 #include "usb_device.h"
 #include "tune.h"
@@ -774,10 +775,14 @@ static void handle_synth(void) {
         reply_err("standalone-only");
         return;
     }
+    char name[TILES_PRESET_NAME_MAX + 1u];
     if (what != NULL && strcmp(what, "LIST") == 0) {
-        for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
-            snprintf(text, sizeof(text), "%u %s", (unsigned)p, tiles_audio_engine_patch_name(p));
-            reply(text);
+        for (uint8_t p = 0; p < TILES_PRESET_SLOTS; p++) {
+            tiles_preset_name(p, name);
+            if (name[0] != '\0') {
+                snprintf(text, sizeof(text), "%u %s", (unsigned)p, name);
+                reply(text);
+            }
         }
         for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
             snprintf(text, sizeof(text), "track %u %s", (unsigned)t + 1u, tiles_audio_engine_track_name(t));
@@ -795,15 +800,19 @@ static void handle_synth(void) {
             return;
         }
         int patch = -1;
-        for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
-            if (strcmp(patch_arg, tiles_audio_engine_patch_name(p)) == 0) {
+        for (uint8_t p = 0; p < TILES_PRESET_SLOTS && patch < 0; p++) {
+            tiles_preset_name(p, name);
+            if (strcmp(patch_arg, name) == 0) {
                 patch = p;
             }
         }
         if (patch < 0 && patch_arg[0] >= '0' && patch_arg[0] <= '9') {
             patch = atoi(patch_arg);
         }
-        if (patch < 0 || patch >= (int)tiles_audio_engine_patch_count()) {
+        if (patch >= 0 && patch < (int)TILES_PRESET_SLOTS) {
+            tiles_preset_name((uint8_t)patch, name);
+        }
+        if (patch < 0 || patch >= (int)TILES_PRESET_SLOTS || name[0] == '\0') {
             reply_err("unknown-patch");
             return;
         }
@@ -822,11 +831,15 @@ static void handle_synth(void) {
         /* On core 0 with its interrupts off, ~5 ms a sound. */
         m33_hw->demcr |= M33_DEMCR_TRCENA_BITS;
         m33_hw->dwt_ctrl |= M33_DWT_CTRL_CYCCNTENA_BITS;
-        for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
+        for (uint8_t p = 0; p < TILES_PRESET_SLOTS; p++) {
+            tiles_preset_name(p, name);
+            if (name[0] == '\0') {
+                continue;
+            }
             uint32_t irq = save_and_disable_interrupts();
             uint32_t c = tiles_audio_engine_bench(p, 2400u, bench_cycles);
             restore_interrupts(irq);
-            snprintf(text, sizeof(text), "%s %lu", tiles_audio_engine_patch_name(p), (unsigned long)c);
+            snprintf(text, sizeof(text), "%s %lu", name, (unsigned long)c);
             reply(text);
         }
         /* The effects share core 1's state: only while it isn't rendering. */

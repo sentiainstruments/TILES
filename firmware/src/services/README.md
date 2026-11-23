@@ -179,12 +179,14 @@ Duet, Prism: 3; bouncing notes and the physics modes: 4; drums: 1);
 "-"/"+" step through the tracks, the underglow in the track's sequencer
 lane colour. No DAW transport here.
 
-- **Sounds:** a family a row, top to bottom: basses (acid, reese, wobble,
-  sub, solid), plucks and leads (pluck, lead, stab, hoover, tine), pads
-  (haze, air, choir, cloud, dust, scatter), bells (glass, pure, chime,
-  shimmer); solid, tine and chime are FM, cloud, dust, scatter and
-  shimmer granular (scatter plays drum slot 8, or the last slot loaded;
-  the delay rests while it is chosen). The track's sound bright, the rest
+- **Sounds:** preset slots 1-24 (`../audio/presets.h`) row by row, a
+  role a row, top to bottom: basses (acid, reese, wobble, sub, solid),
+  plucks and leads (pluck, lead, stab, hoover, tine), pads (haze, air,
+  choir, cloud, dust, scatter), bells (glass, pure, chime, shimmer);
+  solid, tine and chime are FM, cloud, dust, scatter and shimmer granular
+  (scatter plays drum slot 8, or the last slot loaded; the delay rests
+  while it is chosen). A slot written from the computer shows its own
+  sound; an empty one stays dark. The track's sound bright, the rest
   dim; a
   press past half travel picks and plays a short preview on the track. A
   new sound brings its own effect amounts.

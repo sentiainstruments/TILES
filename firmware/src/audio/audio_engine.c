@@ -4,6 +4,7 @@
 #include "fx.h"
 #include "fx_memory.h"
 #include "grain_voice.h"
+#include "presets.h"
 #include "midi_channels.h"
 #include "sampler.h"
 #include "synth_voice.h"
@@ -63,20 +64,18 @@ static float s_slide[16];    /* CC74 0..1 */
 static bool s_sustain[16];
 static float s_bend_range;
 static uint32_t s_age;
-static uint8_t s_track_patch[TILES_AUDIO_TRACKS]; /* a factory sound, or TILES_AUDIO_PATCH_BANK */
+static uint8_t s_track_patch[TILES_AUDIO_TRACKS]; /* its preset slot, or TILES_AUDIO_PATCH_BANK */
 static const synth_patch_t *s_track_sound[TILES_AUDIO_TRACKS];
 
-/* Each track's voice from the DX7 bank: two slots, so voices still fading
+/* Each track's sound, a RAM copy (presets.h): two, so voices still fading
  * from the last one keep theirs while core 0 fills the other
- * (tiles_audio_engine_fm_load()). */
-typedef struct {
-    tiles_fm_patch_t fm;
-    synth_patch_t patch;
-    char name[11];
-} bank_sound_t;
-static bank_sound_t s_bank_sound[TILES_AUDIO_TRACKS][2];
-static volatile uint8_t s_bank_next[TILES_AUDIO_TRACKS];    /* the slot the next load fills */
-static volatile bool s_bank_pending[TILES_AUDIO_TRACKS];    /* filled, not yet switched to */
+ * (tiles_audio_engine_sound_load()). */
+static tiles_sound_t s_sound[TILES_AUDIO_TRACKS][2];
+static volatile uint8_t s_sound_next[TILES_AUDIO_TRACKS];   /* the one the next load fills */
+static volatile bool s_sound_pending[TILES_AUDIO_TRACKS];   /* filled, not yet switched to */
+static uint8_t s_sound_slot[TILES_AUDIO_TRACKS];            /* the pending one's preset slot */
+/* The bench's sound (core 0). */
+static tiles_sound_t s_bench_sound;
 static held_note_t s_mono_held[TILES_AUDIO_TRACKS][MONO_STACK];
 static uint8_t s_mono_count[TILES_AUDIO_TRACKS];
 
@@ -273,12 +272,17 @@ TILES_AUDIO_COLD void tiles_audio_engine_init(uint8_t bend_range_semitones, uint
     s_budget = s_core_cycles * (float)TILES_AUDIO_TARGET_PCT / 100.0f - (float)TILES_AUDIO_RESERVE_CYCLES;
     s_ceiling = s_core_cycles * (float)TILES_AUDIO_CEILING_PCT / 100.0f - (float)TILES_AUDIO_RESERVE_CYCLES;
     for (uint32_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
-        s_track_patch[t] = g_synth_track_default[t];
-        s_track_sound[t] = &g_synth_patches[s_track_patch[t]];
+        uint8_t slot = g_factory_track_default[t];
+        if (!tiles_preset_get(slot, &s_sound[t][0])) {
+            tiles_sound_from_patch(&s_sound[t][0], &g_factory_presets[slot]);
+        }
+        s_sound_next[t] = 1u;
+        s_sound_pending[t] = false;
+        s_track_patch[t] = slot;
+        s_track_sound[t] = &s_sound[t][0].patch;
         s_cost[t] = patch_cost(s_track_sound[t]);
         s_track_fx[t] = s_track_sound[t]->fx;
         tiles_fx_insert_reset(&s_insert[t]);
-        s_bank_pending[t] = false;
     }
     s_over_blocks = 0;
     s_load = 0.0f;
@@ -327,49 +331,66 @@ TILES_AUDIO_COLD static void assign_sound(uint8_t track, const synth_patch_t *p,
     }
 }
 
-TILES_AUDIO_COLD void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch) {
-    if (track >= TILES_AUDIO_TRACKS || patch >= g_synth_patch_count || s_track_patch[track] == patch) {
-        return;
+/* The track's free sound, for core 0 to fill (NULL while the last one is
+ * still to be switched to). */
+TILES_AUDIO_COLD static tiles_sound_t *free_sound(uint8_t track) {
+    if (track >= TILES_AUDIO_TRACKS || __atomic_load_n(&s_sound_pending[track], __ATOMIC_ACQUIRE)) {
+        return NULL;
     }
-    assign_sound(track, &g_synth_patches[patch], patch);
+    return &s_sound[track][s_sound_next[track]];
+}
+
+TILES_AUDIO_COLD bool tiles_audio_engine_sound_load(uint8_t track, uint8_t slot) {
+    tiles_sound_t *s = free_sound(track);
+    if (s == NULL || !tiles_preset_get(slot, s)) {
+        return false;
+    }
+    s_sound_slot[track] = slot;
+    __atomic_store_n(&s_sound_pending[track], true, __ATOMIC_RELEASE);
+    return true;
 }
 
 TILES_AUDIO_COLD bool tiles_audio_engine_fm_load(uint8_t track, const uint8_t voice[TILES_DX7_VOICE_BYTES],
                                                  const char *name) {
-    if (track >= TILES_AUDIO_TRACKS || __atomic_load_n(&s_bank_pending[track], __ATOMIC_ACQUIRE)) {
+    tiles_sound_t *s = free_sound(track);
+    if (s == NULL) {
         return false;
     }
-    bank_sound_t *b = &s_bank_sound[track][s_bank_next[track]];
-    memcpy(b->fm.dx7, voice, TILES_DX7_VOICE_BYTES);
-    b->fm.pressure_db = 9.0f; /* as the factory FM sounds: brighter with pressure and slide */
-    b->fm.slide_db = 6.0f;
-    strncpy(b->name, name, sizeof(b->name) - 1u);
-    b->name[sizeof(b->name) - 1u] = '\0';
-    memset(&b->patch, 0, sizeof(b->patch));
-    b->patch.name = b->name;
-    b->patch.engine = SYNTH_ENGINE_FM;
-    b->patch.fm = &b->fm;
-    b->patch.voice_mode = SYNTH_POLY;
+    memset(s, 0, sizeof(*s));
+    memcpy(s->fm.dx7, voice, TILES_DX7_VOICE_BYTES);
+    s->fm.pressure_db = 9.0f; /* as the factory FM sounds: brighter with pressure and slide */
+    s->fm.slide_db = 6.0f;
+    strncpy(s->name, name, TILES_PRESET_NAME_MAX);
+    s->patch.engine = SYNTH_ENGINE_FM;
+    s->patch.voice_mode = SYNTH_POLY;
     /* Carriers add up: level by their count, about the factory sounds'
      * loudness (first guess). */
     uint8_t carriers = tiles_fm_carriers(voice);
-    b->patch.level = 0.6f / sqrtf((float)(carriers < 1u ? 1u : carriers));
-    b->patch.velocity_level = 0.2f;
-    b->patch.pressure_level = 0.15f;
-    b->patch.fx.reverb = 0.2f;
-    b->patch.fx.delay = 0.1f;
-    __atomic_store_n(&s_bank_pending[track], true, __ATOMIC_RELEASE);
+    s->patch.level = 0.6f / sqrtf((float)(carriers < 1u ? 1u : carriers));
+    s->patch.velocity_level = 0.2f;
+    s->patch.pressure_level = 0.15f;
+    s->patch.fx.reverb = 0.2f;
+    s->patch.fx.delay = 0.1f;
+    tiles_sound_fix(s);
+    s_sound_slot[track] = TILES_AUDIO_PATCH_BANK;
+    __atomic_store_n(&s_sound_pending[track], true, __ATOMIC_RELEASE);
     return true;
 }
 
-TILES_AUDIO_COLD void tiles_audio_engine_fm_use(uint8_t track) {
-    if (track >= TILES_AUDIO_TRACKS || !__atomic_load_n(&s_bank_pending[track], __ATOMIC_ACQUIRE)) {
+TILES_AUDIO_COLD void tiles_audio_engine_sound_use(uint8_t track) {
+    if (track >= TILES_AUDIO_TRACKS || !__atomic_load_n(&s_sound_pending[track], __ATOMIC_ACQUIRE)) {
         return;
     }
-    uint8_t slot = s_bank_next[track];
-    assign_sound(track, &s_bank_sound[track][slot].patch, TILES_AUDIO_PATCH_BANK);
-    s_bank_next[track] = (uint8_t)(1u - slot);
-    __atomic_store_n(&s_bank_pending[track], false, __ATOMIC_RELEASE);
+    uint8_t next = s_sound_next[track];
+    assign_sound(track, &s_sound[track][next].patch, s_sound_slot[track]);
+    s_sound_next[track] = (uint8_t)(1u - next);
+    __atomic_store_n(&s_sound_pending[track], false, __ATOMIC_RELEASE);
+}
+
+TILES_AUDIO_COLD void tiles_audio_engine_set_patch(uint8_t track, uint8_t slot) {
+    if (track < TILES_AUDIO_TRACKS && s_track_patch[track] != slot && tiles_audio_engine_sound_load(track, slot)) {
+        tiles_audio_engine_sound_use(track);
+    }
 }
 
 const char *tiles_audio_engine_track_name(uint8_t track) {
@@ -463,25 +484,17 @@ uint8_t tiles_audio_engine_patch(uint8_t track) {
     return track < TILES_AUDIO_TRACKS ? s_track_patch[track] : 0u;
 }
 
-TILES_AUDIO_COLD const char *tiles_audio_engine_patch_name(uint8_t patch) {
-    return patch < g_synth_patch_count ? g_synth_patches[patch].name : "";
-}
-
-uint8_t tiles_audio_engine_patch_count(void) {
-    return (uint8_t)g_synth_patch_count;
-}
-
 void tiles_audio_engine_set_tempo(float beats_per_minute) {
     if (beats_per_minute >= 20.0f && beats_per_minute <= 400.0f) {
         s_ctx.beats_per_second = beats_per_minute / 60.0f;
     }
 }
 
-TILES_AUDIO_COLD uint32_t tiles_audio_engine_bench(uint8_t patch, uint32_t frames, uint32_t (*cycles)(void)) {
-    if (patch >= g_synth_patch_count || frames == 0u) {
+TILES_AUDIO_COLD uint32_t tiles_audio_engine_bench(uint8_t slot, uint32_t frames, uint32_t (*cycles)(void)) {
+    if (frames == 0u || !tiles_preset_get(slot, &s_bench_sound)) {
         return 0u;
     }
-    const synth_patch_t *p = &g_synth_patches[patch];
+    const synth_patch_t *p = &s_bench_sound.patch;
     voice_t v;
     memset(&v, 0, sizeof(v));
     v.patch = p;

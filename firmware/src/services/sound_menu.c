@@ -7,6 +7,7 @@
 #include "haptics.h"
 #include "lighting.h"
 #include "midi_channels.h"
+#include "presets.h"
 #include "touch.h"
 #include "usb_audio.h"
 
@@ -25,14 +26,8 @@
 #define ROWS 4u
 #define COLS 6u
 
-/* A family a row, top to bottom, by name (a reordered list keeps its
- * place); the preview note suits the family. */
-static const char *const k_rows[ROWS][COLS] = {
-    {"acid", "reese", "wobble", "sub", "solid"},
-    {"pluck", "lead", "stab", "hoover", "tine"},
-    {"haze", "air", "choir", "cloud", "dust", "scatter"},
-    {"glass", "pure", "chime", "shimmer"},
-};
+/* The page's preset slots row by row (presets.h): a role a row, top to
+ * bottom; the preview note suits the role. */
 static const float k_row_rgb[ROWS][3] = {
     {1.0f, 0.0f, 0.3f},   /* basses */
     {0.0f, 0.7f, 1.0f},   /* plucks and leads */
@@ -99,12 +94,10 @@ void tiles_sound_menu_open(bool effects, uint8_t track) {
     s_track = (uint8_t)(track % 4u);
     for (uint32_t r = 0; r < ROWS; r++) {
         for (uint32_t c = 0; c < COLS; c++) {
-            s_patch_at[r][c] = -1;
-            for (uint8_t p = 0; k_rows[r][c] != NULL && p < tiles_audio_engine_patch_count(); p++) {
-                if (strcmp(k_rows[r][c], tiles_audio_engine_patch_name(p)) == 0) {
-                    s_patch_at[r][c] = (int16_t)p;
-                }
-            }
+            char name[TILES_PRESET_NAME_MAX + 1u];
+            uint8_t slot = (uint8_t)(r * COLS + c);
+            tiles_preset_name(slot, name);
+            s_patch_at[r][c] = name[0] != '\0' ? (int16_t)slot : -1;
         }
     }
     load_track();

@@ -43,21 +43,25 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/services test/test_physics_core.c src
 /tmp/sentia_tiles_test_physics_core
 
 # TILES's own sound (USB audio): tracks, voices, the guard and the cross-core ring.
-SYNTH_SRC="src/audio/audio_engine.c src/audio/fm_patches.c src/audio/fm_voice.c src/audio/fx.c src/audio/fx_memory.c src/audio/grain_patches.c src/audio/grain_voice.c src/audio/sampler.c src/audio/synth_voice.c src/audio/synth_patches.c src/audio/wavetable.c src/audio/wavetable_banks.c"
+SYNTH_SRC="src/audio/audio_engine.c src/audio/factory_presets.c src/audio/fm_patches.c src/audio/fm_voice.c src/audio/fx.c src/audio/fx_memory.c src/audio/grain_patches.c src/audio/grain_voice.c src/audio/presets.c src/audio/sampler.c src/audio/synth_voice.c src/audio/wavetable.c src/audio/wavetable_banks.c src/storage/kv_store.c"
 # shellcheck disable=SC2086
-cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/audio -Isrc/services test/test_audio_engine.c $SYNTH_SRC -lm -o /tmp/sentia_tiles_test_audio_engine
+cc -std=c11 -Wall -Wextra -Wpedantic -Isrc/audio -Isrc/services -Isrc/storage test/test_audio_engine.c $SYNTH_SRC -lm -o /tmp/sentia_tiles_test_audio_engine
 /tmp/sentia_tiles_test_audio_engine
 # The wavetable engine's DSP: band-limiting, filters, envelopes, every factory sound.
 # shellcheck disable=SC2086
-cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio -Isrc/services test/test_synth.c $SYNTH_SRC -lm -o /tmp/sentia_tiles_test_synth
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio -Isrc/services -Isrc/storage test/test_synth.c $SYNTH_SRC -lm -o /tmp/sentia_tiles_test_synth
 # The effects: plate, delay, ensemble, overdrive, bit-crush, pump, lending their memory.
 cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio test/test_fx.c src/audio/fx.c src/audio/fx_memory.c -lm -o /tmp/sentia_tiles_test_fx
 /tmp/sentia_tiles_test_fx
 /tmp/sentia_tiles_test_synth
 # The granular engine: pitch, the cloud, pressure, the tape and its loading.
 # shellcheck disable=SC2086
-cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio -Isrc/services test/test_grain.c $SYNTH_SRC -lm -o /tmp/sentia_tiles_test_grain
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio -Isrc/services -Isrc/storage test/test_grain.c $SYNTH_SRC -lm -o /tmp/sentia_tiles_test_grain
 /tmp/sentia_tiles_test_grain
+# The presets: the record, the store over a flash that loses power, factory fallback.
+# shellcheck disable=SC2086
+cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio -Isrc/services -Isrc/storage test/test_presets.c $SYNTH_SRC -lm -o /tmp/sentia_tiles_test_presets
+/tmp/sentia_tiles_test_presets
 # The FM engine: DX7 voice data, pitch, modulation, feedback, envelopes, velocity.
 cc -std=c11 -O2 -Wall -Wextra -Wpedantic -D_DEFAULT_SOURCE -Isrc/audio test/test_fm.c src/audio/fm_voice.c -lm -o /tmp/sentia_tiles_test_fm
 /tmp/sentia_tiles_test_fm

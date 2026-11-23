@@ -15,7 +15,7 @@
  * sync on, the LFO still (speed 35), no transpose. */
 #define VOICE(alg, fb) 99, 99, 99, 99, 50, 50, 50, 50, (alg) - 1, fb, 1, 35, 0, 0, 0, 1, 0, 0, 24
 
-tiles_fm_patch_t g_fm_factory[TILES_FM_FACTORY_COUNT] = {
+const tiles_fm_patch_t g_fm_factory[TILES_FM_FACTORY_COUNT] = {
     /* Electric piano: three pairs; the x14 pair is the tine's strike,
      * velocity brightens, pressure opens it further. */
     [TILES_FM_TINE] = {

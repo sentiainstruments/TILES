@@ -1,18 +1,20 @@
 #include "grain_voice.h"
+#include "presets.h"
 #include "synth_voice.h"
 
 /* The factory sounds (docs/architecture/synth-engines.md, "Sound
- * direction"): glossy by default, grit per patch. Wave positions: CLASSIC
- * frames are sine, triangle, soft saw, saw, square, pulse 30/15/7 %, at
- * 0, 1/7 ... 1. The FM ones play voices from fm_patches.c; the granular
- * ones add their grain settings from grain_patches.c. */
+ * direction"): glossy by default, grit per patch. A slot each, laid out as
+ * the sound menu's page shows them: a row of basses, of plucks and leads,
+ * of pads, of bells. In flash: a track plays a RAM copy (presets.h).
+ * Wave positions: CLASSIC frames are sine, triangle, soft saw, saw,
+ * square, pulse 30/15/7 %, at 0, 1/7 ... 1. The FM ones play voices from
+ * fm_patches.c; the granular ones add their grain settings from
+ * grain_patches.c. */
 
 #define F(n) ((float)(n) / 7.0f) /* frame n of 8 */
 
-/* Not const: in RAM, since core 1 reads the patch every control step and
- * a flash read stalls behind core 0's code fetches. */
-synth_patch_t g_synth_patches[] = {
-    {
+const synth_patch_t g_factory_presets[TILES_PRESET_FACTORY_SLOTS] = {
+    [0] = {
         .name = "acid",
         .bank = TILES_WT_BANK_CLASSIC,
         .wave = F(3), .wave_pressure = 0.14f,
@@ -25,7 +27,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.9f, .velocity_level = 0.4f, .pressure_level = 0.2f,
         .fx = {.reverb = 0.1f, .delay = 0.25f, .drive = 0.35f, .dark = 0.2f},
     },
-    {
+    [6] = {
         .name = "pluck",
         .bank = TILES_WT_BANK_CLASSIC,
         .wave = 0.45f, .wave_pressure = 0.15f, .wave_slide = 0.2f,
@@ -37,7 +39,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.8f, .velocity_level = 0.5f, .pressure_level = 0.3f,
         .fx = {.reverb = 0.3f, .delay = 0.35f, .chorus = 0.15f},
     },
-    {
+    [12] = {
         .name = "haze",
         .bank = TILES_WT_BANK_CLASSIC,
         .wave = F(3), .wave_slide = 0.15f,
@@ -50,7 +52,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.55f, .velocity_level = 0.3f, .pressure_level = 0.35f,
         .fx = {.reverb = 0.45f, .delay = 0.1f, .chorus = 0.5f, .pump = 0.4f},
     },
-    {
+    [18] = {
         .name = "glass",
         .bank = TILES_WT_BANK_GLASS,
         .wave = 0.55f, .wave_pressure = 0.35f, .wave_env = -0.4f,
@@ -62,7 +64,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.8f, .velocity_level = 0.6f, .pressure_level = 0.3f,
         .fx = {.reverb = 0.4f, .delay = 0.2f, .chorus = 0.1f},
     },
-    {
+    [1] = {
         .name = "reese",
         .bank = TILES_WT_BANK_CLASSIC,
         .wave = F(3), .wave_slide = 0.1f,
@@ -76,7 +78,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.75f, .velocity_level = 0.3f, .pressure_level = 0.2f,
         .fx = {.reverb = 0.1f, .chorus = 0.3f, .drive = 0.25f, .dark = 0.3f, .pump = 0.25f},
     },
-    {
+    [9] = {
         .name = "hoover",
         .bank = TILES_WT_BANK_CLASSIC,
         .wave = 0.72f, .wave_lfo = 0.22f, .wave_pressure = 0.1f,
@@ -91,7 +93,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.6f, .velocity_level = 0.3f, .pressure_level = 0.25f,
         .fx = {.reverb = 0.25f, .chorus = 0.4f, .drive = 0.2f, .dark = 0.2f},
     },
-    {
+    [8] = {
         .name = "stab",
         .bank = TILES_WT_BANK_CLASSIC,
         .wave = F(3),
@@ -104,7 +106,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.7f, .velocity_level = 0.5f, .pressure_level = 0.2f,
         .fx = {.reverb = 0.35f, .delay = 0.2f, .drive = 0.1f, .pump = 0.3f},
     },
-    {
+    [2] = {
         .name = "wobble",
         .bank = TILES_WT_BANK_VOICE,
         .wave = 0.6f, .wave_lfo = 0.35f,
@@ -118,7 +120,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.7f, .velocity_level = 0.2f, .pressure_level = 0.2f,
         .fx = {.reverb = 0.05f, .drive = 0.5f, .dark = 0.25f, .crush = 0.15f, .pump = 0.2f},
     },
-    {
+    [13] = {
         .name = "air",
         .bank = TILES_WT_BANK_GLASS,
         .wave = 0.15f, .wave_pressure = 0.5f, .wave_slide = 0.3f,
@@ -132,7 +134,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.6f, .velocity_level = 0.3f, .pressure_level = 0.4f,
         .fx = {.reverb = 0.6f, .delay = 0.15f, .chorus = 0.4f, .pump = 0.3f},
     },
-    {
+    [14] = {
         .name = "choir",
         .bank = TILES_WT_BANK_VOICE,
         .wave = 0.15f, .wave_pressure = 0.3f, .wave_slide = 0.2f,
@@ -146,7 +148,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.6f, .velocity_level = 0.3f, .pressure_level = 0.4f,
         .fx = {.reverb = 0.5f, .chorus = 0.35f, .pump = 0.2f},
     },
-    {
+    [3] = {
         .name = "sub",
         .bank = TILES_WT_BANK_CLASSIC,
         .wave = 0.0f, .wave_pressure = F(1),
@@ -158,7 +160,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 1.0f, .velocity_level = 0.3f, .pressure_level = 0.15f,
         .fx = {.pump = 0.5f},
     },
-    {
+    [7] = {
         .name = "lead",
         .bank = TILES_WT_BANK_CLASSIC,
         .wave = 0.5f, .wave_pressure = 0.1f, .wave_slide = 0.2f,
@@ -172,7 +174,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.7f, .velocity_level = 0.4f, .pressure_level = 0.3f,
         .fx = {.reverb = 0.25f, .delay = 0.3f, .chorus = 0.2f},
     },
-    {
+    [19] = {
         .name = "pure",
         .bank = TILES_WT_BANK_GLASS,
         .wave = 0.0f, .wave_pressure = 0.3f, .wave_slide = 0.2f,
@@ -183,28 +185,28 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.8f, .velocity_level = 0.6f, .pressure_level = 0.5f,
         .fx = {.reverb = 0.2f},
     },
-    {
+    [10] = {
         .name = "tine",
         .engine = SYNTH_ENGINE_FM, .fm = &g_fm_factory[TILES_FM_TINE],
         .voice_mode = SYNTH_POLY,
         .level = 0.35f, .velocity_level = 0.2f, .pressure_level = 0.15f,
         .fx = {.reverb = 0.25f, .delay = 0.15f, .chorus = 0.35f},
     },
-    {
+    [4] = {
         .name = "solid",
         .engine = SYNTH_ENGINE_FM, .fm = &g_fm_factory[TILES_FM_SOLID],
         .voice_mode = SYNTH_LEGATO, .glide_ms = 50.0f,
         .level = 0.75f, .velocity_level = 0.2f, .pressure_level = 0.15f,
         .fx = {.reverb = 0.05f, .drive = 0.2f, .dark = 0.1f, .pump = 0.2f},
     },
-    {
+    [20] = {
         .name = "chime",
         .engine = SYNTH_ENGINE_FM, .fm = &g_fm_factory[TILES_FM_CHIME],
         .voice_mode = SYNTH_POLY,
         .level = 0.55f, .velocity_level = 0.2f, .pressure_level = 0.2f,
         .fx = {.reverb = 0.45f, .delay = 0.25f, .chorus = 0.1f},
     },
-    {
+    [15] = {
         .name = "cloud",
         .engine = SYNTH_ENGINE_GRAIN, .grain = &g_grain_factory[TILES_GRAIN_CLOUD],
         .bank = TILES_WT_BANK_CLASSIC,
@@ -217,7 +219,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 1.0f, .velocity_level = 0.3f, .pressure_level = 0.35f,
         .fx = {.reverb = 0.5f, .delay = 0.15f, .chorus = 0.3f},
     },
-    {
+    [16] = {
         .name = "dust",
         .engine = SYNTH_ENGINE_GRAIN, .grain = &g_grain_factory[TILES_GRAIN_DUST],
         .bank = TILES_WT_BANK_VOICE,
@@ -229,7 +231,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 1.1f, .velocity_level = 0.4f, .pressure_level = 0.3f,
         .fx = {.reverb = 0.6f, .delay = 0.3f},
     },
-    {
+    [21] = {
         .name = "shimmer",
         .engine = SYNTH_ENGINE_GRAIN, .grain = &g_grain_factory[TILES_GRAIN_SHIMMER],
         .bank = TILES_WT_BANK_GLASS,
@@ -241,7 +243,7 @@ synth_patch_t g_synth_patches[] = {
         .level = 0.95f, .velocity_level = 0.4f, .pressure_level = 0.3f,
         .fx = {.reverb = 0.7f, .delay = 0.1f, .chorus = 0.2f},
     },
-    {
+    [17] = {
         .name = "scatter",
         .engine = SYNTH_ENGINE_GRAIN, .grain = &g_grain_factory[TILES_GRAIN_SCATTER],
         .wave = 0.25f, .wave_slide = 0.6f,
@@ -254,7 +256,5 @@ synth_patch_t g_synth_patches[] = {
     },
 };
 
-const uint32_t g_synth_patch_count = sizeof(g_synth_patches) / sizeof(g_synth_patches[0]);
-
 /* acid, pluck, haze, glass */
-const uint8_t g_synth_track_default[4] = {0u, 1u, 2u, 3u};
+const uint8_t g_factory_track_default[4] = {0u, 6u, 12u, 18u};

@@ -95,6 +95,10 @@ bool tiles_storage_fm_bank_region_safe(void) {
     return region_safe(TILES_FLASH_FM_BANK_OFFSET);
 }
 
+bool tiles_storage_preset_region_safe(void) {
+    return region_safe(TILES_FLASH_PRESET_OFFSET);
+}
+
 bool tiles_storage_sample_region_safe(void) {
     return region_safe(TILES_FLASH_SAMPLE_OFFSET);
 }
@@ -193,6 +197,20 @@ REGION_OPS(state, TILES_FLASH_STATE_OFFSET)
 REGION_OPS(seq, TILES_FLASH_SEQ_OFFSET)
 REGION_OPS(fault, TILES_FLASH_FAULT_OFFSET)
 REGION_OPS(fm_bank, TILES_FLASH_FM_BANK_OFFSET)
+#define PRESET_GROUP(g) (TILES_FLASH_PRESET_OFFSET + (g) * 2u * FLASH_SECTOR_SIZE)
+REGION_OPS(preset0, PRESET_GROUP(0u))
+REGION_OPS(preset1, PRESET_GROUP(1u))
+REGION_OPS(preset2, PRESET_GROUP(2u))
+REGION_OPS(preset3, PRESET_GROUP(3u))
+REGION_OPS(preset4, PRESET_GROUP(4u))
+REGION_OPS(preset5, PRESET_GROUP(5u))
+REGION_OPS(preset6, PRESET_GROUP(6u))
+REGION_OPS(preset7, PRESET_GROUP(7u))
+REGION_OPS(preset8, PRESET_GROUP(8u))
+REGION_OPS(preset9, PRESET_GROUP(9u))
+REGION_OPS(preset10, PRESET_GROUP(10u))
+REGION_OPS(preset11, PRESET_GROUP(11u))
+_Static_assert(TILES_FLASH_PRESET_GROUPS == 12u, "one REGION_OPS a preset group");
 
 const tiles_kv_ops_t *tiles_storage_settings_ops(void) {
     return &settings_ops;
@@ -216,6 +234,14 @@ const tiles_kv_ops_t *tiles_storage_seq_ops(void) {
 
 const tiles_kv_ops_t *tiles_storage_fault_ops(void) {
     return &fault_ops;
+}
+
+const tiles_kv_ops_t *tiles_storage_preset_ops(uint8_t group) {
+    static const tiles_kv_ops_t *const k_groups[TILES_FLASH_PRESET_GROUPS] = {
+        &preset0_ops, &preset1_ops, &preset2_ops, &preset3_ops, &preset4_ops,  &preset5_ops,
+        &preset6_ops, &preset7_ops, &preset8_ops, &preset9_ops, &preset10_ops, &preset11_ops,
+    };
+    return group < TILES_FLASH_PRESET_GROUPS ? k_groups[group] : NULL;
 }
 
 const tiles_kv_ops_t *tiles_storage_fm_bank_ops(void) {

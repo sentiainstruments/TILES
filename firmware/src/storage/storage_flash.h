@@ -61,3 +61,8 @@ const tiles_kv_ops_t *tiles_storage_fault_ops(void);
  * two slots. */
 bool tiles_storage_fm_bank_region_safe(void);
 const tiles_kv_ops_t *tiles_storage_fm_bank_ops(void);
+
+/* And for the presets (audio/presets.c), below it: group 0-11's two
+ * sectors as the two slots. */
+bool tiles_storage_preset_region_safe(void);
+const tiles_kv_ops_t *tiles_storage_preset_ops(uint8_t group);

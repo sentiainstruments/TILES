@@ -50,9 +50,11 @@
 #include "services/show_link.h"
 #include "services/standby.h"
 #include "services/touch.h"
+#include "storage/flash_map.h"
 #include "storage/storage_flash.h"
 #include "usb_vendor/usb_vendor.h"
 #include "audio/fm_bank.h"
+#include "audio/presets.h"
 #include "audio/sample_stream.h"
 #include "audio/usb_audio.h"
 
@@ -112,6 +114,16 @@ int main(void) {
     tiles_device_mode_boot();
     tiles_boot_stage("sample_stream");
     tiles_sample_stream_init();
+    /* The presets, before the sound starts: its tracks' first sounds. */
+    tiles_boot_stage("presets");
+    {
+        const tiles_kv_ops_t *ops[TILES_PRESET_GROUPS];
+        for (uint8_t g = 0; g < TILES_PRESET_GROUPS; g++) {
+            ops[g] = tiles_storage_preset_region_safe() ? tiles_storage_preset_ops(g) : NULL;
+        }
+        tiles_presets_init(ops);
+    }
+    _Static_assert(TILES_FLASH_PRESET_GROUPS == TILES_PRESET_GROUPS, "a flash group a preset group");
 
     /* Before stdio_init_all(): with tinyusb_device linked, pico_stdio_usb
      * expects tusb_init() already done with our descriptors

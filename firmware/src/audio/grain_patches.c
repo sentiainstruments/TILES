@@ -1,10 +1,10 @@
 #include "grain_voice.h"
 
 /* The granular factory sounds' grain settings; their patches (place,
- * filter, envelopes, levels) are in synth_patches.c. In RAM, as every
- * patch core 1 reads. Tuned on rendered demos (2026-11-23): clouds of
+ * filter, envelopes, levels) are in factory_presets.c. In flash: a track
+ * plays a RAM copy (presets.h). Tuned on rendered demos (2026-11-23): clouds of
  * 5-6 grains rather than a full 8, smoother and cheaper. */
-tiles_grain_params_t g_grain_factory[TILES_GRAIN_FACTORY_COUNT] = {
+const tiles_grain_params_t g_grain_factory[TILES_GRAIN_FACTORY_COUNT] = {
     /* A wide pad of saw and square grains, an octave and a fifth above
      * now and then; pressure makes them shorter and denser, slide
      * scatters them. */

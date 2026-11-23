@@ -8,6 +8,7 @@
 #include "fx_memory.h"
 #include "grain_voice.h"
 #include "midi_channels.h"
+#include "presets.h"
 #include "sampler.h"
 #include "synth_voice.h"
 #include "wavetable.h"
@@ -219,6 +220,7 @@ static void test_tape_voice(void) {
     fill_sine(s_tape_mem, SECOND, 440.0);
     s_ctx.tape = s_tape_mem;
     s_ctx.tape_frames = SECOND;
+    s_ctx.tape_gain = 1.0f;
     tiles_grain_params_t g = plain_grains();
     g.source = TILES_GRAIN_SRC_TAPE;
     g.root = 69u;
@@ -288,8 +290,10 @@ static const tiles_sampler_fetch_t FETCH = {fetch_busy, fetch_start};
 static int32_t s_out[2u * 4800u];
 
 static uint8_t patch_named(const char *name) {
-    for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
-        if (strcmp(tiles_audio_engine_patch_name(p), name) == 0) {
+    for (uint8_t p = 0; p < TILES_PRESET_SLOTS; p++) {
+        char n[TILES_PRESET_NAME_MAX + 1u];
+        tiles_preset_name(p, n);
+        if (strcmp(n, name) == 0) {
             return p;
         }
     }

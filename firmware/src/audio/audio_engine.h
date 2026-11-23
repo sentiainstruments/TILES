@@ -76,22 +76,23 @@ typedef struct {
 } tiles_audio_master_t;
 tiles_audio_master_t tiles_audio_engine_master(void);
 
-/* Each track's sound: one of the factory patches (synth_patches.c). A
- * change ends the track's notes. */
-void tiles_audio_engine_set_patch(uint8_t track, uint8_t patch);
+/* Each track's sound, in two steps: core 0 copies preset `slot` (presets.h)
+ * into the track's free sound (false while the last one is still to be
+ * switched to, or the slot is empty), then core 1 switches the track to it
+ * (tiles_audio_engine_sound_use(), via usb_audio), the old sound's voices
+ * ending in 5 ms. fm_load() fills it with a DX7 voice (unpacked, fm_voice.h)
+ * instead. set_patch() does both at once: on the computer, and before
+ * core 1 runs. */
+bool tiles_audio_engine_sound_load(uint8_t track, uint8_t slot);
+bool tiles_audio_engine_fm_load(uint8_t track, const uint8_t voice[155], const char *name);
+void tiles_audio_engine_sound_use(uint8_t track);
+void tiles_audio_engine_set_patch(uint8_t track, uint8_t slot);
 /* tiles_audio_engine_patch() for a track playing a bank voice. */
 #define TILES_AUDIO_PATCH_BANK 0xFFu
+/* The track's preset slot. */
 uint8_t tiles_audio_engine_patch(uint8_t track);
-/* The track's sound's name (a factory sound's, or the bank voice's). */
+/* The track's sound's name (its preset's, or the bank voice's). */
 const char *tiles_audio_engine_track_name(uint8_t track);
-/* A DX7 voice (unpacked, fm_voice.h) for a track, in two steps: core 0
- * fills the track's free slot (false while the last one is still to be
- * switched to), then core 1 switches the track to it, ending the old
- * sound's voices in 5 ms (tiles_audio_engine_fm_use(), via usb_audio). */
-bool tiles_audio_engine_fm_load(uint8_t track, const uint8_t voice[155], const char *name);
-void tiles_audio_engine_fm_use(uint8_t track);
-const char *tiles_audio_engine_patch_name(uint8_t patch);
-uint8_t tiles_audio_engine_patch_count(void);
 
 /* The tempo synced LFOs, the delay and the pump follow (120 until set). */
 void tiles_audio_engine_set_tempo(float beats_per_minute);
@@ -131,7 +132,7 @@ float tiles_audio_engine_fx(uint8_t target, uint8_t param);
 /* The effects' cycles per sample, followed live (0 before any). */
 uint32_t tiles_audio_engine_fx_cost(void);
 
-/* A test: cycles per sample of one voice of `patch` held alone for
+/* A test: cycles per sample of one voice of preset `slot` held alone for
  * `frames` (a granular one after 0.5 s untimed, its cloud full), away from
  * the playing voices; `cycles` reads a cycle counter. */
-uint32_t tiles_audio_engine_bench(uint8_t patch, uint32_t frames, uint32_t (*cycles)(void));
+uint32_t tiles_audio_engine_bench(uint8_t slot, uint32_t frames, uint32_t (*cycles)(void));

@@ -34,9 +34,11 @@ void tiles_usb_audio_midi(uint8_t status, uint8_t data1, uint8_t data2);
  * velocity 1-127. Queued for core 1 like the messages above. */
 void tiles_usb_audio_drum_hit(uint8_t slot, uint8_t velocity);
 
-/* A track's sound (0-3, a factory patch), in order with the notes around
- * it; false outside standalone mode. */
-bool tiles_usb_audio_set_patch(uint8_t track, uint8_t patch);
+/* A track's sound (0-3, preset slot 0-95, presets.h), in order with the
+ * notes around it: core 0 copies the preset, core 1 switches. False
+ * outside standalone mode, for an empty slot, or while the track's last
+ * change is still to be switched to. */
+bool tiles_usb_audio_set_patch(uint8_t track, uint8_t slot);
 /* A DX7 voice (unpacked) as a track's sound, the same way; false outside
  * standalone mode or while the track's last one is still being switched
  * to. */

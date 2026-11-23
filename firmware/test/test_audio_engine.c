@@ -6,6 +6,7 @@
 #include "audio_engine.h"
 #include "audio_ring.h"
 #include "fm_voice.h"
+#include "presets.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -58,8 +59,10 @@ static double rms(uint32_t frames) {
 /* 150 MHz: the voices' budget is 85 % of 3,125 cycles minus the 1,200
  * reserve, 1,456. */
 static void pure_everywhere(void) {
-    for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
-        if (strcmp(tiles_audio_engine_patch_name(p), "pure") == 0) {
+    for (uint8_t p = 0; p < TILES_PRESET_SLOTS; p++) {
+        char name[TILES_PRESET_NAME_MAX + 1u];
+        tiles_preset_name(p, name);
+        if (strcmp(name, "pure") == 0) {
             for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
                 tiles_audio_engine_set_patch(t, p);
                 for (uint8_t f = 0; f < TILES_FX_TRACK_PARAMS; f++) {
@@ -344,15 +347,16 @@ static void test_ring(void) {
 }
 
 /* A DX7 voice as track 2's sound: the two-step switch, its name, its
- * sound, the next one into the other slot, back to a factory sound. */
+ * sound, the next one into the other slot, back to a preset; a preset
+ * the same way. */
 static void test_bank_voice(void) {
     reset();
     uint8_t v[TILES_DX7_VOICE_BYTES];
     memcpy(v, g_fm_factory[TILES_FM_TINE].dx7, sizeof(v));
     CHECK(tiles_audio_engine_fm_load(1u, v, "MY PIANO"), "track 2 refused a voice");
     CHECK(!tiles_audio_engine_fm_load(1u, v, "AGAIN"), "a second voice taken before the switch");
-    CHECK(strcmp(tiles_audio_engine_track_name(1u), "pure") == 0, "the track switched before fm_use");
-    tiles_audio_engine_fm_use(1u);
+    CHECK(strcmp(tiles_audio_engine_track_name(1u), "pure") == 0, "the track switched before sound_use");
+    tiles_audio_engine_sound_use(1u);
     CHECK(strcmp(tiles_audio_engine_track_name(1u), "MY PIANO") == 0 &&
               tiles_audio_engine_patch(1u) == TILES_AUDIO_PATCH_BANK,
           "track 2 is '%s' (%u)", tiles_audio_engine_track_name(1u), (unsigned)tiles_audio_engine_patch(1u));
@@ -361,11 +365,18 @@ static void test_bank_voice(void) {
     double level = rms(SECOND / 4u);
     CHECK(level > 0.005, "the bank voice is silent (%.4f RMS)", level);
     CHECK(tiles_audio_engine_fm_load(1u, v, "SECOND") , "the next voice refused");
-    tiles_audio_engine_fm_use(1u);
+    tiles_audio_engine_sound_use(1u);
     CHECK(strcmp(tiles_audio_engine_track_name(1u), "SECOND") == 0, "the second voice isn't the track's");
     render(SECOND / 10u);
     tiles_audio_engine_set_patch(1u, 0u);
     CHECK(tiles_audio_engine_patch(1u) == 0u, "back to a factory sound failed");
+    CHECK(tiles_audio_engine_sound_load(1u, 6u), "pluck refused");
+    CHECK(!tiles_audio_engine_sound_load(1u, 7u), "a second sound taken before the switch");
+    CHECK(tiles_audio_engine_patch(1u) == 0u, "the track switched before sound_use");
+    tiles_audio_engine_sound_use(1u);
+    CHECK(tiles_audio_engine_patch(1u) == 6u && strcmp(tiles_audio_engine_track_name(1u), "pluck") == 0,
+          "track 2 is '%s'", tiles_audio_engine_track_name(1u));
+    CHECK(!tiles_audio_engine_sound_load(1u, 5u), "an empty slot loaded");
 }
 
 int main(void) {

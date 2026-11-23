@@ -28,10 +28,9 @@
 #define AUDIO_RING_WORDS 512u /* 256 stereo frames: core 1 fills it to 144 + a block */
 #define MIDI_RING_WORDS 256u
 #define DRUM_RING_WORDS 64u
-/* In the MIDI ring, words with these statuses aren't MIDI: a patch change,
+/* In the MIDI ring, words with these statuses aren't MIDI: a sound change,
  * an effect setting (target 3 bits, param 5, value x 1000 in 16), a beat. */
-#define PATCH_WORD 0xF5u
-#define FM_VOICE_WORD 0xF6u
+#define SOUND_WORD 0xF6u /* the track's next sound, filled by core 0 */
 #define FX_WORD 0xF4u
 #define BEAT_WORD 0xF9u
 /* Drum slot 1 is the kick: it keys the pump. */
@@ -170,11 +169,8 @@ static void core1_main(void) {
         uint32_t word;
         while (tiles_spsc_pop(&s_midi_ring, &word, 1u) == 1u) {
             switch (word & 0xFFu) {
-            case PATCH_WORD:
-                tiles_audio_engine_set_patch((uint8_t)(word >> 8), (uint8_t)(word >> 16));
-                break;
-            case FM_VOICE_WORD:
-                tiles_audio_engine_fm_use((uint8_t)(word >> 8));
+            case SOUND_WORD:
+                tiles_audio_engine_sound_use((uint8_t)(word >> 8));
                 break;
             case FX_WORD:
                 tiles_audio_engine_set_fx((uint8_t)((word >> 8) & 7u), (uint8_t)((word >> 11) & 31u),
@@ -274,19 +270,25 @@ void tiles_usb_audio_midi(uint8_t status, uint8_t data1, uint8_t data2) {
     }
 }
 
-bool tiles_usb_audio_set_patch(uint8_t track, uint8_t patch) {
+bool tiles_usb_audio_set_patch(uint8_t track, uint8_t slot) {
     if (!s_started) {
         return false;
     }
-    uint32_t word = PATCH_WORD | ((uint32_t)track << 8) | ((uint32_t)patch << 16);
-    return tiles_spsc_push(&s_midi_ring, &word, 1u);
+    if (tiles_audio_engine_patch(track) == slot) {
+        return true;
+    }
+    if (tiles_spsc_space(&s_midi_ring) < 1u || !tiles_audio_engine_sound_load(track, slot)) {
+        return false;
+    }
+    uint32_t word = SOUND_WORD | ((uint32_t)track << 8);
+    return tiles_spsc_push(&s_midi_ring, &word, 1u); /* room checked: core 0 is the only writer */
 }
 
 bool tiles_usb_audio_set_fm_voice(uint8_t track, const uint8_t voice[155], const char *name) {
     if (!s_started || tiles_spsc_space(&s_midi_ring) < 1u || !tiles_audio_engine_fm_load(track, voice, name)) {
         return false;
     }
-    uint32_t word = FM_VOICE_WORD | ((uint32_t)track << 8);
+    uint32_t word = SOUND_WORD | ((uint32_t)track << 8);
     return tiles_spsc_push(&s_midi_ring, &word, 1u); /* room checked: core 0 is the only writer */
 }
 

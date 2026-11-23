@@ -12,6 +12,7 @@
  *       -2          sequencer autosave          op_mode.c
  *       -2          the last caught crash       diagnostics/fault.c
  *       -2          the DX7 bank (32 voices)    audio/fm_bank.c
+ *       -24         96 presets, 12 x (8 + copy)  audio/presets.c
  *   (the saved data keeps a 256 KB band at the top for what comes next)
  *   below the band  8 drum sample slots, 1.5 MB  audio/sample_store.c
  *   0               application image (and its wavetables), < 2.25 MB */
@@ -44,6 +45,10 @@
 #define TILES_FLASH_FM_BANK_SLOTS 2u
 #define TILES_FLASH_FM_BANK_OFFSET (TILES_FLASH_FAULT_OFFSET - FLASH_SECTOR_SIZE * TILES_FLASH_FM_BANK_SLOTS)
 
+/* The presets: 12 groups of 8, each group a kv_store's two sectors. */
+#define TILES_FLASH_PRESET_GROUPS 12u
+#define TILES_FLASH_PRESET_OFFSET (TILES_FLASH_FM_BANK_OFFSET - FLASH_SECTOR_SIZE * 2u * TILES_FLASH_PRESET_GROUPS)
+
 /* The drum sampler's slots: 192 KB each (three 64 KB blocks), below the
  * saved data's 256 KB band. */
 #define TILES_FLASH_SAVED_BAND (256u * 1024u)
@@ -52,6 +57,6 @@
 #define TILES_FLASH_SAMPLE_OFFSET                                                                                  \
     (PICO_FLASH_SIZE_BYTES - TILES_FLASH_SAVED_BAND - TILES_FLASH_SAMPLE_SLOTS * TILES_FLASH_SAMPLE_SLOT_BYTES)
 
-_Static_assert(TILES_FLASH_FM_BANK_OFFSET >= PICO_FLASH_SIZE_BYTES - TILES_FLASH_SAVED_BAND,
+_Static_assert(TILES_FLASH_PRESET_OFFSET >= PICO_FLASH_SIZE_BYTES - TILES_FLASH_SAVED_BAND,
                "the saved data outgrew its band: move the sample slots down");
 _Static_assert(TILES_FLASH_SAMPLE_OFFSET % (64u * 1024u) == 0u, "sample slots start on a 64 KB block");

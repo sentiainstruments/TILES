@@ -4,6 +4,7 @@
 
 #include "audio_engine.h"
 #include "grain_voice.h"
+#include "presets.h"
 #include "synth_voice.h"
 #include "wavetable.h"
 
@@ -258,9 +259,12 @@ static double brightness(uint32_t frames) {
 }
 
 static void test_patches(void) {
-    for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
-        if (g_synth_patches[p].engine == SYNTH_ENGINE_GRAIN && g_synth_patches[p].grain != NULL &&
-            ((const tiles_grain_params_t *)g_synth_patches[p].grain)->source == TILES_GRAIN_SRC_TAPE) {
+    static tiles_sound_t snd;
+    for (uint8_t p = 0; p < TILES_PRESET_SLOTS; p++) {
+        if (!tiles_preset_get(p, &snd)) {
+            continue; /* an empty slot */
+        }
+        if (snd.patch.engine == SYNTH_ENGINE_GRAIN && snd.grain.source == TILES_GRAIN_SRC_TAPE) {
             continue; /* plays a drum slot: test_grain.c loads one */
         }
         tiles_audio_engine_init(48u, 150u, NULL);
@@ -290,7 +294,7 @@ static void test_patches(void) {
         for (uint32_t step = 0; step < 6u; step++) {
             tiles_audio_engine_render(s_out, 48000u);
         }
-        const char *name = tiles_audio_engine_patch_name(p);
+        const char *name = snd.name;
         CHECK(ok, "%s: output out of range", name);
         CHECK(level > 0.01, "%s: too quiet (%.4f RMS)", name, level);
         CHECK(peak < 0.99, "%s: hits the ceiling (peak %.3f)", name, peak);
@@ -301,8 +305,10 @@ static void test_patches(void) {
 }
 
 static uint8_t patch_named(const char *name) {
-    for (uint8_t p = 0; p < tiles_audio_engine_patch_count(); p++) {
-        if (strcmp(tiles_audio_engine_patch_name(p), name) == 0) {
+    for (uint8_t p = 0; p < TILES_PRESET_SLOTS; p++) {
+        char n[TILES_PRESET_NAME_MAX + 1u];
+        tiles_preset_name(p, n);
+        if (strcmp(n, name) == 0) {
             return p;
         }
     }

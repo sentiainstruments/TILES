@@ -134,9 +134,3 @@ static inline float synth_voice_level(const synth_voice_t *v) {
 /* Adds n (a multiple of SYNTH_CTRL) frames into l and r. */
 void synth_voice_render(synth_voice_t *v, const synth_context_t *ctx, const synth_input_t *in, float *l, float *r,
                         uint32_t n);
-
-/* The factory patches (audio/synth_patches.c). */
-extern synth_patch_t g_synth_patches[];
-extern const uint32_t g_synth_patch_count;
-/* Each track's sound at power-up: bass, lead, pads, bells. */
-extern const uint8_t g_synth_track_default[4];
