@@ -1,0 +1,89 @@
+SENTIA TILES BRIDGE -> LOGIC PRO MPE & SMART CONTROLS MIDI MAP
+================================================================
+Applies to: tiles-logic-bridge (tiles_logic_core.{h,c}, StudioLink.{hpp,cpp})
+All MIDI channels are 1-based (Ch 1..16).
+
+
+1. FULL MPE COMPATIBILITY (SENTIA TILES N MIDI <-> TILES Logic MPE)
+------------------------------------------------------------------
+Logic Pro Track Inspector Settings:
+  - MIDI Mono Mode: On (with Common Base Channel 1)
+  - Pitch Bend Range: 48 semitones
+  - MPE Zone Configuration (MCM emitted on connect):
+    RPN 0x0006 on Ch 1 -> Data Entry MSB = 8 (Member Channels Ch 2..9)
+
+MPE Channel Layout:
+  Ch 1 (Master)   -> CC 64 Sustain Pedal, Global Pitch/Pressure, MCM RPN
+  Ch 2..9 (Voice) -> Untouched per-pad MIDI stream forwarded with zero
+                     parsing delay via MIDIReceived(virt_mpe_src, pktlist):
+                       * Touch   -> Note-On (ch 2..9) / Note-Off (ch 2..9)
+                       * Strike  -> Note-On velocity (1..127)
+                       * Press   -> Channel Pressure (0xDn, 0..127)
+                       * Tilt    -> 14-bit Per-Note Pitch Bend (0xEn, Y-axis)
+
+
+2. PER-PAD EXPRESSION -> LOGIC PRO SMART CONTROLS (AUTO-ASSIGN SPLIT)
+---------------------------------------------------------------------
+Virtual Port: TILES Logic Grid (Channel 16 Focused + Channels 2..9 Per-Voice)
+Purpose: Allows Logic Pro Controller Assignments (Cmd+L) and Smart Controls
+to bind Touch, Strike, Press, and Tilt independently without disrupting MPE.
+
+  Physical Gesture  Focused Learn CC (Ch 16)  Per-Voice CC (Ch 2..9)  Range / Scaling
+  ----------------  ------------------------  ----------------------  -------------------------------
+  Strike (Velocity) CC 20                     CC 14                   1..127 (captured on Note-On)
+  Press (Z-Axis)    CC 21                     CC 15                   0..127 (from 0xDn Aftertouch)
+  Tilt (Y-Axis)     CC 22                     CC 16                   0..127 (Pitch Bend MSB, center 64)
+  Touch (Cap Gate)  CC 23                     CC 17                   127 on contact, 0 on release
+
+Enable/Disable Expression Splitter:
+  TILES Logic Grid Ch 1, CC 118 -> 0 = MPE only, 1..127 = Active (default On)
+  Hardware Toggle               -> Smart Controls Page, Pad (6, 4)
+
+
+3. SMART CONTROLS PAGE & MACKIE V-POT BIDIRECTIONAL MAPPING
+-----------------------------------------------------------
+Enter Smart Controls Page: Double-tap Circle+Diamond (CC 105) or Grid Ch 1 CC 119 = 1
+
+  Grid Location     Smart Control   Grid Ch 16 CC   MCU V-Pot In / LED Ring Out
+  ----------------  --------------  --------------  ---------------------------
+  Col 1..4, Row 1   Macros 1..4     CC 102..105     0x10..0x13 (+6) / 0x30..0x33
+  Col 1..4, Row 2   Macros 5..8     CC 106..109     0x14..0x17 (+6) / 0x34..0x37
+  Col 1..4, Row 3   Macros 1..4     CC 102..105     0x10..0x13 (-6) / 0x30..0x33
+  Col 1..4, Row 4   Macros 5..8     CC 106..109     0x14..0x17 (-6) / 0x34..0x37
+
+Column 5 Mackie Assignment Mode (TILES Logic MCU, Ch 1):
+  Row 1 (Pad 5)  -> Note 0x2B (Plug-In / Smart Control mode)
+  Row 2 (Pad 11) -> Note 0x2A (Pan mode)
+  Row 3 (Pad 17) -> Note 0x29 (Send mode)
+  Row 4 (Pad 23) -> Note 0x28 (Track mode)
+
+
+4. HAPTIC INTENSITY SCALING & SYNCHRONIZED FEEDBACK
+---------------------------------------------------
+Controlled by StudioLink (TILES Logic Grid Ch 1 -> SENTIA TILES N DAW SysEx 0x10/0x11)
+
+  Grid CC / Event   Parameter          Values / Behavior
+  ----------------  -----------------  ------------------------------------------------
+  CC 115 (Ch 1)     Haptic Intensity   0 = Muted (no bridge pulses)
+                                       1..127 = Scales pulse duration linearly from
+                                       65 ms nominal (clamped 20..500 ms; default 100)
+  CC 116 (Ch 1)     Detent Sync Cue    1..8 = Fires midpoint detent pulse on Macro 1..8
+  CC 117 (Ch 1)     Direct Haptic Cue  1..24 = Pulse pad 1..24; 127 = all; 0 = clear
+  Macro 62..66      Auto Detent Bump   Grid CC 102..109 (62..66) or MCU Ring (5..6)
+                                       triggers a 65 ms scaled center-detent pulse
+  0xF8 Clock        Beat Sync Pulse    Quarter-note (24 PPQ) pulse on triggered scenes
+
+Firmware Native Haptic Envelope (SysEx 0x10 flags on SENTIA TILES N DAW):
+  Bit 0 (0x01 HAS_CLIP):   Triggers 56 ms sharp touch kick when finger contacts pad
+  Bit 1 (0x02 IS_PLAYING): Sustains continuous level-90 buzz while finger rests on pad
+
+
+5. MIXER BANK NAVIGATION & TRANSPORT SUMMARY
+--------------------------------------------
+  Control                  Port / Channel          Message         Effect
+  -----------------------  ----------------------  --------------  -----------------------------
+  Hardware "-" / "+" Pan   SENTIA TILES DAW Ch 1   CC 106 (0..59)  Track offset + MCU bank sync
+  Bridge Bank Step         TILES Logic Grid Ch 1   CC 114          0..63 (-5 tracks) / 64..127 (+5)
+  Bridge Page Select       TILES Logic Grid Ch 1   CC 119          0 Loops / 1 Smart / 2 Mixer / 127 Next
+  MCU Bank Left / Right    TILES Logic MCU Ch 1    Note 0x2E/0x2F  8-channel bank step
+  MCU Channel Left/Right   TILES Logic MCU Ch 1    Note 0x30/0x31  Single-channel step
