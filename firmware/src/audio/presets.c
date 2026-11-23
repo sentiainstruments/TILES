@@ -107,14 +107,22 @@ void tiles_sound_from_patch(tiles_sound_t *s, const synth_patch_t *p) {
     tiles_sound_fix(s);
 }
 
-void tiles_preset_encode(const tiles_sound_t *s, uint8_t out[TILES_PRESET_RECORD_BYTES]) {
-    const synth_patch_t *p = &s->patch;
+/* A sound in parts (a factory patch points at its grain and FM settings;
+ * either NULL: zeros). */
+static void encode_parts(const synth_patch_t *p, const tiles_grain_params_t *grain, const tiles_fm_patch_t *fm,
+                         const char *name, uint8_t out[TILES_PRESET_RECORD_BYTES]) {
+    static const tiles_grain_params_t k_no_grain;
+    static const tiles_fm_patch_t k_no_fm;
+    grain = grain != NULL ? grain : &k_no_grain;
+    fm = fm != NULL ? fm : &k_no_fm;
     memset(out, 0, TILES_PRESET_RECORD_BYTES);
     out[0] = MARK0;
     out[1] = MARK1;
     out[2] = VERSION;
     out[3] = p->engine;
-    memcpy(&out[OFF_NAME], s->name, strnlen(s->name, TILES_PRESET_NAME_MAX));
+    if (name != NULL) {
+        memcpy(&out[OFF_NAME], name, strnlen(name, TILES_PRESET_NAME_MAX));
+    }
     out[OFF_BYTES + 0u] = p->bank;
     out[OFF_BYTES + 1u] = p->unison;
     out[OFF_BYTES + 2u] = p->filter;
@@ -124,21 +132,25 @@ void tiles_preset_encode(const tiles_sound_t *s, uint8_t out[TILES_PRESET_RECORD
     for (uint32_t i = 0; i < N_COMMON; i++) {
         put_f32(&out[OFF_COMMON + 4u * i], *(const float *)((const uint8_t *)p + k_common[i].at));
     }
-    out[OFF_GRAIN + 0u] = s->grain.source;
-    out[OFF_GRAIN + 1u] = s->grain.slot;
-    out[OFF_GRAIN + 2u] = s->grain.root;
+    out[OFF_GRAIN + 0u] = grain->source;
+    out[OFF_GRAIN + 1u] = grain->slot;
+    out[OFF_GRAIN + 2u] = grain->root;
     for (uint32_t i = 0; i < N_GRAIN; i++) {
-        put_f32(&out[OFF_GRAIN + 4u + 4u * i], *(const float *)((const uint8_t *)&s->grain + k_grain[i].at));
+        put_f32(&out[OFF_GRAIN + 4u + 4u * i], *(const float *)((const uint8_t *)grain + k_grain[i].at));
     }
-    memcpy(&out[OFF_FM], s->fm.dx7, TILES_DX7_VOICE_BYTES);
-    put_f32(&out[OFF_FM + TILES_DX7_VOICE_BYTES + 1u], s->fm.pressure_db);
-    put_f32(&out[OFF_FM + TILES_DX7_VOICE_BYTES + 5u], s->fm.slide_db);
+    memcpy(&out[OFF_FM], fm->dx7, TILES_DX7_VOICE_BYTES);
+    put_f32(&out[OFF_FM + TILES_DX7_VOICE_BYTES + 1u], fm->pressure_db);
+    put_f32(&out[OFF_FM + TILES_DX7_VOICE_BYTES + 5u], fm->slide_db);
     out[OFF_EXTRA + 0u] = p->sub_shape;
     out[OFF_EXTRA + 1u] = p->lfo2.shape;
     out[OFF_EXTRA + 2u] = (uint8_t)((p->lfo2.synced ? 2u : 0u) | (p->lfo2.retrigger ? 4u : 0u));
     for (uint32_t i = 0; i < N_EXTRA; i++) {
         put_f32(&out[OFF_EXTRA + 4u + 4u * i], *(const float *)((const uint8_t *)p + k_extra[i].at));
     }
+}
+
+void tiles_preset_encode(const tiles_sound_t *s, uint8_t out[TILES_PRESET_RECORD_BYTES]) {
+    encode_parts(&s->patch, &s->grain, &s->fm, s->name, out);
 }
 
 /* A float from the record into `dst` (NULL: only checked), clamped. */
@@ -272,6 +284,22 @@ bool tiles_preset_get(uint8_t slot, tiles_sound_t *out) {
     }
     if (slot < TILES_PRESET_FACTORY_SLOTS && g_factory_presets[slot].name != NULL) {
         tiles_sound_from_patch(out, &g_factory_presets[slot]);
+        return true;
+    }
+    return false;
+}
+
+bool tiles_preset_record(uint8_t slot, uint8_t out[TILES_PRESET_RECORD_BYTES]) {
+    if (slot >= TILES_PRESET_SLOTS) {
+        return false;
+    }
+    if (stored(slot) && read_record(slot) && tiles_preset_decode(s_record, NULL)) {
+        memcpy(out, s_record, TILES_PRESET_RECORD_BYTES);
+        return true;
+    }
+    if (slot < TILES_PRESET_FACTORY_SLOTS && g_factory_presets[slot].name != NULL) {
+        const synth_patch_t *p = &g_factory_presets[slot];
+        encode_parts(p, p->grain, p->fm, p->name, out);
         return true;
     }
     return false;

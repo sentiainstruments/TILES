@@ -31,6 +31,8 @@
 #include "audio_engine.h"
 #include "fx.h"
 #include "presets.h"
+#include "kv_store.h"
+#include "flash_staging.h"
 #include "usb_audio.h"
 #include "usb_device.h"
 #include "tune.h"
@@ -76,6 +78,12 @@ static tiles_sample_result_t s_raw_result;
 /* The raw bytes are a DX7 bank (SYNTH BANK PUT), not a sample. */
 static bool s_raw_bank;
 static tiles_fm_bank_result_t s_raw_bank_result;
+/* Or a preset record (PRESET PUT): gathered here, then checked and
+ * written whole. */
+static bool s_raw_preset;
+static uint8_t s_preset_slot;
+static uint32_t s_preset_crc, s_preset_fill;
+static uint8_t s_preset_rx[TILES_PRESET_RECORD_BYTES];
 
 /* A partial line (no newline yet) is dropped once nothing has arrived for
  * this long while the device waits for input. A host that gave up
@@ -602,13 +610,33 @@ static void receive_raw(uint32_t now_ms) {
         s_raw_last_ms = now_ms;
         s_raw_left -= got;
         budget -= got;
-        if (s_raw_bank) {
+        if (s_raw_preset) {
+            memcpy(&s_preset_rx[s_preset_fill], buf, got);
+            s_preset_fill += got;
+        } else if (s_raw_bank) {
             if (s_raw_bank_result == TILES_FM_BANK_OK) {
                 s_raw_bank_result = tiles_fm_bank_write(buf, got);
             }
         } else if (s_raw_result == TILES_SAMPLE_OK) {
             s_raw_result = tiles_sample_store_write(buf, got);
         }
+    }
+    if (s_raw_preset) {
+        if (s_raw_left == 0u || now_ms - s_raw_last_ms > USB_VENDOR_RAW_TIMEOUT_MS) {
+            bool timed_out = s_raw_left > 0u;
+            s_raw_left = 0u;
+            s_raw_preset = false;
+            if (timed_out) {
+                reply_err("timeout");
+            } else if (tiles_kv_crc32(0u, s_preset_rx, TILES_PRESET_RECORD_BYTES) != s_preset_crc) {
+                reply_err("crc");
+            } else {
+                tiles_preset_result_t r = tiles_preset_put(s_preset_slot, s_preset_rx, tiles_flash_staging());
+                r == TILES_PRESET_OK ? reply_ok() : reply_err(tiles_preset_result_name(r));
+            }
+            pump_out();
+        }
+        return;
     }
     if (s_raw_bank) {
         if (s_raw_left == 0u || now_ms - s_raw_last_ms > USB_VENDOR_RAW_TIMEOUT_MS) {
@@ -763,6 +791,80 @@ static void handle_synth_bank(bool voice) {
     reply(text);
 }
 
+/* PRESET LIST (the slots holding a sound: `<slot> <name> factory|stored`) |
+ * GET <slot> (`bytes=508`, the record in hex lines) | PUT <slot> <crc32
+ * hex> (OK 508, the record as raw bytes, then OK or ERR) | CLEAR <slot>
+ * (back to its factory sound, or empty). Slots 1-96; writes only while
+ * TILES is quiet (an erase pauses the sound). */
+static void handle_preset(void) {
+    char *what = strtok(NULL, " ");
+    char *slot_arg = strtok(NULL, " ");
+    char text[USB_VENDOR_LINE_MAX];
+    char name[TILES_PRESET_NAME_MAX + 1u];
+    if (what != NULL && strcmp(what, "LIST") == 0) {
+        for (uint8_t p = 0; p < TILES_PRESET_SLOTS; p++) {
+            tiles_preset_name(p, name);
+            if (name[0] != '\0') {
+                snprintf(text, sizeof(text), "%u %s %s", (unsigned)p + 1u, name,
+                         tiles_preset_stored(p) ? "stored" : "factory");
+                reply(text);
+            }
+        }
+        reply_ok();
+        return;
+    }
+    int slot = slot_arg != NULL ? atoi(slot_arg) : 0;
+    if (what == NULL || slot < 1 || slot > (int)TILES_PRESET_SLOTS) {
+        reply_err("slot-1-96");
+        return;
+    }
+    uint8_t s = (uint8_t)(slot - 1);
+    if (strcmp(what, "GET") == 0) {
+        if (!tiles_preset_record(s, s_preset_rx)) {
+            reply_err("empty");
+            return;
+        }
+        snprintf(text, sizeof(text), "bytes=%u", (unsigned)TILES_PRESET_RECORD_BYTES);
+        reply(text);
+        for (uint32_t at = 0; at < TILES_PRESET_RECORD_BYTES; at += 48u) {
+            uint32_t n = TILES_PRESET_RECORD_BYTES - at < 48u ? TILES_PRESET_RECORD_BYTES - at : 48u;
+            for (uint32_t i = 0; i < n; i++) {
+                snprintf(&text[2u * i], 3, "%02x", s_preset_rx[at + i]);
+            }
+            reply(text);
+        }
+        reply_ok();
+        return;
+    }
+    bool put = strcmp(what, "PUT") == 0, clear = strcmp(what, "CLEAR") == 0;
+    if (!put && !clear) {
+        reply_err("unknown-key");
+        return;
+    }
+    if (tiles_midi_clock_is_running() || !tiles_usb_audio_is_quiet()) {
+        reply_err("playing");
+        return;
+    }
+    if (clear) {
+        tiles_preset_result_t r = tiles_preset_clear(s, tiles_flash_staging());
+        r == TILES_PRESET_OK ? reply_ok() : reply_err(tiles_preset_result_name(r));
+        return;
+    }
+    char *crc = strtok(NULL, " ");
+    if (crc == NULL) {
+        reply_err("crc");
+        return;
+    }
+    s_raw_preset = true;
+    s_preset_slot = s;
+    s_preset_crc = (uint32_t)strtoul(crc, NULL, 16);
+    s_preset_fill = 0u;
+    s_raw_left = TILES_PRESET_RECORD_BYTES;
+    s_raw_last_ms = to_ms_since_boot(get_absolute_time());
+    snprintf(text, sizeof(text), "OK %u", (unsigned)TILES_PRESET_RECORD_BYTES);
+    reply(text);
+}
+
 /* SYNTH LIST (the sounds, then each track's) | PATCH <track 1-4>
  * <number|name> | MIDI <status hex> <data1> <data2>: a message to the
  * engine only (not sent out), to play it from the computer | FX (above) |
@@ -780,7 +882,7 @@ static void handle_synth(void) {
         for (uint8_t p = 0; p < TILES_PRESET_SLOTS; p++) {
             tiles_preset_name(p, name);
             if (name[0] != '\0') {
-                snprintf(text, sizeof(text), "%u %s", (unsigned)p, name);
+                snprintf(text, sizeof(text), "%u %s", (unsigned)p + 1u, name);
                 reply(text);
             }
         }
@@ -807,7 +909,7 @@ static void handle_synth(void) {
             }
         }
         if (patch < 0 && patch_arg[0] >= '0' && patch_arg[0] <= '9') {
-            patch = atoi(patch_arg);
+            patch = atoi(patch_arg) - 1; /* slots 1-96, as PRESET */
         }
         if (patch >= 0 && patch < (int)TILES_PRESET_SLOTS) {
             tiles_preset_name((uint8_t)patch, name);
@@ -905,6 +1007,10 @@ static void handle_line(char *line) {
     }
     if (strcmp(cmd, "SYNTH") == 0) {
         handle_synth();
+        return;
+    }
+    if (strcmp(cmd, "PRESET") == 0) {
+        handle_preset();
         return;
     }
     if (strcmp(cmd, "SAMPLE") == 0) {

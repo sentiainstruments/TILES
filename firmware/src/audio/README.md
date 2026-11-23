@@ -31,35 +31,12 @@ built and what they measure:
 
 ## Preset record
 
-508 bytes, little-endian, fixed offsets; floats are IEEE 754 single.
-Version 1. Bytes past 456 are 0 (later versions add fields there; a
-reader takes 0 as "off"). A record is refused if the marker or version
-is wrong, the name is empty or not printable ASCII, an enum is out of
-range, or a float isn't finite; floats out of their range are clamped
-(the ranges are in `presets.c`).
-
-| Offset | Size | Field |
-|---:|---:|---|
-| 0 | 2 | `TP` |
-| 2 | 1 | version (1) |
-| 3 | 1 | engine: 0 wavetable, 1 FM, 2 granular |
-| 4 | 10 | name, ASCII, NUL-padded |
-| 14 | 4 | wavetable bank (0-2), unison (1-7), filter (0 LP, 1 BP, 2 HP, 3 ladder), voice mode (0 poly, 1 mono, 2 legato) |
-| 18 | 1 | flags: 1 phase reset, 2 LFO synced, 4 LFO retrigger |
-| 19 | 1 | LFO shape (0 sine, 1 triangle, 2 saw down, 3 square, 4 random) |
-| 20 | 168 | 42 floats: wave, wave_pressure, wave_slide, wave_env, wave_lfo, detune_cents, width, drive, fold, cutoff_hz, resonance, key_track, env_oct, velocity_oct, pressure_oct, slide_oct, lfo_oct, amp attack/decay/sustain/release (ms, ms, 0-1, ms), mod the same, lfo rate, lfo delay_ms, vibrato_cents, pitch_env_semis, pitch_env_ms, glide_ms, level, velocity_level, pressure_level, drift_cents, effect sends and inserts: reverb, delay, chorus, drive, dark, crush, pump |
-| 188 | 4 | granular: source (0 wave, 1 tape), tape slot (0-7), root note, 0 |
-| 192 | 68 | 17 floats: size_ms, density, jitter, spray, scan, scatter_cents, octave_up, octave_down, fifth, reverse, spread, skew, size_pressure, density_pressure, spray_pressure, spray_slide, scatter_slide |
-| 260 | 155 | FM: the DX7 voice, unpacked (`fm_voice.h`) |
-| 415 | 1 | 0 |
-| 416 | 8 | 2 floats: FM pressure_db, slide_db |
-| 424 | 4 | sub shape (0 sine, 1 square), LFO 2 shape, LFO 2 flags (2 synced, 4 retrigger), 0 |
-| 428 | 28 | 7 floats: noise, sub, LFO 2 rate, lfo2_oct, lfo2_wave, lfo2_cents, lfo2_level |
-| 456 | 52 | 0 |
-
-The fields are `synth_patch_t`'s, `tiles_grain_params_t`'s and
-`tiles_fm_patch_t`'s (their headers say what each means); an engine reads
-only its own, the rest stay as written.
+508 bytes, version 1: the layout is the contract with the companion app,
+in `../../../shared/protocol/README.md` ("Presets"). `presets.c` holds
+each float's range (out of range: clamped) and refuses a record whose
+marker, version, name, enums or floats aren't valid. Commands: PRESET
+LIST / GET / PUT / CLEAR (`tools/tiles_control.py preset`); writes only
+while TILES is quiet.
 
 ## How it runs
 

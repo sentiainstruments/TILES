@@ -56,6 +56,10 @@ Usage:
     python3 tools/tiles_control.py sample put 1 kick.wav # load slot 1 (drum 1); --mono --normalize --keep-silence --name NAME
     python3 tools/tiles_control.py sample play 1 100     # hear slot 1 at velocity 100 (TILES's own sound)
     python3 tools/tiles_control.py sample delete 1
+    python3 tools/tiles_control.py preset list           # the preset slots holding a sound (factory or stored)
+    python3 tools/tiles_control.py preset get 1 acid.tpr # slot 1's 508-byte record into a file (no file: hex)
+    python3 tools/tiles_control.py preset put 31 acid.tpr # a record into slot 31 (quiet: nothing playing)
+    python3 tools/tiles_control.py preset clear 31       # slot 31 back to its factory sound, or empty
     python3 tools/tiles_control.py synth list            # the synth sounds and each track's (standalone mode)
     python3 tools/tiles_control.py synth patch 2 haze    # track 2 plays "haze"
     python3 tools/tiles_control.py synth bench           # cycles per sample of one voice of each sound
@@ -315,6 +319,46 @@ def dx7_bank(path):
     return data, names
 
 
+def preset(session, args):
+    """The 96 preset slots (firmware/src/audio/README.md, "Preset record"): list | get <slot> [file]
+    | put <slot> <file> | clear <slot>. Slots 1-96; a record is 508 bytes."""
+    import zlib
+    verb = args[0].lower() if args else ""
+    if verb == "list" and len(args) == 1:
+        for line in session.command("PRESET LIST", multi_line=True):
+            print(line)
+    elif verb == "get" and len(args) in (2, 3):
+        lines = session.command(f"PRESET GET {args[1]}", multi_line=True)
+        if not lines or not lines[0].startswith("bytes="):
+            sys.exit(f"preset get: {' '.join(lines)}")
+        data = bytes.fromhex("".join(lines[1:]))
+        if len(data) != int(lines[0].split("=")[1]):
+            sys.exit("preset get: the record came back short")
+        if len(args) == 3:
+            with open(args[2], "wb") as f:
+                f.write(data)
+            print(f"slot {args[1]}: {data[4:14].rstrip(bytes(1)).decode('ascii', 'replace')} -> {args[2]}")
+        else:
+            print(data.hex())
+    elif verb == "put" and len(args) == 3:
+        with open(args[2], "rb") as f:
+            data = f.read()
+        if len(data) != 508 or data[:2] != b"TP":
+            sys.exit("preset put: not a 508-byte preset record")
+        reply = session.command(f"PRESET PUT {args[1]} {zlib.crc32(data) & 0xFFFFFFFF:08x}")
+        if not reply or not reply[0].startswith("OK "):
+            sys.exit(f"preset put: {' '.join(reply)}" + (" (stop playback first)" if reply == ["ERR playing"] else ""))
+        session.ep_out.write(data, timeout=5000)
+        verdict = session.read_line("PRESET PUT")
+        if verdict != "OK":
+            sys.exit(f"preset put: {verdict}")
+        print(f"slot {args[1]}: {data[4:14].rstrip(bytes(1)).decode('ascii', 'replace')}")
+    elif verb == "clear" and len(args) == 2:
+        print(session.command(f"PRESET CLEAR {args[1]}")[0])
+    else:
+        sys.exit(preset.__doc__)
+
+
 def synth(session, args):
     if len(args) == 1 and args[0].lower() in ("list", "bench"):
         for line in session.command("SYNTH " + args[0].upper(), multi_line=True):
@@ -472,6 +516,9 @@ def main():
         return
     elif command == "sample":
         sample(session, sys.argv[2:])
+        return
+    elif command == "preset":
+        preset(session, sys.argv[2:])
         return
     elif command == "synth":
         synth(session, sys.argv[2:])

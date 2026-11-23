@@ -55,6 +55,9 @@ void tiles_presets_init(const tiles_kv_ops_t *const ops[TILES_PRESET_GROUPS]);
 /* Slot 0-95 into `out`: its stored record, else its factory sound; false
  * if it is empty. */
 bool tiles_preset_get(uint8_t slot, tiles_sound_t *out);
+/* Its record (as a stored one, or its factory sound encoded); false if
+ * empty. */
+bool tiles_preset_record(uint8_t slot, uint8_t out[TILES_PRESET_RECORD_BYTES]);
 /* Its name ("" if empty). */
 void tiles_preset_name(uint8_t slot, char name[TILES_PRESET_NAME_MAX + 1u]);
 /* A slot holding a record from the computer (not its factory sound). */
