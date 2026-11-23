@@ -48,6 +48,12 @@ void tiles_audio_engine_render(int32_t *out_lr, uint32_t frames);
  * empty). */
 uint32_t tiles_audio_engine_tape_frames(void);
 
+/* Controller mode never starts the engine (services/device_mode.h: a
+ * switch restarts the board), so its wavetables' memory (114 KB) is free
+ * for the instrument then: `bytes` of it, or NULL if the engine was built
+ * or that's more. */
+void *tiles_audio_engine_idle_memory(uint32_t bytes);
+
 /* Voices still sounding (releases included). */
 uint8_t tiles_audio_engine_active_voices(void);
 

@@ -9,7 +9,7 @@ long swelling pads**. Nothing here is decided yet.
 | | Now | What it means |
 |---|---|---|
 | CPU (core 1) | 4,800 cycles a sample; the voices get 3,030 (85 % less 1,050 for the effects and 5 drum voices; 2,880 before the effects went to 24 kHz) | Plenty. At the budget: wobble 8 voices, reese 10, pluck 13, tine 18, glass 26 (the engine caps a track at 8 and all at 20). |
-| RAM | **14 KB free** of 512 KB (~3 KB after granular and the extras; **~88 KB** since the effects run at 24 kHz, 2026-11-23) | The constraint until then. Taken: the effects 178 KB (91 KB since), three wavetable banks 114 KB, code run from RAM ~77 KB (~86 KB with granular), the sampler's heads and rings ~18 KB, Song's library ~12 KB, the FM sine 8 KB, voices ~7 KB. |
+| RAM | **14 KB free** of 512 KB (~3 KB after granular and the extras; **~100 KB** since the effects run at 24 kHz and Song's library left standalone mode, 2026-11-23) | The constraint until then. Taken: the effects 178 KB (91 KB since), three wavetable banks 114 KB, code run from RAM ~77 KB (~86 KB with granular), the sampler's heads and rings ~18 KB, Song's library ~12 KB, the FM sine 8 KB, voices ~7 KB. |
 | Flash | 1.85 MB free in the image area (the image is 405 KB of 2.25 MB); the 8 drum slots 1.5 MB; the saved band 256 KB (~76 KB used) | Room for presets, more DX7 banks, longer samples. |
 
 So engines that only compute (modal, superwave, formant, harmonic,

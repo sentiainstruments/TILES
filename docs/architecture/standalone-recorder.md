@@ -10,7 +10,9 @@ Standalone mode becomes a **4-track tape recorder with a drum track**.
 Its home screen is the **Deck** (Song mode, renamed). The sequencer,
 drums and Song leave standalone's menu: the Deck does their jobs. They
 stay in controller mode, and Ableton and Volca move there only (owner,
-2026-11-21). Each track holds
+2026-11-21). Song has already gone (2026-11-23): in controller mode its
+12 KB library lives in the sound engine's idle wavetable memory, so it
+costs standalone mode no RAM. Each track holds
 **tapes** (clips); a track plays one tape at a time, so up to 4 synth
 tapes and 1 drum tape play together, launched like clips. A tape is a
 step sequencer: 16 steps a page, up to 8 pages. You fill a tape step by

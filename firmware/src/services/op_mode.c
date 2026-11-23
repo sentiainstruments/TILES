@@ -5,6 +5,7 @@
 #include "buttons.h"
 #include "cv_gate.h"
 #include "debug_mode.h"
+#include "audio_engine.h"
 #include "device_mode.h"
 #include "drum_seq.h"
 #include "harmony.h"
@@ -1293,7 +1294,12 @@ static const menu_slot_t MENU_SLOTS[] = {
  * toggles). All on at boot; the saved settings follow. */
 static bool s_menu_entry_enabled[TILES_MENU_ENTRY_COUNT];
 
+static bool song_available(void);
+
 static bool slot_enabled(const menu_slot_t *slot) {
+    if (slot->mode == OP_MODE_SONG && !song_available()) {
+        return false; /* controller mode's (song_available()) */
+    }
     return slot->entry < 0 || s_menu_entry_enabled[slot->entry];
 }
 
@@ -2087,6 +2093,7 @@ static void seq_capture_mode_exit(void);
 /* Defined in "Song mode: capture". */
 static void song_capture_enter(void);
 static void song_capture_exit(void);
+static void song_library_init(void);
 /* Forward declarations for the Song step-edit screen. */
 static bool s_song_edit_active;
 static void song_edit_exit(void);
@@ -2123,6 +2130,9 @@ static void set_volca(bool volca) {
 static void sound_menu_close(void); /* with the diamond, below */
 
 static void set_active_mode(tiles_op_mode_t mode) {
+    if (mode == OP_MODE_SONG && !song_available()) {
+        mode = OP_MODE_MELODIC; /* a saved or asked-for Song in standalone mode */
+    }
     sound_menu_close();
     if (mode != s_active_mode) {
         tiles_fx_set(tiles_fx_get()); /* the last mode's light, gone */
@@ -3268,10 +3278,10 @@ void tiles_op_mode_init(bool crash_recovered) {
      * plain read, fine on every boot. */
     pattern_store_load_all();
     seq_autosave_init(crash_recovered);
-    /* Song library: same. Song tracks always come up stopped after a reboot,
-     * crash included (their running state isn't in __uninitialized_ram, unlike
-     * the sequencer's lanes). */
-    song_store_load_all();
+    /* Song library: same, in controller mode (song_available()). Song tracks
+     * always come up stopped after a reboot, crash included (their running
+     * state isn't in __uninitialized_ram, unlike the sequencer's lanes). */
+    song_library_init();
 
     /* Drum sequencer: its saved pattern, stopped (running isn't kept across a
      * crash). */
@@ -3367,7 +3377,7 @@ static void advance_playback(tiles_midi_clock_state_t clock) {
         seq_advance_clock(lane, clock);
     }
     /* Except the slot a Song capture is recording. */
-    for (uint8_t slot = 0u; slot < OP_SONG_NUM_SLOTS; slot++) {
+    for (uint8_t slot = 0u; slot < OP_SONG_NUM_SLOTS && song_available(); slot++) {
         if (s_song_capture_active && slot == (uint8_t)(s_song_capture_slot - 1u)) {
             continue;
         }
@@ -3531,7 +3541,9 @@ void tiles_op_mode_scan(void) {
         }
         if (s_song_store_pending) {
             s_song_store_pending = false;
-            song_store_write_all();
+            if (song_available()) {
+                song_store_write_all();
+            }
         }
     }
 
@@ -3772,7 +3784,28 @@ typedef struct {
     uint8_t hue_byte;
 } op_song_pattern_t;
 
-static op_song_pattern_t s_song_pattern[OP_SONG_NUM_SLOTS];
+/* Song is controller mode's (docs/architecture/standalone-recorder.md: the
+ * Deck takes its place in standalone mode). There the sound engine never
+ * starts, so its 12 KB live in the engine's idle wavetable memory
+ * (tiles_audio_engine_idle_memory()); in standalone mode there is no
+ * library, Song isn't on the menu, and none of its code runs. */
+#define SONG_LIBRARY_BYTES (sizeof(op_song_pattern_t) * OP_SONG_NUM_SLOTS)
+static op_song_pattern_t *s_song_pattern;
+
+static bool song_available(void) {
+    return s_song_pattern != NULL;
+}
+
+static void song_store_load_all(void);
+
+static void song_library_init(void) {
+    s_song_pattern = tiles_device_mode_is_standalone()
+                         ? NULL
+                         : (op_song_pattern_t *)tiles_audio_engine_idle_memory(SONG_LIBRARY_BYTES);
+    if (song_available()) {
+        song_store_load_all();
+    }
+}
 static bool s_song_slot_occupied[OP_SONG_NUM_SLOTS];
 /* Runtime playback state per slot (valid while occupied), shaped like the
  * sequencer's per-lane fields. Not persisted: tracks always come up
@@ -3825,7 +3858,7 @@ typedef struct {
 _Static_assert(offsetof(tiles_song_store_t, pattern) == sizeof(uint32_t) * 3u + 1u &&
                    offsetof(tiles_song_store_head_t, next_hue_byte) + 1u == offsetof(tiles_song_store_t, pattern),
                "the head is the store's first bytes");
-_Static_assert(sizeof(s_song_pattern) == sizeof(((tiles_song_store_t *)0)->pattern), "the patterns follow as in RAM");
+_Static_assert(SONG_LIBRARY_BYTES == sizeof(((tiles_song_store_t *)0)->pattern), "the patterns follow as in RAM");
 
 /* Rewrites the whole store from RAM (like pattern_store_write_all()),
  * sector by sector: the head, then the patterns straight from
@@ -3843,7 +3876,7 @@ static void song_store_write_all(void) {
         }
     }
     const size_t head_len = offsetof(tiles_song_store_t, pattern);
-    const size_t patterns_len = sizeof(s_song_pattern);
+    const size_t patterns_len = SONG_LIBRARY_BYTES;
     const uint8_t *patterns = (const uint8_t *)s_song_pattern;
     for (uint32_t sector = 0u; sector < TILES_SONG_NUM_FLASH_SECTORS; sector++) {
         memset(buf, 0, FLASH_SECTOR_SIZE);
@@ -4650,6 +4683,9 @@ static bool song_find_next_empty_slot(uint8_t *out_slot_index) {
 #define OP_SONG_HUE_STEP 97u
 
 static void song_capture_enter(void) {
+    if (!song_available()) {
+        return;
+    }
     uint8_t slot_index;
     if (!song_find_next_empty_slot(&slot_index)) {
         return;
