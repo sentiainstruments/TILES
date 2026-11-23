@@ -53,7 +53,8 @@
 
 /* Modes, in the order they were added. (An arpeggiator stub was replaced
  * by bass guitar mode; there is no arp.) */
-/* SONG: see "Song mode"; SCENE_LAUNCH: Ableton mode. */
+/* SONG: removed (2026-11-23), its number kept so saved modes keep theirs;
+ * SCENE_LAUNCH: Ableton mode. */
 typedef enum {
     OP_MODE_MELODIC = 0,
     OP_MODE_CHORD,
@@ -88,7 +89,7 @@ static int phys_kind_of(tiles_op_mode_t mode) {
 
 static void mode_underglow(void); /* the active mode's colour on the underglow */
 
-/* Lanes and Song tracks play on the Parts USB port, never the MPE zone. */
+/* Lanes play on the Parts USB port, never the MPE zone. */
 static void part_note_on(uint8_t channel, uint8_t note, uint8_t velocity) {
     tiles_midi_out_parts_begin();
     tiles_midi_note_on(channel, note, velocity);
@@ -129,9 +130,6 @@ static void part_note_off(uint8_t channel, uint8_t note, uint8_t release_velocit
 #define OP_MENU_GUITAR_R TILES_LIGHTING_BASS_R
 #define OP_MENU_GUITAR_G TILES_LIGHTING_BASS_G
 #define OP_MENU_GUITAR_B TILES_LIGHTING_BASS_B
-#define OP_MENU_SONG_R 1.0f
-#define OP_MENU_SONG_G 0.62f
-#define OP_MENU_SONG_B 0.0f
 #define OP_MENU_SCENE_LAUNCH_R 0.0f
 #define OP_MENU_SCENE_LAUNCH_G 0.75f
 #define OP_MENU_SCENE_LAUNCH_B 0.55f
@@ -1206,17 +1204,9 @@ static void render_edit_mode(uint32_t now_ms, bool transport_running) {
     }
 }
 
-/* Defined in "Song mode: capture". */
-static bool s_song_capture_active;
-/* Defined in "Song mode: step-edit screen". */
-static bool s_song_edit_pick_active;
-
-/* Modes that draw the whole grid: sequencer, Ableton, and Song except while
- * it captures or picks a pitch. The single place that decides. */
+/* Modes that draw the whole grid: sequencer, Ableton and the rest below.
+ * The single place that decides. */
 static bool mode_owns_standby_grid(tiles_op_mode_t mode) {
-    if (mode == OP_MODE_SONG) {
-        return !s_song_capture_active && !s_song_edit_pick_active;
-    }
     /* Ableton mode's grid is all launch pads, drum mode's steps and drums;
      * no live-play exception. */
     return mode == OP_MODE_SEQUENCER || mode == OP_MODE_SCENE_LAUNCH || mode == OP_MODE_DRUM || mode == OP_MODE_HARMONY ||
@@ -1272,7 +1262,6 @@ static const menu_slot_t MENU_SLOTS[] = {
      OP_MENU_SEQUENCER_B},
     {2u, 2u, OP_MODE_DRUM, false, TILES_MENU_DRUMS, TILES_DRUM_SEQ_COLOR_R, TILES_DRUM_SEQ_COLOR_G,
      TILES_DRUM_SEQ_COLOR_B},
-    {3u, 2u, OP_MODE_SONG, false, TILES_MENU_SONG, OP_MENU_SONG_R, OP_MENU_SONG_G, OP_MENU_SONG_B},
     {1u, 3u, OP_MODE_HARMONY, false, TILES_MENU_PRISM, TILES_HARMONY_COLOR_R, TILES_HARMONY_COLOR_G,
      TILES_HARMONY_COLOR_B},
     {1u, 4u, OP_MODE_SCENE_LAUNCH, false, TILES_MENU_ABLETON, OP_MENU_SCENE_LAUNCH_R, OP_MENU_SCENE_LAUNCH_G,
@@ -1294,12 +1283,7 @@ static const menu_slot_t MENU_SLOTS[] = {
  * toggles). All on at boot; the saved settings follow. */
 static bool s_menu_entry_enabled[TILES_MENU_ENTRY_COUNT];
 
-static bool song_available(void);
-
 static bool slot_enabled(const menu_slot_t *slot) {
-    if (slot->mode == OP_MODE_SONG && !song_available()) {
-        return false; /* controller mode's (song_available()) */
-    }
     return slot->entry < 0 || s_menu_entry_enabled[slot->entry];
 }
 
@@ -1337,7 +1321,7 @@ static void slot_underglow(const menu_slot_t *slot, float *r, float *g, float *b
 }
 
 /* The active mode's colour on the underglow, for the views that draw it
- * (sequencer, Song); the others draw it themselves, and lighting.c shows it
+ * (the sequencer); the others draw it themselves, and lighting.c shows it
  * outside standby (set in set_active_mode()). */
 static void mode_underglow(void) {
     float r, g, b;
@@ -1357,10 +1341,9 @@ static bool slot_is_current(const menu_slot_t *slot) {
 /* Current mode pulses white; other modes on the menu show their color at the
  * dim "available" level; everything else is off. */
 static bool any_lane_running(void);
-static bool any_song_slot_running(void);
 
 /* A mode whose playback is running with the clock (in the background,
- * since the menu is open): sequencer lanes, Song tracks, the drum player
+ * since the menu is open): sequencer lanes, the drum player
  * (Drums or Volca, whichever routing it plays) or Bouncing notes. */
 static bool slot_is_playing(const menu_slot_t *slot) {
     if (!tiles_midi_clock_is_running()) {
@@ -1375,8 +1358,6 @@ static bool slot_is_playing(const menu_slot_t *slot) {
         }
         return false;
     }
-    case OP_MODE_SONG:
-        return any_song_slot_running();
     case OP_MODE_DRUM:
         return tiles_drum_seq_is_running() && tiles_drum_seq_is_volca() == slot->volca;
     case OP_MODE_BOUNCE:
@@ -1520,7 +1501,7 @@ static void scale_menu_enter(void) {
 static void scale_menu_exit(void) {
     s_scale_menu_visible = false;
     /* Keep standby claimed if the current mode draws through it (sequencer,
-     * Ableton, Song; see mode_owns_standby_grid()); releasing it broke the
+     * Ableton; see mode_owns_standby_grid()); releasing it broke the
      * step view when the picker closed. */
     if (!mode_owns_standby_grid(s_active_mode)) {
         tiles_lighting_set_standby_active(false);
@@ -1664,8 +1645,6 @@ static uint8_t s_pattern_flash_pad; /* 1..24, the cell just saved/deleted */
  * (store_service()): an erase stalls everything, playback included, for
  * tens of ms. The confirmation shows at once; RAM already holds the change. */
 static bool s_pattern_store_pending;
-static bool s_song_store_pending;
-static void song_store_write_all(void);
 
 static void pattern_store_save_slot(uint8_t lane, uint8_t alt) {
     s_pattern_slot_saved[lane][alt] = true;
@@ -2090,26 +2069,17 @@ static void pattern_bank_exit(void) {
  * with capture mode below. */
 static bool s_seq_capture_mode_active;
 static void seq_capture_mode_exit(void);
-/* Defined in "Song mode: capture". */
-static void song_capture_enter(void);
-static void song_capture_exit(void);
-static void song_library_init(void);
-/* Forward declarations for the Song step-edit screen. */
-static bool s_song_edit_active;
-static void song_edit_exit(void);
-static void song_edit_pick_cancel(void); /* used by handle_diamond_transport() */
 static void scene_send_stop_all(void); /* used by handle_diamond_transport() */
 static void scene_send_track_offset(uint8_t offset); /* used by handle_transport_and_length() */
 static void scene_launch_enter(void); /* used by set_active_mode() */
 static void scene_launch_leave(void); /* used by set_active_mode() */
-static void song_stop_all_running(void); /* used by set_active_mode() */
 
 /* Live opened an empty clip to record: switch to melodic once every pad is
  * up, so the clicking finger plays no note. */
 static bool s_scene_pending_melodic;
 
 /* Recording a Live clip from melodic mode until circle + diamond ends it;
- * meanwhile circle + diamond belongs to Ableton, not Song capture. */
+ * meanwhile circle + diamond belongs to Ableton. */
 static bool s_ableton_capture_active;
 static void scene_end_capture(void); /* used by handle_diamond_transport() */
 
@@ -2130,36 +2100,22 @@ static void set_volca(bool volca) {
 static void sound_menu_close(void); /* with the diamond, below */
 
 static void set_active_mode(tiles_op_mode_t mode) {
-    if (mode == OP_MODE_SONG && !song_available()) {
-        mode = OP_MODE_MELODIC; /* a saved or asked-for Song in standalone mode */
+    if (mode == OP_MODE_SONG) {
+        mode = OP_MODE_MELODIC; /* Song mode was removed: a saved one comes up melodic */
     }
     sound_menu_close();
     if (mode != s_active_mode) {
         tiles_fx_set(tiles_fx_get()); /* the last mode's light, gone */
     }
-    if (s_song_capture_active && mode != s_active_mode) {
-        /* Any real mode change ends Song capture. */
-        song_capture_exit();
-    } else if (s_seq_capture_mode_active && mode != OP_MODE_SEQUENCER) {
+    if (s_seq_capture_mode_active && mode != OP_MODE_SEQUENCER) {
         /* Leaving the sequencer (e.g. via the mode menu) ends sequencer capture. */
         seq_capture_mode_exit();
-    }
-    if (s_song_edit_active && mode != s_active_mode) {
-        /* A separate `if`: the Song step-edit screen can be open under an active
-         * Song capture, and must close on a mode change too. */
-        song_edit_exit();
     }
     /* Leaving the sequencer does NOT stop it: patterns keep playing in the
      * background (seq_advance_clock() runs every scan). Chord notes do end
      * when leaving chord mode. */
     if (s_active_mode == OP_MODE_CHORD && mode != OP_MODE_CHORD) {
         chord_end_all_notes();
-    }
-    /* Ableton mode and Song mode can't both drive Live, so entering Ableton
-     * mode from ANY mode stops Song's running tracks (they play in the
-     * background). */
-    if (mode == OP_MODE_SCENE_LAUNCH) {
-        song_stop_all_running();
     }
     if (mode != OP_MODE_MELODIC) {
         /* The scale picker can't stay open in another mode; just close the view. */
@@ -2227,7 +2183,7 @@ static void set_active_mode(tiles_op_mode_t mode) {
     /* Triangle is lit only while the mode menu is open. */
     tiles_buttons_set_override_led(TILES_TRIANGLE_BUTTON_ID, 0.0f);
     s_scene_pending_melodic = false;
-    if (mode == OP_MODE_SCENE_LAUNCH || mode == OP_MODE_SEQUENCER || mode == OP_MODE_SONG || mode == OP_MODE_DRUM ||
+    if (mode == OP_MODE_SCENE_LAUNCH || mode == OP_MODE_SEQUENCER || mode == OP_MODE_DRUM ||
         mode == OP_MODE_HARMONY || mode == OP_MODE_BOUNCE || phys_kind_of(mode) != TILES_PHYS_NONE) {
         s_ableton_capture_active = false;
     }
@@ -2596,10 +2552,6 @@ static void handle_triangle_click(void) {
                         /* Drums follow no scale: circle + triangle shows the other page of
                          * steps instead. */
                         tiles_drum_seq_flip_page();
-                    } else if (s_song_capture_active) {
-                        /* End a running Song capture instead of opening the picker over it (the
-                         * picker would take the grid and freeze the capture). */
-                        song_capture_exit();
                     } else if (s_seq_capture_mode_active) {
                         /* Same for sequencer capture. */
                         seq_capture_mode_exit();
@@ -2642,11 +2594,6 @@ static void transport_send_cc(uint8_t cc) {
     tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 127u);
     tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, cc, 0u);
 }
-
-/* Song mode's slot count and capture slot, declared early for
- * handle_diamond_transport() and scan. */
-#define OP_SONG_NUM_SLOTS TILES_NUM_PADS
-static uint8_t s_song_capture_slot; /* 1..24: the slot being recorded into */
 
 /* Diamond's LED level for the transport. Standby-drawing modes write it
  * themselves (override writes are ignored there). */
@@ -2711,10 +2658,9 @@ static void sound_menu_close(void) {
 
 /* Standalone mode outside the sequencer: diamond is the sound menu,
  * circle + diamond the effects menu (services/sound_menu.h), no DAW
- * transport. Song's step editor keeps its diamond (back). */
+ * transport. */
 static bool diamond_opens_sound_menus(void) {
-    return tiles_device_mode_is_standalone() && s_active_mode != OP_MODE_SEQUENCER &&
-           !(s_active_mode == OP_MODE_SONG && s_song_edit_active) && !s_ableton_capture_active;
+    return tiles_device_mode_is_standalone() && s_active_mode != OP_MODE_SEQUENCER && !s_ableton_capture_active;
 }
 
 static void handle_diamond_transport(uint32_t now_ms) {
@@ -2778,8 +2724,7 @@ static void handle_diamond_transport(uint32_t now_ms) {
                  * circle + diamond ends it and returns to Ableton mode, in either
                  * transport layout (ending the clip, not stopping the song). */
                 scene_end_capture();
-            } else if (OP_TRANSPORT_SHIFT_STOP &&
-                       !(s_active_mode == OP_MODE_SONG && s_song_edit_active && !s_diamond_press_was_shift)) {
+            } else if (OP_TRANSPORT_SHIFT_STOP) {
                 /* Performance layout (OP_TRANSPORT_SHIFT_STOP). Realtime Start/Stop as
                  * in the toggle layout below; Start only from stopped, so a click
                  * while playing never restarts synced gear. */
@@ -2804,25 +2749,10 @@ static void handle_diamond_transport(uint32_t now_ms) {
                     s_transport_playing = true;
                 }
             } else if (s_active_mode == OP_MODE_SCENE_LAUNCH && s_diamond_press_was_shift) {
-                /* Ableton mode: circle + diamond = stop all clips (Song capture isn't
-                 * used there). Checked before the generic Song-capture branch. */
+                /* Ableton mode: circle + diamond = stop all clips. */
                 scene_send_stop_all();
             } else if (s_diamond_press_was_shift) {
-                /* Elsewhere: toggle Song capture into the next empty slot. It waits for a
-                 * tempo if none exists; circle taps one meanwhile. */
-                if (s_song_capture_active) {
-                    song_capture_exit();
-                } else {
-                    song_capture_enter();
-                }
-            } else if (s_active_mode == OP_MODE_SONG && s_song_edit_active) {
-                /* Song step-edit screen: a diamond click backs up one level (pitch pick ->
-                 * step grid -> track overview) instead of sending transport. */
-                if (s_song_edit_pick_active) {
-                    song_edit_pick_cancel();
-                } else {
-                    song_edit_exit();
-                }
+                /* Elsewhere circle + diamond does nothing (it was Song capture). */
             } else if (s_diamond_record_armed) {
                 tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 127u);
                 tiles_midi_send_daw_cc(TILES_MIDI_MPE_MASTER_CHANNEL, OP_TRANSPORT_RECORD_CC, 0u);
@@ -2866,8 +2796,8 @@ static void handle_diamond_transport(uint32_t now_ms) {
     s_diamond_was_held = held;
 }
 
-/* Tap tempo on circle: sequencer or drums with no edit open (or Song
- * capture), no external clock, no other combo key. Committed on release
+/* Tap tempo on circle: sequencer or drums with no edit open, no external
+ * clock, no other combo key. Committed on release
  * with the press time, since circle also starts other combos. */
 static uint32_t s_circle_press_ms;
 static bool s_circle_press_pending_tap;
@@ -2886,10 +2816,8 @@ static void handle_circle_tap(uint32_t now_ms) {
 
     if (held && !s_circle_was_held) {
         s_circle_press_ms = now_ms;
-        /* Tap tempo is sequencer-only, plus while a Song capture runs (which can
-         * start without a tempo and needs a way to set one). */
         bool mode_ok = (s_active_mode == OP_MODE_SEQUENCER && s_seq_edit_mode == OP_SEQ_EDIT_NONE) ||
-                       s_active_mode == OP_MODE_DRUM || s_active_mode == OP_MODE_BOUNCE || s_song_capture_active ||
+                       s_active_mode == OP_MODE_DRUM || s_active_mode == OP_MODE_BOUNCE ||
                        phys_kind_of(s_active_mode) != TILES_PHYS_NONE;
         bool combo_conflict = tiles_button_is_pressed(TILES_DIAMOND_BUTTON_ID) ||
                                tiles_button_is_pressed(TILES_TRIANGLE_BUTTON_ID) ||
@@ -2925,22 +2853,6 @@ static bool any_lane_running(void) {
     return tiles_drum_seq_is_running() || tiles_bounce_mode_is_running();
 }
 
-/* Declared early for tiles_op_mode_is_sequencer_active(). Up to
- * OP_SONG_MAX_CONCURRENT slots can run at once. */
-static bool s_song_slot_running[OP_SONG_NUM_SLOTS];
-
-/* Like any_lane_running(), for Song tracks (they also run in the
- * background), so a looping Song pattern also gets standby's longer
- * timeouts. */
-static bool any_song_slot_running(void) {
-    for (uint8_t slot = 0u; slot < OP_SONG_NUM_SLOTS; slot++) {
-        if (s_song_slot_running[slot]) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /* One shared clock (MIDI in, else internal). The first pattern to start
  * starts it; others join on its beat without retriggering; it stops with
  * the last. True if anything but the starting pattern plays. */
@@ -2950,13 +2862,12 @@ static bool others_playing(int lane, bool drums, bool bounce) {
             return true;
         }
     }
-    return (!drums && tiles_drum_seq_is_running()) || (!bounce && tiles_bounce_mode_is_running()) ||
-           any_song_slot_running();
+    return (!drums && tiles_drum_seq_is_running()) || (!bounce && tiles_bounce_mode_is_running());
 }
 
 /* After a stop: the internal clock stops once nothing plays on it. */
 static void stop_clock_if_idle(void) {
-    if (!any_lane_running() && !any_song_slot_running()) {
+    if (!any_lane_running()) {
         tiles_midi_clock_set_running(false);
     }
 }
@@ -3150,20 +3061,6 @@ static float compute_beat_flash_level(uint32_t now_ms, tiles_midi_clock_state_t 
     return 0.0f;
 }
 
-/* Song mode functions, defined in its section below. */
-static void song_store_load_all(void);
-static void handle_song_overview_taps(uint32_t now_ms);
-static void render_song_overview(uint32_t now_ms);
-static void render_song_underglow(void);
-static void song_advance_clock(uint8_t slot, tiles_midi_clock_state_t clock);
-static void song_capture_handle_taps(tiles_midi_clock_state_t clock);
-static void song_capture_advance_clock(tiles_midi_clock_state_t clock);
-/* Song step-edit functions, defined below (song_capture_enter/_exit,
- * song_edit_exit and song_edit_pick_cancel are declared earlier still). */
-static void song_edit_enter(uint8_t pad);
-static void handle_song_edit_taps(uint32_t now_ms);
-static void render_song_edit(uint32_t now_ms);
-static void handle_song_edit_pick_taps(uint32_t now_ms);
 
 /* Ableton mode functions, defined below. scene_launch_init() registers its
  * SysEx callback (see tiles_op_mode_init()). */
@@ -3278,10 +3175,6 @@ void tiles_op_mode_init(bool crash_recovered) {
      * plain read, fine on every boot. */
     pattern_store_load_all();
     seq_autosave_init(crash_recovered);
-    /* Song library: same, in controller mode (song_available()). Song tracks
-     * always come up stopped after a reboot, crash included (their running
-     * state isn't in __uninitialized_ram, unlike the sequencer's lanes). */
-    song_library_init();
 
     /* Drum sequencer: its saved pattern, stopped (running isn't kept across a
      * crash). */
@@ -3375,13 +3268,6 @@ static void advance_playback(tiles_midi_clock_state_t clock) {
         /* Crash-recorder trace: which lane (0-3) is being advanced. */
         tiles_debug_trace((char)('0' + lane));
         seq_advance_clock(lane, clock);
-    }
-    /* Except the slot a Song capture is recording. */
-    for (uint8_t slot = 0u; slot < OP_SONG_NUM_SLOTS && song_available(); slot++) {
-        if (s_song_capture_active && slot == (uint8_t)(s_song_capture_slot - 1u)) {
-            continue;
-        }
-        song_advance_clock(slot, clock);
     }
     tiles_drum_seq_advance(clock, mode_is_shown(OP_MODE_DRUM));
     tiles_bounce_mode_advance(clock, mode_is_shown(OP_MODE_BOUNCE));
@@ -3533,17 +3419,11 @@ void tiles_op_mode_scan(void) {
     bool quiet = tiles_usb_audio_is_quiet();
     tiles_drum_seq_persist_service(now_ms, clock.running || !quiet);
     seq_autosave_service(now_ms, clock.running || !quiet, any_pad_touched());
-    /* Pattern bank and Song saves (erases), once stopped and silent. */
+    /* Pattern bank saves (erases), once stopped and silent. */
     if (!clock.running && quiet && !any_pad_touched()) {
         if (s_pattern_store_pending) {
             s_pattern_store_pending = false;
             pattern_store_write_all();
-        }
-        if (s_song_store_pending) {
-            s_song_store_pending = false;
-            if (song_available()) {
-                song_store_write_all();
-            }
         }
     }
 
@@ -3587,26 +3467,6 @@ void tiles_op_mode_scan(void) {
     if (s_active_mode == OP_MODE_SEQUENCER) {
         seq_handle_step_taps(now_ms);
         render_sequencer(beat_flash_level, clock.running);
-    } else if (s_active_mode == OP_MODE_SONG) {
-        if (s_song_capture_active) {
-            /* Song capture in Song mode: live melodic colouring; lighting.c draws the
-             * amber recording underglow. */
-            song_capture_handle_taps(clock);
-            song_capture_advance_clock(clock);
-        } else if (s_song_edit_active) {
-            if (s_song_edit_pick_active) {
-                /* Step-edit pitch pick: live melodic grid, plus Song's underglow (safe to
-                 * draw here; see render_song_underglow()). */
-                handle_song_edit_pick_taps(now_ms);
-                render_song_underglow();
-            } else {
-                handle_song_edit_taps(now_ms);
-                render_song_edit(now_ms);
-            }
-        } else {
-            handle_song_overview_taps(now_ms);
-            render_song_overview(now_ms);
-        }
     } else if (s_active_mode == OP_MODE_DRUM) {
         /* Drum mode draws through standby, so it writes diamond's transport
          * LED itself. */
@@ -3647,8 +3507,7 @@ void tiles_op_mode_scan(void) {
 }
 
 bool tiles_op_mode_owns_pad_grid(void) {
-    /* Menus and whole-grid modes own every pad. Song capture and pitch pick
-     * don't: there the grid plays live while the touch is recorded. */
+    /* Menus and whole-grid modes own every pad. */
     return s_menu_visible || s_scale_menu_visible || tiles_sound_menu_is_open() ||
            mode_owns_standby_grid(s_active_mode);
 }
@@ -3687,10 +3546,10 @@ bool tiles_op_mode_get_phase_lock(void) {
 }
 
 bool tiles_op_mode_is_sequencer_active(void) {
-    /* A pattern mode is shown or a lane or Song track plays (not just the
-     * clock), so standby uses its longer timeouts. */
-    return s_active_mode == OP_MODE_SEQUENCER || any_lane_running() || s_active_mode == OP_MODE_SONG ||
-           any_song_slot_running() || s_active_mode == OP_MODE_DRUM || s_active_mode == OP_MODE_BOUNCE ||
+    /* A pattern mode is shown or a lane plays (not just the clock), so
+     * standby uses its longer timeouts. */
+    return s_active_mode == OP_MODE_SEQUENCER || any_lane_running() || s_active_mode == OP_MODE_DRUM ||
+           s_active_mode == OP_MODE_BOUNCE ||
            tiles_bounce_mode_is_running() || phys_kind_of(s_active_mode) != TILES_PHYS_NONE;
 }
 
@@ -3731,7 +3590,7 @@ bool tiles_op_mode_test_set_mode(const char *name) {
         const char *name;
         tiles_op_mode_t mode;
     } MODES[] = {{"melodic", OP_MODE_MELODIC}, {"chord", OP_MODE_CHORD},   {"sequencer", OP_MODE_SEQUENCER},
-                 {"bass", OP_MODE_GUITAR},     {"song", OP_MODE_SONG},     {"ableton", OP_MODE_SCENE_LAUNCH},
+                 {"bass", OP_MODE_GUITAR},     {"ableton", OP_MODE_SCENE_LAUNCH},
                  {"drums", OP_MODE_DRUM},      {"volca", OP_MODE_DRUM},    {"harmony", OP_MODE_HARMONY},
                  {"duet", OP_MODE_CHORD},      {"prism", OP_MODE_HARMONY}, {"bounce", OP_MODE_BOUNCE},
                  {"ripples", OP_MODE_RIPPLES}, {"sand", OP_MODE_SAND},     {"orbits", OP_MODE_ORBITS},
@@ -3758,991 +3617,6 @@ bool tiles_op_mode_has_menu_open(void) {
     return s_menu_visible || s_scale_menu_visible || tiles_sound_menu_is_open() || s_pattern_bank_visible ||
            s_seq_edit_mode != OP_SEQ_EDIT_NONE ||
            s_seq_capture_mode_active || (s_active_mode == OP_MODE_BOUNCE && tiles_bounce_mode_is_picking());
-}
-
-/* ---- Song mode (BETA, untested on hardware) -------------------------------
- * A looper library: 24 slots (tap = start/stop, circle + tap = move, circle
- * + hold 5 s = delete, hold 2 s = step editor), 128 steps each, up to 4
- * notes per step. Up to 8 play at once on channels from the shared pool
- * (a full pool flashes red). Recording is Song capture. Amber theme. */
-
-/* Step editor layout: columns 1-4 x 4 rows = the page's 16 steps
- * (row-major); columns 5-6 = the 8 page pads, row 1 = pages 1-2 ... row 4
- * = pages 7-8 (column 5 the lower page of each pair). */
-#define OP_SONG_STEPS_PER_PAGE 16u
-#define OP_SONG_NUM_PAGES 8u
-#define OP_SONG_NUM_STEPS (OP_SONG_STEPS_PER_PAGE * OP_SONG_NUM_PAGES) /* 128 */
-/* OP_SONG_NUM_SLOTS is declared earlier (before handle_diamond_transport()).
- * Up to 4 notes per step; Song's flash region has room without packing
- * (see tiles_song_store_t's _Static_assert). */
-#define OP_SONG_MAX_NOTES_PER_STEP 4u
-
-/* One saved pattern; the runtime struct is the flash layout. 0xFF = unused
- * note slot (all 0xFF = empty step). hue_byte: its colour in the band. */
-typedef struct {
-    uint8_t step_notes[OP_SONG_NUM_STEPS][OP_SONG_MAX_NOTES_PER_STEP];
-    uint8_t hue_byte;
-} op_song_pattern_t;
-
-/* Song is controller mode's (docs/architecture/standalone-recorder.md: the
- * Deck takes its place in standalone mode). There the sound engine never
- * starts, so its 12 KB live in the engine's idle wavetable memory
- * (tiles_audio_engine_idle_memory()); in standalone mode there is no
- * library, Song isn't on the menu, and none of its code runs. */
-#define SONG_LIBRARY_BYTES (sizeof(op_song_pattern_t) * OP_SONG_NUM_SLOTS)
-static op_song_pattern_t *s_song_pattern;
-
-static bool song_available(void) {
-    return s_song_pattern != NULL;
-}
-
-static void song_store_load_all(void);
-
-static void song_library_init(void) {
-    s_song_pattern = tiles_device_mode_is_standalone()
-                         ? NULL
-                         : (op_song_pattern_t *)tiles_audio_engine_idle_memory(SONG_LIBRARY_BYTES);
-    if (song_available()) {
-        song_store_load_all();
-    }
-}
-static bool s_song_slot_occupied[OP_SONG_NUM_SLOTS];
-/* Runtime playback state per slot (valid while occupied), shaped like the
- * sequencer's per-lane fields. Not persisted: tracks always come up
- * stopped. s_song_slot_running[] is declared earlier. */
-static uint8_t s_song_slot_channel[OP_SONG_NUM_SLOTS]; /* valid only while running */
-static uint8_t s_song_current_step[OP_SONG_NUM_SLOTS];
-static uint32_t s_song_step_started_at_pulse[OP_SONG_NUM_SLOTS];
-static bool s_song_note_sounding[OP_SONG_NUM_SLOTS];
-static uint8_t s_song_sounding_notes[OP_SONG_NUM_SLOTS][OP_SONG_MAX_NOTES_PER_STEP];
-static uint8_t s_song_sounding_note_count[OP_SONG_NUM_SLOTS];
-
-/* = services/midi_channels.h TILES_MIDI_SONG_MAX_CONCURRENT (8), aliased
- * locally. */
-#define OP_SONG_MAX_CONCURRENT TILES_MIDI_SONG_MAX_CONCURRENT
-
-/* Channels come from services/midi_channels.h
- * (tiles_midi_channels_song_claim()/_release()), claimed at play start. */
-
-#define TILES_SONG_STORE_MAGIC 0x474e4f53u /* "SONG" */
-/* v2 added next_hue_byte; v1 images load as nothing saved. */
-#define TILES_SONG_STORE_VERSION 2u
-/* 4 sectors below the sequencer's, written one sector at a time (four
- * short pauses, never a watchdog risk). */
-#define TILES_SONG_NUM_FLASH_SECTORS TILES_FLASH_SONG_SECTORS
-#define TILES_SONG_FLASH_OFFSET TILES_FLASH_SONG_OFFSET
-
-typedef struct {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t occupied_mask; /* one bit per slot */
-    uint8_t next_hue_byte; /* OP_SONG_HUE_STEP's counter, persisted (no early repeats after a reboot) */
-    op_song_pattern_t pattern[OP_SONG_NUM_SLOTS];
-} tiles_song_store_t;
-
-/* Must fit its sectors: 13 + 24 * 513 = 12325 of 16384 bytes. */
-_Static_assert(sizeof(tiles_song_store_t) <= FLASH_SECTOR_SIZE * TILES_SONG_NUM_FLASH_SECTORS,
-               "tiles_song_store_t no longer fits in its reserved flash region");
-
-/* OP_SONG_HUE_STEP's counter; declared here because the store functions
- * persist it. */
-static uint8_t s_song_next_hue_byte;
-
-/* The store's fields before the patterns, laid out as tiles_song_store_t. */
-typedef struct {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t occupied_mask;
-    uint8_t next_hue_byte;
-} tiles_song_store_head_t;
-_Static_assert(offsetof(tiles_song_store_t, pattern) == sizeof(uint32_t) * 3u + 1u &&
-                   offsetof(tiles_song_store_head_t, next_hue_byte) + 1u == offsetof(tiles_song_store_t, pattern),
-               "the head is the store's first bytes");
-_Static_assert(SONG_LIBRARY_BYTES == sizeof(((tiles_song_store_t *)0)->pattern), "the patterns follow as in RAM");
-
-/* Rewrites the whole store from RAM (like pattern_store_write_all()),
- * sector by sector: the head, then the patterns straight from
- * s_song_pattern (a staged copy of the store would be 12 KB). */
-static void song_store_write_all(void) {
-    uint8_t *buf = tiles_flash_staging(); /* storage/flash_staging.h */
-    tiles_song_store_head_t head = {
-        .magic = TILES_SONG_STORE_MAGIC,
-        .version = TILES_SONG_STORE_VERSION,
-        .next_hue_byte = s_song_next_hue_byte,
-    };
-    for (uint8_t i = 0; i < OP_SONG_NUM_SLOTS; i++) {
-        if (s_song_slot_occupied[i]) {
-            head.occupied_mask |= (uint32_t)1u << i;
-        }
-    }
-    const size_t head_len = offsetof(tiles_song_store_t, pattern);
-    const size_t patterns_len = SONG_LIBRARY_BYTES;
-    const uint8_t *patterns = (const uint8_t *)s_song_pattern;
-    for (uint32_t sector = 0u; sector < TILES_SONG_NUM_FLASH_SECTORS; sector++) {
-        memset(buf, 0, FLASH_SECTOR_SIZE);
-        size_t from = (size_t)sector * FLASH_SECTOR_SIZE, to = from + FLASH_SECTOR_SIZE;
-        if (from < head_len) {
-            size_t n = (to < head_len ? to : head_len) - from;
-            memcpy(buf, (const uint8_t *)&head + from, n);
-        }
-        size_t p_from = from > head_len ? from - head_len : 0u;
-        size_t p_to = to - head_len < patterns_len ? to - head_len : patterns_len;
-        if (p_from < p_to) {
-            memcpy(buf + (head_len + p_from - from), patterns + p_from, p_to - p_from);
-        }
-        watchdog_update();
-        uint32_t prev_interrupts;
-        if (!tiles_flash_write_begin(&prev_interrupts)) {
-            return;
-        }
-        flash_range_erase(TILES_SONG_FLASH_OFFSET + sector * FLASH_SECTOR_SIZE, FLASH_SECTOR_SIZE);
-        flash_range_program(TILES_SONG_FLASH_OFFSET + sector * FLASH_SECTOR_SIZE, buf, FLASH_SECTOR_SIZE);
-        tiles_flash_write_end(prev_interrupts);
-        watchdog_update();
-    }
-}
-
-/* A plain read; safe on every boot (called from tiles_op_mode_init()). */
-static void song_store_load_all(void) {
-    const tiles_song_store_t *store = (const tiles_song_store_t *)(XIP_BASE + TILES_SONG_FLASH_OFFSET);
-    if (store->magic != TILES_SONG_STORE_MAGIC || store->version != TILES_SONG_STORE_VERSION) {
-        return; /* never saved on this board, or a different layout version */
-    }
-    s_song_next_hue_byte = store->next_hue_byte;
-    for (uint8_t i = 0; i < OP_SONG_NUM_SLOTS; i++) {
-        s_song_slot_occupied[i] = (store->occupied_mask & ((uint32_t)1u << i)) != 0u;
-        if (s_song_slot_occupied[i]) {
-            s_song_pattern[i] = store->pattern[i];
-        }
-    }
-    printf("[op_mode] loaded saved song patterns from flash\n");
-}
-
-
-/* ---- Song mode: track overview ----------------------------------------------
- * One pad per slot; gestures in the Song mode comment above. Moves flash
- * green twice, deletes red twice. */
-
-/* Start/stop is a plain touch toggle (resolved on release), no press
- * needed. */
-
-static void song_end_current_note(uint8_t slot) {
-    if (!s_song_note_sounding[slot]) {
-        return;
-    }
-    for (uint8_t i = 0; i < s_song_sounding_note_count[slot]; i++) {
-        part_note_off(s_song_slot_channel[slot], s_song_sounding_notes[slot][i], 0u); /* clock-fired: release velocity 0 */
-        tiles_cv_gate_note_off(s_song_sounding_notes[slot][i]);
-    }
-    s_song_note_sounding[slot] = false;
-    s_song_sounding_note_count[slot] = 0u;
-}
-
-/* hue_byte -> RGB across 10 deg (red-orange) .. 50 deg (amber), the
- * sequencers' warm family, via a real HSV conversion so the band can change
- * freely. */
-static void song_hue_to_rgb(uint8_t hue_byte, float sat, float val, float *out_r, float *out_g, float *out_b) {
-    float hue = 10.0f + ((float)hue_byte / 255.0f) * 40.0f;
-    float c = val * sat;
-    float x = c * (1.0f - fabsf(fmodf(hue / 60.0f, 2.0f) - 1.0f));
-    float m = val - c;
-    float rp = 0.0f, gp = 0.0f, bp = 0.0f;
-    if (hue < 60.0f) {
-        rp = c;
-        gp = x;
-    } else {
-        rp = x;
-        gp = c;
-    }
-    *out_r = rp + m;
-    *out_g = gp + m;
-    *out_b = bp + m;
-}
-
-/* One short red flash: that didn't work. */
-#define OP_SONG_ERROR_FLASH_MS 300u
-static bool s_song_error_flash_active;
-static uint32_t s_song_error_flash_start_ms;
-static uint8_t s_song_error_flash_pad;
-
-static void song_flash_error(uint8_t pad) {
-    s_song_error_flash_active = true;
-    s_song_error_flash_start_ms = to_ms_since_boot(get_absolute_time());
-    s_song_error_flash_pad = pad;
-}
-
-/* Move (green) / delete (red) confirmation: two blinks, the same timing as
- * the pattern bank's, as a separate copy. */
-#define OP_SONG_FLASH_BLINK_MS 150u
-#define OP_SONG_FLASH_COUNT 2u
-#define OP_SONG_FLASH_TOTAL_MS (OP_SONG_FLASH_BLINK_MS * 2u * OP_SONG_FLASH_COUNT)
-static bool s_song_flash_active;
-static bool s_song_flash_is_delete; /* false = green (moved/swapped), true = red (deleted) */
-static uint32_t s_song_flash_start_ms;
-static uint8_t s_song_flash_pad; /* the cell just moved/deleted (for a swap, the destination) */
-static uint8_t s_song_flash_pad2; /* the other cell of a swap, 0 if none */
-
-static void song_flash_confirm(uint8_t pad, uint8_t pad2, bool is_delete) {
-    s_song_flash_active = true;
-    s_song_flash_is_delete = is_delete;
-    s_song_flash_start_ms = to_ms_since_boot(get_absolute_time());
-    s_song_flash_pad = pad;
-    s_song_flash_pad2 = pad2;
-}
-
-/* 0 = nothing picked up. Placing needs no circle; a plain tap completes
- * it, and tapping the same pad cancels. */
-static uint8_t s_song_picked_up_slot;
-
-static void song_pick_up(uint8_t pad) {
-    s_song_picked_up_slot = pad;
-}
-
-static void song_cancel_pick_up(void) {
-    s_song_picked_up_slot = 0u;
-}
-
-/* Moves `from` to an empty `to`, or swaps with an occupied one. The whole
- * slot's state moves with the pattern; a playing pattern keeps its
- * claimed channel (channels aren't tied to slots). */
-static void song_place(uint8_t from_pad, uint8_t to_pad) {
-    uint8_t from = from_pad - 1u;
-    uint8_t to = to_pad - 1u;
-
-    op_song_pattern_t tmp_pattern = s_song_pattern[to];
-    bool tmp_occupied = s_song_slot_occupied[to];
-    bool tmp_running = s_song_slot_running[to];
-    uint8_t tmp_channel = s_song_slot_channel[to];
-    uint8_t tmp_step = s_song_current_step[to];
-    uint32_t tmp_pulse = s_song_step_started_at_pulse[to];
-    bool tmp_sounding = s_song_note_sounding[to];
-    uint8_t tmp_notes[OP_SONG_MAX_NOTES_PER_STEP];
-    memcpy(tmp_notes, s_song_sounding_notes[to], sizeof(tmp_notes));
-    uint8_t tmp_note_count = s_song_sounding_note_count[to];
-
-    s_song_pattern[to] = s_song_pattern[from];
-    s_song_slot_occupied[to] = s_song_slot_occupied[from];
-    s_song_slot_running[to] = s_song_slot_running[from];
-    s_song_slot_channel[to] = s_song_slot_channel[from];
-    s_song_current_step[to] = s_song_current_step[from];
-    s_song_step_started_at_pulse[to] = s_song_step_started_at_pulse[from];
-    s_song_note_sounding[to] = s_song_note_sounding[from];
-    memcpy(s_song_sounding_notes[to], s_song_sounding_notes[from], sizeof(tmp_notes));
-    s_song_sounding_note_count[to] = s_song_sounding_note_count[from];
-
-    /* Swap: `from` gets what `to` held. Move: that's all empty, which clears
-     * `from`. */
-    s_song_pattern[from] = tmp_pattern;
-    s_song_slot_occupied[from] = tmp_occupied;
-    s_song_slot_running[from] = tmp_running;
-    s_song_slot_channel[from] = tmp_channel;
-    s_song_current_step[from] = tmp_step;
-    s_song_step_started_at_pulse[from] = tmp_pulse;
-    s_song_note_sounding[from] = tmp_sounding;
-    memcpy(s_song_sounding_notes[from], tmp_notes, sizeof(tmp_notes));
-    s_song_sounding_note_count[from] = tmp_note_count;
-
-    s_song_store_pending = true;
-    song_flash_confirm(to_pad, tmp_occupied ? from_pad : 0u, false);
-    s_song_picked_up_slot = 0u;
-}
-
-/* Circle + hold 5 s deletes; a playing pattern is stopped and its channel
- * released first. */
-#define OP_SONG_DELETE_HOLD_MS 5000u
-
-static void song_delete_slot(uint8_t pad) {
-    uint8_t slot = pad - 1u;
-    if (s_song_slot_running[slot]) {
-        song_end_current_note(slot);
-        tiles_midi_channels_song_release(s_song_slot_channel[slot]);
-        s_song_slot_running[slot] = false;
-    }
-    memset(&s_song_pattern[slot], 0, sizeof(s_song_pattern[slot]));
-    s_song_slot_occupied[slot] = false;
-    s_song_store_pending = true;
-    song_flash_confirm(pad, 0u, true);
-}
-
-static void song_toggle_start_stop(uint8_t pad) {
-    uint8_t slot = pad - 1u;
-    if (s_song_slot_running[slot]) {
-        song_end_current_note(slot);
-        tiles_midi_channels_song_release(s_song_slot_channel[slot]);
-        s_song_slot_running[slot] = false;
-        return;
-    }
-    uint8_t channel;
-    if (!tiles_midi_channels_song_claim(&channel)) {
-        /* Pool full: refuse with a red flash. */
-        song_flash_error(pad);
-        return;
-    }
-    /* A live MPE note may have left bend and pressure on this channel; Song
-     * notes send neither, so reset them as it changes hands. */
-    tiles_midi_send_note_setup(channel);
-    s_song_slot_running[slot] = true;
-    s_song_slot_channel[slot] = channel;
-    /* Always starts from step 1 (no quantized start). */
-    s_song_current_step[slot] = 0u;
-}
-
-/* Entering Ableton mode stops every Song track (from any mode, since
- * tracks loop in the background): Ableton mode and Song mode both drive
- * Live's clips, and it frees the shared channel pool for the session. */
-static void song_stop_all_running(void) {
-    for (uint8_t slot = 0u; slot < OP_SONG_NUM_SLOTS; slot++) {
-        if (s_song_slot_running[slot]) {
-            song_end_current_note(slot);
-            tiles_midi_channels_song_release(s_song_slot_channel[slot]);
-            s_song_slot_running[slot] = false;
-        }
-    }
-}
-
-static bool s_song_prev_pad_touched[OP_SONG_NUM_SLOTS];
-/* Circle state recorded at touch-down (as in the pattern bank), so
- * letting go of circle mid-hold doesn't change the gesture. */
-static bool s_song_touch_started_with_shift[OP_SONG_NUM_SLOTS];
-static uint32_t s_song_touch_started_ms[OP_SONG_NUM_SLOTS];
-static bool s_song_delete_fired[OP_SONG_NUM_SLOTS];
-/* Hold 2 s opens the step editor; fires once per touch and cancels that
- * touch's start/stop toggle. */
-#define OP_SONG_EDIT_HOLD_MS 2000u
-static bool s_song_edit_fired[OP_SONG_NUM_SLOTS];
-
-static void handle_song_overview_taps(uint32_t now_ms) {
-    bool circle_held = tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID);
-    for (uint8_t pad = 1u; pad <= OP_SONG_NUM_SLOTS; pad++) {
-        bool touched = tiles_touch_is_touched(pad);
-        bool was_touched = s_song_prev_pad_touched[pad - 1u];
-        if (touched && !was_touched) {
-            tiles_haptics_trigger_touch_pulse(pad);
-            s_song_touch_started_with_shift[pad - 1u] = circle_held;
-            s_song_touch_started_ms[pad - 1u] = now_ms;
-            s_song_delete_fired[pad - 1u] = false;
-            s_song_edit_fired[pad - 1u] = false;
-        }
-
-        if (s_song_touch_started_with_shift[pad - 1u]) {
-            /* Circle + touch: pick up or delete. While something is picked up, circle
-             * + another pad is ignored (the place tap is a plain tap). */
-            if (s_song_picked_up_slot != 0u) {
-                s_song_prev_pad_touched[pad - 1u] = touched;
-                continue;
-            }
-            if (touched) {
-                uint32_t held_ms = now_ms - s_song_touch_started_ms[pad - 1u];
-                if (held_ms >= OP_SONG_DELETE_HOLD_MS && !s_song_delete_fired[pad - 1u] &&
-                    s_song_slot_occupied[pad - 1u]) {
-                    song_delete_slot(pad);
-                    s_song_delete_fired[pad - 1u] = true;
-                }
-            } else if (was_touched && !s_song_delete_fired[pad - 1u] && s_song_slot_occupied[pad - 1u]) {
-                song_pick_up(pad);
-            }
-            s_song_prev_pad_touched[pad - 1u] = touched;
-            continue;
-        }
-
-        if (touched && !was_touched) {
-            if (s_song_picked_up_slot != 0u) {
-                if (pad == s_song_picked_up_slot) {
-                    song_cancel_pick_up();
-                } else {
-                    song_place(s_song_picked_up_slot, pad);
-                }
-            }
-            /* Start/stop waits for release: a tap and a 2 s hold start the same way. */
-        } else if (touched && was_touched) {
-            if (s_song_picked_up_slot == 0u && !s_song_edit_fired[pad - 1u] && s_song_slot_occupied[pad - 1u]) {
-                uint32_t held_ms = now_ms - s_song_touch_started_ms[pad - 1u];
-                if (held_ms >= OP_SONG_EDIT_HOLD_MS) {
-                    song_edit_enter(pad);
-                    s_song_edit_fired[pad - 1u] = true;
-                }
-            }
-        } else if (!touched && was_touched) {
-            if (s_song_picked_up_slot == 0u && !s_song_edit_fired[pad - 1u] && s_song_slot_occupied[pad - 1u]) {
-                song_toggle_start_stop(pad);
-            }
-        }
-        s_song_prev_pad_touched[pad - 1u] = touched;
-    }
-}
-
-static void render_song_overview(uint32_t now_ms) {
-    bool flash_showing = false;
-    bool flash_on = false;
-    if (s_song_flash_active) {
-        uint32_t elapsed = now_ms - s_song_flash_start_ms;
-        if (elapsed >= OP_SONG_FLASH_TOTAL_MS) {
-            s_song_flash_active = false;
-        } else {
-            flash_showing = true;
-            flash_on = ((elapsed / OP_SONG_FLASH_BLINK_MS) % 2u) == 0u;
-        }
-    }
-    bool error_showing = false;
-    if (s_song_error_flash_active) {
-        uint32_t elapsed = now_ms - s_song_error_flash_start_ms;
-        if (elapsed >= OP_SONG_ERROR_FLASH_MS) {
-            s_song_error_flash_active = false;
-        } else {
-            error_showing = true;
-        }
-    }
-    float pick_up_pulse = menu_selected_pulse_level(now_ms);
-
-    for (uint8_t pad = 1u; pad <= OP_SONG_NUM_SLOTS; pad++) {
-        uint8_t slot = pad - 1u;
-        if (flash_showing && (pad == s_song_flash_pad || pad == s_song_flash_pad2)) {
-            float level = flash_on ? 1.0f : 0.0f;
-            if (s_song_flash_is_delete) {
-                tiles_lighting_set_standby_pad_rgb(pad, level, 0.0f, 0.0f);
-            } else {
-                tiles_lighting_set_standby_pad_rgb(pad, 0.0f, level, 0.0f);
-            }
-        } else if (error_showing && pad == s_song_error_flash_pad) {
-            tiles_lighting_set_standby_pad_rgb(pad, 1.0f, 0.0f, 0.0f);
-        } else if (pad == s_song_picked_up_slot) {
-            tiles_lighting_set_standby_pad_rgb(pad, 0.0f, pick_up_pulse, 0.0f);
-        } else if (!s_song_slot_occupied[slot]) {
-            tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
-        } else {
-            float r, g, b;
-            song_hue_to_rgb(s_song_pattern[slot].hue_byte, 1.0f, 1.0f, &r, &g, &b);
-            /* Playing slots pulse in their own hue; stopped ones sit at the dim
-             * "available" level. */
-            float level = s_song_slot_running[slot] ? pick_up_pulse : OP_SCALE_AVAILABLE_LEVEL;
-            tiles_lighting_set_standby_pad_rgb(pad, r * level, g * level, b * level);
-        }
-    }
-    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        /* Diamond shows the transport LED here (see transport_led_level()). */
-        float level = (col == TILES_DIAMOND_BUTTON_COL) ? transport_led_level(now_ms) : 0.0f;
-        tiles_buttons_set_standby_led(board_button_for_col(col), level);
-    }
-    render_song_underglow();
-}
-
-/* Song mode's underglow: steady amber (lighting.c's pulse takes over while
- * capturing). */
-static void render_song_underglow(void) {
-    mode_underglow();
-}
-
-/* ---- Song mode: step editor -------------------------------------------------
- * Columns 1-4 = the page's 16 steps, 5-6 = 8 page pads. Tap a step, play
- * its notes, tap it again to commit (replacing them); diamond cancels.
- * Touches within OP_SONG_EDIT_PICK_WINDOW_MS form one chord (first guess). */
-#define OP_SONG_EDIT_PICK_WINDOW_MS 200u
-
-static uint8_t s_song_edit_slot; /* 0-based, valid iff s_song_edit_active */
-static uint8_t s_song_edit_page; /* 0-7, the page shown */
-static bool s_song_edit_step_prev_touched[OP_SONG_STEPS_PER_PAGE];
-static bool s_song_edit_page_prev_touched[OP_SONG_NUM_PAGES];
-/* Edits mark the pattern dirty; the flash write happens once, when the
- * editor closes (song_edit_exit()), not after every step. Nothing is
- * written if nothing changed. */
-static bool s_song_edit_dirty;
-
-/* Valid only while s_song_edit_pick_active. */
-static uint8_t s_song_edit_pick_step;        /* 0..127: the step in the whole pattern */
-static uint8_t s_song_edit_pick_confirm_pad; /* the pad that commits this pick */
-static uint8_t s_song_edit_pick_notes[OP_SONG_MAX_NOTES_PER_STEP];
-static uint8_t s_song_edit_pick_count;
-static bool s_song_edit_pick_window_active;
-static uint32_t s_song_edit_pick_window_start_ms;
-static bool s_song_edit_pick_prev_touched[TILES_NUM_PADS];
-static tiles_scale_mode_t s_song_edit_pick_prev_scale;
-
-static uint8_t song_edit_step_pad(uint8_t step_in_page) {
-    uint8_t row = (uint8_t)(step_in_page / 4u + 1u);
-    uint8_t col = (uint8_t)(step_in_page % 4u + 1u);
-    return board_pad_for_row_col(row, col);
-}
-
-static uint8_t song_edit_page_pad(uint8_t page) {
-    uint8_t row = (uint8_t)(page / 2u + 1u);
-    uint8_t col = (page % 2u == 0u) ? 5u : 6u;
-    return board_pad_for_row_col(row, col);
-}
-
-static bool song_edit_page_has_content(uint8_t slot, uint8_t page) {
-    uint8_t base = (uint8_t)(page * OP_SONG_STEPS_PER_PAGE);
-    for (uint8_t s = 0u; s < OP_SONG_STEPS_PER_PAGE; s++) {
-        if (s_song_pattern[slot].step_notes[base + s][0] != 0xFFu) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static void song_edit_enter(uint8_t pad) {
-    s_song_edit_active = true;
-    s_song_edit_slot = (uint8_t)(pad - 1u);
-    s_song_edit_page = 0u;
-    s_song_edit_pick_active = false;
-    s_song_edit_dirty = false;
-    for (uint8_t s = 0u; s < OP_SONG_STEPS_PER_PAGE; s++) {
-        s_song_edit_step_prev_touched[s] = false;
-    }
-    for (uint8_t p = 0u; p < OP_SONG_NUM_PAGES; p++) {
-        s_song_edit_page_prev_touched[p] = false;
-    }
-    /* The step grid is drawn through standby (mode_owns_standby_grid()); only
-     * the pitch pick releases it. */
-    printf("[op_mode] song edit -> on (slot %u)\n", (unsigned)(s_song_edit_slot + 1u));
-}
-
-static void song_edit_pick_enter(uint8_t step_index, uint8_t confirm_pad) {
-    s_song_edit_pick_active = true;
-    s_song_edit_pick_step = step_index;
-    s_song_edit_pick_confirm_pad = confirm_pad;
-    s_song_edit_pick_count = 0u;
-    s_song_edit_pick_window_active = false;
-    for (uint8_t i = 0u; i < TILES_NUM_PADS; i++) {
-        s_song_edit_pick_prev_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
-    }
-    /* Chromatic while picking; the scale is restored on commit/cancel. */
-    s_song_edit_pick_prev_scale = tiles_note_map_get_scale();
-    tiles_note_map_set_scale(TILES_SCALE_CHROMATIC);
-    /* Release standby so the grid shows the live note surface (see
-     * mode_owns_standby_grid()). */
-    tiles_lighting_set_standby_active(false);
-    tiles_buttons_set_standby_active(false);
-}
-
-static void song_edit_pick_cancel(void) {
-    if (!s_song_edit_pick_active) {
-        return;
-    }
-    s_song_edit_pick_active = false;
-    tiles_note_map_set_scale(s_song_edit_pick_prev_scale);
-    tiles_lighting_set_standby_active(true);
-    tiles_buttons_set_standby_active(true);
-}
-
-static void song_edit_pick_commit(void) {
-    op_song_pattern_t *pat = &s_song_pattern[s_song_edit_slot];
-    for (uint8_t i = 0u; i < OP_SONG_MAX_NOTES_PER_STEP; i++) {
-        pat->step_notes[s_song_edit_pick_step][i] = (i < s_song_edit_pick_count) ? s_song_edit_pick_notes[i] : 0xFFu;
-    }
-    /* Flash write deferred to song_edit_exit() (see s_song_edit_dirty). */
-    s_song_edit_dirty = true;
-    s_song_edit_pick_active = false;
-    tiles_note_map_set_scale(s_song_edit_pick_prev_scale);
-    tiles_lighting_set_standby_active(true);
-    tiles_buttons_set_standby_active(true);
-}
-
-static void song_edit_exit(void) {
-    if (s_song_edit_pick_active) {
-        song_edit_pick_cancel();
-    }
-    if (s_song_edit_dirty) {
-        s_song_store_pending = true;
-        s_song_edit_dirty = false;
-    }
-    s_song_edit_active = false;
-    printf("[op_mode] song edit -> off\n");
-}
-
-static void handle_song_edit_taps(uint32_t now_ms) {
-    (void)now_ms;
-    uint8_t page_base = (uint8_t)(s_song_edit_page * OP_SONG_STEPS_PER_PAGE);
-
-    for (uint8_t s = 0u; s < OP_SONG_STEPS_PER_PAGE; s++) {
-        uint8_t pad = song_edit_step_pad(s);
-        bool touched = tiles_touch_is_touched(pad);
-        bool was = s_song_edit_step_prev_touched[s];
-        if (touched && !was) {
-            tiles_haptics_trigger_touch_pulse(pad);
-            song_edit_pick_enter((uint8_t)(page_base + s), pad);
-        }
-        s_song_edit_step_prev_touched[s] = touched;
-    }
-    for (uint8_t p = 0u; p < OP_SONG_NUM_PAGES; p++) {
-        uint8_t pad = song_edit_page_pad(p);
-        bool touched = tiles_touch_is_touched(pad);
-        bool was = s_song_edit_page_prev_touched[p];
-        if (touched && !was) {
-            tiles_haptics_trigger_touch_pulse(pad);
-            s_song_edit_page = p;
-        }
-        s_song_edit_page_prev_touched[p] = touched;
-    }
-}
-
-static void handle_song_edit_pick_taps(uint32_t now_ms) {
-    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-        bool touched = tiles_touch_is_touched(pad);
-        bool was = s_song_edit_pick_prev_touched[pad - 1u];
-        if (touched && !was) {
-            tiles_haptics_trigger_touch_pulse(pad);
-            if (pad == s_song_edit_pick_confirm_pad) {
-                song_edit_pick_commit();
-                return; /* pick just ended; later pads' prev_touched are re-seeded on the next pick */
-            }
-            uint8_t note = tiles_note_map_get_note(pad);
-            if (!s_song_edit_pick_window_active ||
-                (now_ms - s_song_edit_pick_window_start_ms) > OP_SONG_EDIT_PICK_WINDOW_MS) {
-                /* Window expired (or first touch): start a fresh chord. */
-                s_song_edit_pick_count = 0u;
-                s_song_edit_pick_window_active = true;
-                s_song_edit_pick_window_start_ms = now_ms;
-            }
-            bool already_picked = false;
-            for (uint8_t i = 0u; i < s_song_edit_pick_count; i++) {
-                if (s_song_edit_pick_notes[i] == note) {
-                    already_picked = true;
-                    break;
-                }
-            }
-            if (!already_picked && s_song_edit_pick_count < OP_SONG_MAX_NOTES_PER_STEP) {
-                s_song_edit_pick_notes[s_song_edit_pick_count] = note;
-                s_song_edit_pick_count++;
-            }
-        }
-        s_song_edit_pick_prev_touched[pad - 1u] = touched;
-    }
-}
-
-static void render_song_edit(uint32_t now_ms) {
-    uint8_t slot = s_song_edit_slot;
-    float r, g, b;
-    song_hue_to_rgb(s_song_pattern[slot].hue_byte, 1.0f, 1.0f, &r, &g, &b);
-    float pulse = menu_selected_pulse_level(now_ms);
-    uint8_t page_base = (uint8_t)(s_song_edit_page * OP_SONG_STEPS_PER_PAGE);
-
-    for (uint8_t s = 0u; s < OP_SONG_STEPS_PER_PAGE; s++) {
-        uint8_t pad = song_edit_step_pad(s);
-        bool armed = s_song_pattern[slot].step_notes[page_base + s][0] != 0xFFu;
-        if (armed) {
-            tiles_lighting_set_standby_pad_rgb(pad, r, g, b);
-        } else {
-            tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
-        }
-    }
-    for (uint8_t p = 0u; p < OP_SONG_NUM_PAGES; p++) {
-        uint8_t pad = song_edit_page_pad(p);
-        if (p == s_song_edit_page) {
-            tiles_lighting_set_standby_pad_rgb(pad, pulse, pulse, pulse);
-        } else if (song_edit_page_has_content(slot, p)) {
-            tiles_lighting_set_standby_pad_rgb(pad, r * OP_SCALE_AVAILABLE_LEVEL, g * OP_SCALE_AVAILABLE_LEVEL,
-                                                b * OP_SCALE_AVAILABLE_LEVEL);
-        } else {
-            tiles_lighting_set_standby_pad_rgb(pad, 0.0f, 0.0f, 0.0f);
-        }
-    }
-    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
-        /* Diamond shows the transport LED here (see transport_led_level()). */
-        float level = (col == TILES_DIAMOND_BUTTON_COL) ? transport_led_level(now_ms) : 0.0f;
-        tiles_buttons_set_standby_led(board_button_for_col(col), level);
-    }
-    render_song_underglow();
-}
-
-/* ---- Song mode: playback --------------------------------------------------
- * A separate copy of the sequencer's engine (the patterns differ enough),
- * on the same tempo. */
-#define OP_SONG_VELOCITY 100u
-static bool s_song_pending_start[OP_SONG_NUM_SLOTS];
-
-static void song_enter_step(uint8_t slot, uint8_t step) {
-    song_end_current_note(slot);
-    s_song_current_step[slot] = step;
-    uint8_t notes[OP_SONG_MAX_NOTES_PER_STEP];
-    uint8_t count = 0u;
-    for (uint8_t i = 0; i < OP_SONG_MAX_NOTES_PER_STEP; i++) {
-        uint8_t note = s_song_pattern[slot].step_notes[step][i];
-        if (note != 0xFFu) {
-            notes[count] = note;
-            count++;
-        }
-    }
-    if (count == 0u) {
-        return;
-    }
-    for (uint8_t i = 0; i < count; i++) {
-        part_note_on(s_song_slot_channel[slot], notes[i], OP_SONG_VELOCITY);
-        tiles_cv_gate_note_on(notes[i], OP_SONG_VELOCITY);
-        s_song_sounding_notes[slot][i] = notes[i];
-    }
-    s_song_sounding_note_count[slot] = count;
-    s_song_note_sounding[slot] = true;
-}
-
-/* Runs for every slot every scan, except the one being captured. Like
- * seq_advance_clock(), without length or restart/resume handling. */
-static void song_advance_clock(uint8_t slot, tiles_midi_clock_state_t clock) {
-    if (!s_song_slot_running[slot]) {
-        song_end_current_note(slot);
-        return;
-    }
-    if (clock.start_edge) {
-        /* A clock Start: step 1 on its downbeat (at the song position), on the
-         * DAW's grid, like the sequencer's lanes. */
-        s_song_pending_start[slot] = false;
-        s_song_step_started_at_pulse[slot] = clock.pulse_count - clock.song_pulse % OP_SEQ_CLOCKS_PER_STEP;
-        song_enter_step(slot, (uint8_t)((clock.song_pulse / OP_SEQ_CLOCKS_PER_STEP) % OP_SONG_NUM_STEPS));
-        return;
-    }
-    if (s_song_pending_start[slot]) {
-        s_song_pending_start[slot] = false;
-        s_song_step_started_at_pulse[slot] = clock.pulse_count;
-        song_enter_step(slot, 0u);
-        return;
-    }
-    if (!clock.running) {
-        song_end_current_note(slot);
-        return;
-    }
-    uint32_t elapsed = clock.pulse_count - s_song_step_started_at_pulse[slot];
-    if (elapsed < OP_SEQ_CLOCKS_PER_STEP) {
-        return;
-    }
-    uint32_t steps_to_advance = elapsed / OP_SEQ_CLOCKS_PER_STEP;
-    s_song_step_started_at_pulse[slot] += steps_to_advance * OP_SEQ_CLOCKS_PER_STEP;
-    uint8_t new_step = (uint8_t)((s_song_current_step[slot] + steps_to_advance) % OP_SONG_NUM_STEPS);
-    song_enter_step(slot, new_step);
-}
-
-/* ---- Song mode: capture ------------------------------------------------------
- * Into the next empty slot, as sequencer capture works. */
-static tiles_scale_mode_t s_song_capture_prev_scale;
-static bool s_song_capture_prev_pad_touched[TILES_NUM_PADS];
-static uint8_t s_song_capture_armed_notes[OP_SONG_MAX_NOTES_PER_STEP];
-static uint8_t s_song_capture_armed_count;
-static uint8_t s_song_capture_target_step;
-static uint8_t s_song_capture_live_pads[OP_SONG_MAX_NOTES_PER_STEP];
-static uint8_t s_song_capture_live_notes[OP_SONG_MAX_NOTES_PER_STEP];
-static uint8_t s_song_capture_live_count;
-
-static void song_capture_end_one_sounding_note(uint8_t pad) {
-    uint8_t slot = s_song_capture_slot - 1u;
-    for (uint8_t i = 0; i < s_song_capture_live_count; i++) {
-        if (s_song_capture_live_pads[i] == pad) {
-            part_note_off(s_song_slot_channel[slot], s_song_capture_live_notes[i], 0u); /* ended by release/exit: release velocity 0 */
-            tiles_cv_gate_note_off(s_song_capture_live_notes[i]);
-            for (uint8_t j = i; (uint8_t)(j + 1u) < s_song_capture_live_count; j++) {
-                s_song_capture_live_pads[j] = s_song_capture_live_pads[j + 1u];
-                s_song_capture_live_notes[j] = s_song_capture_live_notes[j + 1u];
-            }
-            s_song_capture_live_count--;
-            return;
-        }
-    }
-}
-
-static void song_capture_end_all_sounding_notes(void) {
-    uint8_t slot = s_song_capture_slot - 1u;
-    for (uint8_t i = 0; i < s_song_capture_live_count; i++) {
-        part_note_off(s_song_slot_channel[slot], s_song_capture_live_notes[i], 0u); /* ended by exit: release velocity 0 */
-        tiles_cv_gate_note_off(s_song_capture_live_notes[i]);
-    }
-    s_song_capture_live_count = 0u;
-}
-
-bool tiles_op_mode_song_capture_is_active(void) {
-    return s_song_capture_active;
-}
-
-/* Reads the same sounding-note state song_end_current_note() uses, so it
- * can't drift from what's actually playing. */
-bool tiles_op_mode_song_capture_is_note_sounding(uint8_t note) {
-    if (!s_song_capture_active) {
-        return false;
-    }
-    uint8_t slot = s_song_capture_slot - 1u;
-    if (!s_song_note_sounding[slot]) {
-        return false;
-    }
-    for (uint8_t i = 0; i < s_song_sounding_note_count[slot]; i++) {
-        if (s_song_sounding_notes[slot][i] == note) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/* Chord pads: capture on the strike edge, as in sequencer capture. */
-static bool s_song_capture_prev_chord_sounding[TILES_NUM_PADS];
-
-static void song_capture_handle_taps(tiles_midi_clock_state_t clock) {
-    uint8_t slot = s_song_capture_slot - 1u;
-    for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
-        bool touched = tiles_touch_is_touched(pad);
-        bool was_touched = s_song_capture_prev_pad_touched[pad - 1u];
-        bool is_chord_pad = tiles_note_map_is_chord_mode_active() && tiles_note_map_is_chord_region_pad(pad);
-        bool chord_strike_edge =
-            is_chord_pad && s_chord_pad_sounding[pad - 1u] && !s_song_capture_prev_chord_sounding[pad - 1u];
-        if ((touched && !was_touched && !is_chord_pad) || chord_strike_edge) {
-            uint8_t notes[OP_SONG_MAX_NOTES_PER_STEP];
-            uint8_t note_count;
-            uint8_t velocity;
-            if (is_chord_pad) {
-                note_count = (OP_SONG_MAX_NOTES_PER_STEP < OP_CHORD_NUM_VOICES) ? OP_SONG_MAX_NOTES_PER_STEP
-                                                                                 : OP_CHORD_NUM_VOICES;
-                for (uint8_t i = 0; i < note_count; i++) {
-                    notes[i] = s_chord_pad_notes[pad - 1u][i];
-                }
-                velocity = s_chord_pad_last_velocity[pad - 1u];
-            } else {
-                notes[0] = tiles_note_map_get_note(pad);
-                note_count = 1u;
-                velocity = OP_SONG_VELOCITY;
-            }
-            tiles_midi_out_batch_begin(); /* ends below, then the haptic (an I2C write) */
-            for (uint8_t i = 0; i < note_count; i++) {
-                part_note_on(s_song_slot_channel[slot], notes[i], velocity);
-                tiles_cv_gate_note_on(notes[i], velocity);
-                if (s_song_capture_live_count < OP_SONG_MAX_NOTES_PER_STEP) {
-                    s_song_capture_live_pads[s_song_capture_live_count] = pad;
-                    s_song_capture_live_notes[s_song_capture_live_count] = notes[i];
-                    s_song_capture_live_count++;
-                }
-            }
-            uint32_t elapsed_in_step = clock.pulse_count - s_song_step_started_at_pulse[slot];
-            bool nearest_is_next_step = (elapsed_in_step * 2u) >= OP_SEQ_CLOCKS_PER_STEP;
-            uint8_t target = nearest_is_next_step ? (uint8_t)((s_song_current_step[slot] + 1u) % OP_SONG_NUM_STEPS)
-                                                   : s_song_current_step[slot];
-            if (s_song_capture_armed_count == 0u || s_song_capture_target_step != target) {
-                s_song_capture_target_step = target;
-                s_song_capture_armed_count = 0u;
-            }
-            for (uint8_t i = 0; i < note_count; i++) {
-                if (s_song_capture_armed_count < OP_SONG_MAX_NOTES_PER_STEP) {
-                    s_song_capture_armed_notes[s_song_capture_armed_count] = notes[i];
-                    s_song_capture_armed_count++;
-                }
-            }
-        } else if (!touched && was_touched) {
-            song_capture_end_one_sounding_note(pad);
-        }
-        s_song_capture_prev_pad_touched[pad - 1u] = touched;
-        s_song_capture_prev_chord_sounding[pad - 1u] = is_chord_pad && s_chord_pad_sounding[pad - 1u];
-    }
-}
-
-static void song_capture_advance_clock(tiles_midi_clock_state_t clock) {
-    if (s_song_capture_slot == 0u) {
-        return; /* no capture (callers check too; slot - 1 would wrap) */
-    }
-    uint8_t slot = s_song_capture_slot - 1u;
-    if (clock.start_edge) {
-        s_song_current_step[slot] = 0u;
-        s_song_step_started_at_pulse[slot] = clock.pulse_count;
-        s_song_capture_armed_count = 0u;
-        s_song_pending_start[slot] = false;
-        return;
-    }
-    if (s_song_pending_start[slot]) {
-        s_song_pending_start[slot] = false;
-        s_song_current_step[slot] = 0u;
-        s_song_step_started_at_pulse[slot] = clock.pulse_count;
-        s_song_capture_armed_count = 0u;
-        return;
-    }
-    uint32_t elapsed = clock.pulse_count - s_song_step_started_at_pulse[slot];
-    if (elapsed < OP_SEQ_CLOCKS_PER_STEP) {
-        return;
-    }
-    uint32_t steps_to_advance = elapsed / OP_SEQ_CLOCKS_PER_STEP;
-    s_song_step_started_at_pulse[slot] += steps_to_advance * OP_SEQ_CLOCKS_PER_STEP;
-
-    if (s_song_capture_armed_count > 0u && s_song_capture_target_step == s_song_current_step[slot]) {
-        uint8_t step = s_song_current_step[slot];
-        uint8_t count = s_song_capture_armed_count;
-        if (count > OP_SONG_MAX_NOTES_PER_STEP) {
-            count = OP_SONG_MAX_NOTES_PER_STEP;
-        }
-        for (uint8_t i = 0; i < OP_SONG_MAX_NOTES_PER_STEP; i++) {
-            s_song_pattern[slot].step_notes[step][i] = (i < count) ? s_song_capture_armed_notes[i] : 0xFFu;
-        }
-        s_song_capture_armed_count = 0u;
-    }
-    s_song_current_step[slot] = (uint8_t)((s_song_current_step[slot] + steps_to_advance) % OP_SONG_NUM_STEPS);
-}
-
-static bool song_find_next_empty_slot(uint8_t *out_slot_index) {
-    for (uint8_t i = 0; i < OP_SONG_NUM_SLOTS; i++) {
-        if (!s_song_slot_occupied[i]) {
-            *out_slot_index = i;
-            return true;
-        }
-    }
-    return false;
-}
-
-/* No empty slot, or no free channel: silently do nothing (there's no
- * single pad to flash the error on). */
-/* Each new hue = previous + 97: odd, so all 256 come round, and near the
- * golden angle, so neighbours differ. Persisted. */
-#define OP_SONG_HUE_STEP 97u
-
-static void song_capture_enter(void) {
-    if (!song_available()) {
-        return;
-    }
-    uint8_t slot_index;
-    if (!song_find_next_empty_slot(&slot_index)) {
-        return;
-    }
-    uint8_t channel;
-    if (!tiles_midi_channels_song_claim(&channel)) {
-        return;
-    }
-    tiles_midi_send_note_setup(channel); /* same channel reset as the slot-start path */
-    memset(s_song_pattern[slot_index].step_notes, 0xFF, sizeof(s_song_pattern[slot_index].step_notes));
-    s_song_pattern[slot_index].hue_byte = s_song_next_hue_byte;
-    s_song_next_hue_byte = (uint8_t)(s_song_next_hue_byte + OP_SONG_HUE_STEP);
-    s_song_slot_occupied[slot_index] = true;
-    s_song_slot_running[slot_index] = true;
-    s_song_slot_channel[slot_index] = channel;
-    s_song_note_sounding[slot_index] = false;
-    s_song_sounding_note_count[slot_index] = 0u;
-    s_song_pending_start[slot_index] = true;
-
-    s_song_capture_active = true;
-    s_song_capture_slot = (uint8_t)(slot_index + 1u);
-    /* Chromatic while capturing; restored on exit. */
-    s_song_capture_prev_scale = tiles_note_map_get_scale();
-    tiles_note_map_set_scale(TILES_SCALE_CHROMATIC);
-    s_song_capture_armed_count = 0u;
-    s_song_capture_live_count = 0u;
-    for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
-        s_song_capture_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
-        /* A chord pad already sounding isn't a new strike. */
-        s_song_capture_prev_chord_sounding[i] = s_chord_pad_sounding[i];
-    }
-    /* Release standby while capturing, so the grid shows the live melodic
-     * surface notes are played on. Re-claimed on exit if needed. */
-    tiles_lighting_set_standby_active(false);
-    tiles_buttons_set_standby_active(false);
-    printf("[op_mode] song capture -> on (slot %u)\n", (unsigned)s_song_capture_slot);
-}
-
-static void song_capture_exit(void) {
-    if (!s_song_capture_active) {
-        return;
-    }
-    song_capture_end_all_sounding_notes();
-    s_song_capture_active = false;
-    tiles_note_map_set_scale(s_song_capture_prev_scale);
-    /* Re-claim standby only if the current view draws through it
-     * (mode_owns_standby_grid()); e.g. a Song pitch pick still open needs it
-     * released. */
-    if (mode_owns_standby_grid(s_active_mode)) {
-        tiles_lighting_set_standby_active(true);
-        tiles_buttons_set_standby_active(true);
-    } else {
-        tiles_lighting_set_standby_active(false);
-        tiles_buttons_set_standby_active(false);
-    }
-    s_song_store_pending = true;
-    printf("[op_mode] song capture -> off\n");
 }
 
 /* ---- Scene Launch (Ableton) mode --------------------------------------------
@@ -5299,9 +4173,6 @@ static void resync_after_other_feature(void) {
     for (uint8_t step = 0; step < OP_SEQ_NUM_STEPS; step++) {
         s_seq_prev_pad_touched[step] = tiles_touch_is_touched(seq_pad_for_step(layout_pat, step));
         s_seq_step_touch_started_ms[step] = 0u;
-    }
-    for (uint8_t slot = 0; slot < OP_SONG_NUM_SLOTS; slot++) {
-        s_song_prev_pad_touched[slot] = tiles_touch_is_touched((uint8_t)(slot + 1u));
     }
     for (uint8_t i = 0; i < TILES_NUM_PADS; i++) {
         s_scene_prev_pad_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));

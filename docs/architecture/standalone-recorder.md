@@ -7,12 +7,11 @@ as it is.
 ## The idea (owner)
 
 Standalone mode becomes a **4-track tape recorder with a drum track**.
-Its home screen is the **Deck** (Song mode, renamed). The sequencer,
-drums and Song leave standalone's menu: the Deck does their jobs. They
-stay in controller mode, and Ableton and Volca move there only (owner,
-2026-11-21). Song has already gone (2026-11-23): in controller mode its
-12 KB library lives in the sound engine's idle wavetable memory, so it
-costs standalone mode no RAM. Each track holds
+Its home screen is the **Deck** (it takes Song mode's place). The
+sequencer and drums leave standalone's menu: the Deck does their jobs.
+They stay in controller mode, and Ableton and Volca move there only
+(owner, 2026-11-21). Song mode was removed from both modes (owner,
+2026-11-23). Each track holds
 **tapes** (clips); a track plays one tape at a time, so up to 4 synth
 tapes and 1 drum tape play together, launched like clips. A tape is a
 step sequencer: 16 steps a page, up to 8 pages. You fill a tape step by
@@ -67,7 +66,7 @@ keys added for it).
   note or chord played in this tape's layout (a new tape: the track's
   root; the drum track: the last drum played).
 - **Hold a step:** the grid turns into the tape's layout for a moment:
-  play the step's notes, let go to keep them (Song's step editor already
+  play the step's notes, let go to keep them (Song mode's step editor did
   works this way). Or hold a step and **turn encoder 1**: its pitch, in
   the scale; press the held step deeper: its velocity.
 - **Shift + a page pad, then another:** copy the page.
@@ -155,8 +154,8 @@ chord strip's octave; Rev A0 loses it there).
   and a list of notes: step, offset, pitch, velocity, length (6 bytes).
   Up to 256 notes a tape (1.5 KB); a step tape is far smaller.
 - **RAM:** only the 5 playing tapes, the one open and an undo copy:
-  ~10 KB at worst. Song's 12 KB library in RAM goes, so RAM comes out
-  even or better (~88 KB free since the effects went to 24 kHz).
+  ~10 KB at worst (~103 KB free since the effects went to 24 kHz and
+  Song mode was removed).
 - **Flash:** a Deck of 5 tracks x 8 rows = 40 tapes, 60 KB at worst.
   Saves go out a page per pass, only while quiet (as every save does).
 
@@ -183,7 +182,7 @@ chord strip's octave; Rev A0 loses it there).
 2. The tape format and engine on core 0: play, loop, pages on and off,
    record, overdub, undo; tests on the computer.
 3. The Deck: tapes, scenes, launch and stop at the bar, copy, delete;
-   the sequencer, drums, Song, Ableton and Volca off standalone's menu
+   the sequencer, drums, Ableton and Volca off standalone's menu
    (`MENU_SLOTS` in `op_mode.c`).
 4. A tape's steps: steps, pages, the brush, held-step notes.
 5. Layouts into a tape; recording, count-in, the metronome.

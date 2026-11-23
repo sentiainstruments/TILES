@@ -29,7 +29,7 @@ data.
   (the clock stopped and TILES's own sound silent). Same power-cut guarantee as kv_store, tested
   the same way (`firmware/test/test_log_store.c`).
 - **`flash_staging.{h,c}`** -- one 4 KB buffer shared by the saves that
-  build and write within one call (op_mode's pattern and song sectors,
+  build and write within one call (op_mode's pattern sector,
   content's next blob), instead of 4 KB each. A save that writes over
   several passes (the log stores' appends) keeps its own.
 - **`storage_flash.{h,c}`** -- the real flash ops (XIP reads; erase/program
@@ -42,7 +42,8 @@ data.
   flash, far from the image; `picotool load` never touches them, so they
   survive a firmware update):
   - last sector: sequencer pattern bank (`services/op_mode.c`)
-  - 4 sectors below: Song mode store (`services/op_mode.c`)
+  - 4 sectors below: free (Song mode's store until it was removed; kept so
+    nothing below moves)
   - 2 sectors below that: settings (`profiles/settings_persist.c`)
   - 2 sectors below that: content store, custom scales (`profiles/content.c`)
   - 2 sectors below that: drum mode's pattern (`services/drum_seq.c`, log_store)

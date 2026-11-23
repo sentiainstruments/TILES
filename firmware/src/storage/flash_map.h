@@ -4,7 +4,7 @@
  * ~340 KB; storage_flash.c refuses to write if it grows into them).
  * picotool only writes the image, so saved data survives updates.
  *   top -1 sector   sequencer pattern bank      op_mode.c
- *       -4          Song store                  op_mode.c
+ *       -4          free (Song's store until it was removed, 2026-11-23)
  *       -2          settings                    settings_persist.c
  *       -2          content (custom scales)     content.c
  *       -2          drum pattern                drum_seq.c
@@ -21,6 +21,7 @@
 
 #define TILES_FLASH_PATTERN_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
 
+/* Kept free: moving it would move every region below and lose their data. */
 #define TILES_FLASH_SONG_SECTORS 4u
 #define TILES_FLASH_SONG_OFFSET (TILES_FLASH_PATTERN_OFFSET - FLASH_SECTOR_SIZE * TILES_FLASH_SONG_SECTORS)
 

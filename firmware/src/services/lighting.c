@@ -44,7 +44,7 @@
 #define TILES_LIGHTING_ECHO_FLASH_MS 180u
 
 /* Second echo layer: the same flash, settling on a soft warm red (coral,
- * not the root's pink or Song's orange). Unmeasured. */
+ * not the root's pink). Unmeasured. */
 #define TILES_LIGHTING_ECHO_SECONDARY_G 0.18f
 #define TILES_LIGHTING_ECHO_SECONDARY_B 0.12f
 
@@ -508,13 +508,6 @@ static tiles_rgb01_t pad_look_rgb(uint8_t pad_index) {
     }
     uint8_t logical_pad = (uint8_t)(pad_index + 1u);
 
-    /* Song capture: flash the pad of the captured note sounding now, after the
-     * live-touch check. Not chord-strip pads. */
-    if (tiles_op_mode_song_capture_is_active() && !tiles_note_map_is_chord_region_pad(logical_pad) &&
-        tiles_op_mode_song_capture_is_note_sounding(tiles_note_map_get_note(logical_pad))) {
-        return (tiles_rgb01_t){1.0f, 0.6f, 0.0f};
-    }
-
     /* Melodic echo: incoming notes light pale green, flashing in from white.
      * After the live-touch check. */
     uint8_t echo_note = tiles_note_map_get_note(logical_pad);
@@ -800,33 +793,6 @@ static void write_crash_underglow(void) {
     tiles_debug_trace('x');
 }
 
-/* Song capture: an amber underglow pulse, straight to the LEDs (the pads
- * stay the mode's own). Amber is used by nothing else. */
-#define SONG_CAPTURE_UNDERGLOW_PULSE_PERIOD_MS 900.0f
-#define SONG_CAPTURE_UNDERGLOW_PULSE_MIN 0.35f
-#define SONG_CAPTURE_UNDERGLOW_PULSE_MAX 1.0f
-
-static float song_capture_underglow_pulse_level(uint32_t now_ms) {
-    float phase = (float)now_ms / SONG_CAPTURE_UNDERGLOW_PULSE_PERIOD_MS;
-    float raw = 0.5f + 0.5f * sinf(2.0f * DEBUG_UNDERGLOW_PI * phase);
-    return SONG_CAPTURE_UNDERGLOW_PULSE_MIN + (SONG_CAPTURE_UNDERGLOW_PULSE_MAX - SONG_CAPTURE_UNDERGLOW_PULSE_MIN) * raw;
-}
-
-static void write_song_capture_underglow(void) {
-    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-    float pulse = song_capture_underglow_pulse_level(now_ms);
-    uint8_t level = underglow_channel_level(pulse);
-    uint32_t pixel = tiles_sk6805_pack_rgb(level, level, 0u);
-    uint32_t pixels[TILES_LIGHTING_NUM_UNDERGLOW_PIXELS];
-    for (uint8_t i = 0; i < TILES_LIGHTING_NUM_UNDERGLOW_PIXELS; i++) {
-        pixels[i] = pixel;
-    }
-    /* Same 'w'/'x' marks as write_pad(). */
-    tiles_debug_trace('w');
-    tiles_sk6805_write(&s_underglow_chain, pixels, TILES_LIGHTING_NUM_UNDERGLOW_PIXELS);
-    tiles_debug_trace('x');
-}
-
 /* Pattern save/delete confirmation: the color op_mode.c already resolved
  * for the pad flash (tiles_op_mode_pattern_flash_underglow_color()), so
  * pad and underglow blink together. */
@@ -985,8 +951,7 @@ void tiles_lighting_service(void) {
         return;
     }
 
-    /* Underglow override priority: crash > pattern flash > debug > Song
-     * capture. */
+    /* Underglow override priority: crash > pattern flash > debug. */
     bool underglow_override_active = false;
     float pattern_flash_r, pattern_flash_g, pattern_flash_b;
     /* Logs which override owns the underglow, on change only (for debugging
@@ -1007,14 +972,9 @@ void tiles_lighting_service(void) {
         write_debug_underglow();
         underglow_override_active = true;
         debug_override_kind = 3u;
-    } else if (tiles_op_mode_song_capture_is_active()) {
-        /* Song capture: lowest (the player turned it on on purpose). */
-        write_song_capture_underglow();
-        underglow_override_active = true;
-        debug_override_kind = 4u;
     }
     if (debug_override_kind != s_debug_last_override_kind) {
-        printf("[lighting] underglow override -> %u (0=none 1=crash 2=pattern_flash 3=debug 4=song_capture)\n",
+        printf("[lighting] underglow override -> %u (0=none 1=crash 2=pattern_flash 3=debug)\n",
                (unsigned)debug_override_kind);
         s_debug_last_override_kind = debug_override_kind;
     }

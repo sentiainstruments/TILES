@@ -1514,7 +1514,7 @@ static void handle_line(char *line) {
             if (tiles_op_mode_test_set_mode(arg)) {
                 reply_ok();
             } else {
-                reply_err("mode-melodic|duet|sequencer|bass|song|ableton|drums|volca|prism|bounce|ripples|sand|orbits|cradle");
+                reply_err("mode-melodic|duet|sequencer|bass|ableton|drums|volca|prism|bounce|ripples|sand|orbits|cradle");
             }
             return;
         }

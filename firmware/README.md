@@ -66,8 +66,8 @@ Set for now (compile-time switches, see `daw-integration/README.md`):
 
 - Performance transport (`OP_TRANSPORT_SHIFT_STOP 1` in `services/op_mode.c`):
   diamond plays, hold records, circle + diamond stops; while Live plays,
-  diamond alone does nothing. Circle + diamond's other jobs (Ableton stop-all,
-  Song capture) are off meanwhile.
+  diamond alone does nothing. Circle + diamond's other job (Ableton stop-all)
+  is off meanwhile.
 - Ableton mode: a plain press on an empty slot does nothing; circle +
   press records a new clip there.
 
@@ -77,7 +77,6 @@ Set for now (compile-time switches, see `daw-integration/README.md`):
   off), velocity, pressure, per-note pitch bend and vibrato, pedal and
   melodic harmonics, haptics, lighting, standby and deep sleep, games,
   settings saved to flash.
-- **Song mode is beta**: built, not yet played on hardware.
 - **Drum mode** (menu pad 3; bass guitar on pad 7 since 0.2.9): played on
   units 2 and 4 (0.2.8); 0.2.9-0.3.0 add pages, rolls and lag fixes. Colour schemes and custom scales (0.2.7) not
   yet played.

@@ -81,7 +81,7 @@ while TILES is quiet.
   stream stops for that time too (an erase is tens of ms). So an erase
   waits for the clock to stop and this sound to be silent
   (`tiles_usb_audio_is_quiet()`: no host listening, or no voice
-  sounding): the autosaves, settings, pattern bank and Song. Saves while
+  sounding): the autosaves, settings and pattern bank. Saves while
   playing write one 256-byte page at a time, at least 8 ms apart (under
   a millisecond each; core 1 refills the 3 ms ring between them, and a
   late USB frame is made up).

@@ -243,15 +243,8 @@ TILES_AUDIO_COLD static float patch_cost(const synth_patch_t *p) {
     return 45.0f + 38.0f * copies + (stereo ? 10.0f : 0.0f) + filter + shaped * channels + extras;
 }
 
-static bool s_built;
-
-TILES_AUDIO_COLD void *tiles_audio_engine_idle_memory(uint32_t bytes) {
-    return !s_built && bytes <= sizeof(s_banks) ? (void *)s_banks : NULL;
-}
-
 TILES_AUDIO_COLD void tiles_audio_engine_init(uint8_t bend_range_semitones, uint32_t clk_mhz, uint32_t (*now_us)(void)) {
     static bool built;
-    s_built = true;
     if (!built) {
         s_build_scratch = (float *)tiles_fx_memory();
         tiles_wt_spectrum_t *spectrum = (tiles_wt_spectrum_t *)(s_build_scratch + TILES_WT_SCRATCH_FLOATS);

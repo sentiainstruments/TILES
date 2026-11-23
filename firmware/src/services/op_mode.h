@@ -32,8 +32,8 @@ bool tiles_op_mode_owns_octave_buttons(void);
  * open. services/expression.c checks this before starting a note. */
 bool tiles_op_mode_owns_pad(uint8_t logical_pad);
 
-/* True while the sequencer or Song mode is shown, or a lane/track is
- * playing in the background. services/standby.h then uses its longer
+/* True while the sequencer is shown, or a lane is playing in the
+ * background. services/standby.h then uses its longer
  * timeouts. */
 bool tiles_op_mode_is_sequencer_active(void);
 
@@ -48,13 +48,6 @@ bool tiles_op_mode_melodic_harmonics_may_play(void);
 bool tiles_op_mode_has_menu_open(void);
 
 
-/* True while a Song capture is recording. services/lighting.c shows the
- * yellow recording pulse on the underglow. */
-bool tiles_op_mode_song_capture_is_active(void);
-
-/* True if `note` sounds on the slot a Song capture records, so lighting.c
- * can flash its pad. */
-bool tiles_op_mode_song_capture_is_note_sounding(uint8_t note);
 
 /* Melodic echo layers: 0 = the main TILES DISPLAY (any channel but 2),
  * 1 = a second one (MIDI channel 2, drawn soft red). */
@@ -74,7 +67,7 @@ uint32_t tiles_op_mode_incoming_note_age_ms(uint8_t layer, uint8_t note);
 bool tiles_op_mode_pattern_flash_underglow_color(float *out_r, float *out_g, float *out_b);
 
 /* Bench/diagnostics (the settings shell's TEST MODE): switches straight to
- * a mode by name (melodic, chord, sequencer, bass, song, ableton, drums),
+ * a mode by name (melodic, chord, sequencer, bass, ableton, drums),
  * closing any menu. False for an unknown name. */
 bool tiles_op_mode_test_set_mode(const char *name);
 
@@ -84,7 +77,7 @@ typedef enum {
     TILES_MENU_DUET = 0,
     TILES_MENU_SEQUENCER,
     TILES_MENU_DRUMS,
-    TILES_MENU_SONG,
+    TILES_MENU_SONG, /* Song mode was removed: its setting (modes.song) stays, inert */
     TILES_MENU_PRISM,
     TILES_MENU_BASS,
     TILES_MENU_ABLETON,

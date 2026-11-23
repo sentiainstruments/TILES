@@ -31,7 +31,7 @@ before re-tuning a constant or reviving an approach that was dropped.
 | `bend_core` | Per-note pitch bend from sideways tilt, with its smoothing, baseline, deadzone and vibrato, in three modes (`expression.pitch_bend_mode`: `legacy`, `cosine`, `path`, the default), and each pad's press path learned from its strikes. No hardware; tested, and recorded captures replay through it in all three modes. |
 | `note_map` | Pad → note: scales (picker order), key, octave, bass guitar frets, chord strip + melody grid. |
 | `mpe_alloc` | Pure MPE channel choice / steal order (MMA RP-053 3.2). Tested. |
-| `midi_channels` | The 16-channel map: fixed parts (drums 10, game 11, chord 12, sequencer 13-16), pool 2-9 shared by Song and the live MPE zone. Tested. |
+| `midi_channels` | The 16-channel map: fixed parts (drums 10, game 11, chord 12, sequencer 13-16), pool 2-9 shared by a claiming part (none now) and the live MPE zone. Tested. |
 | `midi_clock` | External MIDI clock or tap tempo → one pulse counter. |
 | `cv_gate` | Monophonic MIDI-to-CV (1 V/oct, pressure, gate). Off unless external power and explicitly enabled. |
 | `haptics` | Per-pad motor envelopes: kick, gap, sustain; a click (kick only, for picks and signals no note-off ends); touch pulse; voice ceiling; kick starts 15 ms apart, never more than 30 ms late. |
@@ -40,7 +40,7 @@ before re-tuning a constant or reviving an approach that was dropped.
 
 | Module | Role |
 |---|---|
-| `op_mode` | The mode menu (one column per family, each with its own colours; each mode's underglow its colour) and the modes: melodic, Duet (chord + melody), sequencer, Song (beta), bass guitar, Ableton, plus the switch into drums / Volca (`drum_seq`), Prism (`harmony`), Bouncing notes (`bounce`) and the physics modes (`physics`). Scale picker, pattern bank, captures, Live transport. Modes and keys: below. |
+| `op_mode` | The mode menu (one column per family, each with its own colours; each mode's underglow its colour) and the modes: melodic, Duet (chord + melody), sequencer, bass guitar, Ableton, plus the switch into drums / Volca (`drum_seq`), Prism (`harmony`), Bouncing notes (`bounce`) and the physics modes (`physics`). Scale picker, pattern bank, captures, Live transport. Modes and keys: below. |
 | `physics`, `physics_core` | The physics modes: Ripples (stones that drop every bar, rings playing on the sixteenths), Sand (a melody poured in sand: pile height = pitch, a triplet playhead), Orbits (planets round a sun in whole-beat periods), Newton's cradle (knocks on the beat for ever). One set of moves (what you place loops and stays lit, strike it again to remove it; circle + hold clears; square = the mode's other physics), the shared tempo pulled onto the clock's grid, MIDI channel 11. The simulations are `physics_core` (no hardware; tested). |
 | `bounce`, `bounce_core` | Bouncing notes: 12 lanes (6 shown, circle + "-"/"+" scroll), a ball bouncing in each from a height of 1-4 pads, playing the lane's scale note when it lands; on the shared clock, MIDI channel 11. The physics is `bounce_core` (no hardware; tested). |
 | `harmony`, `harmony_core` | Prism mode: a chord machine; a chord type and extensions on the right shape the root played on the left. Chromatic roots (columns 1-3); voicing (column 4), quality (column 5) and extensions (column 6), pressed by depth and latched onto the sounding chord; root bass; pedal strum; key lock from the scale picker (roots outside it dark and silent, chords unchanged). The chord maths is `harmony_core` (no hardware; tested). |
@@ -69,7 +69,7 @@ row 1, each mode in its menu colour (`MENU_SLOTS` in `op_mode.c`).
 | Column | Modes |
 |---|---|
 | 1 | Melodic (magenta, default; its underglow is the device mode's colour), Duet (pink: chords on columns 1-2, melody on 3-6), Bass guitar (lilac: rows = strings, columns = frets, "-"/"+" shift the frets) |
-| 2 | Sequencer (scarlet), Drums (orange steps, amber drum pads: 16/32 steps on channel 10, Drum Rack order), Song (amber, beta: 24-slot looper, 128 steps per pattern; controller mode only, its library in the sound engine's idle wavetable memory there) |
+| 2 | Sequencer (scarlet), Drums (orange steps, amber drum pads: 16/32 steps on channel 10, Drum Rack order) |
 | 3 | Prism (blue: chord machine, `harmony`) |
 | 4 | Ableton (teal: Session View clip grid), Volca (cyan: a drum per channel) |
 | 5 | Bouncing notes (lime, `bounce`), Newton's cradle (steel), Sand (sand) |
@@ -79,14 +79,17 @@ Every mode but melodic can be taken off the menu (settings `modes.*`);
 removing the one in use returns to melodic. The current mode pulses white.
 A pick takes effect when the finger lifts, so it can't play a note in the
 new mode. Melodic, bass guitar and chord play through `expression`; the
-sequencer, Song, Ableton and drums draw the whole grid themselves.
+sequencer, Ableton and drums draw the whole grid themselves. Song mode
+(a 24-slot looper, beta) was removed on 2026-11-23: the Deck takes its job
+(`docs/architecture/standalone-recorder.md`); a saved Song mode comes up as
+melodic, and its setting `modes.song` stays, inert.
 
 | Keys | Does |
 |---|---|
 | triangle | mode menu (toggle) |
 | circle + triangle | scale picker (drums: the other step page); cancels a step edit or capture |
-| diamond | Live transport: click = play/stop, hold 2 s = record. Standalone mode: the sound menu instead (below). Sequencer: pattern bank. Song step editor: back |
-| circle + diamond | capture (sequencer; Song from melodic/chord/bass/Song); stop all clips in Ableton; end a Live recording. Standalone mode outside the sequencer: the effects menu |
+| diamond | Live transport: click = play/stop, hold 2 s = record. Standalone mode: the sound menu instead (below). Sequencer: pattern bank |
+| circle + diamond | capture (sequencer); stop all clips in Ableton; end a Live recording. Standalone mode outside the sequencer: the effects menu |
 | "-" / "+" | sequencer and drums: stop/start the viewed lane ("-" twice rewinds; "+" restarts the clock when none comes in); circle first = length (drums: previous/next 8 drums). Bass guitar: frets. Ableton: pan the 5-track window |
 | circle | tap tempo when no external clock; flashes the beat |
 
@@ -99,7 +102,7 @@ ratchet. Up to 4 notes per step; a step is a sixteenth (6 clocks) from
 Notes are fitted to the current scale as they play; storage never changes.
 Capture records into the viewed lane at the running tempo, additively.
 
-**Persistence.** Patterns and the Song library are in flash
+**Persistence.** Patterns are in flash
 (`storage/flash_map.h`); mode, lane patterns and running lanes survive a
 crash reboot (`__uninitialized_ram`, `tiles_op_mode_init()`).
 
@@ -107,7 +110,7 @@ crash reboot (`__uninitialized_ram`, `tiles_op_mode_init()`).
 
 - **Who owns the LEDs.** Normal play draws through `lighting.c`
   (`set_pad_press`). Anything that takes over the display (standby,
-  boot animation, menus, games, sequencer/Song/Ableton views) claims
+  boot animation, menus, games, sequencer/Ableton views) claims
   it with `tiles_lighting_set_standby_active()` /
   `tiles_buttons_set_standby_active()` and draws with the standby
   setters. Crash, debug, pattern-confirmation and capture indicators
@@ -138,7 +141,7 @@ crash reboot (`__uninitialized_ram`, `tiles_op_mode_init()`).
   `power.h` and never exceed it; CV/gate needs external power and an
   explicit enable; PCA9685 outputs stay disabled until configured.
 - **Persistence.** User-tunable values are settings (`../profiles/`).
-  Sequencer patterns and the Song library are saved to flash by
+  Sequencer patterns are saved to flash by
   `op_mode.c` (`../storage/flash_map.h`). Scale/key/octave and the
   active mode survive a power cycle (`play_state`, saved ~2 s after a
   change) and a crash reboot (`__uninitialized_ram`); running sequencer
@@ -171,10 +174,10 @@ is read from the settings in flash before USB starts
 ## Sound menus
 
 Standalone mode, every mode but the sequencer (whose diamond stays the
-pattern bank and capture) and Song's step editor (back): diamond opens the
+pattern bank and capture): diamond opens the
 **sound menu**, circle + diamond the **effects menu**; the same keys close
 them, the other key switches. They set one of TILES's four synth tracks,
-first the one the mode plays (melodic, bass guitar, Song, Ableton: 2;
+first the one the mode plays (melodic, bass guitar, Ableton: 2;
 Duet, Prism: 3; bouncing notes and the physics modes: 4; drums: 1);
 "-"/"+" step through the tracks, the underglow in the track's sequencer
 lane colour. No DAW transport here.
@@ -229,7 +232,6 @@ underneath. The decays are first guesses.
 
 ## Status
 
-- **Song mode is beta**: built but not yet played on hardware.
 - CV/gate and the DAC80502 driver are not yet verified on hardware.
 - Per-pad Hall calibration curves, and Hall-depth wake from standby,
   are not built (see `../diagnostics/README.md`).

@@ -3,15 +3,15 @@
 /* How TILES divides the 16 MIDI channels (tested in test_midi_channels.c).
  * Fixed parts sit outside anything live MPE may use, so they can't collide.
  *   1      MPE Master: RPNs and pedals (MPE off: every live note)
- *   2-9    shared pool: Song tracks claim from 9 down, the live MPE zone
- *          counts up from 2, so they never overlap
+ *   2-9    shared pool: a part may claim from 9 down (none does now), the
+ *          live MPE zone counts up from 2, so they never overlap
  *   10     drum sequencer (GM percussion)
  *   11     game mode, Bouncing notes and the physics modes
  *   12     chord mode
  *   13-16  sequencer lanes (lane 0 = 16)
  * Channels 10-16 are permanent. A zone change (RPN 6 + RPN 0) stops every
  * note on the receiver, so a new size is declared only when nothing sounds;
- * until then live MPE uses the last declared size minus Song's channels. */
+ * until then live MPE uses the last declared size minus the claimed ones. */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -28,8 +28,9 @@
 /* General MIDI percussion: the drum sequencer, and nothing else. */
 #define TILES_MIDI_CH_DRUMS 9u /* channel 10 */
 
-/* The shared pool: channels 2-9, split between Song mode and the live
- * MPE zone. */
+/* The shared pool: channels 2-9, split between a part that claims channels
+ * (the `song_` calls, named for Song mode; nothing claims them now) and the
+ * live MPE zone. */
 #define TILES_MIDI_SHARED_POOL_FIRST 1u /* channel 2 */
 #define TILES_MIDI_SHARED_POOL_SIZE 8u
 

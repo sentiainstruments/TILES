@@ -28,7 +28,7 @@ over a track and borrows its lane's voices.
 | Track | Sequencer lane | Played on it (and takes the lane's voices) |
 |---|---|---|
 | 1 | lane 1 | nothing: the sequencer's own |
-| 2 | lane 2 | melodic, Duet's melody, bass guitar, Song's tracks (the MPE channels) |
+| 2 | lane 2 | melodic, Duet's melody, bass guitar (the MPE channels) |
 | 3 | lane 3 | Prism, Duet's chord columns, the chord strip (channel 12) |
 | 4 | lane 4 | the physics modes, bouncing notes, games (channel 11) |
 | Drums | the drum lanes | drum mode and Volca mode: the sampler, 8 sample slots, 5 ringing at once |

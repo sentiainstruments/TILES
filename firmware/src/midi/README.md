@@ -31,7 +31,7 @@ the same way Launchkey, Push and KeyLab do it. Setup in Live:
 
 A single Lower Zone. Channel 1 is the Master Channel (zone RPNs, pedals;
 all notes when MPE is off). Channels 2-9 are Member Channels, one per
-held note. How many of them are in the zone depends on Song mode; the
+held note, all 8 in the zone (a part could claim some, none does); the
 channel map is `../services/midi_channels.h` and per-note allocation is
 `../services/mpe_alloc.h`. Conformance to MMA RP-053:
 
