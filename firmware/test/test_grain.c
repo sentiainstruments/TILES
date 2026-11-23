@@ -31,6 +31,7 @@ static int s_failures;
 
 #define FS 48000.0
 #define SECOND 48000u
+#define TAPE_SAMPLES 24008u /* the delay's line (fx.c) */
 
 static tiles_wt_bank_t s_banks[TILES_WT_BANK_COUNT];
 static tiles_wt_spectrum_t s_spectrum;
@@ -335,7 +336,9 @@ static void test_engine_tape(void) {
     tiles_audio_engine_set_patch(1u, scatter);
     engine_run(4800u * 10u);
     uint32_t frames = tiles_audio_engine_tape_frames();
-    CHECK(frames >= SECOND - 512u && frames <= SECOND, "a stereo second on the tape: %u samples", frames);
+    /* The tape is the delay's line: 0.5 s (24,008 samples), a stereo slot
+     * a chunk's room short. */
+    CHECK(frames >= TAPE_SAMPLES - 512u && frames <= TAPE_SAMPLES, "a stereo slot on the tape: %u samples", frames);
     CHECK(tiles_fx_delay_lent(), "the delay kept its line");
     tiles_audio_engine_midi(0x91u, 60u, 100u); /* the root: its own speed */
     engine_run(4800u * 5u);
@@ -349,7 +352,7 @@ static void test_engine_tape(void) {
     engine_run(4800u * 10u);
     hz = peak_hz(s_l, 4800u, 150.0, 600.0);
     CHECK(fabs(hz - 440.0) <= 12.0, "scatter on slot 8 peaks at %.0f Hz", hz);
-    CHECK(tiles_audio_engine_tape_frames() == SECOND, "a mono second on the tape: %u",
+    CHECK(tiles_audio_engine_tape_frames() == TAPE_SAMPLES, "a mono slot on the tape: %u",
           tiles_audio_engine_tape_frames());
 
     /* The effects' memory lent to the pad capture: no tape, no sound from
@@ -360,7 +363,7 @@ static void test_engine_tape(void) {
     CHECK(tiles_audio_engine_tape_frames() == 0u, "the tape outlived its memory");
     tiles_fx_memory_return();
     engine_run(4800u * 10u);
-    CHECK(tiles_audio_engine_tape_frames() == SECOND, "the tape didn't come back: %u",
+    CHECK(tiles_audio_engine_tape_frames() == TAPE_SAMPLES, "the tape didn't come back: %u",
           tiles_audio_engine_tape_frames());
 
     /* Another sound: the delay gets its line back, cleared. */

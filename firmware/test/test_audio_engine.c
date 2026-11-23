@@ -56,8 +56,8 @@ static double rms(uint32_t frames) {
     return sqrt(sum / frames);
 }
 
-/* 150 MHz: the voices' budget is 85 % of 3,125 cycles minus the 1,200
- * reserve, 1,456. */
+/* 141 MHz: the voices' budget is 85 % of 2,937 cycles minus the 1,050
+ * reserve, 1,447 (the scenarios below: 12 voices of 120 fit, 13 don't). */
 static void pure_everywhere(void) {
     for (uint8_t p = 0; p < TILES_PRESET_SLOTS; p++) {
         char name[TILES_PRESET_NAME_MAX + 1u];
@@ -74,7 +74,7 @@ static void pure_everywhere(void) {
 }
 
 static void reset(void) {
-    tiles_audio_engine_init(12u, 150u, NULL);
+    tiles_audio_engine_init(12u, 141u, NULL);
     pure_everywhere();
 }
 
@@ -280,7 +280,7 @@ static void test_voices(void) {
     for (uint8_t i = 0; i < 3u; i++) {
         tiles_audio_engine_midi(ON(MELODIC), (uint8_t)(60u + i), 100);
     }
-    tiles_audio_engine_midi(ON(MELODIC), 63, 100); /* 1,700 > 1,456: three light voices give way */
+    tiles_audio_engine_midi(ON(MELODIC), 63, 100); /* 1,700 > 1,447: three light voices give way */
     CHECK(tiles_audio_engine_track_voices(0u) == 2u && tiles_audio_engine_track_voices(1u) == 4u,
           "a heavy note took %u light voices", 5u - tiles_audio_engine_track_voices(0u));
 

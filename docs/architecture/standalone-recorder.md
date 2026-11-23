@@ -154,7 +154,7 @@ chord strip's octave; Rev A0 loses it there).
   Up to 256 notes a tape (1.5 KB); a step tape is far smaller.
 - **RAM:** only the 5 playing tapes, the one open and an undo copy:
   ~10 KB at worst. Song's 12 KB library in RAM goes, so RAM comes out
-  even or better (~5 KB free today).
+  even or better (~88 KB free since the effects went to 24 kHz).
 - **Flash:** a Deck of 5 tracks x 8 rows = 40 tapes, 60 KB at worst.
   Saves go out a page per pass, only while quiet (as every save does).
 

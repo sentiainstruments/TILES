@@ -13,6 +13,11 @@
 
 #define INLINE static inline __attribute__((always_inline))
 #define FS SYNTH_RATE
+/* The plate and the delay run at half the rate: half their memory and
+ * cycles; the delay's loop filter tops out at 12 kHz anyway and the
+ * plate's damping rolls its highs off. Sends go down and returns come up
+ * through a 7-tap half-band (-1 0 9 16 9 0 -1)/32. */
+#define FS2 (SYNTH_RATE * 0.5f)
 
 /* Delay memory holds 16-bit samples of the signal x 8192: +-4 of headroom,
  * a -78 dB floor (Mutable Instruments' reverbs store 12 bits). */
@@ -70,22 +75,22 @@ INLINE float apm(int16_t *buf, uint32_t mask, uint32_t wp, uint32_t w, uint32_t 
 }
 
 /* ---- Plate reverb ---------------------------------------------------------
- * Dattorro's figure-eight tank at the full 48 kHz: four input diffusers,
+ * Dattorro's figure-eight tank at 24 kHz: four input diffusers,
  * then two halves (a modulated allpass, a delay, damping, an allpass, a
  * delay) feeding each other; seven taps a side for the stereo outputs.
  * Two power-of-two rings, so an access wraps with one AND (Mutable
  * Instruments' FxEngine does the same): the front (predelay, diffusers,
  * modulated allpasses) and the tank. */
 
-#define REVERB_FRONT 8192u
-#define REVERB_TANK 32768u
-#define REVERB_PRE_MAX 2400u /* 50 ms */
-#define REVERB_EXC_MAX 26u   /* his 16 samples of modulation at 48 kHz */
+#define REVERB_FRONT 4096u
+#define REVERB_TANK 16384u
+#define REVERB_PRE_MAX 1200u /* 50 ms */
+#define REVERB_EXC_MAX 13u   /* his 16 samples of modulation, at 24 kHz */
 #define REVERB_GAIN 0.6f
 
-/* His lengths at 29,761 Hz, at 48 kHz: constants, so every access is an
+/* His lengths at 29,761 Hz, at 24 kHz: constants, so every access is an
  * add of an immediate and a mask. */
-#define DAT(n) ((uint32_t)((double)(n) * (48000.0 / 29761.0) + 0.5))
+#define DAT(n) ((uint32_t)((double)(n) * (24000.0 / 29761.0) + 0.5))
 /* The front ring: predelay, the four diffusers, the modulated allpasses. */
 static const uint32_t PRE = 0u;
 static const uint32_t IN0 = REVERB_PRE_MAX + 2u;
@@ -119,9 +124,9 @@ typedef struct {
  * filter and a soft clip in the loop; a slow wobble of a sample or two
  * keeps repeats from ringing metallic. 16-bit at 48 kHz, 0.5 s a side. */
 
-#define DELAY_MAX 24000u
+#define DELAY_MAX 12000u /* 0.5 s at 24 kHz */
 #define DELAY_RING (2u * (DELAY_MAX + 4u))
-#define DELAY_WOW 1.5f /* samples */
+#define DELAY_WOW 0.75f /* samples */
 
 typedef struct {
     ring_t ring;
@@ -158,6 +163,8 @@ static bool s_bypass = true;
 static bool s_ready;
 static bool s_delay_lent; /* the granular tape has the delay's line */
 static uint32_t s_generation;
+/* The half-band's history: the two sends going down, the two returns up. */
+static float s_down_delay[6], s_down_reverb[6], s_up_l[3], s_up_r[3];
 
 /* The pump: seconds since the last duck. */
 static float s_pump_t = 100.0f;
@@ -179,11 +186,13 @@ const tiles_fx_bus_t g_tiles_fx_bus_default = {
 };
 
 TILES_AUDIO_COLD static void apply_bus(void) {
-    s_rv.pre_d = (uint32_t)(synth_clamp(s_bus.reverb_predelay_ms, 0.0f, 50.0f) * (FS / 1000.0f));
+    s_rv.pre_d = (uint32_t)(synth_clamp(s_bus.reverb_predelay_ms, 0.0f, 50.0f) * (FS2 / 1000.0f));
     s_rv.pre_d = s_rv.pre_d > REVERB_PRE_MAX ? REVERB_PRE_MAX : s_rv.pre_d;
     s_rv.decay = 0.25f + 0.7f * synth_clamp(s_bus.reverb_decay, 0.0f, 1.0f);
     s_rv.diff2 = synth_clamp(s_rv.decay + 0.15f, 0.25f, 0.5f);
-    s_rv.damp_a = 1.0f - 0.7f * synth_clamp(s_bus.reverb_damping, 0.0f, 1.0f);
+    /* The one-pole at 48 kHz (1 - 0.7 x damping), as one step at 24 kHz. */
+    float d = 0.7f * synth_clamp(s_bus.reverb_damping, 0.0f, 1.0f);
+    s_rv.damp_a = 1.0f - d * d;
     s_rv.exc = (float)REVERB_EXC_MAX * synth_clamp(s_bus.reverb_mod, 0.0f, 1.0f);
 }
 
@@ -206,14 +215,18 @@ TILES_AUDIO_COLD void tiles_fx_init(void *memory) {
     }
     apply_bus();
     s_dl.time = -1.0f; /* takes the tempo's at once */
+    memset(s_down_delay, 0, sizeof(s_down_delay));
+    memset(s_down_reverb, 0, sizeof(s_down_reverb));
+    memset(s_up_l, 0, sizeof(s_up_l));
+    memset(s_up_r, 0, sizeof(s_up_r));
     s_bypass = false;
     s_delay_lent = false;
     s_generation++;
 }
 
 _Static_assert((REVERB_TANK + REVERB_FRONT + DELAY_RING) * 2u + CHORUS_LEN * 4u <= TILES_FX_MEMORY_BYTES, "fx memory");
-_Static_assert(DAT(908) == 1464u && DAT(3163) == 5101u, "the plate's lengths");
-/* FRONT_END and TANK_END (6,526 and 32,283) fit their rings: test_fx.c. */
+_Static_assert(DAT(908) == 732u && DAT(3163) == 2551u, "the plate's lengths");
+/* FRONT_END and TANK_END fit their rings: test_fx.c. */
 uint32_t tiles_fx_reverb_extent(bool tank) {
     return tank ? TANK_END : FRONT_END;
 }
@@ -468,14 +481,17 @@ static void chorus_run(const float *in, float *l, float *r, uint32_t n) {
     note_output(&c->quiet, peak);
 }
 
-/* The echo time for the tempo, halved until it fits the line. */
+/* The echo time for the tempo, halved until it fits the line, less the
+ * half-band's way down and up (9 samples at 48 kHz, measured), so
+ * echoes land on the beat. */
+#define RESAMPLE_LAG 4.5f
 static float delay_target(float beats_per_second) {
     float sixteenths = synth_clamp(s_bus.delay_sixteenths, 0.25f, 16.0f);
-    float t = sixteenths * 0.25f / (beats_per_second > 0.1f ? beats_per_second : 2.0f) * FS;
+    float t = sixteenths * 0.25f / (beats_per_second > 0.1f ? beats_per_second : 2.0f) * FS2;
     while (t > (float)(DELAY_MAX - 4u) - DELAY_WOW) {
         t *= 0.5f;
     }
-    return t;
+    return t > 2.0f * RESAMPLE_LAG ? t - RESAMPLE_LAG : t;
 }
 
 static void delay_run(const float *in, float *l, float *r, float *to_reverb, uint32_t n, float beats_per_second) {
@@ -490,13 +506,13 @@ static void delay_run(const float *in, float *l, float *r, float *to_reverb, uin
     /* Glides to a new tempo's time over ~70 ms, tape-like, never a jump. */
     float t_from = d->time, t_to = d->time + (target - d->time) * 0.2f;
     d->time = t_to;
-    d->wow_phase += 0.35f * (float)n * (1.0f / FS);
+    d->wow_phase += 0.35f * (float)n * (1.0f / FS2);
     d->wow_phase -= (float)(int32_t)d->wow_phase;
     float wow = DELAY_WOW * (1.0f + synth_sin_turns(d->wow_phase));
     float fb = synth_clamp(s_bus.delay_feedback, 0.0f, 0.95f);
     float lp_a = 1.0f - synth_exp2(-(2500.0f * synth_exp2(2.3f * synth_clamp(s_bus.delay_tone, 0.0f, 1.0f))) *
-                                   (2.0f * SYNTH_PI / FS) * 1.442695f); /* 2.5 .. 12 kHz */
-    const float hp_a = 1.0f - 0.98442f;                                  /* ~120 Hz */
+                                   (2.0f * SYNTH_PI / FS2) * 1.442695f); /* 2.5 .. 12 kHz */
+    const float hp_a = 1.0f - 0.98442f * 0.98442f;                       /* ~120 Hz */
     const float send = synth_clamp(s_bus.delay_to_reverb, 0.0f, 1.0f);
     const uint32_t base_r = DELAY_MAX + 4u;
     int16_t *const buf = d->ring.buf;
@@ -546,7 +562,7 @@ static void reverb_run(const float *in, float *l, float *r, uint32_t n) {
     if (!awake(&rv->quiet, in, n)) {
         return;
     }
-    rv->lfo_phase += 0.8f * (float)n * (1.0f / FS);
+    rv->lfo_phase += 0.8f * (float)n * (1.0f / FS2);
     rv->lfo_phase -= (float)(int32_t)rv->lfo_phase;
     int16_t *const fr = rv->front, *const tk = rv->tank;
     uint32_t wp = rv->wp;
@@ -565,7 +581,7 @@ static void reverb_run(const float *in, float *l, float *r, uint32_t n) {
             wm(fr, FM, wp, PRE, x);
             x = rm(fr, FM, wp, pre_r);
         }
-        bw += 0.85f * (x - bw); /* input bandwidth: ~14 kHz */
+        bw += 0.9775f * (x - bw); /* input bandwidth: Dattorro's, as one 24 kHz step of 0.85 */
         x = apm(fr, FM, wp, IN0, IN0 + DAT(142), 0.75f, bw);
         x = apm(fr, FM, wp, IN1, IN1 + DAT(107), 0.75f, x);
         x = apm(fr, FM, wp, IN2, IN2 + DAT(379), 0.625f, x);
@@ -614,16 +630,46 @@ static void reverb_run(const float *in, float *l, float *r, uint32_t n) {
     note_output(&rv->quiet, peak);
 }
 
+/* 48 kHz to 24: n (even) in, n / 2 out; `h` the last 6 inputs. */
+static void down(const float *in, uint32_t n, float *out, float *h) {
+    float b[6u + TILES_FX_BLOCK_MAX];
+    memcpy(b, h, 6u * sizeof(float));
+    memcpy(&b[6], in, n * sizeof(float));
+    for (uint32_t m = 0; m < n / 2u; m++) {
+        const float *x = &b[2u * m + 1u];
+        out[m] = (16.0f * x[3] + 9.0f * (x[2] + x[4]) - (x[0] + x[6])) * (1.0f / 32.0f);
+    }
+    memcpy(h, &b[n], 6u * sizeof(float));
+}
+
+/* 24 kHz to 48: n in, 2n added into out; `h` the last 3 inputs. */
+static void up(const float *in, uint32_t n, float *out, float *h) {
+    float c[3u + TILES_FX_BLOCK_MAX / 2u];
+    memcpy(c, h, 3u * sizeof(float));
+    memcpy(&c[3], in, n * sizeof(float));
+    for (uint32_t m = 0; m < n; m++) {
+        const float *x = &c[m];
+        out[2u * m] += x[1];
+        out[2u * m + 1u] += (9.0f * (x[1] + x[2]) - (x[0] + x[3])) * (1.0f / 16.0f);
+    }
+    memcpy(h, &c[n], 3u * sizeof(float));
+}
+
 void tiles_fx_busses(const float *chorus_in, const float *delay_in, const float *reverb_in, float *l, float *r,
                      uint32_t n, float beats_per_second) {
-    if (s_bypass || n > TILES_FX_BLOCK_MAX) {
+    if (s_bypass || n > TILES_FX_BLOCK_MAX || (n & 1u) != 0u) {
         return;
     }
-    float rev[TILES_FX_BLOCK_MAX];
-    memcpy(rev, reverb_in, n * sizeof(float));
+    const uint32_t half = n / 2u;
+    float dl[TILES_FX_BLOCK_MAX / 2u], rv[TILES_FX_BLOCK_MAX / 2u];
+    float ol[TILES_FX_BLOCK_MAX / 2u] = {0}, or_[TILES_FX_BLOCK_MAX / 2u] = {0};
+    down(delay_in, n, dl, s_down_delay);
+    down(reverb_in, n, rv, s_down_reverb);
+    delay_run(dl, ol, or_, rv, half, beats_per_second);
+    reverb_run(rv, ol, or_, half);
+    up(ol, half, l, s_up_l);
+    up(or_, half, r, s_up_r);
     chorus_run(chorus_in, l, r, n);
-    delay_run(delay_in, l, r, rev, n, beats_per_second);
-    reverb_run(rev, l, r, n);
 }
 
 TILES_AUDIO_COLD uint32_t tiles_fx_bench(uint32_t which, uint32_t frames, uint32_t (*cycles)(void)) {
@@ -652,11 +698,11 @@ TILES_AUDIO_COLD uint32_t tiles_fx_bench(uint32_t which, uint32_t frames, uint32
         case TILES_FX_BENCH_CHORUS:
             chorus_run(in, l, r, TILES_FX_BLOCK_MAX);
             break;
-        case TILES_FX_BENCH_DELAY:
-            delay_run(in, l, r, rev, TILES_FX_BLOCK_MAX, 2.0f);
+        case TILES_FX_BENCH_DELAY: /* at its half rate: a block's half */
+            delay_run(in, l, r, rev, TILES_FX_BLOCK_MAX / 2u, 2.0f);
             break;
         case TILES_FX_BENCH_REVERB:
-            reverb_run(in, l, r, TILES_FX_BLOCK_MAX);
+            reverb_run(in, l, r, TILES_FX_BLOCK_MAX / 2u);
             break;
         default:
             tiles_fx_block_begin(TILES_FX_BLOCK_MAX, 2.0f);

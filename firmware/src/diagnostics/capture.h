@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define TILES_CAPTURE_MAX 4000u /* ~8 s at one record per ~2 ms pass */
+#define TILES_CAPTURE_MAX 3300u /* ~6.5 s at one record per ~2 ms pass (all the effects' memory holds) */
 
 #define TILES_CAPTURE_VALID 0x01u        /* the Hall sample is valid */
 #define TILES_CAPTURE_TOUCHED 0x02u      /* raw touch */

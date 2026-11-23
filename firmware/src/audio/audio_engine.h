@@ -19,12 +19,13 @@
 
 /* The guardrails (docs/architecture/audio-engine.md, "Guardrails"): every
  * voice together stays under TARGET % of core 1, after the reserve for the
- * effects and drums (measured on unit 2, cycles per sample: plate 473,
- * delay 118, ensemble 103, overdrive 122 a driven track, drum samples ~65
- * each); the live guard ends voices above CEILING %. */
+ * effects and drums (measured on unit 2, cycles per sample: plate 242 and
+ * delay 71 at 24 kHz, ensemble 102, overdrive 122 a driven track, drum
+ * samples ~65 each; all the effects live at most 644 in a soak with four
+ * driven tracks); the live guard ends voices above CEILING %. */
 #define TILES_AUDIO_TARGET_PCT 85u
 #define TILES_AUDIO_CEILING_PCT 90u
-#define TILES_AUDIO_RESERVE_CYCLES 1200u
+#define TILES_AUDIO_RESERVE_CYCLES 1050u
 
 /* Builds the wavetables (~0.15 s, the first time, in the effects' memory:
  * fx_memory.h) and clears the effects; call once before anything else. bend_range is the

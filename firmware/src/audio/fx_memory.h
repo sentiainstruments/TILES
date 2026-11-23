@@ -9,8 +9,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* The plate (81,920), the ping-pong delay (96,016), the ensemble (4,096). */
-#define TILES_FX_MEMORY_BYTES 182032u
+/* The plate (40,960) and the ping-pong delay (48,016), both at 24 kHz,
+ * and the ensemble (4,096). */
+#define TILES_FX_MEMORY_BYTES 93072u
 
 /* The area, for the effects and the boot-time wavetable build. */
 void *tiles_fx_memory(void);

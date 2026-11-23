@@ -19,7 +19,7 @@ Decided with Mats2000 on 2026-11-14.
 | Unison | Up to 3 copies a voice. |
 | Voice modes | Per patch: poly, mono, legato (glide only on overlapping notes, as on the classic acid box). |
 | Bass music | Tempo-synced wobble LFO, drive and wavefold, FM growls (with the FM engine). |
-| Mix effects | Built (2026-11-15): a modulated plate at the full 48 kHz, a ping-pong delay, an ensemble, a sidechain pump, and per-track overdrive and bit-crush. Amounts per sound, a track can change its own. Their memory is shared with the pad capture (a capture quiets them). |
+| Mix effects | Built (2026-11-15): a modulated plate (at 24 kHz from 2026-11-23), a ping-pong delay, an ensemble, a sidechain pump, and per-track overdrive and bit-crush. Amounts per sound, a track can change its own. Their memory is shared with the pad capture (a capture quiets them). |
 | FM | Six operators that **load DX7 patch files** (.syx), first through `tools/tiles_control.py`, later the companion app. |
 | Patches | A factory set first; a patch format in `shared/` once the engines settle. |
 | Track sounds at power-up | 1 acid bass, 2 pluck (melodic), 3 haze pads (chords), 4 glass bells (physics modes). |
@@ -96,8 +96,8 @@ their returns, the drums and the master's soft clip follow.
 
 | Effect | Design | Cycles a sample (unit 2) |
 |---|---|---|
-| Plate | J. Dattorro's figure-eight tank (*Effect Design*, 1997) at the full 48 kHz, his lengths scaled from 29,761 Hz: four input diffusers, two halves with a modulated allpass (quadrature LFO, his 16-sample excursion), damping, his seven output taps a side. Decay 0.97-2.85 s over the range (1.6 s by default), L/R correlation -0.01, echo density 0.92 (Abel & Huang's measure, 1 = diffuse). | 473 |
-| Ping-pong delay | Two lines crossing over, each echo one feedback down, a 120 Hz-2.5..12 kHz band filter in the loop, a 1.5-sample wobble against metallic repeats; time in sixteenths of the tempo (dotted 1/8 by default), halved until it fits 0.5 s; glides to a new tempo's time. Feeds the plate a little. | 118 |
+| Plate | J. Dattorro's figure-eight tank (*Effect Design*, 1997) at 24 kHz (from 2026-11-23; 48 kHz before), his lengths scaled from 29,761 Hz: four input diffusers, two halves with a modulated allpass (quadrature LFO, his 16-sample excursion), damping, his seven output taps a side. Decay 0.97-2.85 s over the range (1.6 s by default), L/R correlation -0.01, echo density 0.92 (Abel & Huang's measure, 1 = diffuse). | 242 (473 at 48 kHz) |
+| Ping-pong delay | Two lines crossing over, each echo one feedback down, a 120 Hz-2.5..12 kHz band filter in the loop, a 0.75-sample wobble (at 24 kHz) against metallic repeats; time in sixteenths of the tempo (dotted 1/8 by default), halved until it fits 0.5 s; glides to a new tempo's time. Feeds the plate a little. | 71 (118 at 48 kHz) |
 | Ensemble | Three taps 120 degrees apart, each moved by a slow (0.3-1.2 Hz) and a fast (4.5-7.5 Hz) LFO, as the string ensembles' bucket-brigade lines; L/R correlation -0.18. | 103 |
 | Overdrive (insert) | Up to +28 dB into synth_sat's polynomial with first-order antiderivative anti-aliasing (Parker, Zavalishin, Le Bivic 2016): aliases of a hard-driven 4.7 kHz sine -26 dB against -12.5 dB plain; a bias for even harmonics, removed after; a tone low-pass 18 kHz-1.5 kHz; level matched. | 122 a driven track |
 | Bit-crush (insert) | 16 down to 5 bits and 48 kHz down to 2.1 kHz together, sample and hold. | 29 |
@@ -105,16 +105,27 @@ their returns, the drums and the master's soft clip follow.
 
 How they were made cheap enough: 16-bit storage in the lines' own units
 (no scaling per access, SSAT on writes); the plate's lines in two
-power-of-two rings (8 K and 32 K, Mutable Instruments' FxEngine approach)
+power-of-two rings (4 K and 16 K at 24 kHz, Mutable Instruments' FxEngine approach)
 so a wrap is one AND, with every offset a constant; the delay's ramps as
 running sums (a per-sample division hid in one). The plate stays at its
 seven taps a side: they are what makes it wide and dense, and nearly all
 of its cost is its 42 memory accesses a sample.
 
-Memory: 182 KB (plate 80, delay 94, ensemble 4), lent to the pad capture
-(`diagnostics/capture.c`) and used as the wavetables' working space at
-boot. The voices' budget leaves the effects and drums 1,200 cycles a
-sample.
+**At half the rate** (2026-11-23): the plate and the delay run at 24 kHz,
+their sends down and returns up through a 7-tap half-band
+((-1 0 9 16 9 0 -1)/32, ~10 cycles a sample for the four). Half the
+memory and the cycles; the delay's loop filter tops out at 12 kHz
+anyway and the plate's damping rolls its highs off. The one-poles keep
+their frequencies (one 24 kHz step = two 48 kHz ones), the plate
+measures as before (RT60 0.97 / 1.61 / 2.79 s, L/R correlation -0.01,
+echo density 0.96), and the delay's time gives back the half-band's 9
+samples so echoes land on the beat.
+
+Memory: 91 KB (plate 40, delay 47, ensemble 4; 182 KB at 48 kHz), lent
+to the pad capture (`diagnostics/capture.c`, now 3,300 records, ~6.5 s)
+and used as the wavetables' working space at boot. The voices' budget
+leaves the effects and drums 1,050 cycles a sample (1,200 before; all
+the effects live at most 644 in a soak with four driven tracks).
 
 Measured live: the effects took 525 cycles a sample during a demo (pumped
 pads under kicks, a pluck through the delay, an overdriven acid line, a
@@ -235,7 +246,7 @@ Edition's spec sheet (owner, 2026-11-21).
 - **Two sources.** *Wave:* a wavetable bank, each grain one of its 8
   frames (between two, either, by nearness) at the mip level for its own
   pitch, so octave grains don't alias; no memory needed. *Tape:* a drum
-  slot, mixed to mono, copied into the delay's line (1 s at 48 kHz); the
+  slot, mixed to mono, copied into the delay's line (0.5 s at 48 kHz); the
   slot plays at its own speed on the sound's root note. The delay rests
   while a tape sound is chosen on any track (wave sounds keep it); the
   line goes back cleared. The sampler copies the slot between its own
@@ -285,7 +296,7 @@ Edition's spec sheet (owner, 2026-11-21).
 - **RAM:** a grain voice fits the voices' union as it was (364 bytes:
   8 grains of 28); the code in RAM and the four sounds ~9 KB, the code
   run once a note, a grain or 16 samples compiled for size (3 cycles a
-  voice slower, ~1 KB smaller). ~5 KB stays free.
+  voice slower, ~1 KB smaller).
 - **Levels:** cloud, dust and shimmer within ~1 dB of the other pads and
   bells (test_synth's chord, loudest 0.1 s). The tape brings any slot to
   one loudness: the sampler sums the squares of what it copies, the gain

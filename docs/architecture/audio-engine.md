@@ -43,8 +43,9 @@ never breaks up.
 
 1. **Reserved first: the effects and 5 drums.** Reverb, delay, chorus,
    the inserts and the master, plus 5 drum samples ringing, are kept
-   1,200 cycles a sample (the built effects measure ~700 shared plus
-   ~120 a driven track; drum samples ~65 each). Voices never take it,
+   1,050 cycles a sample (the shared effects measure ~415 since the
+   plate and delay run at 24 kHz, plus ~120 a driven track; drum samples
+   ~65 each; at most 644 live in a soak with four driven tracks). Voices never take it,
    so the effects stay at full quality. The sampler rings 5 at most
    (`TILES_AUDIO_DRUM_VOICES`).
 2. **Voices share the rest by cost.** Every voice counts its engine's
@@ -139,7 +140,7 @@ straight from flash through the XIP cache, ~126 from flash uncached.
 **Effects** (per 48 kHz sample): the prototypes, plate reverb run at
 24 kHz ~400, ping-pong delay at 24 kHz ~160, chorus ~210, master (clip
 and 24-bit output) ~100-130. The built effects (`synth-engines.md`,
-"Effects"): plate at 48 kHz 473, delay 118, ensemble 103, overdrive 122
+"Effects"): plate at 48 kHz 473, delay 118 (at 24 kHz since 2026-11-23: 242 and 71), ensemble 103, overdrive 122
 a driven track.
 
 **Everything at once** (the real test; the parts overlap a little, so

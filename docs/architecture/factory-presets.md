@@ -86,7 +86,7 @@ The presets above can't all be made today. In order of what they unlock:
 4. **The drum synth** (planned): kicks for rumble and hard techno.
 5. **A formant (vowel) filter** for talking and growling basses.
 
-RAM is the limit for 3 and 5 (~5 KB free): the store's 2.5 KB and Song's
+RAM was the limit for 3 and 5 (~88 KB free since the effects went to 24 kHz): the store's 2.5 KB and Song's
 12 KB (the Deck replaces it, `standalone-recorder.md`) come first.
 
 ## How a preset is made

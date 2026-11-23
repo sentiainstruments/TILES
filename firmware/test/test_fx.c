@@ -309,8 +309,8 @@ static void test_pump(void) {
 }
 
 static void test_layout(void) {
-    CHECK(tiles_fx_reverb_extent(false) <= 8192u, "the plate's front overflows (%u)", tiles_fx_reverb_extent(false));
-    CHECK(tiles_fx_reverb_extent(true) <= 32768u, "the plate's tank overflows (%u)", tiles_fx_reverb_extent(true));
+    CHECK(tiles_fx_reverb_extent(false) <= 4096u, "the plate's front overflows (%u)", tiles_fx_reverb_extent(false));
+    CHECK(tiles_fx_reverb_extent(true) <= 16384u, "the plate's tank overflows (%u)", tiles_fx_reverb_extent(true));
 }
 
 static void test_lending(void) {
