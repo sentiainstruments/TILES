@@ -3372,7 +3372,7 @@ void tiles_op_mode_scan(void) {
     handle_diamond_transport(now_ms);
     handle_circle_tap(now_ms);
     if (tiles_sound_menu_is_open()) {
-        /* "-"/"+" step the menu's track (sound_menu.c), nothing else. */
+        /* "-"/"+" are the menu's (pages, or with circle tracks: sound_menu.c), nothing else. */
         s_minus_was_held = tiles_button_is_pressed(TILES_MINUS_BUTTON_ID);
         s_plus_was_held = tiles_button_is_pressed(TILES_PLUS_BUTTON_ID);
     } else {

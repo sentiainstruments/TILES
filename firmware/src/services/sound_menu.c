@@ -32,12 +32,14 @@
 #define PAGE_FLASH_MS 500u
 
 /* The page's preset slots row by row (presets.h): a role a row, top to
- * bottom; the preview note suits the role. */
-static const float k_row_rgb[ROWS][3] = {
-    {1.0f, 0.0f, 0.3f},   /* basses */
-    {0.0f, 0.7f, 1.0f},   /* plucks and leads */
-    {0.55f, 0.3f, 1.0f},  /* pads */
-    {0.75f, 0.85f, 1.0f}, /* bells */
+ * bottom (basses, plucks and leads, pads, bells); the preview note suits
+ * the role. Each page its own colour family, a shade a row, so the page
+ * shows at a glance. First guesses. */
+static const float k_page_rgb[PAGES][ROWS][3] = {
+    {{1.0f, 0.0f, 0.45f}, {1.0f, 0.3f, 0.65f}, {0.6f, 0.1f, 1.0f}, {0.85f, 0.55f, 1.0f}}, /* magenta */
+    {{0.0f, 0.15f, 1.0f}, {0.0f, 0.55f, 1.0f}, {0.0f, 0.9f, 0.85f}, {0.55f, 0.85f, 1.0f}}, /* blue */
+    {{0.15f, 1.0f, 0.0f}, {0.55f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.45f}, {0.8f, 1.0f, 0.55f}},  /* green */
+    {{1.0f, 0.0f, 0.0f}, {1.0f, 0.3f, 0.0f}, {1.0f, 0.6f, 0.0f}, {1.0f, 0.85f, 0.45f}},    /* red */
 };
 static const uint8_t k_row_preview[ROWS] = {36u, 60u, 57u, 72u};
 
@@ -190,12 +192,12 @@ static void set_effect(uint32_t row, uint32_t col, float depth, uint32_t now_ms)
 
 static void handle_input(uint32_t now_ms) {
     bool minus = tiles_button_is_pressed(1u), plus = tiles_button_is_pressed(2u);
+    /* Sounds: "-"/"+" pages (Rev A0 has no wheel yet), circle + "-"/"+"
+     * tracks; effects: either way tracks. */
     if ((minus && !s_minus_was) || (plus && !s_plus_was)) {
         preview_off();
-        if (tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID)) {
-            if (!s_effects) {
-                step_page(plus && !s_plus_was, now_ms);
-            }
+        if (!s_effects && !tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID)) {
+            step_page(plus && !s_plus_was, now_ms);
         } else {
             s_track = (uint8_t)((s_track + (plus && !s_plus_was ? 1u : 3u)) % 4u);
             load_track();
@@ -270,7 +272,7 @@ static void render(void) {
                 level = col <= s_page ? 1.0f : 0.0f;
             } else {
                 int16_t p = s_patch_at[row][col];
-                rgb = k_row_rgb[row];
+                rgb = k_page_rgb[s_page][row];
                 level = p < 0 ? 0.0f : (uint8_t)p == s_patch ? 1.0f : DIM;
             }
             px[0] = rgb[0] * level;

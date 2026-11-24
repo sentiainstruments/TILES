@@ -3,11 +3,12 @@
 /* Standalone mode's sound and effects menus (README, "Sound menus"), opened
  * by op_mode.c's diamond outside the sequencer: diamond = the sound menu,
  * circle + diamond = the effects menu, for one of TILES's four synth
- * tracks at a time ("-"/"+" step through them, starting at the mode's
- * own). The sounds come a page of 24 at a time (the 96 preset slots):
- * circle + "-"/"+" steps through the pages holding any, the top row
- * showing the page's number for a moment; a track's own page comes up
- * with it. While one is open it owns the pads and "-"/"+". */
+ * tracks at a time, starting at the mode's own. The sounds come a page of
+ * 24 at a time (the 96 preset slots), each page in its own colours:
+ * "-"/"+" step through the pages holding any (the top row shows the
+ * page's number for a moment), circle + "-"/"+" through the tracks (in
+ * the effects menu "-"/"+" alone do); a track's own page comes up with
+ * it. While one is open it owns the pads and "-"/"+". */
 
 #include <stdbool.h>
 #include <stdint.h>
