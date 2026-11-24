@@ -4,6 +4,7 @@
 
 #include "audio_engine.h"
 #include "presets.h"
+#include "wavetable.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -113,9 +114,110 @@ static void test_store(void) {
     printf("  store: put, restart, a factory slot overridden and cleared, the engine plays a stored one\n");
 }
 
+/* Track t is lane t's channel (16 down to 13). */
+static void note(uint8_t track, bool on) {
+    tiles_audio_engine_midi((uint8_t)((on ? 0x90u : 0x80u) | (15u - track)), 48u, on ? 100u : 0u);
+}
+
+static float loudness(uint32_t frames) {
+    static int32_t buf[2u * 480u];
+    double sum = 0.0;
+    for (uint32_t done = 0; done < frames; done += 480u) {
+        tiles_audio_engine_render(buf, 480u);
+        for (uint32_t i = 0; i < 2u * 480u; i++) {
+            double v = buf[i] / 2147483648.0;
+            sum += v * v;
+        }
+    }
+    return (float)sqrt(sum / (2.0 * frames));
+}
+
+static bool slots_hold(const char *name) {
+    char slots[64];
+    tiles_audio_engine_wt_slots(slots, sizeof(slots));
+    return strstr(slots, name) != NULL;
+}
+
+static uint32_t s_cycle;
+static uint32_t fake_cycles(void) {
+    return s_cycle += 100u;
+}
+
+static void service_until_ready(uint8_t track) {
+    for (uint32_t i = 0; i < 10000u; i++) {
+        if (tiles_audio_engine_service(UINT32_MAX) & (1u << track)) {
+            tiles_audio_engine_sound_use(track);
+            return;
+        }
+    }
+}
+
+/* Banks built while the engine runs: a sound waits for its bank, the old
+ * one playing on; one with no room is refused; one whose only room is its
+ * track's old bank switches at once, and that bank goes only once its
+ * voices have faded. Slots 41-46 hold pluck on each new bank. */
+static void test_swapping(void) {
+    static const uint8_t banks[6] = {TILES_WT_BANK_TALK, TILES_WT_BANK_GROWL, TILES_WT_BANK_FOLD,
+                                     TILES_WT_BANK_BITS, TILES_WT_BANK_SWEEP, TILES_WT_BANK_ORGAN};
+    static tiles_sound_t s;
+    for (uint32_t i = 0; i < 6u; i++) {
+        tiles_preset_get(6u, &s);
+        s.patch.bank = banks[i];
+        strcpy(s.name, tiles_wt_bank_name(banks[i]));
+        tiles_preset_encode(&s, s_rec);
+        CHECK(tiles_preset_put((uint8_t)(40u + i), s_rec, s_staging) == TILES_PRESET_OK, "put %u", i);
+    }
+    enum { TALK = 40, GROWL, FOLD, BITS, SWEEP, ORGAN };
+    tiles_audio_engine_init(48u, 230u, NULL); /* acid, pluck, haze (classic), glass */
+    CHECK(slots_hold("classic") && slots_hold("glass"), "the tracks' banks after init");
+
+    tiles_audio_engine_set_patch(0u, GROWL);
+    tiles_audio_engine_set_patch(1u, FOLD);
+    CHECK(slots_hold("growl") && slots_hold("fold") && slots_hold("glass"), "growl, fold and glass in RAM");
+    CHECK(tiles_audio_engine_sound_load(2u, BITS) == TILES_SOUND_REFUSED, "a fourth bank with every slot held");
+
+    tiles_audio_engine_set_patch(3u, 0u); /* acid: glass is free */
+    CHECK(tiles_audio_engine_sound_load(2u, BITS) == TILES_SOUND_BUILDING, "bits doesn't wait for its bank");
+    CHECK(strcmp(tiles_audio_engine_track_name(2u), "haze") == 0, "the old sound plays on while it builds");
+    service_until_ready(2u);
+    CHECK(strcmp(tiles_audio_engine_track_name(2u), "bits") == 0 && slots_hold("bits") && !slots_hold("glass"),
+          "track 3 on bits, glass gone");
+
+    /* Track 1 (growl) asks for sweep: only its own bank can go. */
+    note(0u, true);
+    CHECK(loudness(4800u) > 1e-3f, "growl is silent");
+    CHECK(tiles_audio_engine_sound_load(0u, SWEEP) == TILES_SOUND_READY, "sweep didn't switch at once");
+    tiles_audio_engine_sound_use(0u);
+    for (uint32_t i = 0; i < 50u; i++) {
+        (void)tiles_audio_engine_service(UINT32_MAX);
+    }
+    CHECK(slots_hold("growl"), "growl went while its voice still faded");
+    note(0u, false);
+    (void)loudness(960u); /* the fade */
+    for (uint32_t i = 0; i < 10000u && !slots_hold("sweep"); i++) {
+        (void)tiles_audio_engine_service(UINT32_MAX);
+    }
+    for (uint32_t i = 0; i < 10000u && slots_hold("+"); i++) {
+        (void)tiles_audio_engine_service(UINT32_MAX);
+    }
+    CHECK(slots_hold("sweep") && !slots_hold("growl"), "sweep built in growl's place");
+    note(0u, true);
+    CHECK(loudness(4800u) > 1e-3f, "sweep is silent");
+    note(0u, false);
+
+    /* The bench builds its bank when there is room, and says 0 when not. */
+    CHECK(tiles_audio_engine_bench(ORGAN, 480u, fake_cycles) == 0u, "the bench found room that isn't there");
+    tiles_audio_engine_set_patch(1u, 6u); /* pluck: fold is free */
+    CHECK(tiles_audio_engine_bench(ORGAN, 480u, fake_cycles) > 0u && slots_hold("organ"), "the bench on organ");
+    char slots[64];
+    tiles_audio_engine_wt_slots(slots, sizeof(slots));
+    printf("  swapping: built while playing, refused when full, old bank kept until its voices end (%s)\n", slots);
+}
+
 int main(void) {
     test_round_trip();
     test_store();
+    test_swapping();
     if (s_failures != 0) {
         printf("test_presets: %d failure(s)\n", s_failures);
         return 1;

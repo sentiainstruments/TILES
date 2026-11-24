@@ -80,14 +80,14 @@ The presets above can't all be made today. In order of what they unlock:
 3. **Wavetable engine additions**, cheap ones first:
    - noise, a sub, a second LFO, unison up to 7: built 2026-11-23
      (`synth-engines.md`, "Wavetable extras"; *super* costs 418 cycles);
-   - more wavetables: banks kept in flash and copied into RAM when a
-     track's sound needs them (each bank is 38 KB in RAM today; 3 fit).
-     Growls, vowels and EDM leads want more than our 24 frames.
+   - more wavetables: built 2026-11-23, nine banks (talk, growl, fold,
+     bits, sweep and organ added), built into one of 4 RAM slots when a
+     track's sound needs one (`synth-engines.md`, "Wavetable library").
 4. **The drum synth** (planned): kicks for rumble and hard techno.
 5. **A formant (vowel) filter** for talking and growling basses.
 
-RAM was the limit for 3 and 5: ~103 KB is free since the effects went
-to 24 kHz and Song mode was removed (2026-11-23).
+RAM was the limit for 3 and 5: ~55 KB is free with the wavetable
+library's fourth slot (2026-11-23).
 
 ## How a preset is made
 

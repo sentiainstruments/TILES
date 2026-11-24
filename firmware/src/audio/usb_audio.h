@@ -35,14 +35,20 @@ void tiles_usb_audio_midi(uint8_t status, uint8_t data1, uint8_t data2);
 void tiles_usb_audio_drum_hit(uint8_t slot, uint8_t velocity);
 
 /* A track's sound (0-3, preset slot 0-95, presets.h), in order with the
- * notes around it: core 0 copies the preset, core 1 switches. False
- * outside standalone mode, for an empty slot, or while the track's last
- * change is still to be switched to. */
+ * notes around it: core 0 copies the preset, core 1 switches; a sound
+ * whose wavetable bank isn't in RAM switches once it is built (~0.3 s,
+ * tiles_audio_engine_sound_load()). False outside standalone mode, for an
+ * empty slot, while the track's last change is still to be switched to,
+ * or when the other tracks' sounds hold every wavetable slot. */
 bool tiles_usb_audio_set_patch(uint8_t track, uint8_t slot);
 /* A DX7 voice (unpacked) as a track's sound, the same way; false outside
  * standalone mode or while the track's last one is still being switched
  * to. */
 bool tiles_usb_audio_set_fm_voice(uint8_t track, const uint8_t voice[155], const char *name);
+
+/* Core 0, every main-loop pass: builds wavetable banks a slice at a time
+ * (~0.4 ms) and switches the tracks whose sound's bank is ready. */
+void tiles_usb_audio_service(void);
 
 /* The tempo the synced LFOs follow; the main loop passes it on. */
 void tiles_usb_audio_set_tempo(float beats_per_minute);

@@ -44,6 +44,26 @@ typedef void (*tiles_wt_design_fn)(void *ctx, uint32_t frame, tiles_wt_spectrum_
 void tiles_wt_build(tiles_wt_bank_t *bank, tiles_wt_design_fn design, void *ctx, tiles_wt_spectrum_t *spectrum,
                     float *scratch);
 
+/* The same build a step at a time (a frame's design, or one level of it;
+ * twice over: the bank's peak is measured first), so it can run between
+ * other work;
+ * `spectrum` and `scratch` are the builder's until it is done. */
+typedef struct {
+    tiles_wt_bank_t *bank;
+    tiles_wt_design_fn design;
+    void *ctx;
+    tiles_wt_spectrum_t *spectrum;
+    float *scratch;
+    float peak;
+    float frame_gain[TILES_WT_FRAMES];
+    uint8_t pass, frame, level; /* level 0: the design, then 1 + each level */
+} tiles_wt_builder_t;
+
+void tiles_wt_build_begin(tiles_wt_builder_t *b, tiles_wt_bank_t *bank, tiles_wt_design_fn design, void *ctx,
+                          tiles_wt_spectrum_t *spectrum, float *scratch);
+/* True once the bank is built. */
+bool tiles_wt_build_step(tiles_wt_builder_t *b);
+
 /* The spectrum of one cycle of a waveform drawn in time: TILES_WT_FFT_MAX
  * samples in `scratch`'s first half (the rest is working space). */
 void tiles_wt_analyze(float *scratch, tiles_wt_spectrum_t *spectrum);
@@ -75,11 +95,21 @@ static inline uint32_t tiles_wt_level_bits(uint32_t level) {
     return g_wt_level_bits[level];
 }
 
-/* The factory banks (audio/wavetable_banks.c). */
+/* The library (audio/wavetable_banks.c): a preset names its bank by this
+ * number, so they never move. Only TILES_WT_SLOTS are in RAM at once
+ * (audio_engine.c builds the others when a sound needs them). */
 enum {
     TILES_WT_BANK_CLASSIC = 0, /* sine, triangle, saw, square, pulses: subtractive */
     TILES_WT_BANK_GLASS,       /* sine to glassy organ partials: bells, airy pads */
     TILES_WT_BANK_VOICE,       /* vowels and digital sync sweeps: choirs, growls */
+    TILES_WT_BANK_TALK,        /* eight vowels set for bass notes, closed to open: talking basses */
+    TILES_WT_BANK_GROWL,       /* phase modulation, gentle to harsh: growls, metallic leads */
+    TILES_WT_BANK_FOLD,        /* a sine folded harder and harder: grit, hard techno */
+    TILES_WT_BANK_BITS,        /* a sine at fewer steps and levels: digital, lo-fi */
+    TILES_WT_BANK_SWEEP,       /* a saw through a resonant low-pass, closed to open */
+    TILES_WT_BANK_ORGAN,       /* drawbar registrations, soft to full: keys, organ stabs */
     TILES_WT_BANK_COUNT,
 };
+#define TILES_WT_NAME_MAX 7u
 void tiles_wt_design(uint32_t bank, uint32_t frame, tiles_wt_spectrum_t *spectrum, float *scratch);
+const char *tiles_wt_bank_name(uint32_t bank);

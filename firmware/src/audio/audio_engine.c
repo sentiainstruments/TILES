@@ -79,13 +79,30 @@ static tiles_sound_t s_bench_sound;
 static held_note_t s_mono_held[TILES_AUDIO_TRACKS][MONO_STACK];
 static uint8_t s_mono_count[TILES_AUDIO_TRACKS];
 
-/* The wavetables, built once at init (TILES_WT_BANK_*) with the effects'
- * memory as working space. */
-static tiles_wt_bank_t s_banks[TILES_WT_BANK_COUNT];
-static float *s_build_scratch;
+/* The wavetables in RAM: slot 0 the classic bank for good (the sub reads
+ * it), the others whichever library banks sounds want (TILES_WT_BANK_*).
+ * s_ctx.banks[] points at a bank's slot, NULL while it is in none. Core 0
+ * builds into an unhooked slot a step at a time (service()); a slot is
+ * emptied only once no sound wants its bank, no voice plays it and core 1
+ * isn't mid-render with its pointer. */
 static synth_context_t s_ctx;
-_Static_assert(TILES_WT_SCRATCH_FLOATS * sizeof(float) + sizeof(tiles_wt_spectrum_t) <= TILES_FX_MEMORY_BYTES,
-               "the wavetable build fits the effects' memory");
+static tiles_wt_bank_t s_slots[TILES_AUDIO_WT_SLOTS];
+static int8_t s_slot_bank[TILES_AUDIO_WT_SLOTS]; /* -1: empty */
+static uint32_t s_slot_used[TILES_AUDIO_WT_SLOTS]; /* when a sound last wanted it: the oldest goes first */
+static uint32_t s_use_clock;
+static float s_build_scratch[TILES_WT_SCRATCH_FLOATS];
+static tiles_wt_spectrum_t s_build_spectrum;
+static struct {
+    tiles_wt_builder_t b;
+    int8_t slot, bank;     /* building (slot -1: not) */
+    int8_t retire;         /* a slot being emptied (-1: none): its bank unhooked, */
+    uint32_t retire_seq;   /* core 1 mid-render then */
+    uint32_t start_us, step_us, last_ms;
+} s_build = {.slot = -1, .retire = -1};
+static volatile uint32_t s_render_seq; /* core 1: renders finished */
+static volatile bool s_rendering;
+static bool s_sound_waiting[TILES_AUDIO_TRACKS]; /* the free sound is loaded, its bank isn't in RAM yet */
+static int8_t s_want_also = -1; /* a bank wanted besides the tracks' (the bench, filling at init) */
 
 /* Each track's effects (its sound's, changed by a track setting), their
  * insert state, and its block before it is mixed. */
@@ -218,6 +235,199 @@ TILES_AUDIO_COLD static void design(void *ctx, uint32_t frame, tiles_wt_spectrum
     tiles_wt_design(((const design_ctx_t *)ctx)->bank, frame, spectrum, s_build_scratch);
 }
 
+/* The bank a sound reads (-1: none, an FM or tape sound). */
+static int32_t sound_bank(const synth_patch_t *p) {
+    if (p == NULL || p->engine == SYNTH_ENGINE_FM ||
+        (p->engine == SYNTH_ENGINE_GRAIN && p->grain != NULL && p->grain->source == TILES_GRAIN_SRC_TAPE)) {
+        return -1;
+    }
+    return p->bank < TILES_WT_BANK_COUNT ? (int32_t)p->bank : 0;
+}
+
+static uint32_t bank_bit(const synth_patch_t *p) {
+    int32_t b = sound_bank(p);
+    return b >= 0 ? 1u << b : 0u;
+}
+
+static bool resident(int32_t bank) {
+    return bank < 0 || __atomic_load_n(&s_ctx.banks[bank], __ATOMIC_ACQUIRE) != NULL;
+}
+
+/* Banks the tracks' sounds want (current, waiting to switch, loaded but
+ * not yet switched to) and the bench's, but `skip`'s. */
+TILES_AUDIO_COLD static uint32_t wanted(int32_t skip) {
+    uint32_t m = s_want_also >= 0 ? 1u << s_want_also : 0u;
+    for (uint32_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
+        if ((int32_t)t == skip) {
+            continue;
+        }
+        m |= bank_bit(__atomic_load_n(&s_track_sound[t], __ATOMIC_ACQUIRE));
+        if (s_sound_waiting[t] || __atomic_load_n(&s_sound_pending[t], __ATOMIC_ACQUIRE)) {
+            m |= bank_bit(&s_sound[t][s_sound_next[t]].patch);
+        }
+    }
+    return m;
+}
+
+/* Banks voices are reading (core 0 looks at core 1's voices: a voice only
+ * starts on a track's current sound, so a bank no sound wants only
+ * leaves this set). */
+TILES_AUDIO_COLD static uint32_t playing(void) {
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
+        if (__atomic_load_n(&s_voice[i].state, __ATOMIC_ACQUIRE) != VOICE_OFF) {
+            m |= bank_bit(__atomic_load_n(&s_voice[i].patch, __ATOMIC_ACQUIRE));
+        }
+    }
+    return m;
+}
+
+static uint32_t others(uint32_t banks) {
+    return (uint32_t)__builtin_popcount(banks & ~(1u << TILES_WT_BANK_CLASSIC));
+}
+
+static void slot_touch(int32_t bank) {
+    for (uint32_t s = 0; bank >= 0 && s < TILES_AUDIO_WT_SLOTS; s++) {
+        if (s_slot_bank[s] == bank) {
+            s_slot_used[s] = ++s_use_clock;
+        }
+    }
+}
+
+static uint32_t elapsed_us(uint32_t since) {
+    return s_now_us != NULL ? s_now_us() - since : 0u;
+}
+
+TILES_AUDIO_COLD static void build_begin(int32_t slot, int32_t bank) {
+    static design_ctx_t ctx;
+    ctx.bank = (uint32_t)bank;
+    s_build.slot = (int8_t)slot;
+    s_build.bank = (int8_t)bank;
+    s_build.start_us = s_now_us != NULL ? s_now_us() : 0u;
+    s_build.step_us = 0u;
+    tiles_wt_build_begin(&s_build.b, &s_slots[slot], design, &ctx, &s_build_spectrum, s_build_scratch);
+}
+
+/* Starts making room for a wanted bank: an empty slot builds at once; else
+ * the slot whose bank was wanted longest ago, once nothing plays it, is
+ * unhooked and emptied when core 1 is past it. */
+TILES_AUDIO_COLD static void build_next(void) {
+    uint32_t want = wanted(-1), busy = want | playing();
+    int32_t bank = -1;
+    for (int32_t b = 0; b < (int32_t)TILES_WT_BANK_COUNT && bank < 0; b++) {
+        bank = (want >> b) & 1u && !resident(b) ? b : -1;
+    }
+    if (bank < 0) {
+        return;
+    }
+    int32_t victim = -1;
+    for (uint32_t s = 1; s < TILES_AUDIO_WT_SLOTS; s++) {
+        if (s_slot_bank[s] < 0) {
+            build_begin((int32_t)s, bank);
+            return;
+        }
+        if (!((busy >> s_slot_bank[s]) & 1u) && (victim < 0 || s_slot_used[s] < s_slot_used[victim])) {
+            victim = (int32_t)s;
+        }
+    }
+    if (victim < 0) {
+        return; /* the voices of the bank going still fade: next pass */
+    }
+    __atomic_store_n(&s_ctx.banks[s_slot_bank[victim]], NULL, __ATOMIC_SEQ_CST);
+    s_build.retire = (int8_t)victim;
+    s_build.retire_seq = __atomic_load_n(&s_render_seq, __ATOMIC_SEQ_CST);
+    if (!__atomic_load_n(&s_rendering, __ATOMIC_SEQ_CST)) {
+        s_slot_bank[victim] = -1; /* core 1 isn't rendering: its next render reads NULL */
+        s_build.retire = -1;
+        build_begin(victim, bank);
+    }
+}
+
+TILES_AUDIO_COLD uint8_t tiles_audio_engine_service(uint32_t budget_us) {
+    if (s_build.retire >= 0) {
+        if (!__atomic_load_n(&s_rendering, __ATOMIC_SEQ_CST) ||
+            __atomic_load_n(&s_render_seq, __ATOMIC_SEQ_CST) != s_build.retire_seq) {
+            s_slot_bank[s_build.retire] = -1;
+            s_build.retire = -1;
+            build_next();
+        }
+    } else if (s_build.slot < 0) {
+        build_next();
+    }
+    if (s_build.slot >= 0) {
+        uint32_t t0 = s_now_us != NULL ? s_now_us() : 0u;
+        bool done = false;
+        do {
+            uint32_t s0 = s_now_us != NULL ? s_now_us() : 0u;
+            done = tiles_wt_build_step(&s_build.b);
+            uint32_t took = elapsed_us(s0);
+            s_build.step_us = took > s_build.step_us ? took : s_build.step_us;
+        } while (!done && elapsed_us(t0) < budget_us);
+        if (done) {
+            int32_t slot = s_build.slot;
+            s_slot_bank[slot] = s_build.bank;
+            s_slot_used[slot] = ++s_use_clock;
+            __atomic_store_n(&s_ctx.banks[s_build.bank], &s_slots[slot], __ATOMIC_SEQ_CST);
+            s_build.last_ms = elapsed_us(s_build.start_us) / 1000u;
+            s_build.slot = -1;
+        }
+    }
+    uint8_t ready = 0;
+    for (uint32_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
+        if (s_sound_waiting[t] && resident(sound_bank(&s_sound[t][s_sound_next[t]].patch))) {
+            s_sound_waiting[t] = false;
+            __atomic_store_n(&s_sound_pending[t], true, __ATOMIC_RELEASE);
+            ready |= (uint8_t)(1u << t);
+        }
+    }
+    return ready;
+}
+
+/* Builds until every wanted bank is in RAM: at init, on the computer, for
+ * the bench (core 1 may be rendering: up to 1 s). */
+TILES_AUDIO_COLD static void build_all_now(void) {
+    uint32_t t0 = s_now_us != NULL ? s_now_us() : 0u;
+    for (uint32_t i = 0; i < 100000u && elapsed_us(t0) < 1000000u; i++) {
+        uint32_t want = wanted(-1);
+        bool all = s_build.slot < 0 && s_build.retire < 0;
+        for (int32_t b = 0; all && b < (int32_t)TILES_WT_BANK_COUNT; b++) {
+            all = !((want >> b) & 1u) || resident(b);
+        }
+        if (all) {
+            return;
+        }
+        (void)tiles_audio_engine_service(UINT32_MAX);
+    }
+}
+
+TILES_AUDIO_COLD void tiles_audio_engine_wt_slots(char *out, uint32_t size) {
+    uint32_t n = 0;
+    out[0] = '\0';
+    for (uint32_t s = 0; s < TILES_AUDIO_WT_SLOTS && n + TILES_WT_NAME_MAX + 3u < size; s++) {
+        const char *name = s_build.slot == (int8_t)s ? tiles_wt_bank_name((uint32_t)s_build.bank)
+                           : s_slot_bank[s] >= 0    ? tiles_wt_bank_name((uint32_t)s_slot_bank[s])
+                                                    : "-";
+        if (s > 0u) {
+            out[n++] = ',';
+        }
+        if (s_build.slot == (int8_t)s) {
+            out[n++] = '+';
+        }
+        for (const char *c = name; *c != '\0'; c++) {
+            out[n++] = *c;
+        }
+        out[n] = '\0';
+    }
+}
+
+uint32_t tiles_audio_engine_wt_build_ms(void) {
+    return s_build.last_ms;
+}
+
+uint32_t tiles_audio_engine_wt_step_us(void) {
+    return s_build.step_us;
+}
+
 /* A patch's cost before it has been measured, cycles per voice-sample,
  * from SYNTH BENCH on unit 2 (2026-11-14), then learned live. */
 TILES_AUDIO_COLD static float patch_cost(const synth_patch_t *p) {
@@ -246,13 +456,11 @@ TILES_AUDIO_COLD static float patch_cost(const synth_patch_t *p) {
 TILES_AUDIO_COLD void tiles_audio_engine_init(uint8_t bend_range_semitones, uint32_t clk_mhz, uint32_t (*now_us)(void)) {
     static bool built;
     if (!built) {
-        s_build_scratch = (float *)tiles_fx_memory();
-        tiles_wt_spectrum_t *spectrum = (tiles_wt_spectrum_t *)(s_build_scratch + TILES_WT_SCRATCH_FLOATS);
-        for (uint32_t b = 0; b < TILES_WT_BANK_COUNT; b++) {
-            design_ctx_t ctx = {b};
-            tiles_wt_build(&s_banks[b], design, &ctx, spectrum, s_build_scratch);
-            s_ctx.banks[b] = &s_banks[b];
-        }
+        memset(s_slot_bank, -1, sizeof(s_slot_bank));
+        design_ctx_t ctx = {TILES_WT_BANK_CLASSIC};
+        tiles_wt_build(&s_slots[0], design, &ctx, &s_build_spectrum, s_build_scratch);
+        s_slot_bank[0] = TILES_WT_BANK_CLASSIC;
+        s_ctx.banks[TILES_WT_BANK_CLASSIC] = &s_slots[0];
         tiles_fm_init();
         built = true;
     }
@@ -284,7 +492,22 @@ TILES_AUDIO_COLD void tiles_audio_engine_init(uint8_t bend_range_semitones, uint
         s_cost[t] = patch_cost(s_track_sound[t]);
         s_track_fx[t] = s_track_sound[t]->fx;
         tiles_fx_insert_reset(&s_insert[t]);
+        s_sound_waiting[t] = false;
     }
+    /* The tracks' banks, then the library in order into what is left. */
+    build_all_now();
+    for (int32_t b = 1; b < (int32_t)TILES_WT_BANK_COUNT; b++) {
+        bool empty = false;
+        for (uint32_t s = 1; s < TILES_AUDIO_WT_SLOTS; s++) {
+            empty |= s_slot_bank[s] < 0;
+        }
+        if (!empty) {
+            break;
+        }
+        s_want_also = (int8_t)b;
+        build_all_now();
+    }
+    s_want_also = -1;
     s_over_blocks = 0;
     s_load = 0.0f;
     s_shed = 0;
@@ -341,14 +564,37 @@ TILES_AUDIO_COLD static tiles_sound_t *free_sound(uint8_t track) {
     return &s_sound[track][s_sound_next[track]];
 }
 
-TILES_AUDIO_COLD bool tiles_audio_engine_sound_load(uint8_t track, uint8_t slot) {
+TILES_AUDIO_COLD tiles_sound_load_t tiles_audio_engine_sound_load(uint8_t track, uint8_t slot) {
     tiles_sound_t *s = free_sound(track);
-    if (s == NULL || !tiles_preset_get(slot, s)) {
-        return false;
+    if (s == NULL) {
+        return TILES_SOUND_REFUSED;
+    }
+    s_sound_waiting[track] = false;
+    if (slot == s_track_patch[track]) {
+        return TILES_SOUND_CURRENT;
+    }
+    if (!tiles_preset_get(slot, s)) {
+        return TILES_SOUND_REFUSED;
     }
     s_sound_slot[track] = slot;
+    int32_t b = sound_bank(&s->patch);
+    slot_touch(b);
+    if (resident(b)) {
+        __atomic_store_n(&s_sound_pending[track], true, __ATOMIC_RELEASE);
+        return TILES_SOUND_READY;
+    }
+    uint32_t rest = wanted((int32_t)track) | (1u << b);
+    if (others(rest) >= TILES_AUDIO_WT_SLOTS) {
+        return TILES_SOUND_REFUSED; /* the other tracks hold every slot */
+    }
+    if (others(rest | bank_bit(s_track_sound[track])) < TILES_AUDIO_WT_SLOTS) {
+        s_sound_waiting[track] = true; /* the old sound plays on until the bank is built */
+        return TILES_SOUND_BUILDING;
+    }
+    /* Only the old sound's own bank can make room: switch now, silent
+     * until the new bank is built. */
     __atomic_store_n(&s_sound_pending[track], true, __ATOMIC_RELEASE);
-    return true;
+    return TILES_SOUND_READY;
 }
 
 TILES_AUDIO_COLD bool tiles_audio_engine_fm_load(uint8_t track, const uint8_t voice[TILES_DX7_VOICE_BYTES],
@@ -357,6 +603,7 @@ TILES_AUDIO_COLD bool tiles_audio_engine_fm_load(uint8_t track, const uint8_t vo
     if (s == NULL) {
         return false;
     }
+    s_sound_waiting[track] = false;
     memset(s, 0, sizeof(*s));
     memcpy(s->fm.dx7, voice, TILES_DX7_VOICE_BYTES);
     s->fm.pressure_db = 9.0f; /* as the factory FM sounds: brighter with pressure and slide */
@@ -389,7 +636,17 @@ TILES_AUDIO_COLD void tiles_audio_engine_sound_use(uint8_t track) {
 }
 
 TILES_AUDIO_COLD void tiles_audio_engine_set_patch(uint8_t track, uint8_t slot) {
-    if (track < TILES_AUDIO_TRACKS && s_track_patch[track] != slot && tiles_audio_engine_sound_load(track, slot)) {
+    tiles_sound_load_t r = tiles_audio_engine_sound_load(track, slot);
+    if (r == TILES_SOUND_READY) {
+        tiles_audio_engine_sound_use(track);
+        for (uint32_t i = 0; i < TILES_AUDIO_VOICES; i++) {
+            if (s_voice[i].track == track && s_voice[i].state != VOICE_OFF) {
+                s_voice[i].state = VOICE_OFF; /* no render here to fade them: their bank may go */
+            }
+        }
+    }
+    if (r == TILES_SOUND_READY || r == TILES_SOUND_BUILDING) {
+        build_all_now();
         tiles_audio_engine_sound_use(track);
     }
 }
@@ -496,6 +753,12 @@ TILES_AUDIO_COLD uint32_t tiles_audio_engine_bench(uint8_t slot, uint32_t frames
         return 0u;
     }
     const synth_patch_t *p = &s_bench_sound.patch;
+    s_want_also = (int8_t)sound_bank(p);
+    build_all_now();
+    if (!resident(sound_bank(p))) {
+        s_want_also = -1;
+        return 0u; /* the tracks hold every slot */
+    }
     voice_t v;
     memset(&v, 0, sizeof(v));
     v.patch = p;
@@ -529,6 +792,7 @@ TILES_AUDIO_COLD uint32_t tiles_audio_engine_bench(uint8_t slot, uint32_t frames
         total += cycles() - t0;
         done += BLOCK_FRAMES;
     }
+    s_want_also = -1;
     return (uint32_t)(total / done);
 }
 
@@ -554,7 +818,7 @@ uint8_t tiles_audio_engine_track(uint8_t channel, bool *from_lane) {
         return 3u;
     case TILES_MIDI_CH_DRUMS:
         return TILES_AUDIO_TRACK_DRUMS;
-    default: /* the MPE master and pool: melodic, Duet's melody, bass, Song */
+    default: /* the MPE master and pool: melodic, Duet's melody, bass */
         return 1u;
     }
 }
@@ -1070,6 +1334,7 @@ uint32_t tiles_audio_engine_tape_frames(void) {
 }
 
 void tiles_audio_engine_render(int32_t *out_lr, uint32_t frames) {
+    __atomic_store_n(&s_rendering, true, __ATOMIC_SEQ_CST); /* before any bank pointer is read */
     tape_service();
     while (frames > 0u) {
         uint32_t n = frames < BLOCK_FRAMES ? frames : BLOCK_FRAMES;
@@ -1077,6 +1342,8 @@ void tiles_audio_engine_render(int32_t *out_lr, uint32_t frames) {
         out_lr += 2u * n;
         frames -= n;
     }
+    __atomic_store_n(&s_render_seq, s_render_seq + 1u, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&s_rendering, false, __ATOMIC_SEQ_CST);
 }
 
 /* Counts leave out voices being cut (a 5 ms fade): they gave way already. */

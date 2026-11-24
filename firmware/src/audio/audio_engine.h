@@ -27,8 +27,14 @@
 #define TILES_AUDIO_CEILING_PCT 90u
 #define TILES_AUDIO_RESERVE_CYCLES 1050u
 
-/* Builds the wavetables (~0.15 s, the first time, in the effects' memory:
- * fx_memory.h) and clears the effects; call once before anything else. bend_range is the
+/* Wavetable banks in RAM at once (38 KB each): slot 1 always the classic
+ * bank, the others any of the library's (wavetable.h), built on core 0 when
+ * a sound needs one (tiles_audio_engine_service()). Every track's sound
+ * fits while the four want at most this many - 1 banks besides classic. */
+#define TILES_AUDIO_WT_SLOTS 4u
+
+/* Builds the wavetables the tracks' sounds need and fills the other slots
+ * (~50 ms a bank, the first time) and clears the effects; call once before anything else. bend_range is the
  * semitones a full pitch bend means (what TILES announces to receivers).
  * clk_mhz sets the budget; now_us (NULL: none) times each track's voices
  * live, to learn their cost and run the load guard. */
@@ -53,7 +59,7 @@ uint8_t tiles_audio_engine_active_voices(void);
 
 /* The track a channel plays on (0-3, or TILES_AUDIO_TRACK_DRUMS) and
  * whether it is a sequencer lane's: lane N is track N; melodic, Duet's
- * melody, bass guitar and Song share lane 2's track, chords lane 3's, the
+ * melody and bass guitar share lane 2's track, chords lane 3's, the
  * physics modes lane 4's. */
 uint8_t tiles_audio_engine_track(uint8_t channel, bool *from_lane);
 
@@ -78,14 +84,32 @@ typedef struct {
 tiles_audio_master_t tiles_audio_engine_master(void);
 
 /* Each track's sound, in two steps: core 0 copies preset `slot` (presets.h)
- * into the track's free sound (false while the last one is still to be
- * switched to, or the slot is empty), then core 1 switches the track to it
+ * into the track's free sound, then core 1 switches the track to it
  * (tiles_audio_engine_sound_use(), via usb_audio), the old sound's voices
- * ending in 5 ms. fm_load() fills it with a DX7 voice (unpacked, fm_voice.h)
- * instead. set_patch() does both at once: on the computer, and before
- * core 1 runs. */
-bool tiles_audio_engine_sound_load(uint8_t track, uint8_t slot);
+ * ending in 5 ms. A sound whose wavetable bank isn't in RAM waits for it
+ * (BUILDING: the track plays its old sound meanwhile, and
+ * tiles_audio_engine_service() says when to switch), or, when the only
+ * room is the old sound's own bank, switches at once and stays silent
+ * until its bank is built (~0.3 s). fm_load() fills it with a DX7 voice
+ * (unpacked, fm_voice.h) instead. set_patch() does it all at once: on the
+ * computer, and before core 1 runs. */
+typedef enum {
+    TILES_SOUND_REFUSED = 0, /* an empty slot, the last one still to be switched to, or no room for its bank */
+    TILES_SOUND_READY,       /* switch to it now */
+    TILES_SOUND_BUILDING,    /* its bank is being built: switch when service() says */
+    TILES_SOUND_CURRENT,     /* the track plays it already (a waiting one is dropped) */
+} tiles_sound_load_t;
+tiles_sound_load_t tiles_audio_engine_sound_load(uint8_t track, uint8_t slot);
 bool tiles_audio_engine_fm_load(uint8_t track, const uint8_t voice[155], const char *name);
+/* Core 0, every pass: builds the banks sounds want, a step at a time for
+ * about `budget_us` (at least one step); a bit set for each track whose
+ * waiting sound is now ready to switch to. */
+uint8_t tiles_audio_engine_service(uint32_t budget_us);
+/* The slots' banks ("classic,glass,-,+talk": - empty, + being built); the
+ * last bank built: its time, and its longest single step. */
+void tiles_audio_engine_wt_slots(char *out, uint32_t size);
+uint32_t tiles_audio_engine_wt_build_ms(void);
+uint32_t tiles_audio_engine_wt_step_us(void);
 void tiles_audio_engine_sound_use(uint8_t track);
 void tiles_audio_engine_set_patch(uint8_t track, uint8_t slot);
 /* tiles_audio_engine_patch() for a track playing a bank voice. */

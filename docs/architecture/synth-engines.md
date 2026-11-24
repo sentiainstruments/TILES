@@ -71,7 +71,8 @@ Each from a public paper, book or open project, written fresh for TILES.
 - `wavetable.c/.h`, `wavetable_banks.c`: the mip-mapped banks, 8 frames
   each: CLASSIC (sine, triangle, soft saw, saw, square, pulses 30/15/7 %),
   GLASS (sine to glassy partials), VOICE (four vowels, four hard-sync
-  sweeps). 38 KB each in RAM, frames interleaved.
+  sweeps). 38 KB each in RAM, frames interleaved. Six more since, and
+  only four in RAM at once ("Wavetable library").
 - `synth_voice.c/.h`, `synth_patches.c`: the voice and 13 factory sounds:
   acid, pluck, haze, glass, reese, hoover, stab, wobble, air, choir, sub,
   lead, pure.
@@ -229,6 +230,56 @@ sub, noise, drive) 209, *throb* (glass, LFO 2 tremolo in eighths) 198;
 sounds without the extras within ~3 % of before (the LFO 2 checks are
 worked out once a note). New factory sounds in the empty slots: rumble
 (basses), super (plucks and leads), throb (bells).
+
+## Wavetable library (built 2026-11-23)
+
+Nine banks a preset can name, 8 frames each, dark to bright (or, for
+talk, closed to open) so pressure sweeping the wave opens the sound:
+
+| # | Bank | Frames |
+|---|---|---|
+| 0 | classic | sine, triangle, soft saw, saw, square, pulses 30/15/7 % |
+| 1 | glass | sine to glassy organ partials |
+| 2 | voice | four vowels as sung at C3, four hard-sync sweeps |
+| 3 | talk | eight vowels (oo oh aw ah ae eh ih ee) as spoken at C2, narrow peaks: talking basses |
+| 4 | growl | phase modulation, gentle to harsh (ratios 1-3, index 0.6-4, a second modulator): growls, metal leads |
+| 5 | fold | a sine folded harder and harder (gain 1 to 7.2, a bias for even harmonics past frame 4): grit |
+| 6 | bits | a sine held at 64 down to 6 steps a cycle and rounded to 24 down to 2 levels: digital, lo-fi |
+| 7 | sweep | a saw through a resonant 4-pole low-pass at harmonic 2 to 70: a filter sweep in the wave, no filter cost |
+| 8 | organ | drawbar registrations (8' to 1', 3 dB a step), flute to full |
+
+Designs are code, ours (spectra, or one cycle drawn and analysed); a
+bank's number never moves, so a preset keeps its sound. The renders on
+2026-11-23 (pluck opened up, pressure through the frames) come out at
+the same loudness, -24 dBFS.
+
+**Only 4 banks are in RAM** (`TILES_AUDIO_WT_SLOTS`, 38 KB each): slot 1
+is classic for good (the sub reads it), the other three hold whatever
+the tracks' sounds want, built on core 0 when one is needed, a step at
+a time (a frame's design, or one mip level of it) for ~0.4 ms each main
+loop pass:
+
+- **A sound on a bank not in RAM waits for it** (`tiles_audio_engine_sound_load()`
+  says BUILDING): the track plays its old sound until the bank is ready,
+  then switches; the sound menu previews it then. Unit 2: 0.10-0.16 s
+  from the pick (44 ms of work), the longest step 1.3-1.8 ms.
+- **The bank to go** is the one wanted longest ago that no track's sound
+  wants and no voice plays. Its pointer is unhooked first, and its slot
+  rewritten only once core 1 is past any render that could hold it, so
+  no voice ever reads a half-built bank.
+- **When the only room is the track's own old bank** the track switches
+  at once and is silent until the new one is built.
+- **When the other three tracks hold every slot** (three different banks
+  besides classic) the sound is refused: the sound menu leaves the track
+  as it was, `SYNTH PATCH` answers `ERR busy`.
+- At boot the tracks' banks are built, then the library in order fills
+  the empty slots (classic, glass, voice, talk with the factory tracks).
+- INFO `audio.wt` lists the slots (`+` building), `audio.wt_build` the
+  last build's time and longest step.
+
+Unit 2, 2026-11-23: a pad held on track 3 while track 1 swapped through
+all six new banks (7 builds): no gap, no click, no underrun. A fifth slot
+(38 KB) would make every combination of four tracks fit.
 
 ## Granular (built 2026-11-21)
 

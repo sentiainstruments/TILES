@@ -488,6 +488,7 @@ void TILES_AUDIO_HOT(synth_voice_render)(synth_voice_t *v, const synth_context_t
     const synth_patch_t *p = v->patch;
     const tiles_wt_bank_t *bank = ctx->banks[p->bank < TILES_WT_BANK_COUNT ? p->bank : 0u];
     if (bank == NULL) {
+        v->amp.stage = SYNTH_ENV_IDLE; /* its bank isn't in RAM (yet): the voice ends */
         return;
     }
     const uint32_t copies = copies_of(p);

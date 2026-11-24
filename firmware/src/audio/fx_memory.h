@@ -1,10 +1,9 @@
 #pragma once
 
 /* One RAM area for the effects' delay lines (audio/fx.c), the biggest user
- * of memory on the board. Two others use it when the effects don't: the
- * wavetable build at boot, before core 1 starts, and the pad capture
- * (diagnostics/capture.c), which borrows it while the delay and reverb go
- * quiet, and gives it back on CAPTURE RELEASE. */
+ * of memory on the board. The pad capture (diagnostics/capture.c) borrows
+ * it while the delay and reverb go quiet, and gives it back on CAPTURE
+ * RELEASE; the granular tape borrows the delay's line (audio_engine.c). */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -13,7 +12,7 @@
  * and the ensemble (4,096). */
 #define TILES_FX_MEMORY_BYTES 93072u
 
-/* The area, for the effects and the boot-time wavetable build. */
+/* The area. */
 void *tiles_fx_memory(void);
 
 /* Core 1, once its effects run: from then on a borrow waits for it. */

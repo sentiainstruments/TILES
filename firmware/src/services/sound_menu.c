@@ -18,6 +18,8 @@
 #define PICK_DEPTH 450.0f
 #define FULL_DEPTH 900.0f
 #define PREVIEW_MS 600u
+/* A sound whose wavetable is being built previews once it plays (~0.3 s). */
+#define PREVIEW_WAIT_MS 2000u
 #define FX_SEND_MS 20u
 /* A sound that isn't the track's, a level an effect hasn't reached: first
  * guesses. */
@@ -69,10 +71,11 @@ static bool s_prev_touched[ROWS * COLS];
 static bool s_picked[ROWS * COLS]; /* this touch has picked already */
 static bool s_minus_was, s_plus_was;
 static uint8_t s_preview_note;
-static bool s_preview_on;
+static bool s_preview_on, s_preview_wait;
 static uint32_t s_preview_until;
 
 static void preview_off(void) {
+    s_preview_wait = false;
     if (s_preview_on) {
         tiles_usb_audio_midi((uint8_t)(0x80u | k_track_channel[s_track]), s_preview_note, 0u);
         s_preview_on = false;
@@ -128,13 +131,15 @@ static void pick_sound(uint32_t row, uint32_t col, uint32_t now_ms) {
         return;
     }
     preview_off();
-    if ((uint8_t)p != s_patch && tiles_usb_audio_set_patch(s_track, (uint8_t)p)) {
+    if ((uint8_t)p != s_patch) {
+        if (!tiles_usb_audio_set_patch(s_track, (uint8_t)p)) {
+            return; /* no room for its wavetable: the track keeps its sound */
+        }
         s_patch = (uint8_t)p;
     }
     s_preview_note = k_row_preview[row];
-    tiles_usb_audio_midi((uint8_t)(0x90u | k_track_channel[s_track]), s_preview_note, 100u);
-    s_preview_on = true;
-    s_preview_until = now_ms + PREVIEW_MS;
+    s_preview_wait = true;
+    s_preview_until = now_ms + PREVIEW_WAIT_MS;
 }
 
 /* Row 1 (top) is full, row 4 off; pressing deeper adds up to a third more. */
@@ -184,6 +189,16 @@ static void handle_input(uint32_t now_ms) {
                 s_picked[i] = true;
                 pick_sound(row, col, now_ms);
             }
+        }
+    }
+    if (s_preview_wait) {
+        if (tiles_audio_engine_patch(s_track) == s_patch) {
+            s_preview_wait = false;
+            tiles_usb_audio_midi((uint8_t)(0x90u | k_track_channel[s_track]), s_preview_note, 100u);
+            s_preview_on = true;
+            s_preview_until = now_ms + PREVIEW_MS;
+        } else if ((int32_t)(now_ms - s_preview_until) >= 0) {
+            s_preview_wait = false;
         }
     }
     if (s_preview_on && (int32_t)(now_ms - s_preview_until) >= 0) {

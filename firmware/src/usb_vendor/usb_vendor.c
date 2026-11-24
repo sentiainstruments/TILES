@@ -1300,6 +1300,13 @@ static void handle_line(char *line) {
                      tiles_audio_engine_track_name(1), tiles_audio_engine_track_name(2),
                      tiles_audio_engine_track_name(3));
             reply(text);
+            char slots[48];
+            tiles_audio_engine_wt_slots(slots, sizeof(slots));
+            snprintf(text, sizeof(text), "audio.wt=%s", slots);
+            reply(text);
+            snprintf(text, sizeof(text), "audio.wt_build=%lu ms, step %lu us",
+                     (unsigned long)tiles_audio_engine_wt_build_ms(), (unsigned long)tiles_audio_engine_wt_step_us());
+            reply(text);
         }
         tiles_buttons_pca_health_t pca = tiles_buttons_pca_health();
         snprintf(text, sizeof(text), "pca.mode1=%02x,%02x", (unsigned)pca.mode1[0], (unsigned)pca.mode1[1]);

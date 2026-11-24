@@ -383,6 +383,7 @@ int main(void) {
         tiles_midi_clock_scan();
         tiles_usb_audio_set_tempo(60000.0f / tiles_midi_clock_get_ms_per_beat());
         tiles_usb_audio_follow_clock(tiles_midi_clock_is_running(), tiles_midi_clock_song_pulse());
+        tiles_usb_audio_service();
 
         /* Power first among the services: lighting, haptics and CV read it this
          * pass. */

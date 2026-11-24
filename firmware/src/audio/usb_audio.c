@@ -33,6 +33,8 @@
 #define SOUND_WORD 0xF6u /* the track's next sound, filled by core 0 */
 #define FX_WORD 0xF4u
 #define BEAT_WORD 0xF9u
+/* Wavetable building on core 0, per main-loop pass (~0.3 s a bank). */
+#define BUILD_BUDGET_US 400u
 /* Drum slot 1 is the kick: it keys the pump. */
 #define KICK_SLOT 0u
 
@@ -270,26 +272,51 @@ void tiles_usb_audio_midi(uint8_t status, uint8_t data1, uint8_t data2) {
     }
 }
 
+/* Tracks with a sound loaded to switch to whose word didn't fit the ring. */
+static uint8_t s_switch_unsent;
+
+static void switch_to_loaded(uint8_t track) {
+    uint32_t word = SOUND_WORD | ((uint32_t)track << 8);
+    if (!tiles_spsc_push(&s_midi_ring, &word, 1u)) {
+        s_switch_unsent |= (uint8_t)(1u << track); /* service() sends it */
+    }
+}
+
 bool tiles_usb_audio_set_patch(uint8_t track, uint8_t slot) {
     if (!s_started) {
         return false;
     }
-    if (tiles_audio_engine_patch(track) == slot) {
+    switch (tiles_audio_engine_sound_load(track, slot)) {
+    case TILES_SOUND_READY:
+        switch_to_loaded(track);
         return true;
-    }
-    if (tiles_spsc_space(&s_midi_ring) < 1u || !tiles_audio_engine_sound_load(track, slot)) {
+    case TILES_SOUND_BUILDING:
+    case TILES_SOUND_CURRENT:
+        return true;
+    default:
         return false;
     }
-    uint32_t word = SOUND_WORD | ((uint32_t)track << 8);
-    return tiles_spsc_push(&s_midi_ring, &word, 1u); /* room checked: core 0 is the only writer */
 }
 
 bool tiles_usb_audio_set_fm_voice(uint8_t track, const uint8_t voice[155], const char *name) {
-    if (!s_started || tiles_spsc_space(&s_midi_ring) < 1u || !tiles_audio_engine_fm_load(track, voice, name)) {
+    if (!s_started || !tiles_audio_engine_fm_load(track, voice, name)) {
         return false;
     }
-    uint32_t word = SOUND_WORD | ((uint32_t)track << 8);
-    return tiles_spsc_push(&s_midi_ring, &word, 1u); /* room checked: core 0 is the only writer */
+    switch_to_loaded(track);
+    return true;
+}
+
+void tiles_usb_audio_service(void) {
+    if (!s_started) {
+        return;
+    }
+    uint8_t due = (uint8_t)(s_switch_unsent | tiles_audio_engine_service(BUILD_BUDGET_US));
+    s_switch_unsent = 0u;
+    for (uint8_t t = 0; t < TILES_AUDIO_TRACKS; t++) {
+        if ((due >> t) & 1u) {
+            switch_to_loaded(t);
+        }
+    }
 }
 
 void tiles_usb_audio_set_tempo(float beats_per_minute) {

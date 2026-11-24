@@ -55,8 +55,17 @@ static void fft(float *x, uint32_t n, bool inverse) {
     }
     for (uint32_t len = 2; len <= n; len <<= 1) {
         float ang = (inverse ? 2.0f : -2.0f) * PI_F / (float)len;
+        float cs = cosf(ang), sn = sinf(ang), wr = 1.0f, wi = 0.0f;
         for (uint32_t k = 0; k < len / 2; k++) {
-            float wr = cosf(ang * (float)k), wi = sinf(ang * (float)k);
+            /* The twiddle turned a step at a time, exact again every 32. */
+            if ((k & 31u) == 0u) {
+                wr = cosf(ang * (float)k);
+                wi = sinf(ang * (float)k);
+            } else {
+                float t = wr * cs - wi * sn;
+                wi = wr * sn + wi * cs;
+                wr = t;
+            }
             for (uint32_t i = k; i < n; i += len) {
                 uint32_t a = i, b = i + len / 2;
                 float br = x[2 * b] * wr - x[2 * b + 1] * wi;
@@ -103,43 +112,73 @@ static uint32_t synth_level(const tiles_wt_spectrum_t *s, uint32_t level, float 
     return len;
 }
 
-void tiles_wt_build(tiles_wt_bank_t *bank, tiles_wt_design_fn design, void *ctx, tiles_wt_spectrum_t *spectrum,
-                    float *scratch) {
+void tiles_wt_build_begin(tiles_wt_builder_t *b, tiles_wt_bank_t *bank, tiles_wt_design_fn design, void *ctx,
+                          tiles_wt_spectrum_t *spectrum, float *scratch) {
     tiles_wt_init_levels();
-    /* Two passes: the bank's peak sets the 16-bit scale, so measure first. */
-    float peak = 1e-9f;
-    float frame_gain[TILES_WT_FRAMES];
-    for (uint32_t pass = 0; pass < 2u; pass++) {
-        float to_int = 32767.0f / peak;
-        for (uint32_t f = 0; f < TILES_WT_FRAMES; f++) {
-            design(ctx, f, spectrum);
-            if (pass == 0u) {
-                float energy = 0.0f;
-                for (uint32_t h = 0; h < TILES_WT_TOP_HARMONICS; h++) {
-                    energy += spectrum->amp[h] * spectrum->amp[h];
-                }
-                frame_gain[f] = energy > 0.0f ? FRAME_RMS / sqrtf(0.5f * energy) : 0.0f;
-            }
+    memset(b, 0, sizeof(*b));
+    b->bank = bank;
+    b->design = design;
+    b->ctx = ctx;
+    b->spectrum = spectrum;
+    b->scratch = scratch;
+    b->peak = 1e-9f;
+}
+
+bool tiles_wt_build_step(tiles_wt_builder_t *b) {
+    if (b->pass >= 2u) {
+        return true;
+    }
+    const uint32_t f = b->frame;
+    tiles_wt_spectrum_t *spectrum = b->spectrum;
+    if (b->level == 0u) { /* the frame's design: a step of its own (a drawn one costs as much as a level) */
+        b->design(b->ctx, f, spectrum);
+        if (b->pass == 0u) {
+            float energy = 0.0f;
             for (uint32_t h = 0; h < TILES_WT_TOP_HARMONICS; h++) {
-                spectrum->amp[h] *= frame_gain[f];
+                energy += spectrum->amp[h] * spectrum->amp[h];
             }
-            for (uint32_t level = 0; level < TILES_WT_LEVELS; level++) {
-                uint32_t len = synth_level(spectrum, level, scratch);
-                int16_t *dst = &bank->data[tiles_wt_level_offset(level) * TILES_WT_FRAMES + f];
-                for (uint32_t i = 0; i < len; i++) {
-                    float v = scratch[i];
-                    if (pass == 0u) {
-                        float a = fabsf(v);
-                        peak = a > peak ? a : peak;
-                    } else {
-                        dst[i * TILES_WT_FRAMES] = (int16_t)lrintf(v * to_int);
-                    }
-                }
-                if (pass == 1u) {
-                    dst[len * TILES_WT_FRAMES] = dst[0]; /* guard point: interpolation wraps */
-                }
+            b->frame_gain[f] = energy > 0.0f ? FRAME_RMS / sqrtf(0.5f * energy) : 0.0f;
+        }
+        for (uint32_t h = 0; h < TILES_WT_TOP_HARMONICS; h++) {
+            spectrum->amp[h] *= b->frame_gain[f];
+        }
+        b->level = 1u;
+        return false;
+    }
+    const uint32_t level = b->level - 1u;
+    uint32_t len = synth_level(spectrum, level, b->scratch);
+    const float *v = b->scratch;
+    if (b->pass == 0u) {
+        float peak = b->peak;
+        for (uint32_t i = 0; i < len; i++) {
+            float a = fabsf(v[i]);
+            peak = a > peak ? a : peak;
+        }
+        b->peak = peak;
+    } else {
+        const float to_int = 32767.0f / b->peak;
+        int16_t *dst = &b->bank->data[tiles_wt_level_offset(level) * TILES_WT_FRAMES + f];
+        for (uint32_t i = 0; i < len; i++) {
+            dst[i * TILES_WT_FRAMES] = (int16_t)lrintf(v[i] * to_int);
+        }
+        dst[len * TILES_WT_FRAMES] = dst[0]; /* guard point: interpolation wraps */
+    }
+    if (++b->level == TILES_WT_LEVELS + 1u) {
+        b->level = 0u;
+        if (++b->frame == TILES_WT_FRAMES) {
+            b->frame = 0u;
+            if (++b->pass == 2u) {
+                b->bank->gain = b->peak / 32767.0f;
             }
         }
     }
-    bank->gain = peak / 32767.0f;
+    return b->pass >= 2u;
+}
+
+void tiles_wt_build(tiles_wt_bank_t *bank, tiles_wt_design_fn design, void *ctx, tiles_wt_spectrum_t *spectrum,
+                    float *scratch) {
+    tiles_wt_builder_t b;
+    tiles_wt_build_begin(&b, bank, design, ctx, spectrum, scratch);
+    while (!tiles_wt_build_step(&b)) {
+    }
 }
