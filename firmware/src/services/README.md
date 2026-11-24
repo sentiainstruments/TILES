@@ -189,7 +189,12 @@ lane colour. No DAW transport here.
   scatter / glass, pure, chime, shimmer, throb. Page 2: yoi, growl,
   riddim, pound, deep, punch / future, organ, dub, rave, screech, brass /
   drift, warm, tunnel, whisper, riser, halo / mallet, metal, bleep, drops,
-  ember, keys. FM: solid, tine, chime, punch, brass, mallet; granular:
+  ember, keys. Page 3 (dubstep, bass music): neuro, tear, wub, rip,
+  snarl, drop / laser, horn, chop, siren, zap, smash / doom, fall,
+  impact, void, ghost, swell / glint, spark, musicbox, steel, arp, glow.
+  Page 4 (heavy techno): thump, gravel, burn, grind, roll, under / slam,
+  alarm, scream, clang, gate, ping / dread, hiss, ritual, fog, cathedral,
+  tide / tick, anvil, glitch, gong, zip, blast. FM: solid, tine, chime, punch, brass, mallet; granular:
   cloud, dust, scatter, shimmer, whisper (scatter plays drum slot 8, or
   the last slot loaded; the delay rests while it is chosen). Circle +
   "-"/"+" steps through the pages holding a sound, the top row showing

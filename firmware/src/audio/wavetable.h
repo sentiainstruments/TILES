@@ -108,6 +108,8 @@ enum {
     TILES_WT_BANK_BITS,        /* a sine at fewer steps and levels: digital, lo-fi */
     TILES_WT_BANK_SWEEP,       /* a saw through a resonant low-pass, closed to open */
     TILES_WT_BANK_ORGAN,       /* drawbar registrations, soft to full: keys, organ stabs */
+    TILES_WT_BANK_NEURO,       /* fed-back FM, synced saws, folds, rings: neuro, tearout */
+    TILES_WT_BANK_HARD,        /* saws and squares driven into clipping, rings: heavy techno */
     TILES_WT_BANK_COUNT,
 };
 #define TILES_WT_NAME_MAX 7u

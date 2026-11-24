@@ -173,10 +173,10 @@ class Session:
         self.ep_in = ep_in
         self.buf = b""
 
-    def read_line(self, what):
+    def read_line(self, what, timeout_ms=TIMEOUT_MS):
         while b"\n" not in self.buf:
             try:
-                self.buf += bytes(self.ep_in.read(64, timeout=TIMEOUT_MS))
+                self.buf += bytes(self.ep_in.read(64, timeout=timeout_ms))
             except usb.core.USBError as exc:
                 print(f"USB read timed out/failed waiting for a response to {what!r}: {exc}", file=sys.stderr)
                 sys.exit(1)
@@ -194,15 +194,16 @@ class Session:
             except usb.core.USBError:
                 return
 
-    def command(self, line, multi_line=False):
+    def command(self, line, multi_line=False, timeout_ms=TIMEOUT_MS):
         """Sends one command. multi_line: LIST/SCHEMA/INFO/SCALES/SCALE GET/CONTENT LIST send lines then a
-        final OK; everything else is answered by exactly one line (a value, OK, or ERR ...)."""
+        final OK; everything else is answered by exactly one line (a value, OK, or ERR ...). timeout_ms:
+        the longest wait for a line (SYNTH BENCH answers after ~3 s)."""
         self.drain()
         self.buf = b""
         self.ep_out.write((line + "\n").encode("ascii"), timeout=TIMEOUT_MS)
         lines = []
         while True:
-            text = self.read_line(line)
+            text = self.read_line(line, timeout_ms)
             if multi_line and text == "OK":
                 return lines
             lines.append(text)
@@ -361,7 +362,8 @@ def preset(session, args):
 
 def synth(session, args):
     if len(args) == 1 and args[0].lower() in ("list", "bench"):
-        for line in session.command("SYNTH " + args[0].upper(), multi_line=True):
+        # The bench times all 96 slots, building their wavetables: seconds.
+        for line in session.command("SYNTH " + args[0].upper(), multi_line=True, timeout_ms=20000):
             print(line)
     elif len(args) == 1 and args[0].lower() == "bank":
         for line in session.command("SYNTH BANK", multi_line=True):

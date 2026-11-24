@@ -233,7 +233,7 @@ worked out once a note). New factory sounds in the empty slots: rumble
 
 ## Wavetable library (built 2026-11-23)
 
-Nine banks a preset can name, 8 frames each, dark to bright (or, for
+Eleven banks a preset can name, 8 frames each, dark to bright (or, for
 talk, closed to open) so pressure sweeping the wave opens the sound:
 
 | # | Bank | Frames |
@@ -247,13 +247,15 @@ talk, closed to open) so pressure sweeping the wave opens the sound:
 | 6 | bits | a sine held at 64 down to 6 steps a cycle and rounded to 24 down to 2 levels: digital, lo-fi |
 | 7 | sweep | a saw through a resonant 4-pole low-pass at harmonic 2 to 70: a filter sweep in the wave, no filter cost |
 | 8 | organ | drawbar registrations (8' to 1', 3 dB a step), flute to full |
+| 9 | neuro | fed-back FM, synced saws, folds and ring modulation, harsher by frame: neuro, tearout, riddim |
+| 10 | hard | saws and squares driven into clipping, then rings: heavy techno |
 
 Designs are code, ours (spectra, or one cycle drawn and analysed); a
 bank's number never moves, so a preset keeps its sound. The renders on
 2026-11-23 (pluck opened up, pressure through the frames) come out at
 the same loudness, -24 dBFS.
 
-Page 2 of the factory sounds is built on them (`factory-presets.md`).
+Pages 2-4 of the factory sounds are built on them (`factory-presets.md`).
 
 **Only 4 banks are in RAM** (`TILES_AUDIO_WT_SLOTS`, 38 KB each): slot 1
 is classic for good (the sub reads it), the other three hold whatever

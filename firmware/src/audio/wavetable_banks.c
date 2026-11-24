@@ -263,8 +263,80 @@ static void organ(uint32_t frame, tiles_wt_spectrum_t *s) {
     }
 }
 
+/* tanh, near enough for drawing (a rational fit, flat past +-5). */
+static float soft_clip(float x) {
+    x = x > 5.0f ? 5.0f : x < -5.0f ? -5.0f : x;
+    float x2 = x * x;
+    float y = x * (27.0f + x2) / (27.0f + 9.0f * x2);
+    return y > 1.0f ? 1.0f : y < -1.0f ? -1.0f : y;
+}
+
+/* A source, then ring, fold and clip; k: source (0 phase modulation:
+ * ratio, index; 1 synced saw: ratio; 2 fed-back sine: amount; 3 saw to
+ * square: mix), fold gain, clip drive, ring ratio, ring amount (0: off). */
+static float grit(float t, const float *k) {
+    float x, f = t - floorf(t);
+    switch ((int)k[0]) {
+    case 0:
+        x = sin_turns(t + k[2] * sin_turns(k[1] * t) * (0.5f / PI_F));
+        break;
+    case 1:
+        x = sync_saw_at(t, &k[1]);
+        break;
+    case 2: {
+        float y = 0.0f;
+        for (uint32_t i = 0; i < 4u; i++) {
+            y = sin_turns(t + k[1] * y * (0.5f / PI_F));
+        }
+        x = y;
+        break;
+    }
+    default:
+        x = (1.0f - k[1]) * (2.0f * f - 1.0f) + k[1] * (f < 0.5f ? 1.0f : -1.0f);
+        break;
+    }
+    if (k[5] > 0.0f) {
+        x *= 1.0f - k[6] + k[6] * sin_turns(k[5] * t);
+    }
+    if (k[3] > 0.0f) {
+        float v = k[3] * x + 1.0f, m = v - 4.0f * floorf(v * 0.25f); /* folded back at +-1 */
+        x = m < 2.0f ? m - 1.0f : 3.0f - m;
+    }
+    if (k[4] > 0.0f) {
+        x = soft_clip(k[4] * x);
+    }
+    return x;
+}
+
+/* Each frame's grit() settings and points a sample (edges get more);
+ * frames in order of brightness. */
+typedef struct {
+    float k[7];
+    uint8_t sub;
+} grit_frame_t;
+
+static void neuro(uint32_t frame, tiles_wt_spectrum_t *s, float *scratch) {
+    static const grit_frame_t f[TILES_WT_FRAMES] = {
+        {{2, 0.8f, 0, 0, 0, 0, 0}, 1},       {{2, 1.4f, 0, 0, 2.0f, 0, 0}, 1},
+        {{0, 1, 2.5f, 1.6f, 0, 0, 0}, 1},    {{1, 1.9f, 0, 1.4f, 0, 0, 0}, 4},
+        {{1, 2.7f, 0, 0, 2.5f, 3, 0.6f}, 4}, {{2, 1.5f, 0, 2.5f, 0, 5, 0.7f}, 1},
+        {{0, 2, 3.5f, 2.2f, 1.5f, 0, 0}, 1}, {{0, 3, 6.0f, 3.0f, 4.0f, 0, 0}, 1},
+    };
+    drawn(s, grit, f[frame].k, f[frame].sub, scratch);
+}
+
+static void hard(uint32_t frame, tiles_wt_spectrum_t *s, float *scratch) {
+    static const grit_frame_t f[TILES_WT_FRAMES] = {
+        {{0, 1, 0, 0, 6.0f, 0, 0}, 2},    {{3, 0, 0, 0, 6.0f, 2, 0.3f}, 4},
+        {{3, 0, 0, 0, 3.0f, 0, 0}, 4},    {{3, 0.5f, 0, 0, 3.0f, 0, 0}, 4},
+        {{3, 0, 0, 0, 1.2f, 0, 0}, 4},    {{3, 1, 0, 0, 0, 3, 0.8f}, 4},
+        {{1, 3.3f, 0, 0, 5.0f, 0, 0}, 4}, {{3, 0.3f, 0, 0, 4.0f, 7, 1.0f}, 4},
+    };
+    drawn(s, grit, f[frame].k, f[frame].sub, scratch);
+}
+
 static const char *const k_names[TILES_WT_BANK_COUNT] = {
-    "classic", "glass", "voice", "talk", "growl", "fold", "bits", "sweep", "organ",
+    "classic", "glass", "voice", "talk", "growl", "fold", "bits", "sweep", "organ", "neuro", "hard",
 };
 
 const char *tiles_wt_bank_name(uint32_t bank) {
@@ -297,6 +369,12 @@ void tiles_wt_design(uint32_t bank, uint32_t frame, tiles_wt_spectrum_t *spectru
         break;
     case TILES_WT_BANK_ORGAN:
         organ(frame, spectrum);
+        break;
+    case TILES_WT_BANK_NEURO:
+        neuro(frame, spectrum, scratch);
+        break;
+    case TILES_WT_BANK_HARD:
+        hard(frame, spectrum, scratch);
         break;
     default:
         classic(frame, spectrum);

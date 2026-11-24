@@ -1,6 +1,6 @@
 # Factory presets: the sound design (planning)
 
-Status: **page 2 built, 2026-11-23** (below); the rest planning. The owner's brief: high-quality sounds
+Status: **pages 2-4 built, 2026-11-23** (below): every page holds factory sounds (95; page 1's last slot is free). The owner's brief: high-quality sounds
 for techno, hard techno, EDM, dubstep, pads, plucks, melodic and harmonic
 playing, with a sound of our own. The slots, store and browsing are
 decided in `sound-roadmap.md` ("Presets: 96 slots in 4 pages"); this note
@@ -63,6 +63,22 @@ growl 379, riser 374, yoi 335, drift 327, tunnel 287, rave 246, riddim
 brass 162, punch 144, deep 143, keys 130, organ 127, drops 120, metal
 108, mallet 106, bleep 106. The renders are the owner's to judge; the
 names are working titles.
+
+## Pages 3 and 4 (built 2026-11-23)
+
+The owner asked for more in the style of the big wavetable synths'
+dubstep presets, and heavy techno. Two banks came first (neuro, hard:
+`synth-engines.md`, "Wavetable library"), then 48 sounds on the same
+rows, levels matched by render to pages 1 and 2.
+
+| Page | Basses | Plucks, leads | Pads, effects | Bells, percussion |
+|---|---|---|---|---|
+| 3: dubstep, bass music | neuro (sixteenth steps), tear (eighth-triplet gate), wub (the first wobble), rip (scoop and tear), snarl (a growl played by pressure and slide), drop (a falling sine) | laser, horn (vowel brass), chop (vocal chop), siren, zap, smash | doom, fall (downlifter), impact (boom), void, ghost (far choir), swell (the build) | glint, spark, musicbox, steel, arp, glow |
+| 4: heavy techno | thump (a tuned kick), gravel (offbeat), burn (acid driven hard), grind, roll (ducked), under (the low end) | slam, alarm (octaves in sixteenths), scream, clang, gate (chopped chord), ping | dread (four-bar drone), hiss, ritual, fog, cathedral, tide | tick, anvil, glitch, gong, zip, blast |
+
+A slot written from the computer takes the factory sound's place;
+clearing it brings it back. The heaviest on the engine's cost: blast and
+swell (seven copies), like super.
 
 ## Recipes by genre (what makes each work)
 

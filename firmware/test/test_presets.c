@@ -60,7 +60,7 @@ static void test_round_trip(void) {
         CHECK(strcmp(a.name, b.name) == 0 && b.patch.name == b.name, "%s's name", a.name);
         CHECK((b.patch.engine == SYNTH_ENGINE_FM) == (b.patch.fm == &b.fm), "%s's FM pointer", a.name);
     }
-    CHECK(n == 47u, "%u factory sounds, want 47", n);
+    CHECK(n == 95u, "%u factory sounds, want 95", n);
     tiles_preset_get(0u, &a);
     tiles_preset_encode(&a, s_rec);
     s_rec[2] = 9u;
@@ -81,7 +81,7 @@ static void test_store(void) {
     (void)s_group;
     tiles_presets_init(k_ops);
     static tiles_sound_t s;
-    CHECK(!tiles_preset_stored(60u) && !tiles_preset_get(60u, &s), "slot 61 not empty");
+    CHECK(!tiles_preset_stored(60u) && tiles_preset_get(60u, &s), "slot 61 isn't its factory sound");
     tiles_preset_get(6u, &s); /* pluck, into slot 61 as "mine" */
     strcpy(s.name, "mine");
     s.patch.cutoff_hz = 777.0f;
