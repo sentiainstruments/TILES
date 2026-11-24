@@ -6,7 +6,7 @@ type Setting = {
   id: number
   key: string
   type: SettingType
-  defaultValue: string
+  defaultValue?: string
   persist: boolean
   options?: string[]
   min?: number
@@ -31,7 +31,7 @@ function parseSchema(lines: string[]): Setting[] {
     }
     const id = Number(fields.id)
     const type = fields.type as SettingType
-    if (!Number.isInteger(id) || !fields.key || !ALLOWED_TYPES.has(type) || fields.default === undefined) {
+    if (!Number.isInteger(id) || !fields.key || !ALLOWED_TYPES.has(type)) {
       throw new Error(`Malformed schema line: ${line}`)
     }
     const min = fields.min === undefined ? undefined : Number(fields.min)
@@ -188,7 +188,7 @@ function SettingRow({ setting, value, disabled, update, reset, caption }: {
         onChange={next => update(setting, next)} />}
     </div>
     <button type="button" className="melodic-reset" title={`Reset ${setting.key}`}
-      disabled={isBusy || shownValue.toLowerCase() === setting.defaultValue.toLowerCase()}
+      disabled={isBusy ||setting.defaultValue === undefined ||shownValue.toLowerCase() === setting.defaultValue.toLowerCase()}
       onClick={() => void reset(setting)}>Reset</button>
   </div>
 }
