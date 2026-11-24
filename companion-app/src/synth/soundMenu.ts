@@ -1,3 +1,4 @@
+import { factoryRecords, factoryRevision } from './factoryRecords'
 import { banks, f, makePreset, name, rename, setF, setG, validate } from './preset'
 import type { Engine, Common } from './preset'
 
@@ -113,21 +114,59 @@ for (const line of rows.split('\n')) {
   if(engine===2){const [size,density,spray,scatter,spread]=grains[slot];for(const [k,n] of Object.entries({size,density,spray,scatter,spread}))p=setG(p,k as Parameters<typeof setG>[1],n);if(slot===18){p[188]=1;p[189]=7}}
   factory.set(slot,validate(p))
 }
+// Exact source-derived TP records override the old preview catalog.
+if (factoryRecords.length) {
+  factory.clear()
+  for (const [slot, hex] of factoryRecords) factory.set(slot, validate(Uint8Array.from(hex.match(/../g) ?? [], b => parseInt(b, 16))))
+}
+export const exactFactory = factoryRecords.length > 0
+export { factoryRevision }
 export const pageColors = [['#ff0073','#ff4da6','#991aff','#d98cff'],['#0026ff','#008cff','#00e6d9','#8cd9ff'],['#26ff00','#8cff00','#00ff73','#ccff8c'],['#ff0000','#ff4d00','#ff9900','#ffd98c']]
 export const fxNames=['Reverb','Delay','Chorus','Drive','Crush','Pump']
 export const fxKeys:Common[]=['reverb','delay','chorus','fxDrive','crush','pump']
 export const fxColors=['#3366ff','#00cccc','#994dff','#ff5900','#b3ff00','#ff0099']
 export const previewNotes=[36,60,57,72]
 export const trackColors=['#ff1f00','#ff5900','#ff9e00','#ff004d']
-export type SoundSelection={slot:number;track:number;record:Uint8Array;label:string}
-const saved=new Map<number,Uint8Array>() // explicit local saves for this app session
+export type SoundSelection={slot:number;track:number;record:Uint8Array;label:string;isNew?:boolean}
+const saved=new Map<number,Uint8Array>()
+const archived=new Map<number,Uint8Array>()
+const removed=new Set<number>()
+let dirty=false
+export function markDraftDirty(value:boolean){dirty=value}
+export function hasUnsavedDraft(){return dirty}
+const storageKey='sentia.simulator.presets.v2'
+function persist(){
+  if(typeof window!=='undefined')window.dispatchEvent(new Event('tiles:sim-presets-changed'))
+  if(typeof localStorage==='undefined')return
+  localStorage.setItem(storageKey,JSON.stringify({saved:Array.from(saved,([k,v])=>[k,Array.from(v)]),archived:Array.from(archived,([k,v])=>[k,Array.from(v)]),removed:[...removed]}))
+}
+try {
+  if(typeof localStorage!=='undefined'){
+    const raw=JSON.parse(localStorage.getItem(storageKey)??'null')
+    if(raw){
+      for(const [map,items] of [[saved,raw.saved],[archived,raw.archived]] as const){
+        if(Array.isArray(items))for(const [id,bytes] of items)if(Number.isInteger(id)&&id>=1&&id<=96&&Array.isArray(bytes)&&bytes.every((v:unknown)=>typeof v==='number'&&Number.isInteger(v)&&v>=0&&v<=255))map.set(id,validate(Uint8Array.from(bytes)))
+      }
+      if(Array.isArray(raw.removed))for(const id of raw.removed)if(Number.isInteger(id)&&id>=1&&id<=96)removed.add(id)
+    }
+  }
+} catch { /* corrupted or unavailable local storage: keep any valid records */ }
+function checkSlot(slot:number){if(!Number.isInteger(slot)||slot<1||slot>96)throw Error('Invalid simulator slot')}
+export function hasArchive(slot:number){return archived.has(slot)}
+export function hasFactory(slot:number){return factory.has(slot)}
+export function archivedName(slot:number){const p=archived.get(slot);return p?name(p):''}
+export function removeVirtualPreset(slot:number){checkSlot(slot);const p=slotRecord(slot);if(!p)return;archived.set(slot,p);saved.delete(slot);removed.add(slot);persist()}
+export function restoreVirtualPreset(slot:number){checkSlot(slot);const p=archived.get(slot);if(!p)throw Error('No archived preset');saved.set(slot,p.slice());removed.delete(slot);archived.delete(slot);persist()}
+export function restoreFactory(slot:number){checkSlot(slot);const previous=slotRecord(slot);if(previous&&saved.has(slot))archived.set(slot,previous);saved.delete(slot);removed.delete(slot);persist()}
+export function newSelection(track:number,slot:number):SoundSelection{checkSlot(slot);if(slotRecord(slot))throw Error('Slot already occupied');return {slot,track,record:rename(makePreset(0),'New Preset'),label:'New preset',isNew:true}}
+
 const trackSlots=[1,7,13,19]
 const effects=Array.from({length:4},()=>[0,0,0,0,0,0])
 export function modeTrack(mode:string){return ['prism','duet'].includes(mode)?3:['bounce','ripples','sand','orbits','cradle'].includes(mode)?4:mode==='drums'?1:2}
 export function slotAt(page:number,pad:number){return page*24+pad}
 export function slotPage(slot:number){return Math.floor((slot-1)/24)}
 export function wrap(n:number,length:number){return ((n%length)+length)%length}
-export function slotRecord(slot:number){return (saved.get(slot)??factory.get(slot))?.slice()}
+export function slotRecord(slot:number){return removed.has(slot)?undefined:(saved.get(slot)??factory.get(slot))?.slice()}
 export function slotName(slot:number){const p=slotRecord(slot);return p?name(p):''}
 export function isSaved(slot:number){return saved.has(slot)}
 export function selectedSlot(track:number){return trackSlots[track-1]}
@@ -135,6 +174,7 @@ export function selectSlot(track:number,slot:number){const p=slotRecord(slot);if
 export function getEffects(track:number){return effects[track-1].slice()}
 export function setEffect(track:number,col:number,value:number){effects[track-1][col]=Math.max(0,Math.min(1,value))}
 export function effectValue(pad:number){return (3-Math.floor((pad-1)/6))/3}
-export function saveVirtualPreset(slot:number,p:Uint8Array){if(!Number.isInteger(slot)||slot<1||slot>96)throw Error('Invalid simulator slot');saved.set(slot,validate(p.slice()))}
-export function makeSelection(track:number):SoundSelection|null{const slot=selectedSlot(track);let record=slotRecord(slot);if(!record)return null;getEffects(track).forEach((v,i)=>{record=setF(record!,fxKeys[i],v)});return {slot,track,record:record!,label:isSaved(slot)?'Local saved draft':'Factory-inspired preview draft'}}
+export function saveVirtualPreset(slot:number,p:Uint8Array){checkSlot(slot);saved.set(slot,validate(p.slice()));removed.delete(slot);persist()}
+export function makeSelection(track:number):SoundSelection|null{const slot=selectedSlot(track);let record=slotRecord(slot);if(!record)return null;getEffects(track).forEach((v,i)=>{record=setF(record!,fxKeys[i],v)});return {slot,track,record:record!,label:isSaved(slot)?'Local saved preset':exactFactory?'Factory preset · source snapshot':'Factory-inspired preview draft'}}
 for(let t=1;t<=4;t++)selectSlot(t,trackSlots[t-1])
+export function editSelection(track:number,slot:number):SoundSelection {const record=slotRecord(slot);if(!record)return newSelection(track,slot);return {slot,track,record,label:isSaved(slot)?'Local saved preset':exactFactory?'Factory preset · source snapshot':'Factory-inspired preview draft'}}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Preview } from './synth/preview'
-import { pageColors, fxNames, fxColors, trackColors, previewNotes, modeTrack, slotAt, slotPage, wrap, slotName, selectedSlot, selectSlot, getEffects, setEffect as setTrackEffect, effectValue, makeSelection, isSaved } from './synth/soundMenu'
+import { pageColors, fxNames, fxColors, trackColors, previewNotes, modeTrack, slotAt, slotPage, wrap, slotName, selectedSlot, selectSlot, getEffects, setEffect as setTrackEffect, effectValue, isSaved, editSelection, makeSelection, hasArchive, hasFactory, archivedName, removeVirtualPreset, restoreVirtualPreset, restoreFactory, exactFactory } from './synth/soundMenu'
 import type { SoundSelection } from './synth/soundMenu'
 import type { CSSProperties } from 'react'
 import './TilesVisualizer.css'
@@ -167,7 +167,9 @@ export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: Sou
   const [soundTrack, setSoundTrack] = useState(2)
   const [soundPage, setSoundPage] = useState(0)
   const [soundRevision, setSoundRevision] = useState(0)
-  const [soundMessage, setSoundMessage] = useState('Select a lit pad to audition a local draft.')
+  const [soundMessage, setSoundMessage] = useState('Select a pad to edit or create a preset.')
+  const [manageSlot,setManageSlot]=useState<number|null>(null)
+  useEffect(()=>{const changed=()=>setSoundRevision(n=>n+1);window.addEventListener('tiles:sim-presets-changed',changed);return()=>window.removeEventListener('tiles:sim-presets-changed',changed)},[])
   const audition = useRef<Preview | null>(null)
   const auditionTimer = useRef<number | undefined>(undefined)
   const auditionGeneration = useRef(0)
@@ -317,7 +319,7 @@ export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: Sou
     setSoundTrack(t)
     setSoundPage(slotPage(selectedSlot(t)))
     setView(next)
-    setSoundMessage('Select a lit pad to audition a local draft.')
+    setSoundMessage('Click a slot to edit or create a preset.')
   }
   function handleButton(index: number) {
     if (index === 5) {
@@ -375,10 +377,9 @@ export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: Sou
   function handlePad(pad: number) {
     if (view === 'sounds') {
       const slot = slotAt(soundPage, pad)
-      if (selectSlot(soundTrack, slot)) {
-        setSoundRevision(n => n + 1)
-        void auditionSound(soundTrack, Math.floor((pad - 1) / 6))
-      }
+      stopAudition()
+      if (onEditSound) { onEditSound(editSelection(soundTrack,slot)); setSoundRevision(n=>n+1); setManageSlot(null) }
+      else if(selectSlot(soundTrack,slot)){setSoundRevision(n=>n+1);void auditionSound(soundTrack,Math.floor((pad-1)/6))}
       return
     }
     if (view === 'effects') {
@@ -424,7 +425,7 @@ export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: Sou
   }
 
   const note = view === 'sounds'
-    ? '− / + changes the preset page. Click ○ then − / + to switch tracks. Press ◇ again to close. Select a pad to audition, then open the selected sound in Synth Workspace.'
+    ? '− / + changes the preset page. Click ○ then − / + to switch tracks. Press ◇ again to close. Click any slot to edit or create a sound. Right-click a slot to manage it, or use Manage slot below.'
     : view === 'effects'
       ? 'Each column is an effect; top row = full, bottom row = off. − / + switches tracks. Click ○ then ◇ to close. Values are local draft data, not live DSP effects.'
       : view === 'modes' 
@@ -568,14 +569,16 @@ export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: Sou
               <button key={pad} type="button"
                 className={`tiles-pad ${selected ? 'is-active' : ''} ${view === 'play' && activeMode === 'melodic' && selected ? 'is-edit-selected' : ''} ${view === 'modes' && selected ? 'is-current-mode' : ''} ${view === 'modes' && !enabled ? 'is-disabled-preview' : ''}`}
                 style={{ '--pad-color': color } as CSSProperties}
-                disabled={(view === 'modes' && !enabled) || (view === 'sounds' && !slotName(slotAt(soundPage,pad)))}
+                disabled={view === 'modes' && !enabled}
+                data-empty={view==='sounds'&&!slotName(slotAt(soundPage,pad))?'true':undefined}
+                onContextMenu={e=>{if(view==='sounds'){e.preventDefault();setManageSlot(slotAt(soundPage,pad))}}}
                 title={view === 'sounds' ? `Slot ${slotAt(soundPage,pad)} · ${label}` : view === 'effects' ? label : view === 'modes' ? (enabled && menuMode ? menuMode.name : 'Unavailable')
                   : activeMode === 'melodic' ? `Pad ${pad} · ${padInfo.noteLabel} · ${role}`
                   : `Pad ${pad} · ${mode.name}`}
                 aria-label={view === 'sounds' ? `Preset ${slotAt(soundPage,pad)}: ${label}` : view === 'effects' ? label : view === 'modes' ? `Select ${menuMode?.name ?? 'unavailable mode'}` : `Preview pad ${pad} in ${mode.name}`}
                 aria-pressed={selected}
                 onClick={() => handlePad(pad)}>
-                <span>{label}</span>
+                <span>{label}</span>{view==='sounds'&&!slotName(slotAt(soundPage,pad))&&<span className="tiles-add-preset" aria-hidden="true">+</span>}
                 {view === 'sounds' && <small>{slotAt(soundPage,pad)}{isSaved(slotAt(soundPage,pad)) ? ' · EDIT' : ''}</small>}
               </button>
             )
@@ -595,13 +598,16 @@ export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: Sou
         <strong>Track {soundTrack} · Slot {chosenSlot} · {slotName(chosenSlot)}</strong>
         {view === 'effects' && <div className="tiles-fx-readout">{fxNames.map((fx,i) => <span key={fx}>{fx} {Math.round(soundFx[i]*100)}%</span>)}</div>}
         <small role="status">{soundMessage}</small>
-        <button type="button" disabled={!onEditSound || !slotName(chosenSlot)} onClick={() => {
-          const selection = makeSelection(soundTrack)
-          if (!selection || !onEditSound) return
-          if (!window.confirm('Open this local sound draft in Synth Workspace? This replaces the current unsaved editor draft.')) return
-          stopAudition(); onEditSound(selection)
-        }}>Edit selected sound in Synth Workspace</button>
-        <small>Development firmware layout · factory-inspired drafts, not exact factory records · no hardware commands</small>
+        {view==='sounds'&&<>
+          <button type="button" disabled={!slotName(chosenSlot)} onClick={()=>void auditionSound(soundTrack,Math.floor(((chosenSlot-1)%24)/6))}>Audition current sound</button>
+          <label>Manage slot <select value={manageSlot??chosenSlot} onChange={e=>setManageSlot(Number(e.target.value))}>{Array.from({length:96},(_,i)=><option key={i} value={i+1}>{i+1} · {slotName(i+1)||'Empty'}</option>)}</select></label>
+          {(()=>{const s=manageSlot??chosenSlot;return <div className="tiles-sound-nav">
+            <button type="button" disabled={!slotName(s)} onClick={()=>{if(window.confirm(`Remove ${slotName(s)} from simulator slot ${s}? It will be archived for restoration.`)){stopAudition();try{removeVirtualPreset(s);setSoundRevision(n=>n+1);setSoundMessage(`Slot ${s} archived.`)}catch(e){setSoundMessage(String(e));setSoundRevision(n=>n+1)}}}}>Remove / archive</button>
+            <button type="button" disabled={!hasArchive(s)} onClick={()=>{if(slotName(s)&&!window.confirm(`Replace slot ${s} with its archived sound?`))return;try{restoreVirtualPreset(s);setSoundRevision(n=>n+1);setSoundMessage(`Restored slot ${s}.`)}catch(e){setSoundMessage(String(e));setSoundRevision(n=>n+1)}}}>Restore archived{hasArchive(s)?` (${archivedName(s)})`:''}</button>
+            <button type="button" disabled={!hasFactory(s)} onClick={()=>{if(!window.confirm(`Restore original factory sound in slot ${s}?`))return;try{restoreFactory(s);setSoundRevision(n=>n+1);setSoundMessage(`Factory slot ${s} restored.`)}catch(e){setSoundMessage(String(e));setSoundRevision(n=>n+1)}}}>Restore factory</button>
+          </div>})()}
+        </>}
+        <small>{exactFactory?'Development firmware factory records':'Partial factory preview records'} · simulator only · no hardware commands</small>
       </div>}
       <p className="tiles-preview-note">{note}</p>
 

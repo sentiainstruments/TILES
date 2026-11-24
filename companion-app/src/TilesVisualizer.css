@@ -203,3 +203,5 @@
 .tiles-sound-nav label { display:flex;gap:5px;align-items:center; }
 .tiles-sound-toolbar button { border:1px solid #74628e;background:#362b49;color:#eee6ff;padding:7px 10px;border-radius:6px;cursor:pointer; }
 .tiles-fx-readout span { padding:4px 6px;background:#2e3141;border-radius:5px; }
+
+.tiles-sound-device .tiles-pad[data-empty="true"]{position:relative;cursor:pointer;opacity:.75;border-style:dashed;border-color:#55566d;box-shadow:none}.tiles-add-preset{position:absolute;inset:0;display:grid;place-items:center;font-size:30px;color:#dac1ff;background:#272438;border-radius:inherit;opacity:0;transition:opacity .12s}.tiles-pad[data-empty="true"]:hover .tiles-add-preset,.tiles-pad[data-empty="true"]:focus-visible .tiles-add-preset{opacity:1}.tiles-pad[data-empty="true"]:hover,.tiles-pad[data-empty="true"]:focus-visible{border-color:#bca0ff;opacity:1}

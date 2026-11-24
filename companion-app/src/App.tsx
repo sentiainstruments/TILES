@@ -1,3 +1,4 @@
+import { hasUnsavedDraft, selectSlot } from './synth/soundMenu'
 import type { SoundSelection } from './synth/soundMenu'
 import { SynthWorkspace } from './synth/SynthWorkspace'
 import { useEffect, useState } from 'react'
@@ -17,6 +18,8 @@ function App() {
 
   const [soundSelection, setSoundSelection] = useState<SoundSelection | null>(null)
   function editSound(selection: SoundSelection) {
+    if(hasUnsavedDraft() && !window.confirm('Replace the unsaved Synth Workspace draft?'))return
+    if(!selection.isNew)selectSlot(selection.track,selection.slot)
     setSoundSelection(selection)
     setPage('synth')
   }
@@ -69,7 +72,7 @@ function App() {
     <div style={{ display: page === 'workspace' ? 'block' : 'none' }}>
       <ProjectWorkspace />
     </div>
-    {page === 'device' && <section>
+    <section style={{ display: page === 'device' ? 'block' : 'none' }}>
       {connected && simFirmware && <div className="snt-firmware-selector">
         <span>Virtual TILES · firmware {simFirmware}</span>
         <label>Simulated firmware{' '}
@@ -87,9 +90,9 @@ function App() {
         <DeviceSettingsPage connected={connected} connectionMessage={error}
           onReconnect={() => { void connect() }} onEditSound={editSound} />
       </div>
-    </section>}
+    </section>
     <div style={{ display: page === 'synth' ? 'block' : 'none' }}>
-      <SynthWorkspace connected={connected} simulated={simFirmware !== null} active={page === 'synth'} soundSelection={soundSelection} />
+      <SynthWorkspace connected={connected} simulated={simFirmware !== null} active={page === 'synth'} soundSelection={soundSelection} onReturnToDevice={()=>setPage('device')} />
     </div>
   </main>
 }
