@@ -1,4 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Preview } from './synth/preview'
+import { pageColors, fxNames, fxColors, trackColors, previewNotes, modeTrack, slotAt, slotPage, wrap, slotName, selectedSlot, selectSlot, getEffects, setEffect as setTrackEffect, effectValue, makeSelection, isSaved } from './synth/soundMenu'
+import type { SoundSelection } from './synth/soundMenu'
 import type { CSSProperties } from 'react'
 import './TilesVisualizer.css'
 import { MelodicEditor } from './MelodicEditor'
@@ -10,7 +13,7 @@ type Scale = { slot: number; name: string; intervals: number[] }
 type ModeId = 'melodic' | 'duet' | 'bass' | 'sequencer' | 'drums' |
   'song' | 'prism' | 'ableton' | 'volca' | 'bounce' | 'cradle' |
   'sand' | 'ripples' | 'orbits'
-type ViewId = 'play' | 'modes' | 'scales' | 'patterns'
+type ViewId = 'play' | 'modes' | 'scales' | 'patterns' | 'sounds' | 'effects'
 
 type Mode = {
   id: ModeId
@@ -159,7 +162,44 @@ function modePadPreview(mode: ModeId, pad: number, selected: Set<number>): {
   }
 }
 
-export function TilesVisualizer() {
+export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: SoundSelection) => void } = {}) {
+  const [standalonePreview, setStandalonePreview] = useState(true)
+  const [soundTrack, setSoundTrack] = useState(2)
+  const [soundPage, setSoundPage] = useState(0)
+  const [soundRevision, setSoundRevision] = useState(0)
+  const [soundMessage, setSoundMessage] = useState('Select a lit pad to audition a local draft.')
+  const audition = useRef<Preview | null>(null)
+  const auditionTimer = useRef<number | undefined>(undefined)
+  const auditionGeneration = useRef(0)
+  function stopAudition() {
+    auditionGeneration.current++
+    window.clearTimeout(auditionTimer.current)
+    audition.current?.panic()
+  }
+  useEffect(() => () => {
+    auditionGeneration.current++
+    window.clearTimeout(auditionTimer.current)
+    audition.current?.close()
+    audition.current = null
+  }, [])
+  async function auditionSound(track: number, row: number) {
+    stopAudition()
+    const generation = auditionGeneration.current
+    const selection = makeSelection(track)
+    if (!selection) return
+    const player = audition.current ?? (audition.current = new Preview())
+    try {
+      await player.enable()
+      if (generation !== auditionGeneration.current) return
+      const note = previewNotes[row]
+      player.noteOn(note, selection.record, 100 / 127)
+      auditionTimer.current = window.setTimeout(() => player.noteOff(note), 600)
+      setSoundMessage(`${slotName(selection.slot)} · local audio approximation`)
+    } catch (error) {
+      if (generation === auditionGeneration.current) setSoundMessage(`Audio unavailable: ${String(error)}`)
+    }
+  }
+
   const [colors, setColors] = useState(DEFAULT_COLORS)
   const [padColors, setPadColors] = useState<Record<string, string>>(DEFAULT_PAD_COLORS)
   const [customPads, setCustomPads] = useState(false)
@@ -266,6 +306,19 @@ export function TilesVisualizer() {
   const mode = MODES.find(m => m.id === activeMode) ?? MODES[0]
   const intervals = scales.find(s => String(s.slot) === scaleChoice)?.intervals
 
+  const soundView = view === 'sounds' || view === 'effects'
+  const chosenSlot = selectedSlot(soundTrack)
+  // The revision triggers a repaint of the app-session simulator store.
+  const soundFx = getEffects(soundTrack)
+  function openSoundView(next: 'sounds' | 'effects') {
+    stopAudition()
+    if (view === next) { setView('play'); return }
+    const t = modeTrack(activeMode)
+    setSoundTrack(t)
+    setSoundPage(slotPage(selectedSlot(t)))
+    setView(next)
+    setSoundMessage('Select a lit pad to audition a local draft.')
+  }
   function handleButton(index: number) {
     if (index === 5) {
       // Circle is a held modifier on hardware. A click arms the *next*
@@ -273,6 +326,18 @@ export function TilesVisualizer() {
       setShiftArmed(current => !current)
       return
     }
+    if (soundView && (index === 0 || index === 1)) {
+      stopAudition()
+      const delta = index === 1 ? 1 : -1
+      if (view === 'effects' || shiftArmed) {
+        const t = wrap(soundTrack - 1 + delta, 4) + 1
+        setSoundTrack(t)
+        setSoundPage(slotPage(selectedSlot(t)))
+      } else setSoundPage(p => wrap(p + delta, 4))
+      setShiftArmed(false)
+      return
+    }
+    if (soundView && index === 2) stopAudition()
     if (index === 2) {
       if (shiftArmed) {
         setView(activeMode === 'drums' || activeMode === 'volca' ? 'play' : 'scales')
@@ -282,7 +347,9 @@ export function TilesVisualizer() {
         setView(current => current === 'modes' ? 'play' : 'modes')
       }
     } else if (index === 3) {
-      if (shiftArmed) {
+      if (standalonePreview && activeMode !== 'sequencer') {
+        openSoundView(shiftArmed ? 'effects' : 'sounds')
+      } else if (shiftArmed) {
         setView('play') // capture needs separate firmware-backed implementation
       } else if (activeMode === 'sequencer') {
         setView(current => current === 'patterns' ? 'play' : 'patterns')
@@ -306,6 +373,19 @@ export function TilesVisualizer() {
   }
 
   function handlePad(pad: number) {
+    if (view === 'sounds') {
+      const slot = slotAt(soundPage, pad)
+      if (selectSlot(soundTrack, slot)) {
+        setSoundRevision(n => n + 1)
+        void auditionSound(soundTrack, Math.floor((pad - 1) / 6))
+      }
+      return
+    }
+    if (view === 'effects') {
+      setTrackEffect(soundTrack, (pad - 1) % 6, effectValue(pad))
+      setSoundRevision(n => n + 1)
+      return
+    }
     if (view === 'modes') {
       const picked = padInModeMenu(pad)
       if (picked && modeEnabled(picked)) {
@@ -343,7 +423,11 @@ export function TilesVisualizer() {
     }
   }
 
-  const note = view === 'modes'
+  const note = view === 'sounds'
+    ? '− / + changes the preset page. Click ○ then − / + to switch tracks. Press ◇ again to close. Select a pad to audition, then open the selected sound in Synth Workspace.'
+    : view === 'effects'
+      ? 'Each column is an effect; top row = full, bottom row = off. − / + switches tracks. Click ○ then ◇ to close. Values are local draft data, not live DSP effects.'
+      : view === 'modes' 
     ? 'Press △ to close the mode menu, or click a lit pad to select a mode. A disabled mode is dark. Mode selection here changes only the app preview; it does not change the real TILES mode.'
     : view === 'scales'
       ? '○ then △ opens the scale picker on TILES. Built-in picker-pad mappings are not modeled here. The scale dropdown above changes this preview only.'
@@ -358,6 +442,30 @@ export function TilesVisualizer() {
         <span>24 Pads · {modern ? 'RGB' : 'Legacy'} · Interactive simulation</span>
       </div>
       <div className="tiles-preview-controls">
+        <label>Instrument preview{' '}
+          <select value={standalonePreview ? 'standalone' : 'controller'} onChange={e => {
+            stopAudition(); setStandalonePreview(e.currentTarget.value === 'standalone'); setView('play'); setShiftArmed(false)
+          }}>
+            <option value="standalone">Standalone (Sound Menu)</option>
+            <option value="controller">Controller (MIDI)</option>
+          </select>
+        </label>
+        <label>Mode{' '}
+          <select aria-label="Preview mode" value={activeMode}
+            onChange={event => {
+              const next = MODES.find(item => item.id === event.currentTarget.value)
+              if (!next || !modeEnabled(next)) return
+              stopAudition()
+              setActiveMode(next.id)
+              setView('play')
+              setActivePad(null)
+              setSelectedPads(new Set())
+            }}>
+            {MODES.map(item => <option key={item.id} value={item.id} disabled={!modeEnabled(item)}>
+              {item.name}
+            </option>)}
+          </select>
+        </label>
         <label>Preview scale{' '}
           <select value={scaleChoice} onChange={e => setScaleChoice(e.currentTarget.value)}>
             <option value="chromatic">Chromatic (C)</option>
@@ -382,8 +490,9 @@ export function TilesVisualizer() {
       </div>
       <div className="tiles-mode-status" aria-live="polite">
         <span className="tiles-mode-dot" style={{ background: mode.color }} />
-        <strong>{view === 'modes' ? 'Mode menu' : view === 'scales' ? 'Scale picker preview'
+        <strong>{view === 'sounds' ? 'Sound Menu' : view === 'effects' ? 'Effects Menu' : view === 'modes' ? 'Mode menu' : view === 'scales' ? 'Scale picker preview'
           : view === 'patterns' ? 'Pattern bank preview' : mode.name}</strong>
+        {soundView && <span style={{ color: trackColors[soundTrack - 1] }}>Track {soundTrack} · {view === 'sounds' ? `Page ${soundPage + 1}/4` : 'FX'}</span>}
         <span>Octave {octave >= 0 ? `+${octave}` : octave}</span>
         <span>{running ? 'Transport: playing' : 'Transport: stopped'}</span>
         <span>{pitchBend ? 'Bend on' : 'Bend off'} · {mpe ? 'MPE on' : 'MPE off'}</span>
@@ -391,16 +500,16 @@ export function TilesVisualizer() {
       </div>
       <div className={`tiles-preview-workspace ${activeMode === 'melodic' && view === 'play' ? 'with-melodic-editor' : ''}`}>
         <div className="tiles-device-and-notes">
-      <div className="tiles-device">
+      <div className={`tiles-device ${soundView ? 'tiles-sound-device' : ''}`} style={soundView ? { '--sound-track-color': trackColors[soundTrack-1] } as CSSProperties : undefined}>
         <div className="tiles-device-header">
           <span className="tiles-brand">SENTIA / TILES</span>
           <div className="tiles-buttons">
             {BUTTONS.map((button, index) => (
               <button key={button.symbol} type="button"
-                className={`tiles-function-button ${index === 2 && view === 'modes' ? 'is-selected' : ''} ${index === 5 && shiftArmed ? 'is-selected' : ''}`}
+                className={`tiles-function-button ${(index === 2 && view === 'modes') || (index === 3 && soundView) ? 'is-selected' : ''} ${index === 5 && shiftArmed ? 'is-selected' : ''}`}
                 onClick={() => handleButton(index)}
-                title={button.hint} aria-label={`${button.name}: ${button.hint}`}
-                aria-pressed={(index === 2 && view === 'modes') || (index === 5 && shiftArmed)}>
+                title={index === 3 && standalonePreview && activeMode !== 'sequencer' ? 'Sound Menu / circle + diamond: effects' : button.hint} aria-label={index === 3 && standalonePreview && activeMode !== 'sequencer' ? 'Diamond: Sound Menu' : `${button.name}: ${button.hint}`}
+                aria-pressed={(index === 2 && view === 'modes') || (index === 3 && soundView) || (index === 5 && shiftArmed)}>
                 {button.symbol}
               </button>
             ))}
@@ -418,7 +527,19 @@ export function TilesVisualizer() {
             let baseColor = ''
             let label = String(pad)
             let selected = isActive
-            if (view === 'modes') {
+            if (view === 'sounds') {
+              const slot = slotAt(soundPage, pad)
+              label = slotName(slot) || 'Empty'
+              selected = slot === chosenSlot && Boolean(slotName(slot))
+              baseColor = slotName(slot) ? pageColors[soundPage][Math.floor(index / 6)] : '#242735'
+            } else if (view === 'effects') {
+              const col = index % 6
+              const threshold = effectValue(pad)
+              const amount = soundFx[col]
+              label = `${fxNames[col]} ${Math.round(threshold*100)}%`
+              selected = threshold === 0 ? amount === 0 : amount >= threshold - .001
+              baseColor = fxColors[col]
+            } else if (view === 'modes') {
               baseColor = enabled && menuMode ? menuMode.color : '#131625'
               label = enabled && menuMode ? menuMode.name : ''
               selected = Boolean(menuMode && menuMode.id === activeMode)
@@ -447,19 +568,41 @@ export function TilesVisualizer() {
               <button key={pad} type="button"
                 className={`tiles-pad ${selected ? 'is-active' : ''} ${view === 'play' && activeMode === 'melodic' && selected ? 'is-edit-selected' : ''} ${view === 'modes' && selected ? 'is-current-mode' : ''} ${view === 'modes' && !enabled ? 'is-disabled-preview' : ''}`}
                 style={{ '--pad-color': color } as CSSProperties}
-                disabled={view === 'modes' && !enabled}
-                title={view === 'modes' ? (enabled && menuMode ? menuMode.name : 'Unavailable')
+                disabled={(view === 'modes' && !enabled) || (view === 'sounds' && !slotName(slotAt(soundPage,pad)))}
+                title={view === 'sounds' ? `Slot ${slotAt(soundPage,pad)} · ${label}` : view === 'effects' ? label : view === 'modes' ? (enabled && menuMode ? menuMode.name : 'Unavailable')
                   : activeMode === 'melodic' ? `Pad ${pad} · ${padInfo.noteLabel} · ${role}`
                   : `Pad ${pad} · ${mode.name}`}
-                aria-label={view === 'modes' ? `Select ${menuMode?.name ?? 'unavailable mode'}` : `Preview pad ${pad} in ${mode.name}`}
+                aria-label={view === 'sounds' ? `Preset ${slotAt(soundPage,pad)}: ${label}` : view === 'effects' ? label : view === 'modes' ? `Select ${menuMode?.name ?? 'unavailable mode'}` : `Preview pad ${pad} in ${mode.name}`}
                 aria-pressed={selected}
                 onClick={() => handlePad(pad)}>
                 <span>{label}</span>
+                {view === 'sounds' && <small>{slotAt(soundPage,pad)}{isSaved(slotAt(soundPage,pad)) ? ' · EDIT' : ''}</small>}
               </button>
             )
           })}
         </div>
       </div>
+      {soundView && <div className="tiles-sound-toolbar" data-revision={soundRevision}>
+        <div className="tiles-sound-nav">
+          <label>Track <select value={soundTrack} onChange={e => {
+            stopAudition(); const t = Number(e.currentTarget.value); setSoundTrack(t); setSoundPage(slotPage(selectedSlot(t)))
+          }}>{[1,2,3,4].map(t => <option key={t} value={t}>Track {t}</option>)}</select></label>
+          {view === 'sounds' && <label>Page <select value={soundPage} onChange={e => { stopAudition(); setSoundPage(Number(e.currentTarget.value)) }}>
+            {[0,1,2,3].map(p => <option key={p} value={p}>{p+1} · {p*24+1}–{p*24+24}</option>)}
+          </select></label>}
+          <button type="button" onClick={() => openSoundView(view === 'sounds' ? 'effects' : 'sounds')}>{view === 'sounds' ? 'Effects' : 'Sounds'}</button>
+        </div>
+        <strong>Track {soundTrack} · Slot {chosenSlot} · {slotName(chosenSlot)}</strong>
+        {view === 'effects' && <div className="tiles-fx-readout">{fxNames.map((fx,i) => <span key={fx}>{fx} {Math.round(soundFx[i]*100)}%</span>)}</div>}
+        <small role="status">{soundMessage}</small>
+        <button type="button" disabled={!onEditSound || !slotName(chosenSlot)} onClick={() => {
+          const selection = makeSelection(soundTrack)
+          if (!selection || !onEditSound) return
+          if (!window.confirm('Open this local sound draft in Synth Workspace? This replaces the current unsaved editor draft.')) return
+          stopAudition(); onEditSound(selection)
+        }}>Edit selected sound in Synth Workspace</button>
+        <small>Development firmware layout · factory-inspired drafts, not exact factory records · no hardware commands</small>
+      </div>}
       <p className="tiles-preview-note">{note}</p>
 
         </div>

@@ -21,6 +21,7 @@ declare global {
         reset(): Promise<boolean>
       }
       usb: {
+        putPreset?(slot: number, bytes: number[]): Promise<void>
         list(): Promise<UsbDeviceInfo[]>
 
         connect(
