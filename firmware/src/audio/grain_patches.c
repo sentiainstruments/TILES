@@ -41,4 +41,13 @@ const tiles_grain_params_t g_grain_factory[TILES_GRAIN_FACTORY_COUNT] = {
         .spread = 0.8f, .skew = 0.15f,
         .size_pressure = 0.7f, .density_pressure = 1.0f, .spray_pressure = 0.3f,
     },
+    /* Short grains of the talk bank's vowels at random: a crowd
+     * murmuring; pressure thickens it, slide spreads the vowels. */
+    [TILES_GRAIN_WHISPER] = {
+        .source = TILES_GRAIN_SRC_WAVE,
+        .size_ms = 70.0f, .density = 28.0f, .jitter = 0.8f, .spray = 0.45f, .scan = 0.05f,
+        .scatter_cents = 14.0f, .octave_up = 0.1f,
+        .spread = 1.0f, .skew = 0.4f,
+        .size_pressure = 0.5f, .density_pressure = 1.2f, .spray_slide = 0.4f,
+    },
 };

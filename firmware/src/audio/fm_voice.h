@@ -127,5 +127,13 @@ void tiles_fm_voice_render(tiles_fm_voice_t *v, const tiles_fm_input_t *in, floa
                            uint32_t n);
 
 /* The factory FM voices (audio/fm_patches.c); in RAM, read every block. */
-enum { TILES_FM_TINE = 0, TILES_FM_SOLID, TILES_FM_CHIME, TILES_FM_FACTORY_COUNT };
+enum {
+    TILES_FM_TINE = 0,
+    TILES_FM_SOLID,
+    TILES_FM_CHIME,
+    TILES_FM_PUNCH,
+    TILES_FM_BRASS,
+    TILES_FM_MALLET,
+    TILES_FM_FACTORY_COUNT
+};
 extern const tiles_fm_patch_t g_fm_factory[TILES_FM_FACTORY_COUNT];

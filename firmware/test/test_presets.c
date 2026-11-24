@@ -60,7 +60,7 @@ static void test_round_trip(void) {
         CHECK(strcmp(a.name, b.name) == 0 && b.patch.name == b.name, "%s's name", a.name);
         CHECK((b.patch.engine == SYNTH_ENGINE_FM) == (b.patch.fm == &b.fm), "%s's FM pointer", a.name);
     }
-    CHECK(n == 23u, "%u factory sounds, want 23", n);
+    CHECK(n == 47u, "%u factory sounds, want 47", n);
     tiles_preset_get(0u, &a);
     tiles_preset_encode(&a, s_rec);
     s_rec[2] = 9u;
@@ -81,21 +81,21 @@ static void test_store(void) {
     (void)s_group;
     tiles_presets_init(k_ops);
     static tiles_sound_t s;
-    CHECK(!tiles_preset_stored(30u) && !tiles_preset_get(30u, &s), "slot 31 not empty");
-    tiles_preset_get(6u, &s); /* pluck, into slot 31 as "mine" */
+    CHECK(!tiles_preset_stored(60u) && !tiles_preset_get(60u, &s), "slot 61 not empty");
+    tiles_preset_get(6u, &s); /* pluck, into slot 61 as "mine" */
     strcpy(s.name, "mine");
     s.patch.cutoff_hz = 777.0f;
     tiles_preset_encode(&s, s_rec);
-    CHECK(tiles_preset_put(30u, s_rec, s_staging) == TILES_PRESET_OK, "put failed");
+    CHECK(tiles_preset_put(60u, s_rec, s_staging) == TILES_PRESET_OK, "put failed");
     tiles_preset_encode(&s, s_rec);
     strcpy(s.name, "acid2");
     tiles_preset_encode(&s, s_rec2);
     CHECK(tiles_preset_put(0u, s_rec2, s_staging) == TILES_PRESET_OK, "put over a factory slot failed");
     tiles_presets_init(k_ops); /* a restart */
     char name[TILES_PRESET_NAME_MAX + 1u];
-    tiles_preset_name(30u, name);
-    CHECK(strcmp(name, "mine") == 0 && tiles_preset_get(30u, &s) && s.patch.cutoff_hz == 777.0f,
-          "slot 31 after a restart: '%s'", name);
+    tiles_preset_name(60u, name);
+    CHECK(strcmp(name, "mine") == 0 && tiles_preset_get(60u, &s) && s.patch.cutoff_hz == 777.0f,
+          "slot 61 after a restart: '%s'", name);
     tiles_preset_name(0u, name);
     CHECK(strcmp(name, "acid2") == 0, "slot 1 after a restart: '%s'", name);
     tiles_preset_name(6u, name);
@@ -103,13 +103,13 @@ static void test_store(void) {
     CHECK(tiles_preset_clear(0u, s_staging) == TILES_PRESET_OK, "clear failed");
     tiles_presets_init(k_ops);
     tiles_preset_name(0u, name);
-    CHECK(strcmp(name, "acid") == 0 && tiles_preset_stored(30u), "after clear: '%s'", name);
+    CHECK(strcmp(name, "acid") == 0 && tiles_preset_stored(60u), "after clear: '%s'", name);
     memset(s_rec, 0, sizeof(s_rec));
     CHECK(tiles_preset_put(40u, s_rec, s_staging) == TILES_PRESET_ERR_RECORD, "a blank record stored");
-    /* Through the engine: track 2 plays slot 31. */
+    /* Through the engine: track 2 plays slot 61. */
     tiles_audio_engine_init(48u, 230u, NULL);
-    tiles_audio_engine_set_patch(1u, 30u);
-    CHECK(tiles_audio_engine_patch(1u) == 30u && strcmp(tiles_audio_engine_track_name(1u), "mine") == 0,
+    tiles_audio_engine_set_patch(1u, 60u);
+    CHECK(tiles_audio_engine_patch(1u) == 60u && strcmp(tiles_audio_engine_track_name(1u), "mine") == 0,
           "track 2 is '%s'", tiles_audio_engine_track_name(1u));
     printf("  store: put, restart, a factory slot overridden and cleared, the engine plays a stored one\n");
 }
@@ -155,7 +155,7 @@ static void service_until_ready(uint8_t track) {
 /* Banks built while the engine runs: a sound waits for its bank, the old
  * one playing on; one with no room is refused; one whose only room is its
  * track's old bank switches at once, and that bank goes only once its
- * voices have faded. Slots 41-46 hold pluck on each new bank. */
+ * voices have faded. Slots 71-76 hold pluck on each new bank. */
 static void test_swapping(void) {
     static const uint8_t banks[6] = {TILES_WT_BANK_TALK, TILES_WT_BANK_GROWL, TILES_WT_BANK_FOLD,
                                      TILES_WT_BANK_BITS, TILES_WT_BANK_SWEEP, TILES_WT_BANK_ORGAN};
@@ -165,9 +165,9 @@ static void test_swapping(void) {
         s.patch.bank = banks[i];
         strcpy(s.name, tiles_wt_bank_name(banks[i]));
         tiles_preset_encode(&s, s_rec);
-        CHECK(tiles_preset_put((uint8_t)(40u + i), s_rec, s_staging) == TILES_PRESET_OK, "put %u", i);
+        CHECK(tiles_preset_put((uint8_t)(70u + i), s_rec, s_staging) == TILES_PRESET_OK, "put %u", i);
     }
-    enum { TALK = 40, GROWL, FOLD, BITS, SWEEP, ORGAN };
+    enum { TALK = 70, GROWL, FOLD, BITS, SWEEP, ORGAN };
     tiles_audio_engine_init(48u, 230u, NULL); /* acid, pluck, haze (classic), glass */
     CHECK(slots_hold("classic") && slots_hold("glass"), "the tracks' banks after init");
 

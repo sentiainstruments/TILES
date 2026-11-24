@@ -63,4 +63,52 @@ const tiles_fm_patch_t g_fm_factory[TILES_FM_FACTORY_COUNT] = {
         .pressure_db = 8.0f,
         .slide_db = 6.0f,
     },
+    /* Bass, three pairs: a sine whose x1 modulator snaps shut (the
+     * pluck), a sub an octave down, and a fed-back pair for the bite. */
+    [TILES_FM_PUNCH] = {
+        .dx7 = {
+            OP(99, 50, 35, 70, 99, 50, 30, 0, 58, 1, 0, 7, 4, 2),
+            OP(99, 35, 25, 70, 99, 70, 55, 0, 72, 1, 0, 9, 2, 1),
+            OP(99, 0, 0, 70, 99, 99, 99, 0, 0, 1, 0, 7, 0, 0),
+            OP(99, 30, 20, 72, 99, 95, 90, 0, 86, 0, 0, 7, 1, 0),
+            OP(99, 58, 32, 72, 99, 42, 10, 0, 80, 1, 0, 7, 5, 2),
+            OP(99, 28, 20, 72, 99, 92, 85, 0, 99, 1, 0, 7, 2, 1),
+            VOICE(5, 6),
+            'P', 'U', 'N', 'C', 'H', ' ', ' ', ' ', ' ', ' ',
+        },
+        .pressure_db = 12.0f,
+        .slide_db = 9.0f,
+    },
+    /* Brass: four carriers, slightly apart; the modulators swell in a
+     * little after the note (the blare), velocity and pressure brighten. */
+    [TILES_FM_BRASS] = {
+        .dx7 = {
+            OP(52, 38, 30, 60, 88, 78, 72, 0, 74, 1, 0, 7, 5, 2),
+            OP(72, 40, 30, 62, 99, 95, 90, 0, 72, 2, 0, 7, 1, 1),
+            OP(74, 40, 30, 62, 99, 95, 90, 0, 86, 1, 0, 10, 1, 1),
+            OP(74, 40, 30, 62, 99, 95, 90, 0, 88, 1, 0, 4, 1, 1),
+            OP(56, 40, 32, 60, 94, 82, 76, 0, 80, 1, 0, 7, 5, 2),
+            OP(74, 40, 30, 62, 99, 95, 90, 0, 96, 1, 0, 7, 1, 1),
+            VOICE(22, 6),
+            'B', 'R', 'A', 'S', 'S', ' ', ' ', ' ', ' ', ' ',
+        },
+        .pressure_db = 9.0f,
+        .slide_db = 6.0f,
+    },
+    /* Mallet: a wooden bar, a sine struck by a x4 modulator that dies at
+     * once, and a x10 click on a second, shorter one. */
+    [TILES_FM_MALLET] = {
+        .dx7 = {
+            OP(99, 0, 0, 70, 99, 99, 99, 0, 0, 1, 0, 7, 0, 0),
+            OP(99, 0, 0, 70, 99, 99, 99, 0, 0, 1, 0, 7, 0, 0),
+            OP(99, 88, 50, 70, 99, 0, 0, 0, 58, 10, 0, 7, 6, 3),
+            OP(99, 52, 35, 55, 99, 0, 0, 0, 80, 1, 0, 9, 3, 3),
+            OP(99, 80, 50, 70, 99, 0, 0, 0, 70, 4, 0, 7, 6, 3),
+            OP(99, 44, 30, 52, 99, 0, 0, 0, 99, 1, 0, 7, 3, 3),
+            VOICE(5, 0),
+            'M', 'A', 'L', 'L', 'E', 'T', ' ', ' ', ' ', ' ',
+        },
+        .pressure_db = 8.0f,
+        .slide_db = 6.0f,
+    },
 };

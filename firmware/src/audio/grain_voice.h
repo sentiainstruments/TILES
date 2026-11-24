@@ -93,5 +93,12 @@ void tiles_grain_voice_render(tiles_grain_voice_t *v, const synth_patch_t *patch
 float tiles_grain_overlap(const tiles_grain_params_t *g);
 
 /* The granular factory sounds' settings (audio/grain_patches.c). */
-enum { TILES_GRAIN_CLOUD = 0, TILES_GRAIN_DUST, TILES_GRAIN_SHIMMER, TILES_GRAIN_SCATTER, TILES_GRAIN_FACTORY_COUNT };
+enum {
+    TILES_GRAIN_CLOUD = 0,
+    TILES_GRAIN_DUST,
+    TILES_GRAIN_SHIMMER,
+    TILES_GRAIN_SCATTER,
+    TILES_GRAIN_WHISPER,
+    TILES_GRAIN_FACTORY_COUNT
+};
 extern const tiles_grain_params_t g_grain_factory[TILES_GRAIN_FACTORY_COUNT];

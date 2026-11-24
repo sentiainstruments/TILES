@@ -22,8 +22,9 @@
 #define TILES_PRESET_GROUPS (TILES_PRESET_SLOTS / TILES_PRESET_GROUP_SLOTS)
 #define TILES_PRESET_RECORD_BYTES 508u
 #define TILES_PRESET_NAME_MAX 10u
-/* The factory sounds' slots: page 1, laid out as the sound menu shows it. */
-#define TILES_PRESET_FACTORY_SLOTS 24u
+/* The factory sounds' slots: pages 1 and 2, laid out as the sound menu
+ * shows them (24 a page, a row a role). */
+#define TILES_PRESET_FACTORY_SLOTS 48u
 
 _Static_assert(TILES_PRESET_GROUP_SLOTS * TILES_PRESET_RECORD_BYTES <= TILES_KV_MAX_PAYLOAD,
                "a group's records fit one kv_store payload");

@@ -1,6 +1,6 @@
 # Factory presets: the sound design (planning)
 
-Status: **planning, 2026-11-23.** The owner's brief: high-quality sounds
+Status: **page 2 built, 2026-11-23** (below); the rest planning. The owner's brief: high-quality sounds
 for techno, hard techno, EDM, dubstep, pads, plucks, melodic and harmonic
 playing, with a sound of our own. The slots, store and browsing are
 decided in `sound-roadmap.md` ("Presets: 96 slots in 4 pages"); this note
@@ -39,6 +39,30 @@ row 4 pads, textures and effects.
 
 The names are working titles; the sounds get their own words when made.
 Today's 20 factory sounds fill a third of it already.
+
+## Page 2 (built 2026-11-23)
+
+24 sounds on the new wavetable banks and three new FM voices, after the
+owner's brief to follow the archetypes the best-known commercial preset
+libraries are built on (studied: the big wavetable synths' and the
+classic FM synths' factory banks, and techno, EDM and dubstep production
+practice; internal only, nothing copied, the values ours; no product is
+named anywhere a player reads). Same rows as page 1:
+
+| Row | Sounds | The archetype |
+|---|---|---|
+| Basses | yoi, growl, riddim, pound, deep, punch | the vowel "yoi" scoop; the wavetable growl wobbling in eighths; riddim's mid chopped in sixteenth triplets over a whole sub; the hard-techno folded hit; the dub-techno sweep; the plucky FM bass |
+| Plucks, leads | future, organ, dub, rave, screech, brass | future-bass chords (seven saws scooping up, pumped); the house organ; the dub chord into the delay; the rave stab; the gliding growl lead; FM brass |
+| Pads | drift, warm, tunnel, whisper, riser, halo | the evolving wavetable pad; the warm seven-saw pad, filter opening; the dark techno pad over two bars; vowel grains; the riser (an octave in four seconds, noise rising); soft drawbars |
+| Bells, keys | mallet, metal, bleep, drops, ember, keys | the FM mallet; a metallic bell; the techno bleep; water drops; a folded bell; percussive drawbars |
+
+Levels set by render so each row sits with page 1's (within ~2 dB while
+sounding). Unit 2 (`synth bench`, cycles a voice): future 437, warm 399,
+growl 379, riser 374, yoi 335, drift 327, tunnel 287, rave 246, riddim
+227, halo 214, screech 203, pound 191, dub 188, ember 170, whisper 168,
+brass 162, punch 144, deep 143, keys 130, organ 127, drops 120, metal
+108, mallet 106, bleep 106. The renders are the owner's to judge; the
+names are working titles.
 
 ## Recipes by genre (what makes each work)
 

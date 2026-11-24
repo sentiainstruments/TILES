@@ -253,6 +253,8 @@ bank's number never moves, so a preset keeps its sound. The renders on
 2026-11-23 (pluck opened up, pressure through the frames) come out at
 the same loudness, -24 dBFS.
 
+Page 2 of the factory sounds is built on them (`factory-presets.md`).
+
 **Only 4 banks are in RAM** (`TILES_AUDIO_WT_SLOTS`, 38 KB each): slot 1
 is classic for good (the sub reads it), the other three hold whatever
 the tracks' sounds want, built on core 0 when one is needed, a step at

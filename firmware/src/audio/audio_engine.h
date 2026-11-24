@@ -159,5 +159,8 @@ uint32_t tiles_audio_engine_fx_cost(void);
 
 /* A test: cycles per sample of one voice of preset `slot` held alone for
  * `frames` (a granular one after 0.5 s untimed, its cloud full), away from
- * the playing voices; `cycles` reads a cycle counter. */
+ * the playing voices; `cycles` reads a cycle counter. 0 if its wavetable
+ * bank has no room. bench_ready() builds that bank first (up to ~0.15 s,
+ * so outside a timed or interrupt-free stretch); false if it can't. */
+bool tiles_audio_engine_bench_ready(uint8_t slot);
 uint32_t tiles_audio_engine_bench(uint8_t slot, uint32_t frames, uint32_t (*cycles)(void));

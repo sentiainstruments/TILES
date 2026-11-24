@@ -748,17 +748,24 @@ void tiles_audio_engine_set_tempo(float beats_per_minute) {
     }
 }
 
+TILES_AUDIO_COLD bool tiles_audio_engine_bench_ready(uint8_t slot) {
+    if (!tiles_preset_get(slot, &s_bench_sound)) {
+        return false;
+    }
+    s_want_also = (int8_t)sound_bank(&s_bench_sound.patch);
+    build_all_now();
+    if (!resident(s_want_also)) {
+        s_want_also = -1;
+        return false; /* the tracks hold every slot */
+    }
+    return true;
+}
+
 TILES_AUDIO_COLD uint32_t tiles_audio_engine_bench(uint8_t slot, uint32_t frames, uint32_t (*cycles)(void)) {
-    if (frames == 0u || !tiles_preset_get(slot, &s_bench_sound)) {
+    if (frames == 0u || !tiles_audio_engine_bench_ready(slot)) {
         return 0u;
     }
     const synth_patch_t *p = &s_bench_sound.patch;
-    s_want_also = (int8_t)sound_bank(p);
-    build_all_now();
-    if (!resident(sound_bank(p))) {
-        s_want_also = -1;
-        return 0u; /* the tracks hold every slot */
-    }
     voice_t v;
     memset(&v, 0, sizeof(v));
     v.patch = p;

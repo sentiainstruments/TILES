@@ -27,6 +27,9 @@
 #define KEY_DIM 0.4f
 #define ROWS 4u
 #define COLS 6u
+#define PAGES (TILES_PRESET_SLOTS / (ROWS * COLS))
+/* After a page change the top row shows its number this long. */
+#define PAGE_FLASH_MS 500u
 
 /* The page's preset slots row by row (presets.h): a role a row, top to
  * bottom; the preview note suits the role. */
@@ -63,6 +66,9 @@ static const uint8_t k_track_channel[4] = {TILES_MIDI_CH_SEQ_LANE_0, TILES_MIDI_
 
 static bool s_open, s_effects;
 static uint8_t s_track;
+static uint8_t s_page;
+static uint32_t s_page_flash_until;
+static bool s_page_flash;
 static int16_t s_patch_at[ROWS][COLS]; /* -1: none */
 static uint8_t s_patch;                /* the track's, as picked here */
 static float s_fx[COLS];               /* the track's amounts, as set here */
@@ -82,12 +88,44 @@ static void preview_off(void) {
     }
 }
 
+/* The page's slots, a row a role (presets.h). */
+static bool load_page(uint8_t page) {
+    bool any = false;
+    for (uint32_t r = 0; r < ROWS; r++) {
+        for (uint32_t c = 0; c < COLS; c++) {
+            char name[TILES_PRESET_NAME_MAX + 1u];
+            uint8_t slot = (uint8_t)(page * ROWS * COLS + r * COLS + c);
+            tiles_preset_name(slot, name);
+            s_patch_at[r][c] = name[0] != '\0' ? (int16_t)slot : -1;
+            any |= name[0] != '\0';
+        }
+    }
+    return any;
+}
+
+/* The track's sound, its effects, and the page its sound is on. */
 static void load_track(void) {
     s_patch = tiles_audio_engine_patch(s_track);
     for (uint32_t c = 0; c < COLS; c++) {
         s_fx[c] = tiles_audio_engine_fx(s_track, k_fx_param[c]);
         s_fx_sent_ms[c] = 0u;
     }
+    s_page = s_patch < TILES_PRESET_SLOTS ? (uint8_t)(s_patch / (ROWS * COLS)) : 0u;
+    (void)load_page(s_page);
+}
+
+/* The next page holding a sound that way (wrapping); stays if none. */
+static void step_page(bool forward, uint32_t now_ms) {
+    for (uint32_t i = 1; i < PAGES; i++) {
+        uint8_t page = (uint8_t)((s_page + (forward ? i : PAGES - i)) % PAGES);
+        if (load_page(page)) {
+            s_page = page;
+            s_page_flash = true;
+            s_page_flash_until = now_ms + PAGE_FLASH_MS;
+            return;
+        }
+    }
+    (void)load_page(s_page);
 }
 
 void tiles_sound_menu_open(bool effects, uint8_t track) {
@@ -95,14 +133,7 @@ void tiles_sound_menu_open(bool effects, uint8_t track) {
     s_open = true;
     s_effects = effects;
     s_track = (uint8_t)(track % 4u);
-    for (uint32_t r = 0; r < ROWS; r++) {
-        for (uint32_t c = 0; c < COLS; c++) {
-            char name[TILES_PRESET_NAME_MAX + 1u];
-            uint8_t slot = (uint8_t)(r * COLS + c);
-            tiles_preset_name(slot, name);
-            s_patch_at[r][c] = name[0] != '\0' ? (int16_t)slot : -1;
-        }
-    }
+    s_page_flash = false;
     load_track();
     for (uint8_t i = 0; i < ROWS * COLS; i++) {
         s_prev_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
@@ -161,8 +192,17 @@ static void handle_input(uint32_t now_ms) {
     bool minus = tiles_button_is_pressed(1u), plus = tiles_button_is_pressed(2u);
     if ((minus && !s_minus_was) || (plus && !s_plus_was)) {
         preview_off();
-        s_track = (uint8_t)((s_track + (plus && !s_plus_was ? 1u : 3u)) % 4u);
-        load_track();
+        if (tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID)) {
+            if (!s_effects) {
+                step_page(plus && !s_plus_was, now_ms);
+            }
+        } else {
+            s_track = (uint8_t)((s_track + (plus && !s_plus_was ? 1u : 3u)) % 4u);
+            load_track();
+        }
+    }
+    if (s_page_flash && (int32_t)(now_ms - s_page_flash_until) >= 0) {
+        s_page_flash = false;
     }
     s_minus_was = minus;
     s_plus_was = plus;
@@ -224,6 +264,10 @@ static void render(void) {
                     float reach = s_fx[col] * (float)(ROWS - 1u) - (float)(step - 1u);
                     level = reach < 0.0f ? 0.0f : reach > 1.0f ? 1.0f : reach;
                 }
+            } else if (s_page_flash && row == 0u) {
+                static const float white[3] = {1.0f, 1.0f, 1.0f};
+                rgb = white; /* the page's number, a pad a page */
+                level = col <= s_page ? 1.0f : 0.0f;
             } else {
                 int16_t p = s_patch_at[row][col];
                 rgb = k_row_rgb[row];

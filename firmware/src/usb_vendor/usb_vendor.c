@@ -938,6 +938,12 @@ static void handle_synth(void) {
             if (name[0] == '\0') {
                 continue;
             }
+            watchdog_update(); /* 47 sounds and their wavetable builds outlast the loop's 1 s */
+            if (!tiles_audio_engine_bench_ready(p)) {
+                snprintf(text, sizeof(text), "%s no-wavetable-room", name);
+                reply(text);
+                continue;
+            }
             uint32_t irq = save_and_disable_interrupts();
             uint32_t c = tiles_audio_engine_bench(p, 2400u, bench_cycles);
             restore_interrupts(irq);
