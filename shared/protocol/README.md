@@ -455,7 +455,7 @@ range, or a float isn't finite; floats out of their range are clamped
 | 2 | 1 | version (1) |
 | 3 | 1 | engine: 0 wavetable, 1 FM, 2 granular |
 | 4 | 10 | name, ASCII, NUL-padded |
-| 14 | 4 | wavetable bank (0 classic, 1 glass, 2 voice, 3 talk, 4 growl, 5 fold, 6 bits, 7 sweep, 8 organ), unison (1-7), filter (0 LP, 1 BP, 2 HP, 3 ladder), voice mode (0 poly, 1 mono, 2 legato) |
+| 14 | 4 | wavetable bank (0 classic, 1 glass, 2 voice, 3 talk, 4 growl, 5 fold, 6 bits, 7 sweep, 8 organ, 9 neuro, 10 hard), unison (1-7), filter (0 LP, 1 BP, 2 HP, 3 ladder), voice mode (0 poly, 1 mono, 2 legato) |
 | 18 | 1 | flags: 1 phase reset, 2 LFO synced, 4 LFO retrigger |
 | 19 | 1 | LFO shape (0 sine, 1 triangle, 2 saw down, 3 square, 4 random) |
 | 20 | 168 | 42 floats: wave, wave_pressure, wave_slide, wave_env, wave_lfo, detune_cents, width, drive, fold, cutoff_hz, resonance, key_track, env_oct, velocity_oct, pressure_oct, slide_oct, lfo_oct, amp attack/decay/sustain/release (ms, ms, 0-1, ms), mod the same, lfo rate, lfo delay_ms, vibrato_cents, pitch_env_semis, pitch_env_ms, glide_ms, level, velocity_level, pressure_level, drift_cents, effect sends and inserts: reverb, delay, chorus, drive, dark, crush, pump |
