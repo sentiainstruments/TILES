@@ -62,7 +62,9 @@ SAMPLE PLAY <slot> [velocity]\n  hit a slot in TILES's own sound: OK
 SYNTH LIST\n              the preset slots holding a sound (`<slot 1-96> <name>`), then each track's
                           (`track <t> <name>`), then OK
 SYNTH PATCH <track> <slot|name>\n  give track 1-4 a preset slot's sound: OK, or ERR unknown-patch
-                          (an empty slot) / track-1-4 / busy
+                          (an empty slot) / track-1-4 / busy (the last change still
+                          switching, or the other tracks hold every wavetable slot);
+                          a sound whose wavetable isn't in RAM switches ~0.2 s after OK
 PRESET LIST\n             the preset slots holding a sound (`<slot> <name> factory|stored`), then OK (see "Presets")
 PRESET GET <slot>\n       a slot's record: `bytes=508`, then hex lines (48 bytes each), then OK; ERR empty
 PRESET PUT <slot> <crc32>\n  write a slot: OK 508, then the 508-byte record as raw bytes (crc32 = zlib's of
@@ -453,7 +455,7 @@ range, or a float isn't finite; floats out of their range are clamped
 | 2 | 1 | version (1) |
 | 3 | 1 | engine: 0 wavetable, 1 FM, 2 granular |
 | 4 | 10 | name, ASCII, NUL-padded |
-| 14 | 4 | wavetable bank (0-2), unison (1-7), filter (0 LP, 1 BP, 2 HP, 3 ladder), voice mode (0 poly, 1 mono, 2 legato) |
+| 14 | 4 | wavetable bank (0 classic, 1 glass, 2 voice, 3 talk, 4 growl, 5 fold, 6 bits, 7 sweep, 8 organ), unison (1-7), filter (0 LP, 1 BP, 2 HP, 3 ladder), voice mode (0 poly, 1 mono, 2 legato) |
 | 18 | 1 | flags: 1 phase reset, 2 LFO synced, 4 LFO retrigger |
 | 19 | 1 | LFO shape (0 sine, 1 triangle, 2 saw down, 3 square, 4 random) |
 | 20 | 168 | 42 floats: wave, wave_pressure, wave_slide, wave_env, wave_lfo, detune_cents, width, drive, fold, cutoff_hz, resonance, key_track, env_oct, velocity_oct, pressure_oct, slide_oct, lfo_oct, amp attack/decay/sustain/release (ms, ms, 0-1, ms), mod the same, lfo rate, lfo delay_ms, vibrato_cents, pitch_env_semis, pitch_env_ms, glide_ms, level, velocity_level, pressure_level, drift_cents, effect sends and inserts: reverb, delay, chorus, drive, dark, crush, pump |
@@ -536,7 +538,10 @@ again) and `pca.read_fails`; TILES's own sound `audio.*`
 pad capture holds their memory) and `audio.fx_cost` (cycles per sample), `audio.usb_gap_us` (core 1's
 longest stretch between USB task calls while streaming, in us: under
 1,000 or packets miss frames), and each track's synth sound
-`audio.patch=<t1>,<t2>,<t3>,<t4>` (standalone mode). The SYNTH commands
+`audio.patch=<t1>,<t2>,<t3>,<t4>`, the wavetable banks in RAM
+`audio.wt=<bank>,<bank>,<bank>,<bank>` (`-` an empty slot, `+` one being
+built) and the last build's `audio.wt_build=<ms> ms, step <us> us`
+(standalone mode). The SYNTH commands
 answer `ERR standalone-only` in controller mode. New keys may be added;
 ignore ones you don't know.
 
