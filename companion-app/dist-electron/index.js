@@ -38,7 +38,16 @@ async function connectUsbDevice(vendorId, productId) {
 		await device.close();
 		throw new Error("TILES control endpoints not found");
 	}
-	await device.claimInterface(iface.interfaceNumber);
+	try {
+		await device.claimInterface(iface.interfaceNumber);
+	} catch (error) {
+		try {
+			await device.close();
+		} catch (closeError) {
+			console.warn("USB cleanup failed:", closeError);
+		}
+		throw error;
+	}
 	activeDevice = device;
 	controlInterface = iface.interfaceNumber;
 	controlOut = out.endpointNumber;
@@ -59,17 +68,25 @@ async function connectUsbDevice(vendorId, productId) {
 	};
 }
 async function disconnectUsbDevice() {
-	if (activeDevice) try {
-		if (controlInterface !== null) await activeDevice.releaseInterface(controlInterface);
-		await activeDevice.close();
-	} catch (error) {
-		console.warn("USB disconnect error:", error);
-	}
+	const device = activeDevice;
+	const iface = controlInterface;
 	activeDevice = null;
 	controlInterface = null;
 	controlIn = null;
 	controlOut = null;
 	receiveBuffer = "";
+	if (device) {
+		try {
+			if (iface !== null) await device.releaseInterface(iface);
+		} catch (error) {
+			console.warn("USB release error:", error);
+		}
+		try {
+			await device.close();
+		} catch (error) {
+			console.warn("USB close error:", error);
+		}
+	}
 	return { connected: false };
 }
 async function readLine() {

@@ -4,7 +4,7 @@ import { ModeProjectTargetPanel } from './ModeProjectTargetPanel'
 import { hasUnsavedDraft, selectSlot } from './synth/soundMenu'
 import type { SoundSelection } from './synth/soundMenu'
 import { SynthWorkspace } from './synth/SynthWorkspace'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ProjectWorkspace } from './project/ProjectWorkspace'
 import { DeviceSettingsPage } from './DeviceSettingsPage'
 import './App.css'
@@ -19,6 +19,7 @@ function App() {
   const [error, setError] = useState('')
   const [simFirmware, setSimFirmware] = useState<string | null>(null)
   const [page, setPage] = useState<'workspace' | 'device' | 'synth'>('workspace')
+  const connecting = useRef(false)
 
   const [soundSelection, setSoundSelection] = useState<SoundSelection | null>(null)
   function editSound(selection: SoundSelection) {
@@ -34,23 +35,63 @@ function App() {
   }
 
 
-  async function connect() {
-    try {
-      setError('')
-      setConnected(false)
-      const devices = await window.tiles.usb.list()
-      const tiles = devices.find(device =>
-        TILES_IDS.some(([vid, pid]) => device.vendorId === vid && device.productId === pid))
-      if (!tiles) throw new Error('SENTIA TILES not found. You can still edit projects offline.')
-      await window.tiles.usb.connect(tiles.vendorId, tiles.productId)
-      const info = await window.tiles.usb.command('INFO', true)
-      const firmware = info.find(line => line.startsWith('firmware='))?.slice(9) ?? 'unknown'
-      setSimFirmware(info.includes('simulator=1') ? firmware : null)
-      setConnected(true)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
+  const connect = useCallback(async () => {
+  if (connecting.current) return
+
+  connecting.current = true
+
+  try {
+    setError('')
+    setConnected(false)
+
+    const devices = await window.tiles.usb.list()
+
+    const tiles = devices.find(device =>
+      TILES_IDS.some(([vid, pid]) =>
+        device.vendorId === vid &&
+        device.productId === pid
+      )
+    )
+
+    if (!tiles) {
+      throw new Error(
+        'SENTIA TILES not found. You can still edit projects offline.'
+      )
     }
+
+    await window.tiles.usb.connect(
+      tiles.vendorId,
+      tiles.productId
+    )
+
+    const info = await window.tiles.usb.command('INFO', true)
+
+    const infoError = info.find(line => line.startsWith('ERR '))
+    if (infoError) throw new Error(infoError)
+
+    const firmware =
+      info.find(line => line.startsWith('firmware='))?.slice(9)
+      ?? 'unknown'
+
+    console.log('TILES firmware:', firmware)
+
+    setSimFirmware(
+      info.includes('simulator=1') ? firmware : null
+    )
+
+    setConnected(true)
+  } catch (reason) {
+    setConnected(false)
+    setSimFirmware(null)
+    setError(
+      reason instanceof Error
+        ? reason.message
+        : String(reason)
+    )
+  } finally {
+    connecting.current = false
   }
+}, [])
 
   async function changeSimFirmware(next: string) {
     try {
@@ -63,7 +104,9 @@ function App() {
     }
   }
 
-  useEffect(() => { void connect() }, [])
+  useEffect(() => {
+    void connect()
+  }, [connect])
 
   return <main>
     <nav style={{ display: 'flex', gap: 12, padding: '14px 22px',
@@ -91,7 +134,7 @@ function App() {
           </select>
         </label>
       </div>}
-      {connected && error && <p role="alert" className="snt-error" style={{ margin: 16 }}>{error}</p>}
+      {error && <p role="alert" className="snt-error" style={{ margin: 16 }}>{error}</p>}
     </span>
     </nav>
     {/* Keep the workspace mounted while switching tabs so edits remain staged. */}
