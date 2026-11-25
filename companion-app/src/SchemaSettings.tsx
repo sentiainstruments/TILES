@@ -1,3 +1,4 @@
+import { openModeEditor } from './modeNavigation'
 import { PadColorSettings } from './controls/PadColorSettings'
 import { DeviceControl } from './controls/DeviceControl'
 import './SchemaSettings.css'
@@ -62,7 +63,7 @@ function title(text: string) {
   return text.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase())
 }
 
-export function SchemaSettings() {
+export function SchemaSettings({ onlyModeKey }: { onlyModeKey?: string } = {}) {
   const [schema, setSchema] = useState<Setting[]>([])
   const [values, setValues] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
@@ -143,6 +144,23 @@ export function SchemaSettings() {
     return result
   }, {})
 
+  if (onlyModeKey) {
+    const setting = schema.find(item => item.key === onlyModeKey && item.type === 'bool')
+    return <section className="snt-schema-settings">
+      {loading && <p className="snt-muted">Reading mode settings…</p>}
+      {error && <p role="alert" className="snt-error">{error}</p>}
+      {!loading && !setting && <p className="snt-muted">This firmware does not expose an enable setting for this mode.</p>}
+      {!loading && setting && <section className="snt-schema-group">
+        <h3>Mode settings</h3>
+        <div className="snt-schema-grid">
+          <DeviceControl setting={setting} label="Enabled" value={values[setting.key]}
+            busy={busy !== null || loading} onUpdate={async (_, next) => { await update(setting, next) }}
+            onReset={() => reset(setting)} />
+        </div>
+      </section>}
+    </section>
+  }
+
   return <section className="snt-schema-settings">
 
     {loading && <p className="snt-muted">Reading SCHEMA and LIST…</p>}
@@ -151,13 +169,13 @@ export function SchemaSettings() {
       <h3>{title(group)}</h3>
       {group === 'color' ? <PadColorSettings settings={settings} values={values}  onUpdate={update}  busy={busy !== null || loading}
         renderSetting={setting => <div key={setting.key} className={`snt-schema-card ${['int', 'uint', 'float'].includes(setting.type) ? 'numeric' : ''}`}>
-          <DeviceControl setting={setting} label={title(setting.key.split('.').slice(1).join(' ') || setting.key)}
+          <DeviceControl onLabelClick={setting.type === 'bool' && setting.key.startsWith('modes.') ? () => openModeEditor(setting.key) : undefined} setting={setting} label={title(setting.key.split('.').slice(1).join(' ') || setting.key)}
             value={values[setting.key]} busy={busy !== null || loading}
             onUpdate={async (_, next) => { await update(setting, next) }}   onReset={() => reset(setting)}/>
 
         </div>} /> : <div className={`snt-schema-grid ${group === 'modes' ? 'snt-modes-grid' : ''}`}>
         {settings.map(setting => <div key={setting.key} className={`snt-schema-card ${['int', 'uint', 'float'].includes(setting.type) ? 'numeric' : ''}`}>
-          <DeviceControl setting={setting} label={title(setting.key.split('.').slice(1).join(' ') || setting.key)}
+          <DeviceControl onLabelClick={setting.type === 'bool' && setting.key.startsWith('modes.') ? () => openModeEditor(setting.key) : undefined} setting={setting} label={title(setting.key.split('.').slice(1).join(' ') || setting.key)}
             value={values[setting.key]} busy={busy !== null || loading}
             onUpdate={async (_, next) => { await update(setting, next) }}  onReset={() => reset(setting)} />
 

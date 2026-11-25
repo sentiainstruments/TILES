@@ -1,3 +1,6 @@
+import { WorkspaceIcon } from './WorkspaceIcon'
+import type { ModeProjectTarget } from './modeNavigation'
+import { ModeProjectTargetPanel } from './ModeProjectTargetPanel'
 import { hasUnsavedDraft, selectSlot } from './synth/soundMenu'
 import type { SoundSelection } from './synth/soundMenu'
 import { SynthWorkspace } from './synth/SynthWorkspace'
@@ -24,6 +27,12 @@ function App() {
     setSoundSelection(selection)
     setPage('synth')
   }
+  const [modeProjectTarget, setModeProjectTarget] = useState<ModeProjectTarget | null>(null)
+  function editModeProject(target: ModeProjectTarget) {
+    setModeProjectTarget(target)
+    setPage('workspace')
+  }
+
 
   async function connect() {
     try {
@@ -60,11 +69,11 @@ function App() {
     <nav style={{ display: 'flex', gap: 12, padding: '14px 22px',
       borderBottom: '1px solid var(--border)', textAlign: 'left' }} aria-label="Companion app">
       <button type="button" aria-current={page === 'workspace' ? 'page' : undefined}
-        onClick={() => setPage('workspace')}>Project Workspace</button>
+        onClick={() => setPage('workspace')} title="Project Workspace"><WorkspaceIcon kind="project" /></button>
       <button type="button" aria-current={page === 'device' ? 'page' : undefined}
-        onClick={() => setPage('device')}>Device Settings</button>
+        onClick={() => setPage('device')} title="Device Settings"><WorkspaceIcon kind="device" /></button>
       <button type="button" aria-current={page === 'synth' ? 'page' : undefined}
-        onClick={() => setPage('synth')}>Synth Workspace</button>
+        onClick={() => setPage('synth')} title="Synth Workspace"><WorkspaceIcon kind="synth" /></button>
         <div className="nav-device-status">
           <span
             className={`nav-status-dot ${connected ? 'connected' : 'disconnected'}`}
@@ -87,13 +96,14 @@ function App() {
     </nav>
     {/* Keep the workspace mounted while switching tabs so edits remain staged. */}
     <div style={{ display: page === 'workspace' ? 'block' : 'none' }}>
+      {modeProjectTarget && <ModeProjectTargetPanel target={modeProjectTarget} onBack={() => setPage('device')} onClose={() => setModeProjectTarget(null)} />}
       <ProjectWorkspace />
     </div>
     <section style={{ display: page === 'device' ? 'block' : 'none' }}>
 
       <div key={simFirmware ?? 'real-device'}>
         <DeviceSettingsPage connected={connected} connectionMessage={error}
-          onReconnect={() => { void connect() }} onEditSound={editSound} />
+          onReconnect={() => { void connect() }} onEditSound={editSound} onEditModeProject={editModeProject} />
       </div>
     </section>
     <div style={{ display: page === 'synth' ? 'block' : 'none' }}>

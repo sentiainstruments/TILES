@@ -10,12 +10,13 @@ export type DeviceSetting = {
   defaultValue?: string
 }
 
-export function DeviceControl({ setting, label, value, busy, onUpdate,   onReset }: {
+export function DeviceControl({ setting, label, value, busy, onUpdate,   onReset, onLabelClick }: {
   setting: DeviceSetting
   label: string
   value: string | undefined
   busy: boolean
   onUpdate: (setting: DeviceSetting, next: string) => Promise<void>
+  onLabelClick?: () => void
   onReset?: () => void | Promise<void>
 }) {
   const id = useId()
@@ -42,7 +43,10 @@ export function DeviceControl({ setting, label, value, busy, onUpdate,   onReset
 
   return <div className="snt-device-control">
     <div className="snt-device-control-heading">
-      {onReset ? (
+      {onLabelClick ? (
+        <button type="button" className="snt-mode-label" title={`Open ${label} settings`}
+          aria-label={`Open ${label} settings`} onClick={onLabelClick}>{label}</button>
+      ) : onReset ? (
         <button
           type="button"
           className="snt-reset-label"

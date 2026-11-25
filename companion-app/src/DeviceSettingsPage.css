@@ -26,7 +26,7 @@
 .snt-connection-note { color: #b6b1c2; margin: -10px 0 19px; font-size: 12px; }
 .snt-device-grid { display: grid; grid-template-columns: minmax(0, 1.53fr) minmax(340px, 1fr); gap: 20px; align-items: start; }
 .snt-device-left { min-width: 0; display: grid; gap: 16px; }
-.snt-panel { min-width: 0; border: 1px solid #393b4a; border-radius: 18px; background: #20232e; box-shadow: 0 14px 38px #0c0e1650; }
+.snt-panel { min-width: 0; border: 1px solid #393b4a; border-radius: 4px; background: #20232e; box-shadow: 0 14px 38px #0c0e1650; }
 .snt-preview-panel { padding: 4px 2px 17px; }
 .snt-preview-panel .tiles-visualizer { padding: 19px; }
 .snt-preview-panel .tiles-visualizer-heading { margin-bottom: 13px; }
@@ -204,4 +204,14 @@
   opacity: 1;
   color: #bfc0ce;
   cursor: default;
+}
+.snt-device-left > .melodic-editor {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.snt-device-left > .melodic-editor .melodic-editor-scroll {
+  max-height: none;
+  overflow: visible;
 }

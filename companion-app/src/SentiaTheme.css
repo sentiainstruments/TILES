@@ -1,0 +1,166 @@
+/* SENTIA / TILES — brand theme. Load after the existing component styles. */
+:root:root {
+  color-scheme: dark;
+  --sentia-ink: #0e1728;
+  --sentia-panel: #17243a;
+  --sentia-surface: #202f48;
+  --sentia-recess: #101a2d;
+  --sentia-line: #394c69;
+  --sentia-ice: #dce9fc;
+  --sentia-muted: #a5b6d0;
+  --sentia-blue: #779bff;
+  --sentia-pink: #ff00e5;
+  --sentia-control: #ff54eb;
+  --sentia-radius: 6px;
+  --sentia-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.88' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.18'/%3E%3C/svg%3E");
+  --sentia-backdrop: var(--sentia-grain), radial-gradient(ellipse at 10% 0%, #334a7a 0%, transparent 50%), radial-gradient(ellipse at 100% 8%, #34243d 0%, transparent 42%), #0e1728;
+  --sentia-card: linear-gradient(145deg, #1d2d46f5, #142136f7);
+  --sentia-input: #22324c;
+  /* Existing Project Workspace / Vite tokens. */
+  --text: var(--sentia-muted);
+  --text-h: var(--sentia-ice);
+  --bg: var(--sentia-ink);
+  --border: var(--sentia-line);
+  --code-bg: var(--sentia-recess);
+  --accent: var(--sentia-control);
+  --accent-bg: #ff00e51c;
+  --accent-border: #e450d5;
+  --social-bg: #20304a;
+  --shadow: 0 12px 32px #070d1950;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+body { background: var(--sentia-backdrop); background-attachment: fixed; }
+#root, #root:has(.device-settings-page) { width: 100%; max-width: none; border-inline: 0; }
+#root > main { color: var(--sentia-ice); }
+/* Compact, consistent nav. Avoid changing the actual page routing. */
+#root > main > nav, #root:has(.device-settings-page) > main > nav {
+  background: var(--sentia-grain), linear-gradient(110deg, #1a2b46, #141e31 75%);
+  border-bottom-color: var(--sentia-line) !important; color: var(--sentia-ice);
+  align-items: center;
+}
+#root > main > nav > button, #root:has(.device-settings-page) > main > nav > button {
+  background: #1d2c44; border: 1px solid #425675; border-radius: 6px;
+  color: var(--sentia-ice); padding: 9px 12px; font-size: 12px; line-height: 1.4; cursor: pointer;
+}
+#root > main > nav > button[aria-current='page'], #root:has(.device-settings-page) > main > nav > button[aria-current='page'] {
+  background: #422043; border-color: var(--sentia-control); color: #fff;
+  box-shadow: inset 0 -2px var(--sentia-pink);
+}
+#root > main > nav > button:hover { border-color: var(--sentia-blue); }
+#root .snt-firmware-selector { background: transparent; border-color: var(--sentia-line); color: var(--sentia-muted); }
+#root .nav-device-status { color: var(--sentia-muted); }
+/* Keep existing layout and control widths; unify the material and type hierarchy. */
+#root .device-settings-page {
+  --snt-fg: var(--sentia-ice); --snt-muted: var(--sentia-muted); --snt-accent: var(--sentia-control);
+  background: var(--sentia-backdrop); color: var(--sentia-ice);
+}
+#root .snt-panel, #root .melodic-editor, #root .snt-scales-details, #root .snt-advanced,
+#root .sw-panel, #root .pw-editor, #root .pw-review {
+  background: var(--sentia-card); border-color: var(--sentia-line);
+  border-radius: var(--sentia-radius); box-shadow: 0 6px 22px #070d192e;
+}
+#root .snt-panel-title-row h2, #root .melodic-editor-heading h3, #root .sw-panel h3 {
+  color: var(--sentia-ice); font-weight: 650; letter-spacing: -.25px;
+}
+#root .snt-schema-settings .snt-schema-group, #root .snt-settings-section,
+#root .melodic-editor-heading, #root .melodic-status, #root .sw-tabs,
+#root .snt-curve-values { border-color: var(--sentia-line); }
+#root .snt-schema-settings .snt-schema-group h3, #root .snt-schema-settings .snt-schema-group h4 {
+  color: var(--sentia-ice); font-weight: 650; letter-spacing: .1px;
+}
+#root .snt-schema-settings .snt-schema-card { border-color: var(--sentia-line); }
+#root .snt-schema-settings .snt-device-control-heading label,
+#root .snt-schema-settings .snt-device-control-heading .snt-reset-label,
+.snt-floating-panel .snt-device-control-heading label { color: var(--sentia-muted); font-size: 12px; line-height: 1.4; }
+#root .snt-schema-settings .snt-device-control-heading .snt-reset-label:hover:not(:disabled) { color: var(--sentia-control); }
+#root .snt-muted, #root .snt-schema-count, #root .snt-panel-title-row p, #root .snt-scales-details summary span,
+#root .snt-schema-meta small, #root .snt-device-control-heading span, #root .snt-curve-heading p,
+#root .snt-curve-values, #root .snt-curve-axis-x, #root .snt-curve-axis-y, #root .tiles-sound-toolbar small { color: var(--sentia-muted); }
+#root .snt-eyebrow, #root .snt-preview-tag, #root .pw-eyebrow { color: var(--sentia-control); }
+#root .snt-system-message, #root .snt-device-connection, #root .tiles-mode-status, #root .tiles-sound-toolbar {
+  background: var(--sentia-recess); border-color: var(--sentia-line); color: var(--sentia-ice);
+}
+/* Acrylic-style instrument housing. Never override --pad-color or its active/disabled LED rules. */
+#root .tiles-visualizer { --device-background: #273c59; --device-border: #657e9f; --pad-background: #111d30; --button-background: #283c58; --button-border: #627b9f; --button-text: var(--sentia-ice); }
+#root .tiles-device {
+  background: var(--sentia-grain), linear-gradient(155deg, #465d7e 0%, #273c59 30%, #1e304d 72%, #345477 100%);
+  border-color: #6984a5; border-radius: 18px;
+  box-shadow: inset 0 1px 0 #d3e9ff55, inset 0 -3px 0 #0e1c3166, 0 5px 0 #263951, 0 9px 0 #142239, 0 14px 24px #07102280;
+}
+#root .tiles-device.tiles-sound-device {
+  box-shadow: inset 0 1px 0 #d3e9ff55, 0 5px 0 #263951, 0 9px 0 #142239, 0 14px 24px #07102280, 0 0 18px color-mix(in srgb, var(--sound-track-color) 32%, transparent);
+}
+#root .tiles-brand, #root .tiles-pad span { color: var(--sentia-ice); }
+#root .tiles-pad { border-radius: 7px; }
+#root .tiles-pad.is-disabled-preview span, #root .tiles-pad:disabled span { color: #8e9bb2; }
+#root .tiles-function-button { background: var(--button-background); color: var(--button-text); border-color: var(--button-border); }
+#root .tiles-function-button:hover, #root .tiles-function-button.is-selected { background: #54244f; border-color: var(--sentia-control); }
+/* Native fields, not color inputs, piano keys, or the invisible pad picker. */
+#root .device-settings-page select, #root .device-settings-page input:is([type='number'],[type='text']),
+#root .snt-firmware-selector select, #root .sw-root select, #root .sw-root input:not([type='range']):not([type='color']):not([type='checkbox']):not([type='radio']):not([type='file']),
+.snt-floating-panel select, .snt-floating-panel input:is([type='number'],[type='text']), .snt-floating-panel .snt-scale-name-row input,
+#root .snt-scale-name-row input {
+  background: var(--sentia-input); border: 1px solid #465d7d; color: var(--sentia-ice); border-radius: 5px;
+}
+#root .snt-subtle-button, #root .sw-root button:not(.white):not(.black):not(.held),
+#root .tiles-sound-toolbar button, #root .snt-scale-manager-toolbar button,
+#root .snt-scale-actions button, .snt-floating-panel .snt-scale-actions button {
+  background: var(--sentia-input); border-color: #465d7d; color: var(--sentia-ice); border-radius: 5px;
+}
+#root .sw-tabs button.selected, #root .snt-scale-actions .snt-scale-save, .snt-floating-panel .snt-scale-actions .snt-scale-save {
+  background: #502149; border-color: var(--sentia-control); color: #fff;
+}
+#root .pw-main .pw-apply, #root .pw-review .pw-apply { color: #151827; }
+#root .snt-subtle-button:hover:not(:disabled), #root .tiles-sound-toolbar button:hover:not(:disabled),
+#root .snt-scale-actions button:hover:not(:disabled), .snt-floating-panel .snt-scale-actions button:hover:not(:disabled) { border-color: var(--sentia-blue); }
+#root input[type='range'], #root input[type='checkbox'], .snt-floating-panel input[type='range'] { accent-color: var(--sentia-control); }
+#root .snt-toggle-track, .snt-floating-panel .snt-toggle-track { background: #465673; }
+#root .snt-toggle.active .snt-toggle-track, .snt-floating-panel .snt-toggle.active .snt-toggle-track { background: var(--sentia-control); }
+#root .snt-toggle-track span, .snt-floating-panel .snt-toggle-track span { background: #f7f6ff; }
+#root .snt-toggle, .snt-floating-panel .snt-toggle { color: var(--sentia-muted); }
+/* Preserve native range size and user-defined compact grid spacing. */
+#root .snt-reset-label, #root .snt-pad-palette-button, #root .snt-scale-reset-icon,
+.snt-floating-panel .snt-scale-reset-icon { color: var(--sentia-blue); }
+#root .snt-pad-palette-button:hover, #root .snt-scale-reset-icon:hover,
+.snt-floating-panel .snt-scale-reset-icon:hover { color: var(--sentia-control); background: #ff00e517; }
+#root .snt-curve { background: #142239; border-color: var(--sentia-line); border-radius: 7px; }
+#root .snt-curve-chart svg { background: #101b2e; border-color: #435675; }
+#root .snt-curve-grid line { stroke: #304562; }
+#root .snt-curve-guide { stroke: #637da1; }
+#root .snt-curve-line { stroke: var(--sentia-control); filter: drop-shadow(0 0 2px #ff00e54d); }
+#root .snt-curve-handle { fill: #fff0fc; stroke: #ef38d7; }
+#root .snt-curve-handle:hover, #root .snt-curve-handle:focus-visible { stroke: #ff9ef2; }
+#root .snt-curve-chart stop { stop-color: var(--sentia-control); }
+#root .snt-curve-values button { color: var(--sentia-control); }
+/* Floating windows render in a portal under body. Keep the same skin there. */
+body .snt-floating-panel { background: #17263c; color: var(--sentia-ice); border-color: #5c7396; border-radius: 9px; box-shadow: 0 20px 65px #050b16b3; }
+body .snt-floating-titlebar { background: var(--sentia-grain), linear-gradient(110deg, #354d72, #26344f); border-color: var(--sentia-line); }
+body .snt-floating-titlebar .snt-floating-close { background: #273b59; border-color: #526b90; color: var(--sentia-ice); }
+body .snt-floating-titlebar .snt-floating-close:hover { background: #5c2858; }
+#root .snt-mini-tiles, body .snt-floating-panel .snt-mini-tiles { background: var(--sentia-grain), linear-gradient(145deg,#344d70,#233653); border-color: #647fa4; }
+#root .snt-scale-editor .snt-scale-keyboard button.active, .snt-floating-panel .snt-scale-editor .snt-scale-keyboard button.active { background: #d329be; border-color: #ff8cf0; color: #fff; }
+#root .snt-scale-editor .snt-scale-black, .snt-floating-panel .snt-scale-editor .snt-scale-black { background: #152137; border-color: #4f6481; }
+/* Reassert active black keys after base black-key treatment. */
+#root .snt-scale-editor .snt-scale-keyboard .snt-scale-black.active, .snt-floating-panel .snt-scale-editor .snt-scale-keyboard .snt-scale-black.active { background: #d329be; border-color: #ff8cf0; }
+#root .snt-scale-readout, .snt-floating-panel .snt-scale-readout { color: var(--sentia-blue); }
+#root .snt-scale-editor button.snt-scale-delete, .snt-floating-panel .snt-scale-editor button.snt-scale-delete { color: #ffc0c9; border-color: #95516c; background: #432639; }
+#root .tiles-pad.tiles-scale-empty::after { background: #263855; color: var(--sentia-control); }
+/* Synth workspace: visual-only accents; preserve each parameter and audio path. */
+#root .sw-root { --sw-border: var(--sentia-line); --sw-muted: var(--sentia-muted); --sw-accent: var(--sentia-control); background: var(--sentia-backdrop); color: var(--sentia-ice); }
+#root .sw-graph, #root .sw-scope { background-color: var(--sentia-recess); background-image: linear-gradient(#263a54 1px,transparent 1px),linear-gradient(90deg,#263a54 1px,transparent 1px); border-color: var(--sentia-line); }
+#root .sw-dial strong { color: var(--sentia-ice); }
+#root .sw-dial svg path[stroke='#b79afc'], #root .sw-graph path[stroke='#bd9fff'] { stroke: var(--sentia-control); }
+#root .sw-dial svg path[stroke='#45495b'] { stroke: #486181; }
+#root .sw-dial svg circle[fill='#282b39'] { fill: #233752; stroke: #597596; }
+#root .sw-dial svg line[stroke='#decaff'] { stroke: var(--sentia-ice); }
+#root .sw-graph path[stroke='#8261c2'] { stroke: var(--sentia-blue); }
+#root .sw-graph path[stroke='#e2d0ff'] { stroke: var(--sentia-control); }
+#root .sw-graph path[fill='#a982ed25'] { fill: #ff54eb25; }
+#root .sw-operators > div, #root .sw-status { background: var(--sentia-recess); border-color: var(--sentia-line); color: var(--sentia-muted); }
+#root .sw-root .sw-keys .held { background: var(--sentia-control); color: #151827; }
+#root .pw-sidebar, #root .pw-modal { background: var(--sentia-panel); border-color: var(--sentia-line); }
+/* Keyboard visibility; do not replace the pad's color-coded focus styles. */
+#root :is(button,select,input,summary):focus-visible, .snt-floating-panel :is(button,select,input):focus-visible { outline: 2px solid var(--sentia-blue); outline-offset: 2px; }
+#root .tiles-pad:focus-visible { outline-color: #edf5ff; }

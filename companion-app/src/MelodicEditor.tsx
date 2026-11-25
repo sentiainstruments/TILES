@@ -73,8 +73,9 @@ function parseList(lines: string[]): Record<string, string> {
 
 const isHex = (value: string) => /^[0-9A-F]{6}$/i.test(value)
 
-export function MelodicEditor({ selectedPad }: {
+export function MelodicEditor({ selectedPad, onEditPreset }: {
   selectedPad: number | null
+  onEditPreset?: () => void
   onSelectPad: (pad: number) => void
 }) {
   const [schema, setSchema] = useState<Setting[]>([])
@@ -82,7 +83,7 @@ export function MelodicEditor({ selectedPad }: {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [isMock, setIsMock] = useState(false)
+  const [, setIsMock] = useState(false)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -194,7 +195,9 @@ export function MelodicEditor({ selectedPad }: {
   return <aside className="melodic-editor snt-melodic-compact" aria-label="Melodic mode customization">
     <div className="melodic-editor-heading">
       <h3>Melodic</h3>
-      <button type="button" className="snt-subtle-button" onClick={() => void refresh()} disabled={loading || busy}>Refresh</button>
+      <div className="snt-mode-preview-action"><button type="button" className="snt-subtle-button" onClick={() => void refresh()} disabled={loading || busy}>Refresh</button>
+        {onEditPreset && <button type="button" className="snt-subtle-button" onClick={onEditPreset}>Edit Preset</button>}
+      </div>
     </div>
 
     {error && <div className="melodic-error" role="alert">{error}</div>}
