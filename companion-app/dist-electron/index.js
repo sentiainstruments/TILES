@@ -1229,11 +1229,18 @@ function createWindow() {
 	mainWindow = new BrowserWindow({
 		width: 1200,
 		height: 800,
+		minWidth: 900,
+		minHeight: 600,
+		show: false,
 		webPreferences: {
 			preload: join(__dirname, "preload.mjs"),
 			contextIsolation: true,
 			nodeIntegration: false
 		}
+	});
+	mainWindow.once("ready-to-show", () => {
+		mainWindow?.maximize();
+		mainWindow?.show();
 	});
 	if (process.env.VITE_DEV_SERVER_URL) mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
 	else mainWindow.loadFile("dist/index.html");

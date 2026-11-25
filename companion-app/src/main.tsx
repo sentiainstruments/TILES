@@ -8,3 +8,7 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 )
+
+import './SentiaTheme.css'
+
+import './AmbientNavigation.css'

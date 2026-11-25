@@ -1,0 +1,42 @@
+/* Scoped to the dynamic settings panel; existing compact layouts are untouched. */
+.snt-schema-settings { padding: 14px; min-width: 0; }
+.snt-schema-settings .snt-panel-title-row { margin-bottom: 12px; align-items: center; }
+.snt-schema-settings .snt-panel-title-row h2 { margin: 0 0 4px; font-size: 16px; }
+.snt-schema-settings .snt-panel-title-row p { margin: 0; font-size: 11px; }
+.snt-schema-settings .snt-schema-group { padding: 14px 0; border-top: 1px solid #3b3e50; }
+.snt-schema-settings .snt-schema-group h3 { font-size: 13px; margin: 0 0 12px; }
+.snt-schema-settings .snt-schema-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}/* .snt-schema-settings .snt-schema-card { min-width: 0; display: flex; flex-direction: column; gap: 8px; background: #1e212c; border: 1px solid #393b4a; border-radius: 8px; padding: 10px; } */
+.snt-schema-settings .snt-device-control, .snt-schema-settings .snt-device-control select { min-width: 0; }
+.snt-schema-settings .snt-device-control-heading { gap: 6px; flex-wrap: wrap; }
+.snt-schema-settings .snt-device-control select { font-size: 12px; padding: 7px; }
+.snt-schema-settings .snt-number-control input[type='number'] { width: 86px; min-width: 0; font-size: 12px; padding: 7px; }
+.snt-schema-settings .snt-number-control input[type='range'] {
+  flex: 0 1 100px;
+  width: 100px;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+.snt-schema-settings .snt-schema-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; margin-top: auto; }
+.snt-schema-settings .snt-schema-meta small { color: #9296aa; font-size: 10px; overflow-wrap: anywhere; }
+.snt-schema-settings .snt-color-control { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; font-size: 11px; }
+.snt-schema-settings .snt-color-control input { width: 30px; height: 26px; padding: 0; border: 0; background: transparent; }
+.snt-schema-settings .snt-schema-count { color: #a3a5b7; font-size: 11px; }
+.snt-schema-settings .snt-schema-grid.snt-modes-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px 8px;
+}
+
+.snt-modes-grid .snt-device-control {
+  gap: 4px;
+}
+
+.snt-modes-grid .snt-toggle {
+  gap: 5px;
+  min-height: 24px;
+}

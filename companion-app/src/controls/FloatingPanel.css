@@ -1,0 +1,53 @@
+/* Portal to body: independent of scroll, clipping and container queries. */
+.snt-floating-panel {
+  position: fixed;
+  z-index: 1000;
+  width: min(450px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+  color: #e7e5f0;
+  color-scheme: dark;
+  background: #21232e;
+  border: 1px solid #57596d;
+  border-radius: 12px;
+  box-shadow: 0 18px 60px #0009, 0 0 0 1px #0003;
+  text-align: left;
+}
+.snt-floating-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: #2b2d3b;
+  border-bottom: 1px solid #414457;
+  font-size: 13px;
+  font-weight: 600;
+  flex: 0 0 auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.snt-floating-titlebar:active { cursor: grabbing; }
+.snt-floating-titlebar .snt-floating-close {
+  width: 27px;
+  height: 27px;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: #e4deef;
+  background: #353747;
+  border: 1px solid #54566b;
+  border-radius: 6px;
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+}
+.snt-floating-titlebar .snt-floating-close:hover { background: #574266; }
+.snt-floating-content { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
