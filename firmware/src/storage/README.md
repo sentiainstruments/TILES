@@ -23,9 +23,15 @@ data.
   data that changes while music plays (drum mode's pattern; the mode,
   scale, key and octave in `services/play_state.c`). Each save is a
   new page-aligned record after the last (page programs only, well under a
-  millisecond); erasing the spare sector is a separate call the owner makes
-  when a stall doesn't matter. Same power-cut guarantee as kv_store, tested
+  millisecond each, and `tiles_log_append_start/step` puts out one page
+  per call so a big record never stalls more than one); erasing the spare
+  sector is a separate call the owner makes when a stall doesn't matter
+  (the clock stopped and TILES's own sound silent). Same power-cut guarantee as kv_store, tested
   the same way (`firmware/test/test_log_store.c`).
+- **`flash_staging.{h,c}`** -- one 4 KB buffer shared by the saves that
+  build and write within one call (op_mode's pattern sector,
+  content's next blob), instead of 4 KB each. A save that writes over
+  several passes (the log stores' appends) keeps its own.
 - **`storage_flash.{h,c}`** -- the real flash ops (XIP reads; erase/program
   with interrupts off and the watchdog petted before/after, the same
   single-core pattern the pattern bank uses) and a boot-time check that the
@@ -36,11 +42,16 @@ data.
   flash, far from the image; `picotool load` never touches them, so they
   survive a firmware update):
   - last sector: sequencer pattern bank (`services/op_mode.c`)
-  - 4 sectors below: Song mode store (`services/op_mode.c`)
+  - 4 sectors below: free (Song mode's store until it was removed; kept so
+    nothing below moves)
   - 2 sectors below that: settings (`profiles/settings_persist.c`)
   - 2 sectors below that: content store, custom scales (`profiles/content.c`)
   - 2 sectors below that: drum mode's pattern (`services/drum_seq.c`, log_store)
   - 2 sectors below that: mode, scale, key, octave (`services/play_state.c`, log_store)
+  - the saved data keeps a 256 KB band at the top; below it, the drum
+    sampler's 8 slots, 192 KB each (1.5 MB, `audio/sample_store.c`): its
+    own format (a header programmed last over 16-bit audio), erased a
+    sector at a time as a load reaches it
 
 ## What uses it
 

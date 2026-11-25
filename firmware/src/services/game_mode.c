@@ -1047,7 +1047,7 @@ static void ge_update(uint32_t now_ms) {
         if (s_ge_playback_step != s_ge_last_haptic_step) {
             /* One haptic per step, as its flash starts. */
             s_ge_last_haptic_step = s_ge_playback_step;
-            tiles_haptics_trigger_kick(s_ge_pattern_pad[s_ge_playback_step], GE_PLAYBACK_VELOCITY);
+            tiles_haptics_trigger_click(s_ge_pattern_pad[s_ge_playback_step], GE_PLAYBACK_VELOCITY);
         }
         break;
     }
@@ -1080,7 +1080,7 @@ static void ge_handle_input(uint32_t now_ms) {
         /* Correct: re-flash this pad's pattern color, plus a haptic. */
         s_ge_feedback_pad = pad;
         s_ge_feedback_start_ms = now_ms;
-        tiles_haptics_trigger_kick(pad, GE_FEEDBACK_VELOCITY);
+        tiles_haptics_trigger_click(pad, GE_FEEDBACK_VELOCITY);
 
         s_ge_input_index++;
         if (s_ge_input_index >= s_ge_length) {
@@ -1217,19 +1217,19 @@ static void gm_handle_menu_selection(void) {
 
     /* The one haptic outside Echo: a felt confirmation a game started. */
     if (pad1 && !s_gm_prev_pad1_touched) {
-        tiles_haptics_trigger_kick(1u, GM_MENU_SELECT_VELOCITY);
+        tiles_haptics_trigger_click(1u, GM_MENU_SELECT_VELOCITY);
         gm_start_snake(now_ms);
     } else if (pad2 && !s_gm_prev_pad2_touched) {
-        tiles_haptics_trigger_kick(2u, GM_MENU_SELECT_VELOCITY);
+        tiles_haptics_trigger_click(2u, GM_MENU_SELECT_VELOCITY);
         gm_start_tile_breaker(now_ms);
     } else if (pad3 && !s_gm_prev_pad3_touched) {
-        tiles_haptics_trigger_kick(3u, GM_MENU_SELECT_VELOCITY);
+        tiles_haptics_trigger_click(3u, GM_MENU_SELECT_VELOCITY);
         gm_start_tile_drop(now_ms);
     } else if (pad4 && !s_gm_prev_pad4_touched) {
-        tiles_haptics_trigger_kick(4u, GM_MENU_SELECT_VELOCITY);
+        tiles_haptics_trigger_click(4u, GM_MENU_SELECT_VELOCITY);
         gm_start_paddle(now_ms);
     } else if (pad5 && !s_gm_prev_pad5_touched) {
-        tiles_haptics_trigger_kick(5u, GM_MENU_SELECT_VELOCITY);
+        tiles_haptics_trigger_click(5u, GM_MENU_SELECT_VELOCITY);
         gm_start_echo(now_ms);
     }
     s_gm_prev_pad1_touched = pad1;

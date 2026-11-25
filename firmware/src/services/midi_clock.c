@@ -455,3 +455,7 @@ tiles_midi_clock_state_t tiles_midi_clock_get_state(void) {
     s_start_edge = false;
     return state;
 }
+
+uint32_t tiles_midi_clock_song_pulse(void) {
+    return visible_pulse_count() - s_song_origin;
+}

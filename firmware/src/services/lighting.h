@@ -117,5 +117,12 @@ void tiles_lighting_set_standby_underglow_from_pads(const float rgb[][3], float 
 
 /* Bench test (TEST LEDS): everything white at percent of full scale, not
  * the ceiling, for measuring current. 0 ends it. */
+/* Show takeover (show_link.c): while active the pads show the show's
+ * colours and the underglow its strobe, over every mode, menu and standby
+ * screen (the crash indicator still shows). Off: everything as it was. */
+void tiles_lighting_set_show_active(bool active);
+void tiles_lighting_set_show_pad_rgb(uint8_t logical_pad, float r, float g, float b);
+void tiles_lighting_set_show_underglow_rgb(float r, float g, float b); /* all four, written now */
+
 void tiles_lighting_set_test_white(uint8_t percent_0_to_100);
 uint8_t tiles_lighting_get_test_white(void);

@@ -1,5 +1,7 @@
 #include "content.h"
 
+#include "flash_staging.h"
+
 #include "note_map.h"
 
 #include <string.h>
@@ -11,10 +13,16 @@ static bool s_storage;
 static bool s_newer_format;
 
 /* What flash holds (and what's applied). Static, not on the stack: one kv
- * payload is ~4 KB. s_work builds the next version of the blob. */
+ * payload is ~4 KB. work() builds the next version of the blob. */
 static uint8_t s_blob[TILES_KV_MAX_PAYLOAD];
 static uint16_t s_len;
-static uint8_t s_work[TILES_KV_MAX_PAYLOAD];
+_Static_assert(TILES_KV_MAX_PAYLOAD <= TILES_FLASH_STAGING_BYTES, "a blob fits the staging buffer");
+
+/* The next blob, built and written within one call: the shared staging
+ * buffer (storage/flash_staging.h). */
+static uint8_t *work(void) {
+    return tiles_flash_staging();
+}
 
 static void put_u16(uint8_t *p, uint16_t v) {
     p[0] = (uint8_t)(v & 0xFFu);
@@ -156,22 +164,22 @@ void tiles_content_init(const tiles_kv_ops_t *ops) {
     apply_scales();
 }
 
-/* Writes s_work[0..len) as the new store, then makes it current. */
+/* Writes work()[0..len) as the new store, then makes it current. */
 static tiles_content_result_t commit(uint16_t len) {
     if (!s_storage) {
         return TILES_CONTENT_NO_STORAGE;
     }
-    if (tiles_kv_write(&s_kv, s_work, len, TILES_CONTENT_BLOB_VERSION) != TILES_KV_OK) {
+    if (tiles_kv_write(&s_kv, work(), len, TILES_CONTENT_BLOB_VERSION) != TILES_KV_OK) {
         return TILES_CONTENT_SAVE_FAILED;
     }
-    memcpy(s_blob, s_work, len);
+    memcpy(s_blob, work(), len);
     s_len = len;
     s_newer_format = false;
     apply_scales();
     return TILES_CONTENT_OK;
 }
 
-/* Copies every intact record except (type, slot) into s_work; its length. */
+/* Copies every intact record except (type, slot) into work(); its length. */
 static uint16_t copy_without(uint8_t type, uint8_t slot) {
     uint16_t out = 0u;
     uint16_t pos = 0u;
@@ -181,7 +189,7 @@ static uint16_t copy_without(uint8_t type, uint8_t slot) {
             break;
         }
         if (!(s_blob[pos] == type && s_blob[pos + 1u] == slot)) {
-            memcpy(&s_work[out], &s_blob[pos], (size_t)(next - pos));
+            memcpy(&work()[out], &s_blob[pos], (size_t)(next - pos));
             out = (uint16_t)(out + (next - pos));
         }
         pos = next;
@@ -207,13 +215,13 @@ tiles_content_result_t tiles_content_put_scale(const tiles_content_scale_t *scal
         return TILES_CONTENT_NO_STORAGE;
     }
     uint16_t len = copy_without(TILES_CONTENT_TYPE_SCALE, scale->slot);
-    if ((uint32_t)len + RECORD_HEADER + SCALE_BODY_MAX > sizeof(s_work)) {
+    if ((uint32_t)len + RECORD_HEADER + SCALE_BODY_MAX > TILES_KV_MAX_PAYLOAD) {
         return TILES_CONTENT_FULL;
     }
-    uint16_t body = encode_scale(scale, &s_work[len + RECORD_HEADER]);
-    s_work[len] = TILES_CONTENT_TYPE_SCALE;
-    s_work[len + 1u] = scale->slot;
-    put_u16(&s_work[len + 2u], body);
+    uint16_t body = encode_scale(scale, &work()[len + RECORD_HEADER]);
+    work()[len] = TILES_CONTENT_TYPE_SCALE;
+    work()[len + 1u] = scale->slot;
+    put_u16(&work()[len + 2u], body);
     return commit((uint16_t)(len + RECORD_HEADER + body));
 }
 

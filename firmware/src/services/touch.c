@@ -101,6 +101,21 @@ tiles_touch_info_t tiles_touch_get_info(void) {
     return s_info;
 }
 
+bool tiles_touch_read_electrode(uint8_t logical_pad, uint16_t *filtered, uint16_t *baseline) {
+    const tiles_pad_config_t *cfg = board_pad_config(logical_pad);
+    if (cfg == NULL) {
+        return false;
+    }
+    tiles_mpr121_t *chip = cfg->touch.mpr121_i2c_addr == TILES_I2C0_ADDR_TOUCH1 ? &s_touch1 : &s_touch2;
+    uint16_t f[12], b[12];
+    if (!tiles_mpr121_read_electrodes(chip, f, b)) {
+        return false;
+    }
+    *filtered = f[cfg->touch.electrode];
+    *baseline = b[cfg->touch.electrode];
+    return true;
+}
+
 bool tiles_touch_is_touched(uint8_t logical_pad) {
     if (logical_pad < 1u || logical_pad > TILES_NUM_PADS) {
         return false;

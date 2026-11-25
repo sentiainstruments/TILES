@@ -28,10 +28,9 @@
 /* Circle + square hold toggles MPE, edge-latched (fires once per hold). */
 #define EXPRESSION_MPE_TOGGLE_HOLD_MS 2000u
 
-/* Square held ALONE this long locks the menu open (sticky); the menu
- * itself shows from the first instant. Own timer and latch
+/* Square held ALONE this long opens or closes the menu. Own timer and latch
  * (s_submenu_toggle_fired), separate from the MPE combo. */
-#define EXPRESSION_SUBMENU_TOGGLE_HOLD_MS 2000u
+#define EXPRESSION_SUBMENU_TOGGLE_HOLD_MS 1000u
 
 /* Soft pulse on square while MPE is off (the non-default mode). Same
  * breathing shape as standby's deep-sleep pulse, kept as a separate copy.
@@ -88,9 +87,8 @@ static const uint8_t LED_INTENSITY_BY_COLUMN[EXPRESSION_SUBMENU_MAX_COLUMN] = {0
  * LED intensity is saved, so its row shows the nearest column instead. */
 static uint8_t s_row_column[EXPRESSION_SUBMENU_NUM_ROWS];
 
-/* s_submenu_sticky survives a square release once locked; s_submenu_visible
- * is whether it shows this tick (square held alone OR sticky), which is
- * what owns_pad_grid() reports. */
+/* s_submenu_sticky: the menu is open (a 1 s hold until another, or a click);
+ * s_submenu_visible: it shows this tick, what owns_pad_grid() reports. */
 static bool s_submenu_sticky;
 static bool s_submenu_visible;
 static bool s_prev_pad_touched[TILES_NUM_PADS];
@@ -364,16 +362,24 @@ static void deep_slot_rgb(uint8_t pad, float rgb[3]) {
 }
 
 /* A resting finger previews the pad after DEEP_PREVIEW_DELAY_MS: Light
- * effects plays it soft to hard and back, Layouts shows the resting
- * colours. A press picks; lifting goes back unchanged. */
+ * effects plays a short phrase over the whole grid, soft to hard, with
+ * rests for the fades; Layouts shows the resting colours. A press picks;
+ * lifting goes back unchanged. */
 #define DEEP_PRESS_DEPTH TILES_EXPRESSION_MIN_STRIKE_DEPTH_DELTA
 #define DEEP_PREVIEW_DELAY_MS 300u /* first guess */
 #define DEEP_FRAME_WRITES 3u /* pads per scan (lighting.h: standby frame) */
-#define DEMO_LOOP_MS 1800u
-#define DEMO_NOTE_MS 160u
-static const uint8_t DEMO_VELOCITY[] = {35u, 60u, 85u, 110u, 127u, 95u, 65u, 45u};
-#define DEMO_HITS (sizeof(DEMO_VELOCITY) / sizeof(DEMO_VELOCITY[0]))
-#define DEMO_STEP_MS (DEMO_LOOP_MS / DEMO_HITS)
+#define DEMO_LOOP_MS 6000u
+typedef struct {
+    uint8_t row, col;
+    uint16_t at_ms, len_ms;
+    uint8_t velocity;
+} demo_note_t;
+static const demo_note_t DEMO[] = {
+    {3u, 2u, 0u, 300u, 40u},     {2u, 4u, 550u, 300u, 70u},   {1u, 6u, 1100u, 300u, 100u},
+    {4u, 5u, 1650u, 300u, 127u}, {2u, 1u, 2200u, 900u, 60u},  {3u, 3u, 3300u, 450u, 90u},
+    {3u, 4u, 3300u, 450u, 90u},  {1u, 2u, 4000u, 300u, 120u},
+};
+#define DEMO_NOTES (sizeof(DEMO) / sizeof(DEMO[0]))
 /* s_preview_pad: the pad being touched (0 = none); s_preview_on: past the
  * delay, showing (declared above, for open_deep()). */
 static uint32_t s_preview_touch_ms; /* when it was touched */
@@ -383,8 +389,7 @@ static uint32_t s_demo_last_ms;      /* loop time already played up to */
 
 static void preview_end(void) {
     if (s_preview_on && s_deep == DEEP_EFFECTS) {
-        tiles_fx_release(s_preview_pad, 0u); /* its note may be down */
-        tiles_fx_set(s_demo_saved);
+        tiles_fx_set(s_demo_saved); /* also clears the demo's hits */
     }
     s_preview_pad = 0u;
     s_preview_on = false;
@@ -400,25 +405,26 @@ static void preview_start(uint32_t now_ms) {
     }
 }
 
-/* Strikes and releases the touched pad on the loop's beats; true while
- * its note is down. */
-static bool demo_run(uint32_t now_ms) {
+/* Plays the phrase's hits and releases due since the last pass; returns
+ * the loop time. */
+static uint32_t demo_run(uint32_t now_ms) {
     uint32_t t = (now_ms - s_demo_start_ms) % DEMO_LOOP_MS;
     uint32_t from = s_demo_last_ms;
     s_demo_last_ms = t;
-    for (uint8_t i = 0; i < DEMO_HITS; i++) {
-        uint32_t on = i * DEMO_STEP_MS, off = on + DEMO_NOTE_MS;
+    for (uint8_t i = 0; i < DEMO_NOTES; i++) {
+        uint32_t on = DEMO[i].at_ms, off = on + DEMO[i].len_ms;
         bool on_due = t >= from ? (on > from && on <= t) : (on > from || on <= t);
         bool off_due = t >= from ? (off > from && off <= t) : (off > from || off <= t);
+        uint8_t pad = board_pad_for_row_col(DEMO[i].row, DEMO[i].col);
         if (on_due) {
-            tiles_fx_hit(s_preview_pad, DEMO_VELOCITY[i], now_ms);
+            tiles_fx_hit(pad, DEMO[i].velocity, now_ms);
         }
         if (off_due) {
-            tiles_fx_release(s_preview_pad, now_ms);
+            tiles_fx_release(pad, now_ms);
         }
     }
     tiles_fx_step(now_ms);
-    return t % DEMO_STEP_MS < DEMO_NOTE_MS;
+    return t;
 }
 
 /* The previewed layout's resting colours, read with it switched in for
@@ -441,7 +447,7 @@ static void deep_pick(uint8_t pad) {
     } else {
         tiles_note_map_set_layout((tiles_melodic_layout_t)(pad - 1u));
     }
-    tiles_haptics_trigger_kick(pad, 100u);
+    tiles_haptics_trigger_click(pad, 100u);
     s_preview_pad = 0u;
     s_preview_on = false;
     close_deep();
@@ -482,9 +488,8 @@ static void handle_deep_menu(uint32_t now_ms) {
         }
     }
     if (s_preview_on) {
-        float *touched = frame[s_preview_pad - 1u];
         if (s_deep == DEEP_EFFECTS) {
-            bool down = demo_run(now_ms);
+            uint32_t t = demo_run(now_ms);
             /* Over the melodic look, dimmed as in play (full for Off). */
             float rest = tiles_fx_get() == TILES_FX_OFF ? 1.0f : TILES_LIGHTING_FX_REST_LEVEL;
             for (uint8_t pad = 1u; pad <= TILES_NUM_PADS; pad++) {
@@ -495,11 +500,16 @@ static void handle_deep_menu(uint32_t now_ms) {
                     out[c] = 1.0f - (1.0f - out[c] * rest) * (1.0f - fx[c]);
                 }
             }
-            /* Pressed, as in play: white, or Touch colour's tint. */
-            if (down && !tiles_fx_pressed_colour(s_preview_pad, touched)) {
-                touched[0] = touched[1] = touched[2] = 1.0f;
+            /* The phrase's held pads as in play: white, or Touch colour's tint. */
+            for (uint8_t i = 0; i < DEMO_NOTES; i++) {
+                uint8_t pad = board_pad_for_row_col(DEMO[i].row, DEMO[i].col);
+                bool down = t >= DEMO[i].at_ms && t < (uint32_t)DEMO[i].at_ms + DEMO[i].len_ms;
+                if (down && !tiles_fx_pressed_colour(pad, frame[pad - 1u])) {
+                    frame[pad - 1u][0] = frame[pad - 1u][1] = frame[pad - 1u][2] = 1.0f;
+                }
             }
         } else {
+            float *touched = frame[s_preview_pad - 1u];
             layout_preview_frame(frame);
             touched[0] = touched[1] = touched[2] = submenu_selected_pulse_level(now_ms) * 0.5f;
         }
@@ -734,8 +744,8 @@ void tiles_expression_control_scan(void) {
         }
     }
 
-    /* Sticky lock and haptics shift: square held ALONE. The streak restarts if
-     * circle joins. */
+    /* Opening or closing the menu, and haptics shift: square held ALONE. The streak
+     * restarts if circle joins. */
     if (square_alone_held && !s_square_alone_was_held) {
         s_square_alone_hold_start_ms = now_ms;
         s_submenu_toggle_fired = false;
@@ -745,7 +755,7 @@ void tiles_expression_control_scan(void) {
             s_submenu_toggle_fired = true;
             s_square_press_had_long_action = true;
             s_submenu_sticky = !s_submenu_sticky;
-            printf("[expression_control] sub-menu sticky=%d\n", (int)s_submenu_sticky);
+            printf("[expression_control] sub-menu open=%d\n", (int)s_submenu_sticky);
         }
         handle_square_shift_input();
     }
@@ -774,7 +784,7 @@ void tiles_expression_control_scan(void) {
         s_submenu_sticky = false;
     }
 
-    bool submenu_should_be_visible = square_alone_held || s_submenu_sticky;
+    bool submenu_should_be_visible = s_submenu_sticky;
     if (submenu_should_be_visible != s_submenu_visible) {
         set_submenu_visible(submenu_should_be_visible);
     }

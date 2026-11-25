@@ -1,6 +1,8 @@
 #include "midi_out.h"
 
 #include "din_midi.h"
+#include "usb_audio.h"
+#include "usb_device.h"
 #include "usb_midi_packet.h"
 
 #include "tusb.h"
@@ -55,7 +57,7 @@ static void batch_flush(void) {
             s_stream_dirty = !on_boundary;
             break;
         }
-        tud_task();
+        tiles_usb_task();
     }
     s_batch_count = 0u;
 }
@@ -106,6 +108,20 @@ void tiles_midi_out_parts_end(void) {
     }
 }
 
+static uint8_t s_drums_depth;
+
+void tiles_midi_out_drums_begin(void) {
+    if (s_drums_depth < 255u) {
+        s_drums_depth++;
+    }
+}
+
+void tiles_midi_out_drums_end(void) {
+    if (s_drums_depth > 0u) {
+        s_drums_depth--;
+    }
+}
+
 static uint8_t cable_for_channel_message(uint8_t status) {
     if (!s_parts_separate) {
         return TILES_USB_MIDI_CABLE_MAIN;
@@ -150,13 +166,21 @@ static void usb_write(uint8_t cable, const char *what, const uint8_t *msg, uint3
                        (unsigned)i, (unsigned)count, (unsigned)MIDI_SEND_RETRY_TIMEOUT_MS);
                 return;
             }
-            tud_task();
+            tiles_usb_task();
         }
     }
 }
 
 /* Two sinks: USB MAIN while mounted, and DIN whenever initialized. DIN
- * first: it only queues, while USB may wait. daw_cc is the exception. */
+ * first: it only queues, while USB may wait. daw_cc is the exception.
+ * TILES's own sound hears everything but drum hits, which wait for the
+ * drum engine (Volca mode puts them on any channel). */
+static void to_audio(uint8_t status, uint8_t data1, uint8_t data2) {
+    if (s_drums_depth == 0u) {
+        tiles_usb_audio_midi(status, data1, data2);
+    }
+}
+
 static void send1(uint8_t status) {
     uint8_t msg[1] = {status};
     tiles_din_midi_send(msg, sizeof(msg));
@@ -166,12 +190,14 @@ static void send1(uint8_t status) {
 static void send2(uint8_t status, uint8_t data1) {
     uint8_t msg[2] = {status, data1};
     tiles_din_midi_send(msg, sizeof(msg));
+    to_audio(status, data1, 0u);
     usb_write(cable_for_channel_message(status), "send2", msg, sizeof(msg));
 }
 
 static void send3(uint8_t status, uint8_t data1, uint8_t data2) {
     uint8_t msg[3] = {status, data1, data2};
     tiles_din_midi_send(msg, sizeof(msg));
+    to_audio(status, data1, data2);
     usb_write(cable_for_channel_message(status), "send3", msg, sizeof(msg));
 }
 

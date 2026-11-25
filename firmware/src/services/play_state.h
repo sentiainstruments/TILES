@@ -19,8 +19,9 @@ void tiles_play_state_init(const tiles_kv_ops_t *ops, bool crash_recovered);
  * crash recovery or when nothing is saved. */
 bool tiles_play_state_boot_mode(uint8_t *mode);
 
-/* Every scan. `mode` is the active mode now. Saves when due. */
-void tiles_play_state_service(uint32_t now_ms, uint8_t mode, bool clock_running, bool pads_idle);
+/* Every scan. `mode` is the active mode now. Saves when due; `playing`
+ * (the clock runs or TILES's own sound rings) holds off any erase. */
+void tiles_play_state_service(uint32_t now_ms, uint8_t mode, bool playing, bool pads_idle);
 
 typedef struct {
     bool storage;

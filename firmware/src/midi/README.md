@@ -6,10 +6,10 @@ never goes over MIDI; that's `usb_vendor/`.
 
 | File | What it is |
 |---|---|
-| `usb_device`, `usb_descriptors.c`, `tusb_config.h` | The composite USB device: CDC console, MIDI (2 cables), vendor (settings), picotool reset interface. MS OS 2.0 descriptors give Windows WinUSB for the vendor and reset interfaces. |
+| `usb_device`, `usb_descriptors.c`, `tusb_config.h` | The composite USB device: CDC console, MIDI (3 cables), vendor (settings), picotool reset interface, and a USB audio input (last, so the others keep their interface numbers; `../audio/README.md`). MS OS 2.0 descriptors give Windows WinUSB for the vendor and reset interfaces. |
 | `product_identity.h` | USB VID/PID, firmware version, SysEx manufacturer ID, all in one place. **The USB ID is a test ID and must be replaced before any unit ships.** |
 | `midi_ports.h` | The ports: MAIN (cable 0, "MIDI"), DAW (cable 1, "DAW"), DIN. |
-| `midi_out` | Every outgoing message, including the MPE zone setup (RPN 6 + RPN 0), per-note setup, panic, DAW-only CCs and SysEx. |
+| `midi_out` | Every outgoing message, including the MPE zone setup (RPN 6 + RPN 0), per-note setup, panic, DAW-only CCs and SysEx. Channel messages are also copied to TILES's own sound (`../audio/`). |
 | `midi_in` | The one reader of all MIDI input. It parses each source with its own parser (running status, SysEx, Real-Time) and fires callbacks. |
 | `usb_midi_packet` | USB-MIDI 1.0 packet packing, used instead of TinyUSB's byte-stream API. Pure, tested. |
 | `din_midi`, `din_midi_queue`, `din_midi_tx.pio` | DIN: a PIO UART out, UART0 in, and the hardware-free queues (coalescing, running status, Real-Time priority). The queues are pure and tested. |
@@ -19,7 +19,7 @@ never goes over MIDI; that's `usb_vendor/`.
 
 | Port | Carries | macOS / Live name |
 |---|---|---|
-| MAIN | Notes, MPE, pedals, clock and transport Start/Stop, Identity | "SENTIA TILES 2 MIDI" / "SENTIA TILES 2 (MIDI)" (unit 2) |
+| MAIN | Notes, MPE, pedals, clock and transport Start/Stop, Identity; show-link SysEx in (`../services/README.md`, "Show link") | "SENTIA TILES 2 MIDI" / "SENTIA TILES 2 (MIDI)" (unit 2) |
 | DAW | Only the Ableton control surface script: Scene Launch and transport CCs out; clip/scene SysEx and TILES DISPLAY echo notes in | "SENTIA TILES 2 DAW" / "SENTIA TILES 2 (DAW)" (unit 2) |
 | DIN | Everything MAIN carries | TRS jack |
 
@@ -31,7 +31,7 @@ the same way Launchkey, Push and KeyLab do it. Setup in Live:
 
 A single Lower Zone. Channel 1 is the Master Channel (zone RPNs, pedals;
 all notes when MPE is off). Channels 2-9 are Member Channels, one per
-held note. How many of them are in the zone depends on Song mode; the
+held note, all 8 in the zone (a part could claim some, none does); the
 channel map is `../services/midi_channels.h` and per-note allocation is
 `../services/mpe_alloc.h`. Conformance to MMA RP-053:
 
@@ -48,10 +48,13 @@ channel map is `../services/midi_channels.h` and per-note allocation is
 
 ## USB details worth knowing
 
-- `main.c` must call `tud_task()` every loop pass (linking
-  `tinyusb_device` turns off the SDK's background task).
-- USB writes wait for FIFO room for up to 5 ms, pumping `tud_task()`, then
-  give up and log. They never block indefinitely.
+- `tud_task()` must run every pass (linking `tinyusb_device` turns off
+  the SDK's background task): core 0 calls `tiles_usb_task()`, which runs
+  it in controller mode; in standalone mode core 1 owns it
+  (`../audio/README.md`) and the call does nothing. Never call
+  `tud_task()` directly on core 0.
+- USB writes wait for FIFO room for up to 5 ms, pumping `tiles_usb_task()`,
+  then give up and log. They never block indefinitely.
 - On macOS, a device that once enumerated with a different port layout can
   leave stale entries in CoreMIDI; the cleanup is in
   `../../../daw-integration/README.md`.

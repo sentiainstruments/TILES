@@ -27,7 +27,7 @@ organization owner he can merge his own.
 6. The owner reviews. Answer every comment and resolve the threads; a
    new push after an approval needs a fresh approval.
 7. Once approved and green, **Squash and merge**. GitHub deletes the
-   branch.
+   branch, except `sam/companion-app`, which stays.
 
 To bring the latest `main` into your branch: `git fetch` then
 `git merge origin/main`. Don't rebase pushed work — it needs a
@@ -111,6 +111,8 @@ What keeps them in step:
   deletion.
 - `firmware/...` branches: only Mats2000 can create or push to them;
   `firmware/board-bringup` also can't be force-pushed or deleted.
+- `sam/companion-app`: can't be deleted, by anyone, so it survives its
+  pull requests' merges.
 - Every other branch: no force-push, except `sam/...` branches.
 - Tags: no moving or deleting.
 

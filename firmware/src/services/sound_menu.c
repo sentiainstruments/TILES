@@ -1,0 +1,305 @@
+#include "sound_menu.h"
+
+#include "audio_engine.h"
+#include "board_layout.h"
+#include "buttons.h"
+#include "hall.h"
+#include "haptics.h"
+#include "lighting.h"
+#include "midi_channels.h"
+#include "presets.h"
+#include "touch.h"
+#include "usb_audio.h"
+
+#include <string.h>
+
+/* A press past half travel picks, as in the mode menu (op_mode.c); deeper
+ * fine-tunes an effect up to the next level at full travel (~900). */
+#define PICK_DEPTH 450.0f
+#define FULL_DEPTH 900.0f
+#define PREVIEW_MS 600u
+/* A sound whose wavetable is being built previews once it plays (~0.3 s). */
+#define PREVIEW_WAIT_MS 2000u
+#define FX_SEND_MS 20u
+/* A sound that isn't the track's, a level an effect hasn't reached: first
+ * guesses. */
+#define DIM 0.18f
+#define KEY_DIM 0.4f
+#define ROWS 4u
+#define COLS 6u
+#define PAGES (TILES_PRESET_SLOTS / (ROWS * COLS))
+/* After a page change the top row shows its number this long. */
+#define PAGE_FLASH_MS 500u
+
+/* The page's preset slots row by row (presets.h): a role a row, top to
+ * bottom (basses, plucks and leads, pads, bells); the preview note suits
+ * the role. Each page its own colour family, a shade a row, so the page
+ * shows at a glance. First guesses. */
+static const float k_page_rgb[PAGES][ROWS][3] = {
+    {{1.0f, 0.0f, 0.45f}, {1.0f, 0.3f, 0.65f}, {0.6f, 0.1f, 1.0f}, {0.85f, 0.55f, 1.0f}}, /* magenta */
+    {{0.0f, 0.15f, 1.0f}, {0.0f, 0.55f, 1.0f}, {0.0f, 0.9f, 0.85f}, {0.55f, 0.85f, 1.0f}}, /* blue */
+    {{0.15f, 1.0f, 0.0f}, {0.55f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.45f}, {0.8f, 1.0f, 0.55f}},  /* green */
+    {{1.0f, 0.0f, 0.0f}, {1.0f, 0.3f, 0.0f}, {1.0f, 0.6f, 0.0f}, {1.0f, 0.85f, 0.45f}},    /* red */
+};
+static const uint8_t k_row_preview[ROWS] = {36u, 60u, 57u, 72u};
+
+/* An effect a column; its amount as a meter from the bottom row (off) up. */
+static const uint8_t k_fx_param[COLS] = {TILES_FX_TRACK_REVERB, TILES_FX_TRACK_DELAY, TILES_FX_TRACK_CHORUS,
+                                         TILES_FX_TRACK_DRIVE,  TILES_FX_TRACK_CRUSH, TILES_FX_TRACK_PUMP};
+static const float k_fx_rgb[COLS][3] = {
+    {0.2f, 0.4f, 1.0f}, /* reverb */
+    {0.0f, 0.8f, 0.8f}, /* delay */
+    {0.6f, 0.3f, 1.0f}, /* chorus */
+    {1.0f, 0.35f, 0.0f}, /* drive */
+    {0.7f, 1.0f, 0.0f}, /* crush */
+    {1.0f, 0.0f, 0.6f}, /* pump */
+};
+
+/* Each track on the underglow in its sequencer lane's colour (op_mode.c);
+ * a lane's channel plays its track (audio_engine.h). */
+static const float k_track_rgb[4][3] = {
+    {1.0f, 0.12f, 0.0f},
+    {1.0f, 0.35f, 0.0f},
+    {1.0f, 0.62f, 0.0f},
+    {1.0f, 0.0f, 0.3f},
+};
+static const uint8_t k_track_channel[4] = {TILES_MIDI_CH_SEQ_LANE_0, TILES_MIDI_CH_SEQ_LANE_1,
+                                           TILES_MIDI_CH_SEQ_LANE_2, TILES_MIDI_CH_SEQ_LANE_3};
+
+static bool s_open, s_effects;
+static uint8_t s_track;
+static uint8_t s_page;
+static uint32_t s_page_flash_until;
+static bool s_page_flash;
+static int16_t s_patch_at[ROWS][COLS]; /* -1: none */
+static uint8_t s_patch;                /* the track's, as picked here */
+static float s_fx[COLS];               /* the track's amounts, as set here */
+static uint32_t s_fx_sent_ms[COLS];
+static bool s_prev_touched[ROWS * COLS];
+static bool s_picked[ROWS * COLS]; /* this touch has picked already */
+static bool s_minus_was, s_plus_was;
+static uint8_t s_preview_note;
+static bool s_preview_on, s_preview_wait;
+static uint32_t s_preview_until;
+
+static void preview_off(void) {
+    s_preview_wait = false;
+    if (s_preview_on) {
+        tiles_usb_audio_midi((uint8_t)(0x80u | k_track_channel[s_track]), s_preview_note, 0u);
+        s_preview_on = false;
+    }
+}
+
+/* The page's slots, a row a role (presets.h). */
+static bool load_page(uint8_t page) {
+    bool any = false;
+    for (uint32_t r = 0; r < ROWS; r++) {
+        for (uint32_t c = 0; c < COLS; c++) {
+            char name[TILES_PRESET_NAME_MAX + 1u];
+            uint8_t slot = (uint8_t)(page * ROWS * COLS + r * COLS + c);
+            tiles_preset_name(slot, name);
+            s_patch_at[r][c] = name[0] != '\0' ? (int16_t)slot : -1;
+            any |= name[0] != '\0';
+        }
+    }
+    return any;
+}
+
+/* The track's sound, its effects, and the page its sound is on. */
+static void load_track(void) {
+    s_patch = tiles_audio_engine_patch(s_track);
+    for (uint32_t c = 0; c < COLS; c++) {
+        s_fx[c] = tiles_audio_engine_fx(s_track, k_fx_param[c]);
+        s_fx_sent_ms[c] = 0u;
+    }
+    s_page = s_patch < TILES_PRESET_SLOTS ? (uint8_t)(s_patch / (ROWS * COLS)) : 0u;
+    (void)load_page(s_page);
+}
+
+/* The next page holding a sound that way (wrapping); stays if none. */
+static void step_page(bool forward, uint32_t now_ms) {
+    for (uint32_t i = 1; i < PAGES; i++) {
+        uint8_t page = (uint8_t)((s_page + (forward ? i : PAGES - i)) % PAGES);
+        if (load_page(page)) {
+            s_page = page;
+            s_page_flash = true;
+            s_page_flash_until = now_ms + PAGE_FLASH_MS;
+            return;
+        }
+    }
+    (void)load_page(s_page);
+}
+
+void tiles_sound_menu_open(bool effects, uint8_t track) {
+    preview_off();
+    s_open = true;
+    s_effects = effects;
+    s_track = (uint8_t)(track % 4u);
+    s_page_flash = false;
+    load_track();
+    for (uint8_t i = 0; i < ROWS * COLS; i++) {
+        s_prev_touched[i] = tiles_touch_is_touched((uint8_t)(i + 1u));
+        s_picked[i] = s_prev_touched[i]; /* a finger already down picks nothing */
+    }
+    s_minus_was = tiles_button_is_pressed(1u);
+    s_plus_was = tiles_button_is_pressed(2u);
+}
+
+void tiles_sound_menu_close(void) {
+    preview_off();
+    s_open = false;
+}
+
+bool tiles_sound_menu_is_open(void) {
+    return s_open;
+}
+
+bool tiles_sound_menu_is_effects(void) {
+    return s_open && s_effects;
+}
+
+static void pick_sound(uint32_t row, uint32_t col, uint32_t now_ms) {
+    int16_t p = s_patch_at[row][col];
+    if (p < 0) {
+        return;
+    }
+    preview_off();
+    if ((uint8_t)p != s_patch) {
+        if (!tiles_usb_audio_set_patch(s_track, (uint8_t)p)) {
+            return; /* no room for its wavetable: the track keeps its sound */
+        }
+        s_patch = (uint8_t)p;
+    }
+    s_preview_note = k_row_preview[row];
+    s_preview_wait = true;
+    s_preview_until = now_ms + PREVIEW_WAIT_MS;
+}
+
+/* Row 1 (top) is full, row 4 off; pressing deeper adds up to a third more. */
+static void set_effect(uint32_t row, uint32_t col, float depth, uint32_t now_ms) {
+    float level = (float)(ROWS - 1u - row) / (float)(ROWS - 1u);
+    float extra = (depth - PICK_DEPTH) / (FULL_DEPTH - PICK_DEPTH);
+    extra = extra < 0.0f ? 0.0f : extra > 1.0f ? 1.0f : extra;
+    float v = level + extra / (float)(ROWS - 1u);
+    v = v > 1.0f ? 1.0f : v;
+    float d = v - s_fx[col];
+    if ((d > 0.005f || d < -0.005f) && now_ms - s_fx_sent_ms[col] >= FX_SEND_MS &&
+        tiles_usb_audio_set_fx(s_track, k_fx_param[col], v)) {
+        s_fx[col] = v;
+        s_fx_sent_ms[col] = now_ms;
+    }
+}
+
+static void handle_input(uint32_t now_ms) {
+    bool minus = tiles_button_is_pressed(1u), plus = tiles_button_is_pressed(2u);
+    /* Sounds: "-"/"+" pages (Rev A0 has no wheel yet), circle + "-"/"+"
+     * tracks; effects: either way tracks. */
+    if ((minus && !s_minus_was) || (plus && !s_plus_was)) {
+        preview_off();
+        if (!s_effects && !tiles_button_is_pressed(TILES_CIRCLE_BUTTON_ID)) {
+            step_page(plus && !s_plus_was, now_ms);
+        } else {
+            s_track = (uint8_t)((s_track + (plus && !s_plus_was ? 1u : 3u)) % 4u);
+            load_track();
+        }
+    }
+    if (s_page_flash && (int32_t)(now_ms - s_page_flash_until) >= 0) {
+        s_page_flash = false;
+    }
+    s_minus_was = minus;
+    s_plus_was = plus;
+
+    for (uint32_t row = 0; row < ROWS; row++) {
+        for (uint32_t col = 0; col < COLS; col++) {
+            uint8_t pad = board_pad_for_row_col((uint8_t)(row + 1u), (uint8_t)(col + 1u));
+            uint32_t i = pad - 1u;
+            bool touched = tiles_touch_is_touched(pad);
+            if (touched && !s_prev_touched[i]) {
+                tiles_haptics_trigger_touch_pulse(pad);
+            }
+            if (!touched) {
+                s_picked[i] = false;
+            }
+            s_prev_touched[i] = touched;
+            float depth = touched ? (float)tiles_hall_get_depth(pad) : 0.0f;
+            if (!touched || depth < PICK_DEPTH) {
+                continue;
+            }
+            if (s_effects) {
+                set_effect(row, col, depth, now_ms);
+            } else if (!s_picked[i]) {
+                s_picked[i] = true;
+                pick_sound(row, col, now_ms);
+            }
+        }
+    }
+    if (s_preview_wait) {
+        if (tiles_audio_engine_patch(s_track) == s_patch) {
+            s_preview_wait = false;
+            tiles_usb_audio_midi((uint8_t)(0x90u | k_track_channel[s_track]), s_preview_note, 100u);
+            s_preview_on = true;
+            s_preview_until = now_ms + PREVIEW_MS;
+        } else if ((int32_t)(now_ms - s_preview_until) >= 0) {
+            s_preview_wait = false;
+        }
+    }
+    if (s_preview_on && (int32_t)(now_ms - s_preview_until) >= 0) {
+        preview_off();
+    }
+}
+
+static void render(void) {
+    float frame[ROWS * COLS][3];
+    memset(frame, 0, sizeof(frame));
+    for (uint32_t row = 0; row < ROWS; row++) {
+        for (uint32_t col = 0; col < COLS; col++) {
+            float *px = frame[board_pad_for_row_col((uint8_t)(row + 1u), (uint8_t)(col + 1u)) - 1u];
+            const float *rgb;
+            float level;
+            if (s_effects) {
+                /* The bottom row always shows the column; the rows above
+                 * light as the amount reaches them. */
+                rgb = k_fx_rgb[col];
+                uint32_t step = ROWS - 1u - row; /* 0 = the off row .. 3 = full */
+                level = DIM;
+                if (step > 0u) {
+                    float reach = s_fx[col] * (float)(ROWS - 1u) - (float)(step - 1u);
+                    level = reach < 0.0f ? 0.0f : reach > 1.0f ? 1.0f : reach;
+                }
+            } else if (s_page_flash && row == 0u) {
+                static const float white[3] = {1.0f, 1.0f, 1.0f};
+                rgb = white; /* the page's number, a pad a page */
+                level = col <= s_page ? 1.0f : 0.0f;
+            } else {
+                int16_t p = s_patch_at[row][col];
+                rgb = k_page_rgb[s_page][row];
+                level = p < 0 ? 0.0f : (uint8_t)p == s_patch ? 1.0f : DIM;
+            }
+            px[0] = rgb[0] * level;
+            px[1] = rgb[1] * level;
+            px[2] = rgb[2] * level;
+        }
+    }
+    tiles_lighting_set_standby_frame(frame, 6u);
+    const float *t = k_track_rgb[s_track];
+    for (uint8_t i = 0; i < TILES_NUM_UNDERGLOW_ANCHORS; i++) {
+        tiles_lighting_set_standby_underglow_rgb(i, t[0], t[1], t[2]);
+    }
+    for (uint8_t col = TILES_GRID_MIN_COL; col <= TILES_GRID_MAX_COL; col++) {
+        float level = 0.0f;
+        if (col == 1u || col == 2u) {
+            level = KEY_DIM; /* "-"/"+": the track */
+        } else if (col == TILES_DIAMOND_BUTTON_COL || (s_effects && col == TILES_CIRCLE_BUTTON_COL)) {
+            level = 1.0f; /* the menu's own keys */
+        }
+        tiles_buttons_set_standby_led(board_button_for_col(col), level);
+    }
+}
+
+void tiles_sound_menu_scan(uint32_t now_ms) {
+    if (!s_open) {
+        return;
+    }
+    handle_input(now_ms);
+    render();
+}

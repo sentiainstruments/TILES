@@ -69,7 +69,7 @@ bool tiles_play_state_boot_mode(uint8_t *mode) {
     return s_boot_mode_valid;
 }
 
-void tiles_play_state_service(uint32_t now_ms, uint8_t mode, bool clock_running, bool pads_idle) {
+void tiles_play_state_service(uint32_t now_ms, uint8_t mode, bool playing, bool pads_idle) {
     if (!s_storage) {
         return;
     }
@@ -80,9 +80,9 @@ void tiles_play_state_service(uint32_t now_ms, uint8_t mode, bool clock_running,
         s_changed_ms = now_ms;
     }
     if (s_have_saved && memcmp(now_state, s_saved, sizeof(now_state)) == 0) {
-        /* Nothing to save. Idle and stopped: erase the spare sector now, so
-         * saves while playing never need to. */
-        if (!clock_running && pads_idle && s_log.have_newest && !s_log.blank[1u - s_log.newest_slot]) {
+        /* Nothing to save. Stopped, silent and idle: erase the spare sector
+         * now, so saves while playing never need to. */
+        if (!playing && pads_idle && s_log.have_newest && !s_log.blank[1u - s_log.newest_slot]) {
             (void)tiles_log_prepare(&s_log);
         }
         return;
@@ -91,9 +91,9 @@ void tiles_play_state_service(uint32_t now_ms, uint8_t mode, bool clock_running,
         (s_retry_after_ms != 0u && (int32_t)(now_ms - s_retry_after_ms) < 0)) {
         return;
     }
-    tiles_log_result_t r = tiles_log_append(&s_log, now_state, PLAY_STATE_BYTES, PLAY_STATE_VERSION, !clock_running);
+    tiles_log_result_t r = tiles_log_append(&s_log, now_state, PLAY_STATE_BYTES, PLAY_STATE_VERSION, !playing);
     if (r == TILES_LOG_ERR_NEEDS_ERASE) {
-        return; /* saved once the clock stops */
+        return; /* saved once the clock stops and the sound is silent */
     }
     if (r != TILES_LOG_OK) {
         s_retry_after_ms = now_ms + PLAY_STATE_RETRY_MS;

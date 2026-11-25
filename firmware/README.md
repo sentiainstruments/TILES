@@ -15,7 +15,9 @@ several boards, the feedback loop): `AGENTS.md`. Tests: `test/README.md`.
 | `src/board/` | Every pin, bus handle and the 24-pad routing table. Nothing else touches a raw pin or mux channel. | `src/board/README.md` |
 | `src/drivers/` | One small driver per chip (TCA9548A, TMAG5273, MPR121, PCA9685, TCA9554, SK6805, DAC80502) plus the shared bounded I2C layer. | `src/drivers/README.md` |
 | `src/services/` | Everything musical and interactive: sensing, expression/MPE, modes and menus, lighting, haptics, standby, games, CV/gate. | `src/services/README.md` |
-| `src/midi/` | The USB device (MIDI on two ports, CDC console, vendor, reset), MIDI in/out, DIN MIDI, the MPE wire protocol, product identity. | `src/midi/README.md` |
+| `src/midi/` | The USB device (MIDI on three ports, CDC console, vendor, reset, audio input), MIDI in/out, DIN MIDI, the MPE wire protocol, product identity. | `src/midi/README.md` |
+| `src/audio/` | TILES's own sound on core 1 (the wavetable synth and the drum sampler), streamed as a USB audio input. | `src/audio/README.md` |
+| `src/link/` | Linker overrides: core 1's USB path and note handling placed in RAM. | `src/audio/README.md` |
 | `src/usb_vendor/` | The text settings protocol for the companion app and scripts. | `src/usb_vendor/README.md` |
 | `src/profiles/` | The settings table: every user-tunable value, saved to flash. | `src/profiles/README.md` |
 | `src/storage/` | Power-cut-safe two-slot flash store and the flash region map. | `src/storage/README.md` |
@@ -47,6 +49,9 @@ print-only steps and the boot animation.
 - CV/gate stay off unless GP22 shows external power (and CV/gate is
   explicitly enabled).
 - A failed subsystem disables itself; it never blocks USB or the rest.
+- Every flash erase or program goes through `tiles_flash_write_begin()` /
+  `tiles_flash_write_end()` (`storage/storage_flash.h`): core 1 runs from
+  flash and must be paused first.
 - No unbounded waits: every I2C, PIO and USB wait has a timeout, and no
   code prints periodically from the main loop (a blocked USB-CDC print
   stalls everything).
@@ -61,8 +66,8 @@ Set for now (compile-time switches, see `daw-integration/README.md`):
 
 - Performance transport (`OP_TRANSPORT_SHIFT_STOP 1` in `services/op_mode.c`):
   diamond plays, hold records, circle + diamond stops; while Live plays,
-  diamond alone does nothing. Circle + diamond's other jobs (Ableton stop-all,
-  Song capture) are off meanwhile.
+  diamond alone does nothing. Circle + diamond's other job (Ableton stop-all)
+  is off meanwhile.
 - Ableton mode: a plain press on an empty slot does nothing; circle +
   press records a new clip there.
 
@@ -72,7 +77,6 @@ Set for now (compile-time switches, see `daw-integration/README.md`):
   off), velocity, pressure, per-note pitch bend and vibrato, pedal and
   melodic harmonics, haptics, lighting, standby and deep sleep, games,
   settings saved to flash.
-- **Song mode is beta**: built, not yet played on hardware.
 - **Drum mode** (menu pad 3; bass guitar on pad 7 since 0.2.9): played on
   units 2 and 4 (0.2.8); 0.2.9-0.3.0 add pages, rolls and lag fixes. Colour schemes and custom scales (0.2.7) not
   yet played.

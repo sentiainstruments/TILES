@@ -11,6 +11,21 @@ belonging to one module.
   talks to the device (USB vendor interface, the settings table,
   layouts as portable files), what's built, the next steps, and the app
   stack choice.
+- [`audio-engine.md`](audio-engine.md): TILES's own sound -- the CPU,
+  RAM and flash budget, four tracks plus the drum sampler, the
+  guardrails (voices by measured cost, the load guard), the engines,
+  reverb and delay, and the USB and DAC outputs and clocks.
+- [`synth-engines.md`](synth-engines.md): the wavetable and FM engines,
+  the effects, measurements, and the clock plan.
+- [`sound-roadmap.md`](sound-roadmap.md): planning 96 presets in 4 pages
+  and new engines for breakbeat, bubbly sounds and pads; the headroom.
+- [`factory-presets.md`](factory-presets.md): the sound design of the 96
+  factory presets: the Sentia sound, a page per genre (techno, EDM, bass
+  music, melodic), recipes, and what the engines need first.
+- [`standalone-recorder.md`](standalone-recorder.md): the design of
+  standalone mode as a tape recorder: the Deck (4 synth tracks + drums),
+  tapes of 16-step pages, recording on the wheel, the shift latch, the
+  metronome.
 - [`content-packs.md`](content-packs.md): how sold packs reach a device --
   data content (scales, later layouts) pushed into the content store, code
   content (modes, games) unlocked per unit by signed entitlements -- and

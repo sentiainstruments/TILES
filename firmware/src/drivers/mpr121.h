@@ -27,3 +27,8 @@ uint16_t tiles_mpr121_read_touched(tiles_mpr121_t *dev, bool *ok);
  * reports nothing touched while still answering; false then, or on a
  * failed read. */
 bool tiles_mpr121_running(tiles_mpr121_t *dev);
+
+/* Every electrode's filtered reading and baseline (both 10-bit; the
+ * baseline is kept to 8 bits, so its low 2 are 0). A touch is a reading
+ * more than the touch threshold below the baseline. False on I2C failure. */
+bool tiles_mpr121_read_electrodes(tiles_mpr121_t *dev, uint16_t filtered[12], uint16_t baseline[12]);

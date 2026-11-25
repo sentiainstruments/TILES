@@ -189,6 +189,38 @@ void tiles_buttons_resync_pca9685(void) {
     refresh_all_button_leds();
 }
 
+#define PCA_CHECK_INTERVAL_MS 250u
+static uint32_t s_pca_next_check_ms;
+static tiles_buttons_pca_health_t s_pca_health;
+
+bool tiles_buttons_check_pca9685(uint32_t now_ms) {
+    if ((int32_t)(now_ms - s_pca_next_check_ms) < 0) {
+        return false;
+    }
+    s_pca_next_check_ms = now_ms + PCA_CHECK_INTERVAL_MS;
+    tiles_pca9685_t *chips[2] = {&s_pca1, &s_pca2};
+    bool asleep = false;
+    for (uint8_t i = 0; i < 2u; i++) {
+        uint8_t mode1;
+        if (!tiles_pca9685_read_mode1(chips[i], &mode1)) {
+            s_pca_health.read_fails++;
+            continue;
+        }
+        s_pca_health.mode1[i] = mode1;
+        asleep = asleep || (mode1 & TILES_PCA9685_MODE1_SLEEP) != 0u;
+    }
+    if (!asleep) {
+        return false;
+    }
+    s_pca_health.resets++;
+    tiles_buttons_resync_pca9685();
+    return true;
+}
+
+tiles_buttons_pca_health_t tiles_buttons_pca_health(void) {
+    return s_pca_health;
+}
+
 bool tiles_buttons_init(void) {
     bool ok = tiles_pca9685_init(&s_pca1, i2c1, TILES_I2C1_ADDR_HAPTIC_PCA9685_1);
     ok = tiles_pca9685_init(&s_pca2, i2c1, TILES_I2C1_ADDR_HAPTIC_PCA9685_2) && ok;
