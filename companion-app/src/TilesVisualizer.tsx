@@ -438,57 +438,6 @@ export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: Sou
 
   return (
     <section className="tiles-visualizer">
-      <div className="tiles-visualizer-heading">
-        <h2>Instrument Preview</h2>
-        <span>24 Pads · {modern ? 'RGB' : 'Legacy'} · Interactive simulation</span>
-      </div>
-      <div className="tiles-preview-controls">
-        <label>Instrument preview{' '}
-          <select value={standalonePreview ? 'standalone' : 'controller'} onChange={e => {
-            stopAudition(); setStandalonePreview(e.currentTarget.value === 'standalone'); setView('play'); setShiftArmed(false)
-          }}>
-            <option value="standalone">Standalone (Sound Menu)</option>
-            <option value="controller">Controller (MIDI)</option>
-          </select>
-        </label>
-        <label>Mode{' '}
-          <select aria-label="Preview mode" value={activeMode}
-            onChange={event => {
-              const next = MODES.find(item => item.id === event.currentTarget.value)
-              if (!next || !modeEnabled(next)) return
-              stopAudition()
-              setActiveMode(next.id)
-              setView('play')
-              setActivePad(null)
-              setSelectedPads(new Set())
-            }}>
-            {MODES.map(item => <option key={item.id} value={item.id} disabled={!modeEnabled(item)}>
-              {item.name}
-            </option>)}
-          </select>
-        </label>
-        <label>Preview scale{' '}
-          <select value={scaleChoice} onChange={e => setScaleChoice(e.currentTarget.value)}>
-            <option value="chromatic">Chromatic (C)</option>
-            {scales.map(scale =>
-              <option key={scale.slot} value={String(scale.slot)}>
-                Slot {scale.slot}: {scale.name.replace(/_/g, ' ')}
-              </option>)}
-          </select>
-        </label>
-        <label>Pad animation{' '}
-          <select value={previewMode}
-            onChange={e => setPreviewMode(e.currentTarget.value as PreviewMode)}>
-            <option value="press">Press</option>
-            <option value="primary">Primary echo</option>
-            <option value="secondary">Secondary echo</option>
-          </select>
-        </label>
-        <label><input type="checkbox" checked={previewPressed}
-          onChange={event => setPreviewPressed(event.currentTarget.checked)} />
-          Animate selected pad
-        </label>
-      </div>
       <div className="tiles-mode-status" aria-live="polite">
         <span className="tiles-mode-dot" style={{ background: mode.color }} />
         <strong>{view === 'sounds' ? 'Sound Menu' : view === 'effects' ? 'Effects Menu' : view === 'modes' ? 'Mode menu' : view === 'scales' ? 'Scale picker preview'
@@ -503,7 +452,7 @@ export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: Sou
         <div className="tiles-device-and-notes">
       <div className={`tiles-device ${soundView ? 'tiles-sound-device' : ''}`} style={soundView ? { '--sound-track-color': trackColors[soundTrack-1] } as CSSProperties : undefined}>
         <div className="tiles-device-header">
-          <span className="tiles-brand">SENTIA / TILES</span>
+          <span className="tiles-brand"></span>
           <div className="tiles-buttons">
             {BUTTONS.map((button, index) => (
               <button key={button.symbol} type="button"
@@ -609,7 +558,7 @@ export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: Sou
         </>}
         <small>{exactFactory?'Development firmware factory records':'Partial factory preview records'} · simulator only · no hardware commands</small>
       </div>}
-      <p className="tiles-preview-note">{note}</p>
+
 
         </div>
         {activeMode === 'melodic' && view === 'play' &&

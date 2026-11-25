@@ -180,9 +180,7 @@ export function GlobalDeviceSettings({ connected }: GlobalProps) {
   return <div className="snt-global-settings">
     <div className="snt-panel-title-row">
       <div>
-        <span className="snt-eyebrow">INSTRUMENT-WIDE</span>
-        <h2>Global Device Settings</h2>
-        <p>Parameters shared across playing modes.</p>
+        <h2>Global Settings</h2>
       </div>
       <button type="button" className="snt-subtle-button" disabled={!connected || busy || loading}
         onClick={() => void refresh()}>Refresh</button>
@@ -192,9 +190,9 @@ export function GlobalDeviceSettings({ connected }: GlobalProps) {
     {!connected && <p className="snt-system-message">Connect TILES to edit hardware parameters. Curves below are editable previews.</p>}
 
     <section className="snt-settings-section">
-      <div className="snt-section-label"><h3>Pedal</h3><span>HARDWARE</span></div>
+      <div className="snt-section-label"><h3>Pedal</h3></div>
       {connected && hasPedal
-        ? <div className="snt-control-stack">
+        ? <div className="snt-pedal-grid">
             {show('pedal.mode', 'Pedal mode')}
             {show('pedal.polarity', 'Polarity')}
             {show('pedal.sustain_style', 'Sustain style')}
@@ -203,20 +201,20 @@ export function GlobalDeviceSettings({ connected }: GlobalProps) {
     </section>
 
     <section className="snt-settings-section">
-      <div className="snt-section-label"><h3>Expression</h3><span>HARDWARE</span></div>
+      <div className="snt-section-label"><h3>Expression</h3></div>
       {connected && hasExpression
-        ? <div className="snt-control-stack">
-            {show('expression.mpe_enabled', 'MPE enabled')}
-            {show('expression.pitch_bend_sensitivity', 'Pitch bend sensitivity')}
-            {show('expression.aftertouch_sensitivity', 'Aftertouch sensitivity')}
-          </div>
+      ? <div className="snt-expression-grid">
+          {show('expression.mpe_enabled', 'MPE enabled')}
+          {show('expression.pitch_bend_sensitivity', 'Pitch bend sensitivity')}
+          {show('expression.aftertouch_sensitivity', 'Aftertouch sensitivity')}
+        </div>
         : <p className="snt-muted">{connected ? loading ? 'Loading…' : 'No expression controls exposed by this firmware.' : 'Connect for expression controls.'}</p>}
     </section>
 
     <section className="snt-settings-section">
-      <div className="snt-section-label"><h3>Response curves</h3><span className="snt-preview-tag">UI PREVIEW</span></div>
-      <p className="snt-muted">Shape how input pressure maps to output. These curves currently affect only the UI; they are not sent to firmware or saved on TILES.</p>
-      <div className="snt-curve-stack">
+
+      <div className="snt-response-curve-grid">
+
         <ResponseCurveEditor label="Velocity curve" description="Initial strike response"
           value={velocity} onChange={setVelocity} />
         <ResponseCurveEditor label="Aftertouch curve" description="Continuous pressure response"

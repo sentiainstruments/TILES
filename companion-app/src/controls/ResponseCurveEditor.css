@@ -1,18 +1,18 @@
 .snt-curve {
-  padding: 16px;
+  padding: 10px;
   background: #1c1f2a;
   border: 1px solid #383c4d;
-  border-radius: 13px;
+  border-radius: 4px;
   min-width: 0;
 }
-.snt-curve-heading { display: flex; align-items: start; justify-content: space-between; gap: 10px; margin-bottom: 13px; }
+.snt-curve-heading { display: flex; align-items: start; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .snt-curve-heading h4 { margin: 0 0 4px; font-size: 13px; color: #f0eafb; }
 .snt-curve-heading p { margin: 0; color: #a2a6ba; font-size: 11px; line-height: 1.4; }
 .snt-curve select {
   color: #eae6f8; background: #2a2e3d; border: 1px solid #4a4e62;
   font-size: 11px; border-radius: 7px; padding: 6px 7px; max-width: 110px;
 }
-.snt-curve-chart { width: min(100%, 280px); padding-left: 17px; padding-bottom: 17px; margin: 0 auto; position: relative; }
+.snt-curve-chart { width: min(60%, 280px);  margin: 0 auto; position: relative; }
 .snt-curve-chart svg { display: block; width: 100%; aspect-ratio: 1 / 1; border-radius: 8px; background: #151924; border: 1px solid #454b62; overflow: visible; touch-action: none; }
 .snt-curve-axis-y { position: absolute; top: 43%; left: -13px; transform: rotate(-90deg); font-size: 9px; letter-spacing: 1px; color: #8e93a7; }
 .snt-curve-axis-x { position: absolute; bottom: 0; left: 43%; font-size: 9px; letter-spacing: 1px; color: #8e93a7; }

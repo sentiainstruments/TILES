@@ -182,3 +182,28 @@
     border-right-color: var(--border);
   }
 }
+.nav-device-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: #b5b7c8;
+  margin-right: 16px;
+}
+
+.nav-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.nav-status-dot.connected {
+  background: #62d7ac;
+  box-shadow: 0 0 8px rgba(98, 215, 172, 0.6);
+}
+
+.nav-status-dot.disconnected {
+  background: #858595;
+}

@@ -97,7 +97,7 @@ export function ResponseCurveEditor({ label, description, value, onChange, disab
       </select>
     </div>
     <div className="snt-curve-chart">
-      <span className="snt-curve-axis-y">Output</span>
+
       <svg ref={svgRef} viewBox="0 0 100 100" preserveAspectRatio="none" role="group"
         aria-label={`${label}: drag either handle vertically, or use arrow keys`}>
         <defs>
@@ -142,7 +142,7 @@ export function ResponseCurveEditor({ label, description, value, onChange, disab
           onKeyDown={event => keyHandle(event, which)}
         />)}
       </svg>
-      <span className="snt-curve-axis-x">Input →</span>
+
     </div>
     <div className="snt-curve-values">
       <span>33% input → {Math.round(value.low * 100)}%</span>

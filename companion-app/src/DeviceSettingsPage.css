@@ -6,7 +6,7 @@
   --snt-accent: #c49afc;
   color: var(--snt-fg);
   min-height: calc(100vh - 80px);
-  padding: 28px clamp(16px, 3vw, 44px) 50px;
+  padding: 10px clamp(10px, 1vw, 10px) 10px;
   background: radial-gradient(circle at 15% 0%, #292039 0%, transparent 38%), #141620;
   box-sizing: border-box;
   text-align: left;
@@ -104,3 +104,77 @@
 #root:has(.device-settings-page) > main > nav { background: #1b1e2a; color: #dad6e8; }
 #root:has(.device-settings-page) > main > nav button { color: #ded9ed; background: #2a2d3b; border: 1px solid #50536a; border-radius: 8px; padding: 7px 11px; cursor: pointer; }
 #root:has(.device-settings-page) > main > nav button[aria-current='page'] { background: #4a345f; border-color: #956dbf; color: #fff; }
+.snt-pedal-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.snt-pedal-grid .snt-device-control {
+  min-width: 0;
+  gap: 6px;
+}
+
+.snt-pedal-grid select {
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+  padding: 8px 6px;
+  text-overflow: ellipsis;
+}
+.snt-expression-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.7fr) repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.snt-expression-grid .snt-device-control {
+  min-width: 0;
+  gap: 6px;
+}
+
+.snt-expression-grid .snt-number-control {
+  gap: 6px;
+}
+
+.snt-expression-grid input[type='range'] {
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+}
+
+.snt-expression-grid input[type='number'] {
+  width: 65px;
+  min-width: 0;
+  padding: 6px;
+  font-size: 11px;
+}
+
+.snt-expression-grid .snt-toggle {
+  min-height: 32px;
+}
+.snt-response-curve-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.snt-response-curve-grid > * {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.snt-response-curve-grid svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.snt-response-curve-grid select {
+  min-width: 0;
+  font-size: 12px;
+}

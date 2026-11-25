@@ -4,6 +4,7 @@ import { SynthWorkspace } from './synth/SynthWorkspace'
 import { useEffect, useState } from 'react'
 import { ProjectWorkspace } from './project/ProjectWorkspace'
 import { DeviceSettingsPage } from './DeviceSettingsPage'
+import './App.css'
 
 const TILES_IDS = [
   [0x1209, 0x0001],
@@ -64,28 +65,32 @@ function App() {
         onClick={() => setPage('device')}>Device Settings</button>
       <button type="button" aria-current={page === 'synth' ? 'page' : undefined}
         onClick={() => setPage('synth')}>Synth Workspace</button>
+        <div className="nav-device-status">
+          <span
+            className={`nav-status-dot ${connected ? 'connected' : 'disconnected'}`}
+          />
+          {connected ? 'Device connected' : 'Device disconnected'}
+        </div>
       <span style={{ marginLeft: 'auto', fontSize: 12, alignSelf: 'center' }}>
-        {connected ? simFirmware ? `Simulator ${simFirmware}` : 'TILES connected' : 'Offline'}
-      </span>
+        {connected && simFirmware && <div className="snt-firmware-selector">
+          <label>Simulated firmware{' '}
+            <select value={simFirmware} onChange={e => void changeSimFirmware(e.currentTarget.value)}>
+              <option value="0.2.0">0.2.0 — legacy</option>
+              <option value="0.3.6">0.3.6 — main</option>
+            <option value="alpha.6.5">Alpha 6.5 — previous</option>
+            <option value="alpha.6.9">Alpha 6.9 — official main</option>
+          </select>
+        </label>
+      </div>}
+      {connected && error && <p role="alert" className="snt-error" style={{ margin: 16 }}>{error}</p>}
+    </span>
     </nav>
     {/* Keep the workspace mounted while switching tabs so edits remain staged. */}
     <div style={{ display: page === 'workspace' ? 'block' : 'none' }}>
       <ProjectWorkspace />
     </div>
     <section style={{ display: page === 'device' ? 'block' : 'none' }}>
-      {connected && simFirmware && <div className="snt-firmware-selector">
-        <span>Virtual TILES · firmware {simFirmware}</span>
-        <label>Simulated firmware{' '}
-          <select value={simFirmware} onChange={e => void changeSimFirmware(e.currentTarget.value)}>
-            <option value="0.2.0">0.2.0 — legacy</option>
-            <option value="0.3.6">0.3.6 — main</option>
-            <option value="alpha.6.5">Alpha 6.5 — previous</option>
-            <option value="alpha.6.9">Alpha 6.9 — official main</option>
-          </select>
-        </label>
-        <small>Changing simulated firmware resets the virtual board, not saved projects.</small>
-      </div>}
-      {connected && error && <p role="alert" className="snt-error" style={{ margin: 16 }}>{error}</p>}
+
       <div key={simFirmware ?? 'real-device'}>
         <DeviceSettingsPage connected={connected} connectionMessage={error}
           onReconnect={() => { void connect() }} onEditSound={editSound} />

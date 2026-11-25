@@ -11,20 +11,9 @@ type Props = {
   onEditSound: (selection: SoundSelection) => void
 }
 
-export function DeviceSettingsPage({ connected, connectionMessage, onReconnect, onEditSound }: Props) {
+export function DeviceSettingsPage({ connected, connectionMessage, onEditSound }: Props) {
   return <section className="device-settings-page">
-    <header className="snt-device-page-heading">
-      <div>
-        <span className="snt-eyebrow">SENTIA / TILES</span>
-        <h1>Device Settings</h1>
-        <p>Preview the instrument, customize each mode, and adjust global behavior.</p>
-      </div>
-      <div className="snt-device-connection">
-        <span className={`snt-connection-dot ${connected ? 'connected' : ''}`} />
-        {connected ? 'Device connected' : 'Offline preview'}
-        {!connected && <button type="button" onClick={onReconnect}>Reconnect</button>}
-      </div>
-    </header>
+
     {!connected && connectionMessage &&
       <p className="snt-connection-note">{connectionMessage}</p>}
     <div className="snt-device-grid">
