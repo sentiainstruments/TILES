@@ -1,3 +1,6 @@
+import { ScalePadEditor } from './ScaleEditor'
+import { factoryScale, makeScaleLibrary, parseScaleList } from './scalePicker'
+import type { FactoryOverrides } from './scalePicker'
 import { useEffect, useRef, useState } from 'react'
 import { Preview } from './synth/preview'
 import { pageColors, fxNames, fxColors, trackColors, previewNotes, modeTrack, slotAt, slotPage, wrap, slotName, selectedSlot, selectSlot, getEffects, setEffect as setTrackEffect, effectValue, isSaved, editSelection, makeSelection, hasArchive, hasFactory, archivedName, removeVirtualPreset, restoreVirtualPreset, restoreFactory, exactFactory } from './synth/soundMenu'
@@ -102,10 +105,7 @@ function previewColor(mode: PreviewMode, look: Record<string, number>): string {
 }
 
 function parseScales(rows: string[]): Scale[] {
-  return rows.flatMap(row => {
-    const match = row.match(/^([1-9]) (\S+) (\d+(?:,\d+)*)/)
-    return match ? [{ slot: Number(match[1]), name: match[2], intervals: match[3].split(',').map(Number) }] : []
-  })
+  return parseScaleList(rows)
 }
 
 function dimColor(hex: string, multiplier: number): string {
@@ -211,6 +211,9 @@ const [standalonePreview] = useState(true)
   const [, setEffect] = useState('off')
   const [scales, setScales] = useState<Scale[]>([])
   const [scaleChoice, setScaleChoice] = useState('chromatic')
+  const [scaleEditorSlot, setScaleEditorSlot] = useState<number | null>(null)
+  const [factoryScaleOverrides, setFactoryScaleOverrides] = useState<FactoryOverrides>({})
+  const [scaleUploadsSupported, setScaleUploadsSupported] = useState(false)
   const [activePad, setActivePad] = useState<number | null>(null)
   const [previewMode] = useState<PreviewMode>('press')
   const [previewPressed] = useState(false)
@@ -258,10 +261,13 @@ const [standalonePreview] = useState(true)
         if (cancelled) return
         const current = parseScales(rows)
         setScales(current)
+        setScaleUploadsSupported(true)
         setScaleChoice(previous =>
-          previous === 'chromatic' || current.some(s => String(s.slot) === previous)
-            ? previous : 'chromatic')
-      } catch (reason) { console.warn('Could not read custom scales', reason) }
+          makeScaleLibrary(current).some(s => s.id === previous && s.intervals.length) ? previous : 'chromatic')
+      } catch (reason) {
+        if (!cancelled) { setScaleUploadsSupported(false); setScales([]); setScaleChoice(previous => makeScaleLibrary([]).some(s => s.id === previous && s.intervals.length) ? previous : 'chromatic') }
+        console.warn('Could not read custom scales', reason)
+      }
     }
     function changed(event: Event) {
       const { key, value } = (event as CustomEvent<{key: string; value: string}>).detail
@@ -306,7 +312,10 @@ const [standalonePreview] = useState(true)
   }, [activeMode, modeSettings])
 
   const mode = MODES.find(m => m.id === activeMode) ?? MODES[0]
-  const intervals = scales.find(s => String(s.slot) === scaleChoice)?.intervals
+  const scaleLibrary = makeScaleLibrary(scales, factoryScaleOverrides)
+  const editingScale = scaleEditorSlot === null ? undefined : scaleLibrary[scaleEditorSlot - 1]
+  const activeScale = scaleLibrary.find(s => s.id === scaleChoice && s.intervals.length) ?? scaleLibrary[0]
+  const intervals = activeScale.intervals
 
   const soundView = view === 'sounds' || view === 'effects'
   const chosenSlot = selectedSlot(soundTrack)
@@ -322,6 +331,7 @@ const [standalonePreview] = useState(true)
     setSoundMessage('Click a slot to edit or create a preset.')
   }
   function handleButton(index: number) {
+    if (scaleEditorSlot !== null) return
     if (index === 5) {
       // Circle is a held modifier on hardware. A click arms the *next*
       // combo in this mouse-operated preview, rather than faking a hold.
@@ -342,7 +352,7 @@ const [standalonePreview] = useState(true)
     if (soundView && index === 2) stopAudition()
     if (index === 2) {
       if (shiftArmed) {
-        setView(activeMode === 'drums' || activeMode === 'volca' ? 'play' : 'scales')
+        setView(current => activeMode === 'drums' || activeMode === 'volca' || current === 'scales' ? 'play' : 'scales')
         if (activeMode === 'drums' || activeMode === 'volca')
           setDrumPage(p => p === 1 ? 2 : 1)
       } else {
@@ -398,8 +408,12 @@ const [standalonePreview] = useState(true)
       return
     }
     if (view === 'scales') {
-      // Actual built-in scale picker positions are not available to the
-      // app through the USB settings protocol; use the dropdown instead.
+      if (scaleEditorSlot !== null) return
+      const scale = scaleLibrary[pad - 1]
+      if (!scale) return
+      if (scale.intervals.length || (scale.customSlot && scaleUploadsSupported)) {
+        setScaleEditorSlot(pad)
+      }
       return
     }
     if (view === 'patterns') {
@@ -446,6 +460,32 @@ const [standalonePreview] = useState(true)
             ))}
           </div>
         </div>
+        {editingScale && scaleEditorSlot !== null && <ScalePadEditor key={scaleEditorSlot}
+          scale={editingScale} factory={factoryScale(editingScale.id)}
+          initial={scales.find(s => s.slot === editingScale.customSlot)}
+          onClose={() => setScaleEditorSlot(null)}
+          onSaved={saved => {
+            setScales(saved)
+            if (!saved.some(s => String(s.slot) === scaleChoice) && !factoryScale(scaleChoice)) setScaleChoice('chromatic')
+            setView('scales')
+            window.dispatchEvent(new Event('tiles:scales-changed'))
+          }}
+          onFactorySave={edit => {
+            setFactoryScaleOverrides(previous => {
+              const next = { ...previous }
+              if (edit) next[editingScale.id] = edit
+              else delete next[editingScale.id]
+              return next
+            })
+          }}
+          onUse={() => {
+            if (!editingScale.intervals.length) return
+            setScaleChoice(editingScale.id)
+            setScaleEditorSlot(null)
+            setView('play')
+            setActivePad(null)
+            setSelectedPads(new Set())
+          }} />}
         <div className="tiles-pad-grid">
           {Array.from({ length: 24 }, (_, index) => {
             const pad = index + 1
@@ -475,8 +515,11 @@ const [standalonePreview] = useState(true)
               label = enabled && menuMode ? menuMode.name : ''
               selected = Boolean(menuMode && menuMode.id === activeMode)
             } else if (view === 'scales') {
-              baseColor = pad <= 9 ? '#663b87' : '#141824'
-              label = pad <= 9 ? `S${pad}` : ''
+              const scale = scaleLibrary[pad - 1]
+              const available = Boolean(scale?.intervals.length)
+              selected = available && scale.id === scaleChoice
+              baseColor = selected ? '#ffffff' : available ? '#800080' : '#141824'
+              label = available ? scale.name : 'Empty'
             } else if (view === 'patterns') {
               selected = selectedPads.has(pad)
               baseColor = selected ? '#ff89f6' : '#842c62'
@@ -497,15 +540,15 @@ const [standalonePreview] = useState(true)
             const color = dimColor(baseColor, look['look.led_intensity_percent'] / 100)
             return (
               <button key={pad} type="button"
-                className={`tiles-pad ${selected ? 'is-active' : ''} ${view === 'play' && activeMode === 'melodic' && selected ? 'is-edit-selected' : ''} ${view === 'modes' && selected ? 'is-current-mode' : ''} ${view === 'modes' && !enabled ? 'is-disabled-preview' : ''}`}
+                className={`tiles-pad ${selected ? 'is-active' : ''} ${view === 'play' && activeMode === 'melodic' && selected ? 'is-edit-selected' : ''} ${view === 'modes' && selected ? 'is-current-mode' : ''} ${view === 'modes' && !enabled ? 'is-disabled-preview' : ''} ${view === 'scales' && scaleUploadsSupported && !scaleLibrary[pad - 1]?.intervals.length ? 'tiles-scale-empty' : ''}`}
                 style={{ '--pad-color': color } as CSSProperties}
-                disabled={view === 'modes' && !enabled}
+                disabled={view === 'scales' ? (!scaleLibrary[pad - 1]?.intervals.length && !scaleUploadsSupported) : (view === 'modes' && !enabled)}
                 data-empty={view==='sounds'&&!slotName(slotAt(soundPage,pad))?'true':undefined}
                 onContextMenu={e=>{if(view==='sounds'){e.preventDefault();setManageSlot(slotAt(soundPage,pad))}}}
-                title={view === 'sounds' ? `Slot ${slotAt(soundPage,pad)} · ${label}` : view === 'effects' ? label : view === 'modes' ? (enabled && menuMode ? menuMode.name : 'Unavailable')
+                title={view === 'scales' ? (scaleLibrary[pad - 1]?.intervals.length ? `Edit ${scaleLibrary[pad - 1].name}` : `Custom scale ${pad - 15}${scaleUploadsSupported ? ': create' : ': unavailable'}`) : (view === 'sounds' ? `Slot ${slotAt(soundPage,pad)} · ${label}` : view === 'effects' ? label : view === 'modes' ? (enabled && menuMode ? menuMode.name : 'Unavailable')
                   : activeMode === 'melodic' ? `Pad ${pad} · ${padInfo.noteLabel} · ${role}`
-                  : `Pad ${pad} · ${mode.name}`}
-                aria-label={view === 'sounds' ? `Preset ${slotAt(soundPage,pad)}: ${label}` : view === 'effects' ? label : view === 'modes' ? `Select ${menuMode?.name ?? 'unavailable mode'}` : `Preview pad ${pad} in ${mode.name}`}
+                  : `Pad ${pad} · ${mode.name}`)}
+                aria-label={view === 'scales' ? (scaleLibrary[pad - 1]?.intervals.length ? `Edit ${scaleLibrary[pad - 1].name}` : `Custom scale ${pad - 15}${scaleUploadsSupported ? ': create' : ': unavailable'}`) : (view === 'sounds' ? `Preset ${slotAt(soundPage,pad)}: ${label}` : view === 'effects' ? label : view === 'modes' ? `Select ${menuMode?.name ?? 'unavailable mode'}` : `Preview pad ${pad} in ${mode.name}`)}
                 aria-pressed={selected}
                 onClick={() => handlePad(pad)}>
                 <span>{label}</span>{view==='sounds'&&!slotName(slotAt(soundPage,pad))&&<span className="tiles-add-preset" aria-hidden="true">+</span>}
