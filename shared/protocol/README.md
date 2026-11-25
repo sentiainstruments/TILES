@@ -80,7 +80,7 @@ SYNTH FX <t|BUS> <name> <value>\n  set one: a track 1-4's (reverb delay chorus d
 TEST LEDS <0-100>\n       bench only: every LED white at that % (current measurement)
 TEST MOTORS <n> [duty%]\n bench only: pads 1..n's motors for 8 s
 TEST MOTOR <pad> [duty%]\n bench only: one pad's motor (1-24) for 1 s
-TEST MODE <name>\n        bench only: switch mode (melodic duet sequencer bass song ableton drums volca prism bounce ripples sand orbits cradle)
+TEST MODE <name>\n        bench only: switch mode (melodic duet sequencer bass ableton drums volca prism bounce ripples sand orbits cradle)
 TEST OFF\n                bench only: back to normal
 FLASH CRC\n               the program read back from flash uncached (~0.1 s): crc=<zlib CRC-32 hex>
                           bytes=<n>; equal to the build's .bin's while the flash timing holds
@@ -233,7 +233,7 @@ refused, not clamped); the default is whatever the owning module boots with --
 | 0x040C | `look.play_effect` | enum | `off`, `afterglow`, `ripple`, `cross`, `halo`, `warmth`, `prism_ripple`, `touch_colour`, `heatmap`, `fireworks`, `rise`, `ink` (the light effect while playing; Feel menu, circle + square) | `off` | yes |
 | 0x0500 | `midi.din_trs_type` | enum | `a`, `b` (TRS polarity of DIN MIDI OUT) | `a` | yes |
 | 0x0501 | `midi.clock_lead_ms` | uint | 0 - 50 (ms early that pulses come through when following a DAW's clock, so the notes they trigger land on its grid; 0 = off) | `15` | yes |
-| 0x0502 | `midi.parts_port` | enum | `parts` (the sequencer, drums, Volca, Bouncing notes, Song tracks, chords and games on their own USB port, "Parts"), `main` (all on the MIDI port) | `parts` | yes |
+| 0x0502 | `midi.parts_port` | enum | `parts` (the sequencer, drums, Volca, Bouncing notes, chords and games on their own USB port, "Parts"), `main` (all on the MIDI port) | `parts` | yes |
 | 0x0600 | `features.melodic_harmonics` | bool | | `1` | yes |
 | 0x0601 | `features.harmonics.arm_ms` | uint | 0 - 1000 (ms a struck note is held alone before other touches may pluck) | `150` | yes |
 | 0x0602 | `features.harmonics.confirm_ms` | uint | 0 - 500 (ms a touch waits before plucking) | `40` | yes |
@@ -248,7 +248,7 @@ refused, not clamped); the default is whatever the owning module boots with --
 | 0x0800 | `modes.duet` | bool | | `1` | yes |
 | 0x0801 | `modes.sequencer` | bool | | `1` | yes |
 | 0x0802 | `modes.drums` | bool | | `1` | yes |
-| 0x0803 | `modes.song` | bool | | `1` | yes |
+| 0x0803 | `modes.song` | bool | inert: Song mode was removed, the id stays taken | `1` | yes |
 | 0x0804 | `modes.prism` | bool | | `1` | yes |
 | 0x0805 | `modes.bass` | bool | | `1` | yes |
 | 0x0806 | `modes.ableton` | bool | | `1` | yes |
@@ -284,8 +284,8 @@ Melodic is always there; turning off the mode in use switches to melodic.
 `modes.bounce` Bouncing notes, `modes.cradle` Newton's cradle, and
 `modes.sand`, `modes.ripples`, `modes.orbits` the other physics modes. The
 menu itself is laid out by family, one column each: melodic / Duet / bass
-(magenta, pink, lilac), sequencers (sequencer scarlet, drums orange, Song
-amber), Prism (blue), hardware (Ableton teal, Volca cyan), then two columns of
+(magenta, pink, lilac), sequencers (sequencer scarlet, drums orange),
+Prism (blue), hardware (Ableton teal, Volca cyan), then two columns of
 physical modelling and experimental modes, each in the colour of what it
 models: Bouncing notes (lime), Newton's cradle (steel), Sand (sand); Ripples
 (water), Orbits (night sky). A mode's underglow and resting pads are always
@@ -323,8 +323,8 @@ five values to apply one:
   90% on external power), so brightness is in the value: `363636` is a dim
   white, `FFFFFF` full. The ceiling still applies on top; no setting can
   raise it.
-- Pressed pads (white), the echo after a note, and Song capture still draw
-  over the scheme.
+- Pressed pads (white) and the echo after a note still draw over the
+  scheme.
 - Defaults are the device's original look: `RESET color.root` (or `RESET
   ALL`) brings a role back.
 

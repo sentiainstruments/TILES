@@ -1,0 +1,60 @@
+/* Use the same control styling as the schema-driven Global Settings. */
+.snt-melodic-compact .melodic-editor-heading {
+  padding: 14px 16px 4px;
+  align-items: center;
+}
+.snt-melodic-compact .melodic-editor-heading h3 {
+  margin: 0;
+  font-size: 18px;
+}
+.snt-melodic-compact .melodic-status {
+  border-bottom: 0;
+  padding: 4px 16px 10px;
+}
+.snt-melodic-compact .melodic-editor-scroll.snt-schema-settings {
+  padding: 0 16px 8px;
+  max-height: none;
+  overflow: visible;
+}
+.snt-melodic-compact .snt-schema-group {
+  padding: 12px 0;
+}
+.snt-melodic-compact .snt-schema-group h4 {
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+.snt-melodic-compact .snt-schema-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 12px;
+  align-items: start;
+}
+.snt-melodic-compact .snt-melodic-control-cell {
+  min-width: 0;
+}
+.snt-melodic-compact .snt-device-control {
+  min-width: 0;
+  gap: 6px;
+}
+.snt-melodic-compact .snt-melodic-quick-pad {
+  margin-top: 10px;
+}
+.snt-melodic-compact :focus-visible {
+  outline: 2px solid #c5a0ff;
+  outline-offset: 2px;
+}
+/* Container is on the scroll wrapper, not the viewport. */
+.snt-melodic-compact .melodic-editor-scroll {
+  container-type: inline-size;
+  container-name: melodic-compact;
+}
+@container melodic-compact (max-width: 400px) {
+  .snt-melodic-compact .snt-schema-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container melodic-compact (max-width: 240px) {
+  .snt-melodic-compact .snt-schema-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

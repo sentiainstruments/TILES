@@ -1,3 +1,7 @@
+import { openModeEditor } from './modeNavigation'
+import { PadColorSettings } from './controls/PadColorSettings'
+import { DeviceControl } from './controls/DeviceControl'
+import './SchemaSettings.css'
 import { useCallback, useEffect, useState } from 'react'
 
 type SettingType = 'bool' | 'enum' | 'int' | 'uint' | 'float' | 'color'
@@ -59,48 +63,7 @@ function title(text: string) {
   return text.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase())
 }
 
-function SettingControl({ setting, value, busy, update, reset }: {
-  setting: Setting
-  value: string
-  busy: boolean
-  update: (setting: Setting, next: string) => Promise<void>
-  reset: (setting: Setting) => Promise<void>
-}) {
-  const [draft, setDraft] = useState(value)
-  useEffect(() => setDraft(value), [value])
-  const numeric = ['int', 'uint', 'float'].includes(setting.type)
-  const numberValue = Number(draft)
-  const validNumber = draft.trim() !== '' && Number.isFinite(numberValue) &&
-    (setting.type === 'float' || Number.isInteger(numberValue)) &&
-    (setting.min === undefined || numberValue >= setting.min) &&
-    (setting.max === undefined || numberValue <= setting.max)
-  const commit = () => {
-    if (!validNumber) { setDraft(value); return }
-    if (draft !== value) void update(setting, draft)
-  }
-  const hex = /^[0-9a-f]{6}$/i.test(value)
-
-  return <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(160px, 1fr) auto', gap: 14, alignItems: 'center', padding: '12px 0', borderBottom: '1px solid var(--border, #5553)' }}>
-    <div>
-      <div style={{ fontWeight: 600 }}>{title(setting.key.split('.').slice(1).join(' '))}</div>
-      <small style={{ opacity: .65 }}>{setting.key}{!setting.persist ? ' · Resets on reboot' : ''}</small>
-    </div>
-    <div>
-      {setting.type === 'bool' && <input aria-label={setting.key} type="checkbox" checked={value === '1'} disabled={busy} onChange={event => void update(setting, event.currentTarget.checked ? '1' : '0')} />}
-      {setting.type === 'enum' && <select aria-label={setting.key} value={value} disabled={busy} onChange={event => void update(setting, event.currentTarget.value)}>
-        {(setting.options ?? []).map(option => <option value={option} key={option}>{title(option)}</option>)}
-      </select>}
-      {numeric && <input aria-label={setting.key} type="number" value={draft} min={setting.min} max={setting.max} step={setting.type === 'float' ? 'any' : 1} disabled={busy} style={{ width: 130 }} onChange={event => setDraft(event.currentTarget.value)} onBlur={commit} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }} />}
-      {setting.type === 'color' && <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <input aria-label={setting.key} type="color" disabled={busy || !hex} value={hex ? `#${value}` : '#000000'} onChange={event => void update(setting, event.currentTarget.value.slice(1).toUpperCase())} />
-        <label><input type="checkbox" disabled={busy} checked={value === 'none'} onChange={event => void update(setting, event.currentTarget.checked ? 'none' : (/^[0-9a-f]{6}$/i.test(setting.defaultValue) ? setting.defaultValue : 'FFFFFF'))} /> None</label>
-      </div>}
-    </div>
-    <button type="button" disabled={busy || value === setting.defaultValue} onClick={() => void reset(setting)}>Reset</button>
-  </div>
-}
-
-export function SchemaSettings() {
+export function SchemaSettings({ onlyModeKey }: { onlyModeKey?: string } = {}) {
   const [schema, setSchema] = useState<Setting[]>([])
   const [values, setValues] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
@@ -181,17 +144,44 @@ export function SchemaSettings() {
     return result
   }, {})
 
-  return <section style={{ padding: 24 }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-      <div><h2>Device Settings</h2><p style={{ marginTop: 0 }}>Generated directly from the connected TILES firmware SCHEMA.</p></div>
-      <button type="button" disabled={loading || busy !== null} onClick={() => void refresh()}>Refresh from TILES</button>
-    </div>
-    {loading && <p>Reading SCHEMA and LIST…</p>}
-    {error && <p role="alert">{error}</p>}
-    {!loading && Object.entries(grouped).map(([group, settings]) => <fieldset key={group} style={{ marginBottom: 20, padding: 18 }}>
-      <legend style={{ fontWeight: 700, fontSize: 18 }}>{title(group)}</legend>
-      {settings.map(setting => <SettingControl key={setting.id} setting={setting} value={values[setting.key] ?? ''} busy={busy !== null || values[setting.key] === undefined} update={update} reset={reset} />)}
-    </fieldset>)}
-    {!loading && schema.length > 0 && <small>{schema.length} settings reported by firmware. Settings apply live and are automatically saved by the device unless marked nonpersistent.</small>}
+  if (onlyModeKey) {
+    const setting = schema.find(item => item.key === onlyModeKey && item.type === 'bool')
+    return <section className="snt-schema-settings">
+      {loading && <p className="snt-muted">Reading mode settings…</p>}
+      {error && <p role="alert" className="snt-error">{error}</p>}
+      {!loading && !setting && <p className="snt-muted">This firmware does not expose an enable setting for this mode.</p>}
+      {!loading && setting && <section className="snt-schema-group">
+        <h3>Mode settings</h3>
+        <div className="snt-schema-grid">
+          <DeviceControl setting={setting} label="Enabled" value={values[setting.key]}
+            busy={busy !== null || loading} onUpdate={async (_, next) => { await update(setting, next) }}
+            onReset={() => reset(setting)} />
+        </div>
+      </section>}
+    </section>
+  }
+
+  return <section className="snt-schema-settings">
+
+    {loading && <p className="snt-muted">Reading SCHEMA and LIST…</p>}
+    {error && <p className="snt-error" role="alert">{error}</p>}
+    {!loading && Object.entries(grouped).map(([group, settings]) => <section key={group} className="snt-schema-group">
+      <h3>{title(group)}</h3>
+      {group === 'color' ? <PadColorSettings settings={settings} values={values}  onUpdate={update}  busy={busy !== null || loading}
+        renderSetting={setting => <div key={setting.key} className={`snt-schema-card ${['int', 'uint', 'float'].includes(setting.type) ? 'numeric' : ''}`}>
+          <DeviceControl onLabelClick={setting.type === 'bool' && setting.key.startsWith('modes.') ? () => openModeEditor(setting.key) : undefined} setting={setting} label={title(setting.key.split('.').slice(1).join(' ') || setting.key)}
+            value={values[setting.key]} busy={busy !== null || loading}
+            onUpdate={async (_, next) => { await update(setting, next) }}   onReset={() => reset(setting)}/>
+
+        </div>} /> : <div className={`snt-schema-grid ${group === 'modes' ? 'snt-modes-grid' : ''}`}>
+        {settings.map(setting => <div key={setting.key} className={`snt-schema-card ${['int', 'uint', 'float'].includes(setting.type) ? 'numeric' : ''}`}>
+          <DeviceControl onLabelClick={setting.type === 'bool' && setting.key.startsWith('modes.') ? () => openModeEditor(setting.key) : undefined} setting={setting} label={title(setting.key.split('.').slice(1).join(' ') || setting.key)}
+            value={values[setting.key]} busy={busy !== null || loading}
+            onUpdate={async (_, next) => { await update(setting, next) }}  onReset={() => reset(setting)} />
+
+        </div>)}
+      </div>}
+    </section>)}
+    {!loading && schema.length > 0 && <small className="snt-schema-count">{schema.length} settings reported by firmware. Persistence depends on the setting and firmware.</small>}
   </section>
 }

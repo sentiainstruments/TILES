@@ -1,8 +1,13 @@
+import { WorkspaceIcon } from './WorkspaceIcon'
+import type { ModeProjectTarget } from './modeNavigation'
+import { ModeProjectTargetPanel } from './ModeProjectTargetPanel'
+import { hasUnsavedDraft, selectSlot } from './synth/soundMenu'
+import type { SoundSelection } from './synth/soundMenu'
+import { SynthWorkspace } from './synth/SynthWorkspace'
 import { useEffect, useState } from 'react'
-import { TilesVisualizer } from './TilesVisualizer'
-import { CustomScales } from './CustomScales'
 import { ProjectWorkspace } from './project/ProjectWorkspace'
-import { SchemaSettings } from './SchemaSettings'
+import { DeviceSettingsPage } from './DeviceSettingsPage'
+import './App.css'
 
 const TILES_IDS = [
   [0x1209, 0x0001],
@@ -13,7 +18,21 @@ function App() {
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState('')
   const [simFirmware, setSimFirmware] = useState<string | null>(null)
-  const [page, setPage] = useState<'workspace' | 'device'>('workspace')
+  const [page, setPage] = useState<'workspace' | 'device' | 'synth'>('workspace')
+
+  const [soundSelection, setSoundSelection] = useState<SoundSelection | null>(null)
+  function editSound(selection: SoundSelection) {
+    if(hasUnsavedDraft() && !window.confirm('Replace the unsaved Synth Workspace draft?'))return
+    if(!selection.isNew)selectSlot(selection.track,selection.slot)
+    setSoundSelection(selection)
+    setPage('synth')
+  }
+  const [modeProjectTarget, setModeProjectTarget] = useState<ModeProjectTarget | null>(null)
+  function editModeProject(target: ModeProjectTarget) {
+    setModeProjectTarget(target)
+    setPage('workspace')
+  }
+
 
   async function connect() {
     try {
@@ -50,42 +69,46 @@ function App() {
     <nav style={{ display: 'flex', gap: 12, padding: '14px 22px',
       borderBottom: '1px solid var(--border)', textAlign: 'left' }} aria-label="Companion app">
       <button type="button" aria-current={page === 'workspace' ? 'page' : undefined}
-        onClick={() => setPage('workspace')}>Project Workspace</button>
+        onClick={() => setPage('workspace')} title="Project Workspace"><WorkspaceIcon kind="project" /></button>
       <button type="button" aria-current={page === 'device' ? 'page' : undefined}
-        onClick={() => setPage('device')}>Device Settings</button>
+        onClick={() => setPage('device')} title="Device Settings"><WorkspaceIcon kind="device" /></button>
+      <button type="button" aria-current={page === 'synth' ? 'page' : undefined}
+        onClick={() => setPage('synth')} title="Synth Workspace"><WorkspaceIcon kind="synth" /></button>
+        <div className="nav-device-status">
+          <span
+            className={`nav-status-dot ${connected ? 'connected' : 'disconnected'}`}
+          />
+          {connected ? 'Device connected' : 'Device disconnected'}
+        </div>
       <span style={{ marginLeft: 'auto', fontSize: 12, alignSelf: 'center' }}>
-        {connected ? simFirmware ? `Simulator ${simFirmware}` : 'TILES connected' : 'Offline'}
-      </span>
-    </nav>
-    {/* Keep the workspace mounted while switching tabs so edits remain staged. */}
-    <div style={{ display: page === 'workspace' ? 'block' : 'none' }}>
-      <ProjectWorkspace />
-    </div>
-    {page === 'device' && <section>
-      {!connected ? <div style={{ padding: 32 }}>
-        <h2>Device not connected</h2><p>{error}</p>
-        <button onClick={() => void connect()}>Reconnect</button>
-      </div> : <>
-        {simFirmware && <div style={{ padding: 18 }}>
-          <h2>Virtual TILES · firmware {simFirmware}</h2>
+        {connected && simFirmware && <div className="snt-firmware-selector">
           <label>Simulated firmware{' '}
             <select value={simFirmware} onChange={e => void changeSimFirmware(e.currentTarget.value)}>
               <option value="0.2.0">0.2.0 — legacy</option>
               <option value="0.3.6">0.3.6 — main</option>
-              <option value="alpha.6.5">Alpha 6.5 — previous</option>
-              <option value="alpha.6.9">Alpha 6.9 — official main</option>
-            </select>
-          </label>
-          <p>Switching firmware versions resets the simulated device, not saved project files.</p>
-        </div>}
-        {error && <p role="alert">{error}</p>}
-        <div key={simFirmware ?? 'real-device'}>
-          <TilesVisualizer />
-          <SchemaSettings />
-          <CustomScales />
-        </div>
-      </>}
-    </section>}
+            <option value="alpha.6.5">Alpha 6.5 — previous</option>
+            <option value="alpha.6.9">Alpha 6.9 — official main</option>
+          </select>
+        </label>
+      </div>}
+      {connected && error && <p role="alert" className="snt-error" style={{ margin: 16 }}>{error}</p>}
+    </span>
+    </nav>
+    {/* Keep the workspace mounted while switching tabs so edits remain staged. */}
+    <div style={{ display: page === 'workspace' ? 'block' : 'none' }}>
+      {modeProjectTarget && <ModeProjectTargetPanel target={modeProjectTarget} onBack={() => setPage('device')} onClose={() => setModeProjectTarget(null)} />}
+      <ProjectWorkspace />
+    </div>
+    <section style={{ display: page === 'device' ? 'block' : 'none' }}>
+
+      <div key={simFirmware ?? 'real-device'}>
+        <DeviceSettingsPage connected={connected} connectionMessage={error}
+          onReconnect={() => { void connect() }} onEditSound={editSound} onEditModeProject={editModeProject} />
+      </div>
+    </section>
+    <div style={{ display: page === 'synth' ? 'block' : 'none' }}>
+      <SynthWorkspace connected={connected} simulated={simFirmware !== null} active={page === 'synth'} soundSelection={soundSelection} onReturnToDevice={()=>setPage('device')} />
+    </div>
   </main>
 }
 export default App
