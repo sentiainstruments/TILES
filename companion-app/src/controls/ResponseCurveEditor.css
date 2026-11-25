@@ -12,8 +12,8 @@
   color: #eae6f8; background: #2a2e3d; border: 1px solid #4a4e62;
   font-size: 11px; border-radius: 7px; padding: 6px 7px; max-width: 110px;
 }
-.snt-curve-chart { width: min(60%, 280px);  margin: 0 auto; position: relative; }
-.snt-curve-chart svg { display: block; width: 100%; aspect-ratio: 1 / 1; border-radius: 8px; background: #151924; border: 1px solid #454b62; overflow: visible; touch-action: none; }
+/* .snt-curve-chart { width: min(60%, 280px);  margin: 0 auto; position: relative; } */
+/* .snt-curve-chart svg { display: block; width: 100%; aspect-ratio: 1 / 1; border-radius: 8px; background: #151924; border: 1px solid #454b62; overflow: visible; touch-action: none; } */
 .snt-curve-axis-y { position: absolute; top: 43%; left: -13px; transform: rotate(-90deg); font-size: 9px; letter-spacing: 1px; color: #8e93a7; }
 .snt-curve-axis-x { position: absolute; bottom: 0; left: 43%; font-size: 9px; letter-spacing: 1px; color: #8e93a7; }
 .snt-curve-grid line { stroke: #34394c; stroke-width: .45; vector-effect: non-scaling-stroke; }

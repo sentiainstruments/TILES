@@ -163,7 +163,7 @@ function modePadPreview(mode: ModeId, pad: number, selected: Set<number>): {
 }
 
 export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: SoundSelection) => void } = {}) {
-  const [standalonePreview, setStandalonePreview] = useState(true)
+const [standalonePreview] = useState(true)
   const [soundTrack, setSoundTrack] = useState(2)
   const [soundPage, setSoundPage] = useState(0)
   const [soundRevision, setSoundRevision] = useState(0)
@@ -208,12 +208,12 @@ export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: Sou
   const [look, setLook] = useState(DEFAULT_LOOK)
   const [modern, setModern] = useState(false)
   const [layout, setLayout] = useState('rows')
-  const [effect, setEffect] = useState('off')
+  const [, setEffect] = useState('off')
   const [scales, setScales] = useState<Scale[]>([])
   const [scaleChoice, setScaleChoice] = useState('chromatic')
   const [activePad, setActivePad] = useState<number | null>(null)
-  const [previewMode, setPreviewMode] = useState<PreviewMode>('press')
-  const [previewPressed, setPreviewPressed] = useState(false)
+  const [previewMode] = useState<PreviewMode>('press')
+  const [previewPressed] = useState(false)
   const [activeMode, setActiveMode] = useState<ModeId>('melodic')
   const [view, setView] = useState<ViewId>('play')
   const [modeSettings, setModeSettings] = useState<Record<string, string>>({})
@@ -424,30 +424,11 @@ export function TilesVisualizer({ onEditSound }: { onEditSound?: (selection: Sou
     }
   }
 
-  const note = view === 'sounds'
-    ? '− / + changes the preset page. Click ○ then − / + to switch tracks. Press ◇ again to close. Click any slot to edit or create a sound. Right-click a slot to manage it, or use Manage slot below.'
-    : view === 'effects'
-      ? 'Each column is an effect; top row = full, bottom row = off. − / + switches tracks. Click ○ then ◇ to close. Values are local draft data, not live DSP effects.'
-      : view === 'modes' 
-    ? 'Press △ to close the mode menu, or click a lit pad to select a mode. A disabled mode is dark. Mode selection here changes only the app preview; it does not change the real TILES mode.'
-    : view === 'scales'
-      ? '○ then △ opens the scale picker on TILES. Built-in picker-pad mappings are not modeled here. The scale dropdown above changes this preview only.'
-      : view === 'patterns'
-        ? '◇ opens the sequencer pattern bank. This grid is a visual placeholder: the real instrument stores six alternatives per lane. Press ◇ again to return.'
-        : `Previewing ${mode.name}: ${mode.description} ${activeMode === 'melodic' ? 'Click a pad to edit its individual color; enable Animate selected pad to show its pressed state.' : 'These pads do not send MIDI or change the physical instrument.'} Layout: ${layout}; lighting effect: ${effect}.`
+
 
   return (
     <section className="tiles-visualizer">
-      <div className="tiles-mode-status" aria-live="polite">
-        <span className="tiles-mode-dot" style={{ background: mode.color }} />
-        <strong>{view === 'sounds' ? 'Sound Menu' : view === 'effects' ? 'Effects Menu' : view === 'modes' ? 'Mode menu' : view === 'scales' ? 'Scale picker preview'
-          : view === 'patterns' ? 'Pattern bank preview' : mode.name}</strong>
-        {soundView && <span style={{ color: trackColors[soundTrack - 1] }}>Track {soundTrack} · {view === 'sounds' ? `Page ${soundPage + 1}/4` : 'FX'}</span>}
-        <span>Octave {octave >= 0 ? `+${octave}` : octave}</span>
-        <span>{running ? 'Transport: playing' : 'Transport: stopped'}</span>
-        <span>{pitchBend ? 'Bend on' : 'Bend off'} · {mpe ? 'MPE on' : 'MPE off'}</span>
-        {shiftArmed && <strong className="tiles-shift-label">○ Shift armed — choose another button</strong>}
-      </div>
+
       <div className={`tiles-preview-workspace ${activeMode === 'melodic' && view === 'play' ? 'with-melodic-editor' : ''}`}>
         <div className="tiles-device-and-notes">
       <div className={`tiles-device ${soundView ? 'tiles-sound-device' : ''}`} style={soundView ? { '--sound-track-color': trackColors[soundTrack-1] } as CSSProperties : undefined}>
