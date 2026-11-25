@@ -3,6 +3,7 @@ import { PadColorSettings } from './controls/PadColorSettings'
 import './SchemaSettings.css'
 import './MelodicCompact.css'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { WorkspaceIcon } from './WorkspaceIcon'
 import './MelodicEditor.css'
 
 type SettingType = 'bool' | 'enum' | 'int' | 'uint' | 'float' | 'color'
@@ -195,8 +196,26 @@ export function MelodicEditor({ selectedPad, onEditPreset }: {
   return <aside className="melodic-editor snt-melodic-compact" aria-label="Melodic mode customization">
     <div className="melodic-editor-heading">
       <h3>Melodic</h3>
-      <div className="snt-mode-preview-action"><button type="button" className="snt-subtle-button" onClick={() => void refresh()} disabled={loading || busy}>Refresh</button>
-        {onEditPreset && <button type="button" className="snt-subtle-button" onClick={onEditPreset}>Edit Preset</button>}
+
+      <div className="snt-mode-preview-action">
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          disabled={loading || busy}
+          title="Refresh"
+        >
+          <WorkspaceIcon kind="refresh" />
+        </button>
+
+        {onEditPreset && (
+          <button
+            type="button"
+            onClick={onEditPreset}
+            title="Edit Preset"
+          >
+            <WorkspaceIcon kind="edit" />
+          </button>
+        )}
       </div>
     </div>
 

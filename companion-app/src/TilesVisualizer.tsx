@@ -8,12 +8,13 @@ import { factoryScale, makeScaleLibrary, parseScaleList } from './scalePicker'
 import type { FactoryOverrides } from './scalePicker'
 import { useEffect, useRef, useState } from 'react'
 import { Preview } from './synth/preview'
-import { pageColors, fxNames, fxColors, trackColors, previewNotes, modeTrack, slotAt, slotPage, wrap, slotName, selectedSlot, selectSlot, getEffects, setEffect as setTrackEffect, effectValue, isSaved, editSelection, makeSelection, hasArchive, hasFactory, archivedName, removeVirtualPreset, restoreVirtualPreset, restoreFactory, exactFactory } from './synth/soundMenu'
+import { pageColors, fxNames, fxColors, trackColors, previewNotes, modeTrack, slotAt, slotPage, wrap, slotName, selectedSlot, selectSlot, getEffects, setEffect as setTrackEffect, effectValue, isSaved, editSelection, makeSelection, hasFactory, restoreFactory } from './synth/soundMenu'
 import type { SoundSelection } from './synth/soundMenu'
 import type { CSSProperties } from 'react'
 import './TilesVisualizer.css'
 import { MelodicEditor } from './MelodicEditor'
 import { getMelodicPadInfo } from './melodicNoteMap'
+import { WorkspaceIcon } from './WorkspaceIcon'
 
 type ColorRole = 'root' | 'fifth' | 'third' | 'note' | 'accidental'
 type PreviewMode = 'press' | 'primary' | 'secondary'
@@ -172,8 +173,8 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
   const [soundTrack, setSoundTrack] = useState(2)
   const [soundPage, setSoundPage] = useState(0)
   const [soundRevision, setSoundRevision] = useState(0)
-  const [soundMessage, setSoundMessage] = useState('Select a pad to edit or create a preset.')
-  const [manageSlot,setManageSlot]=useState<number|null>(null)
+
+  const [soundEditorSlot, setSoundEditorSlot] = useState<number | null>(null)
   useEffect(()=>{const changed=()=>setSoundRevision(n=>n+1);window.addEventListener('tiles:sim-presets-changed',changed);return()=>window.removeEventListener('tiles:sim-presets-changed',changed)},[])
   const audition = useRef<Preview | null>(null)
   const auditionTimer = useRef<number | undefined>(undefined)
@@ -201,9 +202,8 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
       const note = previewNotes[row]
       player.noteOn(note, selection.record, 100 / 127)
       auditionTimer.current = window.setTimeout(() => player.noteOff(note), 600)
-      setSoundMessage(`${slotName(selection.slot)} · local audio approximation`)
     } catch (error) {
-      if (generation === auditionGeneration.current) setSoundMessage(`Audio unavailable: ${String(error)}`)
+      if (generation === auditionGeneration.current) console.warn('Could not audition sound', error)
     }
   }
 
@@ -232,7 +232,15 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
     function open(event: Event) {
       const key = (event as CustomEvent<string>).detail
       const found = MODES.find(candidate => candidate.setting === key)
+
       if (!found) return
+
+      setView(current =>
+        current === 'sounds' || current === 'effects'
+          ? 'modes'
+          : current
+      )
+
       setNewModeSlot(null)
       setEditorMode(found.id)
       setEditorRequest(n => n + 1)
@@ -368,17 +376,57 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
 
   const soundView = view === 'sounds' || view === 'effects'
   const chosenSlot = selectedSlot(soundTrack)
+  const editingSoundSlot = soundEditorSlot ?? chosenSlot
+  const editingSoundName = slotName(editingSoundSlot)
   // The revision triggers a repaint of the app-session simulator store.
   const soundFx = getEffects(soundTrack)
+  function changeSoundTrack(track: number) {
+    stopAudition()
+    setSoundTrack(track)
+    setSoundPage(slotPage(selectedSlot(track)))
+    setSoundEditorSlot(null)
+
+  }
+
   function openSoundView(next: 'sounds' | 'effects') {
     stopAudition()
+    setSoundEditorSlot(null)
     if (view === next) { setView('play'); return }
-    const t = modeTrack(activeMode)
-    setSoundTrack(t)
-    setSoundPage(slotPage(selectedSlot(t)))
+    changeSoundTrack(soundView ? soundTrack : modeTrack(activeMode))
     setView(next)
-    setSoundMessage('Click a slot to edit or create a preset.')
+
   }
+
+  function editSelectedSound() {
+    if (!onEditSound) return
+    stopAudition()
+    onEditSound(editSelection(soundTrack, editingSoundSlot))
+  }
+
+  function auditionSelectedSound() {
+    if (!editingSoundName) return
+    if (selectedSlot(soundTrack) !== editingSoundSlot) {
+      if (!selectSlot(soundTrack, editingSoundSlot)) return
+      setSoundRevision(n => n + 1)
+    }
+    void auditionSound(soundTrack, Math.floor(((editingSoundSlot - 1) % 24) / 6))
+  }
+  function restoreSelectedSound() {
+    if (!hasFactory(editingSoundSlot)) return
+    if (!window.confirm(`Restore original factory sound in slot ${editingSoundSlot}?`)) return
+
+    stopAudition()
+    try {
+      restoreFactory(editingSoundSlot)
+      // Reload the factory sound and its effect defaults for the current track.
+      selectSlot(soundTrack, editingSoundSlot)
+    } catch (error) {
+      console.warn('Could not restore factory preset', error)
+    } finally {
+      setSoundRevision(n => n + 1)
+    }
+  }
+
   function handleButton(index: number) {
     if (scaleEditorSlot !== null) return
     if (index === 5) {
@@ -392,8 +440,7 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
       const delta = index === 1 ? 1 : -1
       if (view === 'effects' || shiftArmed) {
         const t = wrap(soundTrack - 1 + delta, 4) + 1
-        setSoundTrack(t)
-        setSoundPage(slotPage(selectedSlot(t)))
+        changeSoundTrack(t)
       } else setSoundPage(p => wrap(p + delta, 4))
       setShiftArmed(false)
       return
@@ -437,8 +484,12 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
     if (view === 'sounds') {
       const slot = slotAt(soundPage, pad)
       stopAudition()
-      if (onEditSound) { onEditSound(editSelection(soundTrack,slot)); setSoundRevision(n=>n+1); setManageSlot(null) }
-      else if(selectSlot(soundTrack,slot)){setSoundRevision(n=>n+1);void auditionSound(soundTrack,Math.floor((pad-1)/6))}
+      setSoundEditorSlot(slot)
+      if (slotName(slot) && selectedSlot(soundTrack) !== slot) {
+        selectSlot(soundTrack, slot)
+      }
+      setSoundRevision(n => n + 1)
+      setEditorRequest(n => n + 1)
       return
     }
     if (view === 'effects') {
@@ -561,7 +612,7 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
             if (view === 'sounds') {
               const slot = slotAt(soundPage, pad)
               label = slotName(slot) || 'Empty'
-              selected = slot === chosenSlot && Boolean(slotName(slot))
+              selected = slot === editingSoundSlot
               baseColor = slotName(slot) ? pageColors[soundPage][Math.floor(index / 6)] : '#242735'
             } else if (view === 'effects') {
               const col = index % 6
@@ -605,8 +656,7 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
                 disabled={view === 'scales' ? (!scaleLibrary[pad - 1]?.intervals.length && !scaleUploadsSupported) : (view === 'modes' && !enabled && !onEditModeProject)}
                 data-empty={view==='sounds'&&!slotName(slotAt(soundPage,pad))?'true':undefined}
                 onContextMenu={e => {
-                  if (view === 'sounds') { e.preventDefault(); setManageSlot(slotAt(soundPage,pad)) }
-                  else if (view === 'modes' && menuMode && enabled) { e.preventDefault(); previewModeSelection(menuMode) }
+                  if (view === 'modes' && menuMode && enabled) { e.preventDefault(); previewModeSelection(menuMode) }
                 }}
                 title={view === 'scales' ? (scaleLibrary[pad - 1]?.intervals.length ? `Edit ${scaleLibrary[pad - 1].name}` : `Custom scale ${pad - 15}${scaleUploadsSupported ? ': create' : ': unavailable'}`) : (view === 'sounds' ? `Slot ${slotAt(soundPage,pad)} · ${label}` : view === 'effects' ? label : view === 'modes' ? (menuMode ? `${menuMode.name} · Open mode editor${enabled ? ' · Right-click to preview' : ' · Disabled'}` : onEditModeProject ? 'Name a new mode preset' : 'Unavailable')
                   : activeMode === 'melodic' ? `Pad ${pad} · ${padInfo.noteLabel} · ${role}`
@@ -626,39 +676,63 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
           })}
         </div>
       </div>
-      {soundView && <div className="tiles-sound-toolbar" data-revision={soundRevision}>
-        <div className="tiles-sound-nav">
-          <label>Track <select value={soundTrack} onChange={e => {
-            stopAudition(); const t = Number(e.currentTarget.value); setSoundTrack(t); setSoundPage(slotPage(selectedSlot(t)))
-          }}>{[1,2,3,4].map(t => <option key={t} value={t}>Track {t}</option>)}</select></label>
-          {view === 'sounds' && <label>Page <select value={soundPage} onChange={e => { stopAudition(); setSoundPage(Number(e.currentTarget.value)) }}>
-            {[0,1,2,3].map(p => <option key={p} value={p}>{p+1} · {p*24+1}–{p*24+24}</option>)}
-          </select></label>}
-          <button type="button" onClick={() => openSoundView(view === 'sounds' ? 'effects' : 'sounds')}>{view === 'sounds' ? 'Effects' : 'Sounds'}</button>
-        </div>
-        <strong>Track {soundTrack} · Slot {chosenSlot} · {slotName(chosenSlot)}</strong>
-        {view === 'effects' && <div className="tiles-fx-readout">{fxNames.map((fx,i) => <span key={fx}>{fx} {Math.round(soundFx[i]*100)}%</span>)}</div>}
-        <small role="status">{soundMessage}</small>
-        {view==='sounds'&&<>
-          <button type="button" disabled={!slotName(chosenSlot)} onClick={()=>void auditionSound(soundTrack,Math.floor(((chosenSlot-1)%24)/6))}>Audition current sound</button>
-          <label>Manage slot <select value={manageSlot??chosenSlot} onChange={e=>setManageSlot(Number(e.target.value))}>{Array.from({length:96},(_,i)=><option key={i} value={i+1}>{i+1} · {slotName(i+1)||'Empty'}</option>)}</select></label>
-          {(()=>{const s=manageSlot??chosenSlot;return <div className="tiles-sound-nav">
-            <button type="button" disabled={!slotName(s)} onClick={()=>{if(window.confirm(`Remove ${slotName(s)} from simulator slot ${s}? It will be archived for restoration.`)){stopAudition();try{removeVirtualPreset(s);setSoundRevision(n=>n+1);setSoundMessage(`Slot ${s} archived.`)}catch(e){setSoundMessage(String(e));setSoundRevision(n=>n+1)}}}}>Remove / archive</button>
-            <button type="button" disabled={!hasArchive(s)} onClick={()=>{if(slotName(s)&&!window.confirm(`Replace slot ${s} with its archived sound?`))return;try{restoreVirtualPreset(s);setSoundRevision(n=>n+1);setSoundMessage(`Restored slot ${s}.`)}catch(e){setSoundMessage(String(e));setSoundRevision(n=>n+1)}}}>Restore archived{hasArchive(s)?` (${archivedName(s)})`:''}</button>
-            <button type="button" disabled={!hasFactory(s)} onClick={()=>{if(!window.confirm(`Restore original factory sound in slot ${s}?`))return;try{restoreFactory(s);setSoundRevision(n=>n+1);setSoundMessage(`Factory slot ${s} restored.`)}catch(e){setSoundMessage(String(e));setSoundRevision(n=>n+1)}}}>Restore factory</button>
-          </div>})()}
-        </>}
-        <small>{exactFactory?'Development firmware factory records':'Partial factory preview records'} · simulator only · no hardware commands</small>
-      </div>}
-
-
         </div>
                 </div>
       </section>
     </div>
 
     <div className="snt-mode-editor-anchor" ref={editorAnchor}>
-      {newModeSlot !== null ? (
+         {soundView ? (
+          <aside className="snt-panel snt-sound-editor">
+            <div className="melodic-editor-heading">
+              <div className="snt-sound-editor-title">
+                <h3>
+                  {view === 'effects' ? 'Synth Effects' : editingSoundName || 'New sound preset'}
+                </h3>
+
+              </div>
+              {view === 'sounds' && (
+                <div className="snt-mode-preview-action">
+                  <button
+                    type="button"
+                    disabled={!editingSoundName}
+                    onClick={auditionSelectedSound}
+                    title="Audition current sound"
+                    aria-label="Audition current sound"
+                  >
+                    <WorkspaceIcon kind="speaker" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!onEditSound}
+                    onClick={editSelectedSound}
+                    title={editingSoundName ? 'Edit Preset' : 'Create Preset'}
+                    aria-label={editingSoundName ? 'Edit Preset' : 'Create Preset'}
+                  >
+                    <WorkspaceIcon kind="edit" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!hasFactory(editingSoundSlot)}
+                    onClick={restoreSelectedSound}
+                    title="Restore factory preset"
+                    aria-label="Restore factory preset"
+                  >
+                    <WorkspaceIcon kind="reset" />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="tiles-sound-toolbar" data-revision={soundRevision}>
+              <div className="tiles-sound-nav">
+
+                <button type="button" onClick={() => openSoundView(view === 'sounds' ? 'effects' : 'sounds')}>{view === 'sounds' ? 'Effects' : 'Sounds'}</button>
+              </div>
+
+             </div>
+          </aside>
+        ) : newModeSlot !== null ? (
         <aside className="melodic-editor snt-melodic-compact snt-mode-context" aria-label="New mode preset">
           <form onSubmit={event => { event.preventDefault(); editSelectedModePreset() }}>
             <div className="melodic-editor-heading">
@@ -681,8 +755,23 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
           <div className="melodic-editor-heading">
             <h3>{editingMode.name}</h3>
             <div className="snt-mode-preview-action">
-              <button type="button" className="snt-subtle-button" disabled={!modeEnabled(editingMode)} onClick={() => previewModeSelection(editingMode)}>Preview mode</button>
-              <button type="button" className="snt-subtle-button" disabled={!onEditModeProject} onClick={editSelectedModePreset}>Edit Preset</button>
+              <button
+                type="button"
+                disabled={!modeEnabled(editingMode)}
+                onClick={() => previewModeSelection(editingMode)}
+                title="Preview Mode"
+              >
+                <WorkspaceIcon kind="preview" />
+              </button>
+
+              <button
+                type="button"
+                disabled={!onEditModeProject}
+                onClick={editSelectedModePreset}
+                title="Edit Preset"
+              >
+                <WorkspaceIcon kind="edit" />
+              </button>
             </div>
           </div>
           <SchemaSettings key={editingMode.setting} onlyModeKey={editingMode.setting} />

@@ -182,6 +182,5 @@ export function SchemaSettings({ onlyModeKey }: { onlyModeKey?: string } = {}) {
         </div>)}
       </div>}
     </section>)}
-    {!loading && schema.length > 0 && <small className="snt-schema-count">{schema.length} settings reported by firmware. Persistence depends on the setting and firmware.</small>}
   </section>
 }
