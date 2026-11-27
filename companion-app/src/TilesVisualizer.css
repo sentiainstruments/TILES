@@ -205,3 +205,16 @@
 .tiles-fx-readout span { padding:4px 6px;background:#2e3141;border-radius:5px; }
 
 .tiles-sound-device .tiles-pad[data-empty="true"]{position:relative;cursor:pointer;opacity:.75;border-style:dashed;border-color:#55566d;box-shadow:none}.tiles-add-preset{position:absolute;inset:0;display:grid;place-items:center;font-size:30px;color:#dac1ff;background:#272438;border-radius:inherit;opacity:0;transition:opacity .12s}.tiles-pad[data-empty="true"]:hover .tiles-add-preset,.tiles-pad[data-empty="true"]:focus-visible .tiles-add-preset{opacity:1}.tiles-pad[data-empty="true"]:hover,.tiles-pad[data-empty="true"]:focus-visible{border-color:#bca0ff;opacity:1}
+
+/* Read-only live USB MIDI visualization. Independent of editor selection. */
+.tiles-midi-input { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; font-size: 11px; }
+.tiles-midi-input select { max-width: 145px; min-width: 0; font-size: 11px; }
+.tiles-midi-input button { font-size: 11px; padding: 4px 7px; white-space: nowrap; }
+.tiles-midi-input .tiles-midi-status { color: inherit; opacity: .75; }
+.tiles-pad[data-midi-active="true"] {
+  background: #e7d7ff;
+  border-color: #fff;
+  box-shadow: inset 0 0 12px #fff, 0 0 18px #b67bff;
+  color: #171322;
+  transition: none;
+}

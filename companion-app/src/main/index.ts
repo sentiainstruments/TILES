@@ -1,3 +1,4 @@
+import { uploadDrumSample } from './usb'
 import {app, BrowserWindow, ipcMain,} from 'electron'
 import { dirname, join,} from 'node:path'
 import {  fileURLToPath,} from 'node:url'
@@ -110,6 +111,10 @@ app.whenReady().then(() => {
       void sendUsbList()
     },
   )
+  ipcMain.handle('usb:sample-upload', async (_event, sample: unknown) => {
+    if (isMock) throw new Error('Sample upload requires physical TILES')
+    return uploadDrumSample(sample)
+  })
   ipcMain.handle(
   'usb:command',
   async (_event, command: string, multiLine = false) => {

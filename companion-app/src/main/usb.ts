@@ -38,6 +38,7 @@ export async function connectUsbDevice(
   vendorId: number,
   productId: number,
 ) {
+  if (drumUploadActive) throw new Error('Sample upload in progress')
   await disconnectUsbDevice()
 
   const device = await usb.findDeviceByIds(
@@ -112,6 +113,7 @@ export async function connectUsbDevice(
 }
 
 export async function disconnectUsbDevice() {
+  if (drumUploadActive) throw new Error('Sample upload in progress')
   const device = activeDevice
   const iface = controlInterface
 
@@ -268,4 +270,58 @@ async function sendTilesCommandNow(
 
 function hex(value: number) {
   return `0x${value.toString(16).padStart(4, '0')}`
+}
+
+// TILES drum samples: one exclusive command+binary+verdict transaction.
+let drumUploadActive = false
+export function uploadDrumSample(input: unknown): Promise<void> {
+  if (!input || typeof input !== 'object') return Promise.reject(new Error('Invalid sample'))
+  const {slot,name,channels,frames,bytes} = input as {slot:number;name:string;channels:number;frames:number;bytes:number[]}
+  if (!Number.isInteger(slot) || slot<1 || slot>8 || typeof name!=='string' || !/^[A-Za-z0-9_-]{1,23}$/.test(name) ||
+      (channels!==1 && channels!==2) || !Number.isInteger(frames) || frames<1 || frames>(channels===1?96000:48000) ||
+      !Array.isArray(bytes) || bytes.length!==frames*channels*2 || !bytes.every(b=>Number.isInteger(b)&&b>=0&&b<=255)) {
+    return Promise.reject(new Error('Invalid sample format or length'))
+  }
+  const data=Uint8Array.from(bytes)
+  let crc=0xffffffff
+  for(const b of data){crc^=b;for(let j=0;j<8;j++)crc=(crc>>>1)^((crc&1)?0xedb88320:0)}
+  const checksum=((crc^0xffffffff)>>>0).toString(16).padStart(8,'0')
+  const result=commandQueue.then(async()=>{
+    if(!activeDevice || controlOut===null)throw new Error('TILES is not connected')
+    const device=activeDevice, endpoint=controlOut
+    const anticipatedTag=tagsSupported?`@${nextTag} `:''
+    drumUploadActive=true
+    let uncertain=true
+    try {
+      const [reply]=await sendTilesCommandNow(`SAMPLE BEGIN ${slot} ${channels} ${frames} ${checksum} ${name}`,false)
+      if(reply?.startsWith('ERR ')){uncertain=false;throw new Error(reply==='ERR playing'?'Stop playback and wait for the instrument to become silent.':reply)}
+      if(reply!==`OK ${data.length}`)throw new Error(`Unexpected sample handshake: ${reply}`)
+      const tag=tagsSupported?anticipatedTag:''
+      for(let i=0;i<data.length;i+=4096){
+        const chunk=data.slice(i,i+4096)
+        const write=await device.transferOut(endpoint,chunk)
+        if(write.status!=='ok'||write.bytesWritten!==chunk.length)throw new Error('Incomplete sample write')
+      }
+      while(true){
+        const raw=await readLine()
+        if(tag&&!raw.startsWith(tag))continue
+        const verdict=tag?raw.slice(tag.length):raw
+        if(verdict==='OK'){uncertain=false;return}
+        if(verdict.startsWith('ERR ')){uncertain=false;throw new Error(verdict)}
+        throw new Error(`Unexpected sample verdict: ${verdict}`)
+      }
+    }catch(error){
+      if(uncertain){
+        // Don't let queued text commands become sample bytes. Wait beyond the
+        // firmware's 3 s raw timeout, then close the connection before releasing the queue.
+        await new Promise<void>(resolve=>setTimeout(resolve,3500))
+        drumUploadActive=false
+        await disconnectUsbDevice()
+        throw new Error(`${error instanceof Error?error.message:String(error)}. Reconnect TILES and check the slot; it may be empty.`)
+      }
+      throw error
+    }finally{drumUploadActive=false}
+  })
+  commandQueue=result.then(()=>undefined,()=>undefined)
+  return result
 }

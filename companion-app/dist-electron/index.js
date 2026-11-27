@@ -1,7 +1,7 @@
+import { usb } from "usb";
 import { BrowserWindow, app, dialog, ipcMain } from "electron";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { usb } from "usb";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 //#region src/main/usb.ts
@@ -23,6 +23,7 @@ async function listUsbDevices() {
 	}));
 }
 async function connectUsbDevice(vendorId, productId) {
+	if (drumUploadActive) throw new Error("Sample upload in progress");
 	await disconnectUsbDevice();
 	const device = await usb.findDeviceByIds(vendorId, productId);
 	if (!device) throw new Error(`USB device ${hex(vendorId)}:${hex(productId)} not found`);
@@ -68,6 +69,7 @@ async function connectUsbDevice(vendorId, productId) {
 	};
 }
 async function disconnectUsbDevice() {
+	if (drumUploadActive) throw new Error("Sample upload in progress");
 	const device = activeDevice;
 	const iface = controlInterface;
 	activeDevice = null;
@@ -149,6 +151,66 @@ async function sendTilesCommandNow(command, multiLine = false) {
 }
 function hex(value) {
 	return `0x${value.toString(16).padStart(4, "0")}`;
+}
+var drumUploadActive = false;
+function uploadDrumSample(input) {
+	if (!input || typeof input !== "object") return Promise.reject(/* @__PURE__ */ new Error("Invalid sample"));
+	const { slot, name, channels, frames, bytes } = input;
+	if (!Number.isInteger(slot) || slot < 1 || slot > 8 || typeof name !== "string" || !/^[A-Za-z0-9_-]{1,23}$/.test(name) || channels !== 1 && channels !== 2 || !Number.isInteger(frames) || frames < 1 || frames > (channels === 1 ? 96e3 : 48e3) || !Array.isArray(bytes) || bytes.length !== frames * channels * 2 || !bytes.every((b) => Number.isInteger(b) && b >= 0 && b <= 255)) return Promise.reject(/* @__PURE__ */ new Error("Invalid sample format or length"));
+	const data = Uint8Array.from(bytes);
+	let crc = 4294967295;
+	for (const b of data) {
+		crc ^= b;
+		for (let j = 0; j < 8; j++) crc = crc >>> 1 ^ (crc & 1 ? 3988292384 : 0);
+	}
+	const checksum = ((crc ^ 4294967295) >>> 0).toString(16).padStart(8, "0");
+	const result = commandQueue.then(async () => {
+		if (!activeDevice || controlOut === null) throw new Error("TILES is not connected");
+		const device = activeDevice, endpoint = controlOut;
+		const anticipatedTag = tagsSupported ? `@${nextTag} ` : "";
+		drumUploadActive = true;
+		let uncertain = true;
+		try {
+			const [reply] = await sendTilesCommandNow(`SAMPLE BEGIN ${slot} ${channels} ${frames} ${checksum} ${name}`, false);
+			if (reply?.startsWith("ERR ")) {
+				uncertain = false;
+				throw new Error(reply === "ERR playing" ? "Stop playback and wait for the instrument to become silent." : reply);
+			}
+			if (reply !== `OK ${data.length}`) throw new Error(`Unexpected sample handshake: ${reply}`);
+			const tag = tagsSupported ? anticipatedTag : "";
+			for (let i = 0; i < data.length; i += 4096) {
+				const chunk = data.slice(i, i + 4096);
+				const write = await device.transferOut(endpoint, chunk);
+				if (write.status !== "ok" || write.bytesWritten !== chunk.length) throw new Error("Incomplete sample write");
+			}
+			while (true) {
+				const raw = await readLine();
+				if (tag && !raw.startsWith(tag)) continue;
+				const verdict = tag ? raw.slice(tag.length) : raw;
+				if (verdict === "OK") {
+					uncertain = false;
+					return;
+				}
+				if (verdict.startsWith("ERR ")) {
+					uncertain = false;
+					throw new Error(verdict);
+				}
+				throw new Error(`Unexpected sample verdict: ${verdict}`);
+			}
+		} catch (error) {
+			if (uncertain) {
+				await new Promise((resolve) => setTimeout(resolve, 3500));
+				drumUploadActive = false;
+				await disconnectUsbDevice();
+				throw new Error(`${error instanceof Error ? error.message : String(error)}. Reconnect TILES and check the slot; it may be empty.`);
+			}
+			throw error;
+		} finally {
+			drumUploadActive = false;
+		}
+	});
+	commandQueue = result.then(() => void 0, () => void 0);
+	return result;
 }
 var tiles_settings_default = {
 	_comment: "Simulator catalog based on current official main protocol/settings table, identified as Alpha 6.9 in firmware/src/midi/product_identity.h (checked 2026-11-09). Alpha 6.9 extends the Alpha 6.5 settings with expression.pitch_bend_mode. Not tested against hardware; simulation does not emulate physical sensing.",
@@ -1288,6 +1350,10 @@ app.whenReady().then(() => {
 	});
 	usb.addEventListener("disconnect", () => {
 		sendUsbList();
+	});
+	ipcMain.handle("usb:sample-upload", async (_event, sample) => {
+		if (isMock) throw new Error("Sample upload requires physical TILES");
+		return uploadDrumSample(sample);
 	});
 	ipcMain.handle("usb:command", async (_event, command, multiLine = false) => {
 		if (isMock) return mockCommand(command, multiLine);
