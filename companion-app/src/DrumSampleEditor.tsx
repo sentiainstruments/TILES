@@ -8,7 +8,7 @@ type SampleUpload = { slot: number; name: string; channels: 1 | 2; frames: numbe
 // Optional IPC extension; UI-only installations can still list, play and preview.
 const sampleUsb = () => window.tiles.usb as typeof window.tiles.usb & { uploadDrumSample?: (sample: SampleUpload) => Promise<void> }
 const message = (e: unknown) => e instanceof Error ? e.message : String(e)
-export function DrumSampleEditor() {
+export function DrumSampleEditor({ onSlotsChange }: { onSlotsChange?: (slots: DrumSlot[]) => void } = {}) {
   const [slots,setSlots] = useState<DrumSlot[]>([])
   const [busy,setBusy] = useState(false)
   const [error,setError] = useState('')
@@ -28,7 +28,10 @@ export function DrumSampleEditor() {
   async function refresh() {
     const rows = await window.tiles.usb.command('SAMPLE LIST',true)
     const next = parseDrumSlots(rows)
-    if (mounted.current) setSlots(next)
+    if (mounted.current) {
+      setSlots(next)
+      onSlotsChange?.(next)
+    }
   }
   async function run(action: () => Promise<void>) {
     if (lock.current) return
@@ -111,6 +114,5 @@ export function DrumSampleEditor() {
         {!supported && <p className="snt-muted">Upload bridge not installed. Local preview remains available.</p>}
       </>}
     </div>}
-    <p className="snt-drum-note">Hardware playback uses TILES audio routing. Local preview uses your computer. Existing device audio cannot be downloaded; keep original WAV files.</p>
   </section>
 }

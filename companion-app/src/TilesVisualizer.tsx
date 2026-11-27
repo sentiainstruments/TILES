@@ -1,3 +1,5 @@
+import type { DrumSlot } from './drumSample'
+import { HardwareAudioMonitor } from './HardwareAudioMonitor'
 import { DrumSampleEditor } from './DrumSampleEditor'
 import { TilesAmbient } from './TilesAmbient'
 import { OPEN_MODE_EDITOR } from './modeNavigation'
@@ -171,10 +173,21 @@ function modePadPreview(mode: ModeId, pad: number, selected: Set<number>): {
   }
 }
 
+// Physical grid: columns 5–6, top to bottom, are sample slots 1–8.
+function drumSlotForPad(pad: number): number | null {
+  if (!Number.isInteger(pad) || pad < 1 || pad > 24) return null
+  const col = (pad - 1) % 6
+  return col < 4 ? null : Math.floor((pad - 1) / 6) * 2 + col - 3
+}
+
 export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSound?: (selection: SoundSelection) => void; onEditModeProject?: (target: ModeProjectTarget) => void } = {}) {
   const [standalonePreview] = useState(true)
   const [midiEnabled, setMidiEnabled] = useState(false)
   const midi = useTilesMidi(midiEnabled)
+  const [drumSlots, setDrumSlots] = useState<DrumSlot[]>([])
+  const [drumPadMessage, setDrumPadMessage] = useState('')
+  const [drumSyncBusy, setDrumSyncBusy] = useState(false)
+  const drumSyncLock = useRef(false)
   const [mirrorEnabled, setMirrorEnabled] = useState(true)
   const mirror = useDeviceMirror(mirrorEnabled)
   const hardware = mirrorEnabled ? mirror.snapshot : null
@@ -195,6 +208,18 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
   const [audioEnabled, setAudioEnabled] = useState(false)
   const [audioError, setAudioError] = useState('')
   const audioRequest = useRef(0)
+  const [hardwareMonitoring, setHardwareMonitoring] = useState(false)
+  const hardwareMonitoringRef = useRef(false)
+  function handleHardwareMonitoring(active: boolean) {
+    hardwareMonitoringRef.current = active
+    setHardwareMonitoring(active)
+    if (active) {
+      audioRequest.current++
+      setAudioEnabled(false)
+      stopLiveNotes()
+      stopAudition()
+    }
+  }
   const livePlayer = useRef<Preview | null>(null)
   const liveNotes = useRef(new Set<number>())
   const liveArmed = useRef(false)
@@ -220,6 +245,7 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
     liveArmed.current = false
   }
   async function toggleAudio() {
+    if (hardwareMonitoringRef.current) return
     const request = ++audioRequest.current
     if (audioEnabled) {
       setAudioEnabled(false)
@@ -249,6 +275,7 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
     liveArmed.current = false
   }, [])
   async function auditionSound(track: number, row: number) {
+    if (hardwareMonitoringRef.current) return
     stopAudition()
     const generation = auditionGeneration.current
     const selection = makeSelection(track)
@@ -604,7 +631,48 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
     if (play && occupied) void auditionSound(soundTrack, Math.floor((pad - 1) / 6))
   }
 
+  // Do not replay mirrored physical hits: firmware's drum mode already
+  // triggers its own sampler. Only explicit UI clicks send SAMPLE PLAY.
+  async function playDrumPad(slot: number) {
+    if (drumSyncLock.current) return
+    const sample = drumSlots.find(item => item.slot === slot)
+    if (sample && !sample.name) { setDrumPadMessage(`Slot ${slot} is empty.`); return }
+    try {
+      const reply = await window.tiles.usb.command(`SAMPLE PLAY ${slot} 100`)
+      if (reply.length !== 1 || reply[0] !== 'OK') throw new Error(reply.join(' ') || 'No reply')
+      setDrumPadMessage('')
+    } catch (error) { setDrumPadMessage(`Drum playback: ${String(error)}`) }
+  }
+  async function syncHardwareDrums() {
+    if (drumSyncLock.current) return
+    drumSyncLock.current = true
+    setDrumSyncBusy(true)
+    setDrumPadMessage('')
+    try {
+      // Existing diagnostic command; changes active mode, not the firmware.
+      const reply = await window.tiles.usb.command('TEST MODE drums')
+      if (reply.length !== 1 || reply[0] !== 'OK') throw new Error(reply.join(' ') || 'No reply')
+      stopLiveNotes()
+      stopAudition()
+      setActiveMode('drums')
+      setEditorMode('drums')
+      setView('play')
+      setNewModeSlot(null)
+      setSelectedPads(new Set())
+      setActivePad(null)
+      setDrumPadMessage('TILES accepted Drums mode. Play the right two columns on the physical board (first bank).')
+    } catch (error) { setDrumPadMessage(`Mode sync: ${String(error)}. Select Drums on the physical board instead.`) }
+    finally { drumSyncLock.current = false; setDrumSyncBusy(false) }
+  }
   function handlePad(pad: number) {
+    if (view === 'play' && activeMode === 'drums') {
+      const slot = drumSlotForPad(pad)
+      if (slot !== null && (mirror.status === 'hall' || mirror.status === 'mirror')) {
+        void playDrumPad(slot)
+        return
+      }
+      // Step pads retain the existing local preview behavior below.
+    }
     if (view === 'other') return
     if (view === 'sounds') {
       // A mouse click is itself an audio-unlocking gesture.
@@ -758,32 +826,7 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
       <div className={`tiles-device ${soundView ? 'tiles-sound-device' : ''}`} style={soundView ? { '--sound-track-color': trackColors[soundTrack-1] } as CSSProperties : undefined}>
         <div className="tiles-device-header" style={{ flexWrap: 'wrap', gap: 8 }}>
           <div className="tiles-midi-input" style={{ flexWrap: 'wrap' }}>
-            <button type="button" aria-pressed={mirrorEnabled}
-              title="Mirror physical USB pad positions; turn off for standalone preview"
-              onClick={() => setMirrorEnabled(value => !value)}>
-              {mirrorEnabled ? 'Mirror on' : 'Mirror off'}
-            </button>
-            <span className="tiles-midi-status" title={mirror.error || undefined} role="status">{mirrorStatus}</span>
-            <button type="button" aria-pressed={audioEnabled}
-              title="Enable local synth sound for hardware pads and melodic MIDI notes"
-              onClick={() => { void toggleAudio() }}>
-              {audioEnabled ? 'Audio on' : 'Enable audio'}
-            </button>
-            {audioError && <span role="alert" title={audioError}>Audio unavailable</span>}
-            <button type="button" aria-pressed={midiEnabled}
-              onClick={() => setMidiEnabled(value => !value)}>
-              {midiEnabled ? 'Disable MIDI' : 'Live MIDI'}
-            </button>
-            {midiEnabled && <>
-              <select aria-label="TILES MIDI input" value={midi.ports.some(port => port.id === midi.portId) ? midi.portId : ''}
-                onChange={event => midi.setPortId(event.currentTarget.value)}>
-                <option value="">{midi.ports.length ? 'Select MIDI port' : 'No TILES inputs'}</option>
-                {midi.ports.map(port => <option key={port.id} value={port.id}>{port.name || port.id}</option>)}
-              </select>
-              <span className="tiles-midi-status" title={midi.error || undefined} role="status">
-                {midi.error ? 'MIDI unavailable' : midi.opened ? 'MIDI connected' : !midi.ready ? 'Connecting…' : 'Select input'}
-              </span>
-            </>}
+            <HardwareAudioMonitor onActiveChange={handleHardwareMonitoring} />
           </div>
           <div className="tiles-buttons">
             {BUTTONS.map((button, index) => (
@@ -879,7 +922,9 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
             } else {
               const result = modePadPreview(activeMode, pad, selectedPads)
               baseColor = selectedPads.has(pad) ? dimColor(result.color, 1) : result.color
-              label = result.text
+              const drumSlot = activeMode === 'drums' ? drumSlotForPad(pad) : null
+              const drumSample = drumSlot === null ? undefined : drumSlots.find(item => item.slot === drumSlot)
+              label = drumSample ? (drumSample.name || `D${drumSlot} · Empty`) : result.text
               selected = selectedPads.has(pad)
             }
             const color = dimColor(baseColor, look['look.led_intensity_percent'] / 100)
@@ -1010,7 +1055,9 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
             </div>
           </div>
           <SchemaSettings key={editingMode.setting} onlyModeKey={editingMode.setting} />
-          {editorMode === 'drums' && <DrumSampleEditor />}
+          {editorMode === 'drums' && <>
+            <DrumSampleEditor onSlotsChange={setDrumSlots} />
+          </>}
         </aside>
       )}
     </div>
