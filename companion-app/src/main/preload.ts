@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld(
       reset: () => ipcRenderer.invoke('project:new'),
     },
     usb: {
+      uploadDrumSample: (sample: unknown) => ipcRenderer.invoke('usb:sample-upload', sample),
       list: () =>
         ipcRenderer.invoke('usb:list'),
 

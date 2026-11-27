@@ -25,28 +25,76 @@ function assertNoError(lines: string[], command: string) {
 
 function parseSchema(lines: string[]): Setting[] {
   assertNoError(lines, 'SCHEMA')
-  return lines.map(line => {
+
+  const entries: Setting[] = []
+
+  for (const line of lines) {
     const fields: Record<string, string> = {}
+
     for (const token of line.trim().split(/\s+/)) {
       const separator = token.indexOf('=')
-      if (separator > 0) fields[token.slice(0, separator)] = token.slice(separator + 1)
+
+      if (separator > 0) {
+        fields[token.slice(0, separator)] =
+          token.slice(separator + 1)
+      }
     }
+
     const id = Number(fields.id)
     const type = fields.type as SettingType
-    if (!fields.key || !Number.isInteger(id) || !TYPES.has(type) || fields.default === undefined) {
-      throw new Error(`Invalid SCHEMA entry: ${line}`)
+
+    if (
+      !fields.key ||
+      !fields.id ||
+      !Number.isInteger(id) ||
+      !TYPES.has(type) ||
+      fields.default === undefined
+    ) {
+      console.warn(
+        'Skipping incomplete SCHEMA entry:',
+        line
+      )
+      continue
     }
-    const min = fields.min === undefined ? undefined : Number(fields.min)
-    const max = fields.max === undefined ? undefined : Number(fields.max)
-    if ((min !== undefined && !Number.isFinite(min)) || (max !== undefined && !Number.isFinite(max))) {
-      throw new Error(`Invalid range in SCHEMA: ${line}`)
+
+    const min =
+      fields.min === undefined
+        ? undefined
+        : Number(fields.min)
+
+    const max =
+      fields.max === undefined
+        ? undefined
+        : Number(fields.max)
+
+    if (
+      (min !== undefined && !Number.isFinite(min)) ||
+      (max !== undefined && !Number.isFinite(max))
+    ) {
+      console.warn(
+        'Skipping invalid SCHEMA range:',
+        line
+      )
+      continue
     }
-    return {
-      id, key: fields.key, type, defaultValue: fields.default,
-      persist: fields.persist !== '0', min, max,
+
+    if (entries.some(entry => entry.key === fields.key)) {
+      continue
+    }
+
+    entries.push({
+      id,
+      key: fields.key,
+      type,
+      defaultValue: fields.default,
+      persist: fields.persist !== '0',
+      min,
+      max,
       options: fields.values?.split('|'),
-    }
-  }).filter((entry, i, entries) => entries.findIndex(other => other.key === entry.key) === i)
+    })
+  }
+
+  return entries
 }
 
 function parseValues(lines: string[]) {
@@ -182,6 +230,5 @@ export function SchemaSettings({ onlyModeKey }: { onlyModeKey?: string } = {}) {
         </div>)}
       </div>}
     </section>)}
-    {!loading && schema.length > 0 && <small className="snt-schema-count">{schema.length} settings reported by firmware. Persistence depends on the setting and firmware.</small>}
   </section>
 }

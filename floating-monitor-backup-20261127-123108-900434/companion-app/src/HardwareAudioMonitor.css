@@ -1,0 +1,14 @@
+.snt-hw-monitor { margin: 10px 0 14px; padding: 10px 12px; background: #142033b3; border: 1px solid #536883; border-radius: 8px; display: grid; gap: 8px; text-align: left; color: #dce7f6; font-size: 12px; }
+.snt-hw-monitor-heading,.snt-hw-monitor-input,.snt-hw-volume { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.snt-hw-monitor-heading strong { margin-right: auto; font-size: 13px; }
+.snt-hw-monitor-heading span,.snt-hw-monitor small { color: #aabbd1; }
+.snt-hw-monitor button,.snt-hw-monitor select { border: 1px solid #536883; border-radius: 5px; color: #dce7f6; background: #1e3047; padding: 5px 9px; font: inherit; min-height: 28px; }
+.snt-hw-monitor button[disabled],.snt-hw-monitor select[disabled] { opacity: .5; cursor: not-allowed; }
+.snt-hw-monitor select { flex: 1; min-width: 135px; }
+.snt-hw-meter { display: grid; gap: 5px; }
+.snt-hw-meter > div { display: flex; align-items: center; gap: 7px; }
+.snt-hw-meter > div > span { width: 10px; }
+.snt-hw-meter-track { flex: 1; height: 7px; background: #304158; border-radius: 3px; overflow: hidden; }
+.snt-hw-meter-track > div { height: 100%; background: linear-gradient(90deg,#51c7a2 0%,#51c7a2 65%,#e5c15e 86%,#f37a8a 100%); transition: width 60ms linear; }
+.snt-hw-volume input { flex: 1; accent-color: #ff49db; }
+.snt-hw-monitor .snt-hw-error { color: #ffb0bb; overflow-wrap: anywhere; }

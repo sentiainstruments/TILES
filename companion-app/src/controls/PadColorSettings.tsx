@@ -82,53 +82,53 @@ export function PadColorSettings<S extends DeviceSetting>({
         </div>
       )}
 
-{other.length > 0 && (
-  <div className="snt-schema-grid snt-other-colors">
-    {other.map(setting => (
-      <div
-        key={setting.key}
-        className={
-          setting.key === 'color.custom_pads'
-            ? 'snt-custom-pad-cell'
-            : ''
-        }
-      >
-        {renderSetting(setting)}
-
-        {setting.key === 'color.custom_pads' &&
-          pads.length > 0 && (
-            <button
-              type="button"
-              className="snt-pad-palette-button"
-              title={`Customize individual pads (${overrides} overrides)`}
-              aria-label="Open Pad Color Editor"
-              aria-haspopup="dialog"
-              aria-expanded={editorOpen}
-              onClick={() => setEditorOpen(open => !open)}
+      {other.length > 0 && (
+        <div className="snt-schema-grid snt-other-colors">
+          {other.map(setting => (
+            <div
+              key={setting.key}
+              className={
+                setting.key === 'color.custom_pads'
+                  ? 'snt-custom-pad-cell'
+                  : ''
+              }
             >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M12 3a9 9 0 1 0 0 18h1.5a1.5 1.5 0 0 0 1.1-2.5 1.5 1.5 0 0 1 1.1-2.5H18a3 3 0 0 0 3-3c0-5.5-4-10-9-10Z" />
-                <circle cx="7.5" cy="12" r="1" />
-                <circle cx="10" cy="7.5" r="1" />
-                <circle cx="15" cy="7.5" r="1" />
-                <circle cx="17.5" cy="12" r="1" />
-              </svg>
-            </button>
-          )}
-      </div>
-    ))}
-  </div>
-)}
+              {renderSetting(setting)}
+
+              {setting.key === 'color.custom_pads' &&
+                pads.length > 0 && (
+                  <button
+                    type="button"
+                    className="snt-pad-palette-button"
+                    title={`Customize individual pads (${overrides} overrides)`}
+                    aria-label="Open Pad Color Editor"
+                    aria-haspopup="dialog"
+                    aria-expanded={editorOpen}
+                    onClick={() => setEditorOpen(open => !open)}
+                  >
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12 3a9 9 0 1 0 0 18h1.5a1.5 1.5 0 0 0 1.1-2.5 1.5 1.5 0 0 1 1.1-2.5H18a3 3 0 0 0 3-3c0-5.5-4-10-9-10Z" />
+                      <circle cx="7.5" cy="12" r="1" />
+                      <circle cx="10" cy="7.5" r="1" />
+                      <circle cx="15" cy="7.5" r="1" />
+                      <circle cx="17.5" cy="12" r="1" />
+                    </svg>
+                  </button>
+                )}
+            </div>
+          ))}
+        </div>
+      )}
 
 
       {pads.length > 0 && editorOpen && (

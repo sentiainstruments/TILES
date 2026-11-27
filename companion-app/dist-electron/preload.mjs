@@ -7,6 +7,7 @@ electron.contextBridge.exposeInMainWorld("tiles", {
 		reset: () => electron.ipcRenderer.invoke("project:new")
 	},
 	usb: {
+		uploadDrumSample: (sample) => electron.ipcRenderer.invoke("usb:sample-upload", sample),
 		list: () => electron.ipcRenderer.invoke("usb:list"),
 		connect: (vendorId, productId) => electron.ipcRenderer.invoke("usb:connect", vendorId, productId),
 		disconnect: () => electron.ipcRenderer.invoke("usb:disconnect"),

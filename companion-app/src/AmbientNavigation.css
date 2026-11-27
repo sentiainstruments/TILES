@@ -1,50 +1,141 @@
-/* Additive: preserves SentiaTheme, existing routing, pad colors and layout. */
 #root > main > nav > button:has(> .snt-workspace-icon),
-#root:has(.device-settings-page) > main > nav > button:has(> .snt-workspace-icon) {
+#root:has(.device-settings-page) > main > nav > button:has(> .snt-workspace-icon),
+#root .snt-mode-preview-action > button:has(> .snt-workspace-icon) {
   --workspace-led: var(--sentia-control, #ff54eb);
+  --workspace-size: 46px;
+
   display: inline-grid;
   place-items: center;
-  width: 46px;
-  height: 46px;
-  min-width: 46px;
-  flex: 0 0 46px;
+  width: var(--workspace-size);
+  height: var(--workspace-size);
+  min-width: var(--workspace-size);
+  flex: 0 0 var(--workspace-size);
   aspect-ratio: 1;
   padding: 0;
   box-sizing: border-box;
   border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--workspace-led) 54%, #394c69);
+
+  border: 1px solid color-mix(
+    in srgb,
+    var(--workspace-led) 54%,
+    #394c69
+  );
+
   background: var(--sentia-recess, #101a2d);
   color: var(--sentia-ice, #dce9fc);
   box-shadow: inset 0 0 8px #0008;
-  transition: background 140ms, border-color 140ms, box-shadow 140ms, color 140ms;
+  cursor: pointer;
+
+  transition:
+    background 140ms,
+    border-color 140ms,
+    box-shadow 140ms,
+    color 140ms;
 }
-#root > main > nav > button:has(> [data-workspace='project']) { --workspace-led: #779bff; }
-#root > main > nav > button:has(> [data-workspace='device']) { --workspace-led: #ff54eb; }
-#root > main > nav > button:has(> [data-workspace='synth']) { --workspace-led: #a38aff; }
-#root > main > nav > button:has(> .snt-workspace-icon):hover:not(:disabled) {
+
+/* Compact workspace buttons */
+#root .snt-mode-preview-action > button:has(> .snt-workspace-icon) {
+  --workspace-size: 34px;
+  border-radius: 6px;
+}
+
+.snt-mode-preview-action .snt-workspace-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Workspace LED colors */
+#root > main > nav > button:has(> [data-workspace='project']) {
+  --workspace-led: #779bff;
+}
+
+#root > main > nav > button:has(> [data-workspace='device']) {
+  --workspace-led: #ff54eb;
+}
+
+#root > main > nav > button:has(> [data-workspace='synth']) {
+  --workspace-led: #a38aff;
+}
+
+/* Hover */
+#root > main > nav > button:has(> .snt-workspace-icon):hover:not(:disabled),
+#root .snt-mode-preview-action > button:has(> .snt-workspace-icon):hover:not(:disabled) {
   color: var(--workspace-led);
   border-color: var(--workspace-led);
-  box-shadow: inset 0 0 10px color-mix(in srgb, var(--workspace-led) 17%, transparent);
+
+  box-shadow: inset 0 0 10px color-mix(
+    in srgb,
+    var(--workspace-led) 17%,
+    transparent
+  );
 }
+
+/* Active state */
 #root > main > nav > button:has(> .snt-workspace-icon)[aria-current='page'],
 #root > main > nav > button:has(> .snt-workspace-icon)[aria-selected='true'],
 #root > main > nav > button:has(> .snt-workspace-icon).active,
-#root > main > nav > button:has(> .snt-workspace-icon).selected {
-  background: color-mix(in srgb, var(--workspace-led) 13%, var(--sentia-recess, #101a2d));
+#root > main > nav > button:has(> .snt-workspace-icon).selected,
+#root .snt-mode-preview-action > button:has(> .snt-workspace-icon):active:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--workspace-led) 13%,
+    var(--sentia-recess, #101a2d)
+  );
+
   color: var(--workspace-led);
   border-color: var(--workspace-led);
-  box-shadow: inset 0 0 9px color-mix(in srgb, var(--workspace-led) 34%, transparent),
-    0 0 8px color-mix(in srgb, var(--workspace-led) 28%, transparent);
+
+  box-shadow:
+    inset 0 0 9px color-mix(
+      in srgb,
+      var(--workspace-led) 34%,
+      transparent
+    ),
+    0 0 8px color-mix(
+      in srgb,
+      var(--workspace-led) 28%,
+      transparent
+    );
 }
-#root > main > nav > button:has(> .snt-workspace-icon):focus-visible {
+
+/* Keyboard focus */
+#root > main > nav > button:has(> .snt-workspace-icon):focus-visible,
+#root .snt-mode-preview-action > button:has(> .snt-workspace-icon):focus-visible {
   outline: 2px solid var(--sentia-ice, #fff);
   outline-offset: 3px;
 }
-.snt-workspace-icon { display: inline-grid; place-items: center; }
-.snt-workspace-icon svg { display: block; }
+
+/* Disabled */
+#root .snt-mode-preview-action > button:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.snt-workspace-icon {
+  display: inline-grid;
+  place-items: center;
+}
+
+.snt-workspace-icon svg {
+  display: block;
+}
+
 .snt-workspace-sr-label {
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #root .snt-mode-preview-action > button:has(> .snt-workspace-icon) {
+    transition: none;
+  }
 }
 /* Confined to simulator card; no parent overflow clipping (floating panels stay usable). */
 #root .snt-preview-panel { position: relative; isolation: isolate; }

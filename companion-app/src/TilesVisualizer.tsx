@@ -1,3 +1,6 @@
+import type { DrumSlot } from './drumSample'
+import { HardwareAudioMonitor } from './HardwareAudioMonitor'
+import { DrumSampleEditor } from './DrumSampleEditor'
 import { TilesAmbient } from './TilesAmbient'
 import { OPEN_MODE_EDITOR } from './modeNavigation'
 import type { ModeProjectTarget } from './modeNavigation'
@@ -8,12 +11,15 @@ import { factoryScale, makeScaleLibrary, parseScaleList } from './scalePicker'
 import type { FactoryOverrides } from './scalePicker'
 import { useEffect, useRef, useState } from 'react'
 import { Preview } from './synth/preview'
-import { pageColors, fxNames, fxColors, trackColors, previewNotes, modeTrack, slotAt, slotPage, wrap, slotName, selectedSlot, selectSlot, getEffects, setEffect as setTrackEffect, effectValue, isSaved, editSelection, makeSelection, hasArchive, hasFactory, archivedName, removeVirtualPreset, restoreVirtualPreset, restoreFactory, exactFactory } from './synth/soundMenu'
+import { pageColors, fxNames, fxColors, trackColors, previewNotes, modeTrack, slotAt, slotPage, wrap, slotName, selectedSlot, selectSlot, getEffects, setEffect as setTrackEffect, effectValue, isSaved, editSelection, makeSelection, hasFactory, restoreFactory } from './synth/soundMenu'
 import type { SoundSelection } from './synth/soundMenu'
 import type { CSSProperties } from 'react'
 import './TilesVisualizer.css'
 import { MelodicEditor } from './MelodicEditor'
 import { getMelodicPadInfo } from './melodicNoteMap'
+import { useTilesMidi } from './useTilesMidi'
+import { useDeviceMirror } from './useDeviceMirror'
+import { WorkspaceIcon } from './WorkspaceIcon'
 
 type ColorRole = 'root' | 'fifth' | 'third' | 'note' | 'accidental'
 type PreviewMode = 'press' | 'primary' | 'secondary'
@@ -167,14 +173,58 @@ function modePadPreview(mode: ModeId, pad: number, selected: Set<number>): {
   }
 }
 
+// Physical grid: columns 5–6, top to bottom, are sample slots 1–8.
+function drumSlotForPad(pad: number): number | null {
+  if (!Number.isInteger(pad) || pad < 1 || pad > 24) return null
+  const col = (pad - 1) % 6
+  return col < 4 ? null : Math.floor((pad - 1) / 6) * 2 + col - 3
+}
+
 export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSound?: (selection: SoundSelection) => void; onEditModeProject?: (target: ModeProjectTarget) => void } = {}) {
   const [standalonePreview] = useState(true)
+  const [midiEnabled, setMidiEnabled] = useState(false)
+  const midi = useTilesMidi(midiEnabled)
+  const [drumSlots, setDrumSlots] = useState<DrumSlot[]>([])
+  const [drumPadMessage, setDrumPadMessage] = useState('')
+  const [drumSyncBusy, setDrumSyncBusy] = useState(false)
+  const drumSyncLock = useRef(false)
+  const [mirrorEnabled, setMirrorEnabled] = useState(true)
+  const mirror = useDeviceMirror(mirrorEnabled)
+  const hardware = mirrorEnabled ? mirror.snapshot : null
+  const deviceReady = mirror.status === 'hall' || mirror.status === 'mirror' || mirror.status === 'simulator'
+  const mirrorStatus = mirror.status === 'hall' ? 'USB: pads only' : mirror.status === 'mirror'
+    ? (hardware?.view === 'other' ? 'USB: unsupported view' : 'USB: live mirror')
+    : mirror.status === 'simulator' ? 'Simulator' : mirror.status === 'checking' ? 'Connecting…'
+    : mirror.status === 'unavailable' ? 'USB unavailable' : 'Preview' 
   const [soundTrack, setSoundTrack] = useState(2)
   const [soundPage, setSoundPage] = useState(0)
   const [soundRevision, setSoundRevision] = useState(0)
-  const [soundMessage, setSoundMessage] = useState('Select a pad to edit or create a preset.')
-  const [manageSlot,setManageSlot]=useState<number|null>(null)
+
+  const [soundEditorSlot, setSoundEditorSlot] = useState<number | null>(null)
   useEffect(()=>{const changed=()=>setSoundRevision(n=>n+1);window.addEventListener('tiles:sim-presets-changed',changed);return()=>window.removeEventListener('tiles:sim-presets-changed',changed)},[])
+  // One user gesture unlocks the existing preview AudioContext. Use a
+  // separate voice bank for held MIDI notes so preset audition timers cannot
+  // release a live melodic voice.
+  const [audioEnabled, setAudioEnabled] = useState(false)
+  const [audioError, setAudioError] = useState('')
+  const audioRequest = useRef(0)
+  const [hardwareMonitoring, setHardwareMonitoring] = useState(false)
+  const hardwareMonitoringRef = useRef(false)
+  function handleHardwareMonitoring(active: boolean) {
+    hardwareMonitoringRef.current = active
+    setHardwareMonitoring(active)
+    if (active) {
+      audioRequest.current++
+      setAudioEnabled(false)
+      stopLiveNotes()
+      stopAudition()
+    }
+  }
+  const livePlayer = useRef<Preview | null>(null)
+  const liveNotes = useRef(new Set<number>())
+  const liveArmed = useRef(false)
+  const soundPadLatch = useRef({ context: '', armed: false, used: new Set<number>() })
+  const visualizerRef = useRef<HTMLElement | null>(null)
   const audition = useRef<Preview | null>(null)
   const auditionTimer = useRef<number | undefined>(undefined)
   const auditionGeneration = useRef(0)
@@ -189,7 +239,43 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
     audition.current?.close()
     audition.current = null
   }, [])
+  function stopLiveNotes() {
+    livePlayer.current?.panic()
+    liveNotes.current.clear()
+    liveArmed.current = false
+  }
+  async function toggleAudio() {
+    if (hardwareMonitoringRef.current) return
+    const request = ++audioRequest.current
+    if (audioEnabled) {
+      setAudioEnabled(false)
+      stopLiveNotes()
+      stopAudition()
+      return
+    }
+    setAudioError('')
+    try {
+      // Call enable from the click, before awaiting anything, for Chromium's
+      // autoplay/user activation policy. Keep the contexts for later presses.
+      const live = livePlayer.current ?? (livePlayer.current = new Preview())
+      const sample = audition.current ?? (audition.current = new Preview())
+      await Promise.all([live.enable(), sample.enable()])
+      if (request !== audioRequest.current) return
+      setAudioEnabled(true)
+      setMidiEnabled(true)
+    } catch (error) {
+      if (request === audioRequest.current) setAudioError(String(error))
+    }
+  }
+  useEffect(() => () => {
+    audioRequest.current++
+    livePlayer.current?.close()
+    livePlayer.current = null
+    liveNotes.current.clear()
+    liveArmed.current = false
+  }, [])
   async function auditionSound(track: number, row: number) {
+    if (hardwareMonitoringRef.current) return
     stopAudition()
     const generation = auditionGeneration.current
     const selection = makeSelection(track)
@@ -201,9 +287,8 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
       const note = previewNotes[row]
       player.noteOn(note, selection.record, 100 / 127)
       auditionTimer.current = window.setTimeout(() => player.noteOff(note), 600)
-      setSoundMessage(`${slotName(selection.slot)} · local audio approximation`)
     } catch (error) {
-      if (generation === auditionGeneration.current) setSoundMessage(`Audio unavailable: ${String(error)}`)
+      if (generation === auditionGeneration.current) console.warn('Could not audition sound', error)
     }
   }
 
@@ -222,7 +307,8 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
   const [activePad, setActivePad] = useState<number | null>(null)
   const [previewMode] = useState<PreviewMode>('press')
   const [previewPressed] = useState(false)
-  const [activeMode, setActiveMode] = useState<ModeId>('melodic')
+  const [previewActiveMode, setActiveMode] = useState<ModeId>('melodic')
+  const activeMode: ModeId = hardware?.mode ?? previewActiveMode
   const [editorMode, setEditorMode] = useState<ModeId>('melodic')
   const [newModeSlot, setNewModeSlot] = useState<number | null>(null)
   const [newModeName, setNewModeName] = useState('')
@@ -232,7 +318,15 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
     function open(event: Event) {
       const key = (event as CustomEvent<string>).detail
       const found = MODES.find(candidate => candidate.setting === key)
+
       if (!found) return
+
+      setView(current =>
+        current === 'sounds' || current === 'effects'
+          ? 'modes'
+          : current
+      )
+
       setNewModeSlot(null)
       setEditorMode(found.id)
       setEditorRequest(n => n + 1)
@@ -243,7 +337,8 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
   useEffect(() => {
     if (editorRequest) editorAnchor.current?.scrollIntoView({ block: 'nearest', behavior: 'auto' })
   }, [editorRequest])
-  const [view, setView] = useState<ViewId>('play')
+  const [previewView, setView] = useState<ViewId>('play')
+  const view = hardware?.view ?? previewView
   const [modeSettings, setModeSettings] = useState<Record<string, string>>({})
   const [shiftArmed, setShiftArmed] = useState(false)
   const [octave, setOctave] = useState(0)
@@ -253,7 +348,58 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
   const [, setDrumPage] = useState(1)
   const [selectedPads, setSelectedPads] = useState<Set<number>>(new Set())
 
+  // Old firmware exposes physical pad depth but not the active menu.
+  // Only interpret presses as mode selections when the local menu is open.
+  const hallMenu = useRef<{ armed: boolean; pending: ModeId | null }>({ armed: false, pending: null })
   useEffect(() => {
+    const state = hallMenu.current
+    if (!mirrorEnabled || mirror.status !== 'hall' || view !== 'modes') {
+      state.armed = false
+      state.pending = null
+      return
+    }
+    // Require a clean release on entering the menu so a held note cannot select a mode.
+    if (!state.armed) {
+      if (mirror.activePads.size === 0) state.armed = true
+      return
+    }
+    if (state.pending !== null) {
+      if (mirror.activePads.size !== 0) return
+      const picked = state.pending
+      state.pending = null
+      state.armed = false
+      setActiveMode(picked)
+      setEditorMode(picked)
+      setNewModeSlot(null)
+      setSelectedPads(new Set())
+      setActivePad(null)
+      setShiftArmed(false)
+      setView('play')
+      return
+    }
+    // Same order and depth threshold as the firmware; ignore empty/disabled slots.
+    for (const pad of [...mirror.pressedPads].sort((a, b) => a - b)) {
+      const picked = padInModeMenu(pad)
+      if (!picked || (picked.setting && modeSettings[picked.setting] === '0')) continue
+      state.pending = picked.id
+      setEditorMode(picked.id)
+      setNewModeSlot(null)
+      break
+    }
+  }, [mirrorEnabled, mirror.status, mirror.activePads, mirror.pressedPads, view, modeSettings])
+
+  const hardwareMode = hardware?.mode
+  useEffect(() => {
+    if (!hardwareMode) return
+    setEditorMode(hardwareMode)
+    setNewModeSlot(null)
+    setActivePad(null)
+    setSelectedPads(new Set())
+  }, [hardwareMode])
+
+  useEffect(() => {
+    // App connects asynchronously; avoid issuing LIST/SCALES before it is ready.
+    if (mirrorEnabled && !deviceReady) return
     let cancelled = false
     async function loadSettings() {
       try {
@@ -321,7 +467,7 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
       window.removeEventListener('tiles:setting-changed', changed)
       window.removeEventListener('tiles:scales-changed', loadScales)
     }
-  }, [])
+  }, [mirrorEnabled, deviceReady])
 
   function modeEnabled(mode: Mode): boolean {
     return !mode.setting || modeSettings[mode.setting] !== '0'
@@ -329,12 +475,12 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
 
   useEffect(() => {
     const selected = MODES.find(candidate => candidate.id === activeMode)
-    if (selected?.setting && modeSettings[selected.setting] === '0') {
+    if (!hardwareMode && selected?.setting && modeSettings[selected.setting] === '0') {
       setActiveMode('melodic')
       setView('play')
       setSelectedPads(new Set())
     }
-  }, [activeMode, modeSettings])
+  }, [activeMode, modeSettings, hardwareMode])
 
   const mode = MODES.find(m => m.id === activeMode) ?? MODES[0]
   const editingMode = MODES.find(m => m.id === editorMode) ?? MODES[0]
@@ -368,19 +514,59 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
 
   const soundView = view === 'sounds' || view === 'effects'
   const chosenSlot = selectedSlot(soundTrack)
+  const editingSoundSlot = soundEditorSlot ?? chosenSlot
+  const editingSoundName = slotName(editingSoundSlot)
   // The revision triggers a repaint of the app-session simulator store.
   const soundFx = getEffects(soundTrack)
+  function changeSoundTrack(track: number) {
+    stopAudition()
+    setSoundTrack(track)
+    setSoundPage(slotPage(selectedSlot(track)))
+    setSoundEditorSlot(null)
+
+  }
+
   function openSoundView(next: 'sounds' | 'effects') {
     stopAudition()
+    setSoundEditorSlot(null)
     if (view === next) { setView('play'); return }
-    const t = modeTrack(activeMode)
-    setSoundTrack(t)
-    setSoundPage(slotPage(selectedSlot(t)))
+    changeSoundTrack(soundView ? soundTrack : modeTrack(activeMode))
     setView(next)
-    setSoundMessage('Click a slot to edit or create a preset.')
+
   }
+
+  function editSelectedSound() {
+    if (!onEditSound) return
+    stopAudition()
+    onEditSound(editSelection(soundTrack, editingSoundSlot))
+  }
+
+  function auditionSelectedSound() {
+    if (!editingSoundName) return
+    if (selectedSlot(soundTrack) !== editingSoundSlot) {
+      if (!selectSlot(soundTrack, editingSoundSlot)) return
+      setSoundRevision(n => n + 1)
+    }
+    void auditionSound(soundTrack, Math.floor(((editingSoundSlot - 1) % 24) / 6))
+  }
+  function restoreSelectedSound() {
+    if (!hasFactory(editingSoundSlot)) return
+    if (!window.confirm(`Restore original factory sound in slot ${editingSoundSlot}?`)) return
+
+    stopAudition()
+    try {
+      restoreFactory(editingSoundSlot)
+      // Reload the factory sound and its effect defaults for the current track.
+      selectSlot(soundTrack, editingSoundSlot)
+    } catch (error) {
+      console.warn('Could not restore factory preset', error)
+    } finally {
+      setSoundRevision(n => n + 1)
+    }
+  }
+
   function handleButton(index: number) {
-    if (scaleEditorSlot !== null) return
+    if (hardware || scaleEditorSlot !== null) return
     if (index === 5) {
       // Circle is a held modifier on hardware. A click arms the *next*
       // combo in this mouse-operated preview, rather than faking a hold.
@@ -392,8 +578,7 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
       const delta = index === 1 ? 1 : -1
       if (view === 'effects' || shiftArmed) {
         const t = wrap(soundTrack - 1 + delta, 4) + 1
-        setSoundTrack(t)
-        setSoundPage(slotPage(selectedSlot(t)))
+        changeSoundTrack(t)
       } else setSoundPage(p => wrap(p + delta, 4))
       setShiftArmed(false)
       return
@@ -433,12 +618,65 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
     setShiftArmed(false)
   }
 
-  function handlePad(pad: number) {
-    if (view === 'sounds') {
-      const slot = slotAt(soundPage, pad)
+  function selectSoundPad(pad: number, play: boolean) {
+    const slot = slotAt(soundPage, pad)
+    stopAudition()
+    setSoundEditorSlot(slot)
+    const occupied = Boolean(slotName(slot))
+    if (occupied && selectedSlot(soundTrack) !== slot) {
+      if (!selectSlot(soundTrack, slot)) return
+    }
+    setSoundRevision(n => n + 1)
+    setEditorRequest(n => n + 1)
+    if (play && occupied) void auditionSound(soundTrack, Math.floor((pad - 1) / 6))
+  }
+
+  // Do not replay mirrored physical hits: firmware's drum mode already
+  // triggers its own sampler. Only explicit UI clicks send SAMPLE PLAY.
+  async function playDrumPad(slot: number) {
+    if (drumSyncLock.current) return
+    const sample = drumSlots.find(item => item.slot === slot)
+    if (sample && !sample.name) { setDrumPadMessage(`Slot ${slot} is empty.`); return }
+    try {
+      const reply = await window.tiles.usb.command(`SAMPLE PLAY ${slot} 100`)
+      if (reply.length !== 1 || reply[0] !== 'OK') throw new Error(reply.join(' ') || 'No reply')
+      setDrumPadMessage('')
+    } catch (error) { setDrumPadMessage(`Drum playback: ${String(error)}`) }
+  }
+  async function syncHardwareDrums() {
+    if (drumSyncLock.current) return
+    drumSyncLock.current = true
+    setDrumSyncBusy(true)
+    setDrumPadMessage('')
+    try {
+      // Existing diagnostic command; changes active mode, not the firmware.
+      const reply = await window.tiles.usb.command('TEST MODE drums')
+      if (reply.length !== 1 || reply[0] !== 'OK') throw new Error(reply.join(' ') || 'No reply')
+      stopLiveNotes()
       stopAudition()
-      if (onEditSound) { onEditSound(editSelection(soundTrack,slot)); setSoundRevision(n=>n+1); setManageSlot(null) }
-      else if(selectSlot(soundTrack,slot)){setSoundRevision(n=>n+1);void auditionSound(soundTrack,Math.floor((pad-1)/6))}
+      setActiveMode('drums')
+      setEditorMode('drums')
+      setView('play')
+      setNewModeSlot(null)
+      setSelectedPads(new Set())
+      setActivePad(null)
+      setDrumPadMessage('TILES accepted Drums mode. Play the right two columns on the physical board (first bank).')
+    } catch (error) { setDrumPadMessage(`Mode sync: ${String(error)}. Select Drums on the physical board instead.`) }
+    finally { drumSyncLock.current = false; setDrumSyncBusy(false) }
+  }
+  function handlePad(pad: number) {
+    if (view === 'play' && activeMode === 'drums') {
+      const slot = drumSlotForPad(pad)
+      if (slot !== null && (mirror.status === 'hall' || mirror.status === 'mirror')) {
+        void playDrumPad(slot)
+        return
+      }
+      // Step pads retain the existing local preview behavior below.
+    }
+    if (view === 'other') return
+    if (view === 'sounds') {
+      // A mouse click is itself an audio-unlocking gesture.
+      selectSoundPad(pad, true)
       return
     }
     if (view === 'effects') {
@@ -498,20 +736,103 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
 
 
 
+  // USB pad IDs choose preset slots; a held pad must not repeatedly audition.
+  // On older firmware use the same pressure threshold as mode selection.
+  useEffect(() => {
+    const latch = soundPadLatch.current
+    const available = mirrorEnabled && (mirror.status === 'hall' || mirror.status === 'mirror')
+    const visible = Boolean(visualizerRef.current?.getClientRects().length)
+    const context = available && visible && view === 'sounds' ? `${soundTrack}:${soundPage}:${mirror.status}` : ''
+    if (latch.context !== context) {
+      latch.context = context
+      latch.armed = false
+      latch.used.clear()
+    }
+    if (!context) return
+    if (!latch.armed) {
+      if (mirror.activePads.size === 0) latch.armed = true
+      return
+    }
+    for (const pad of latch.used) if (!mirror.activePads.has(pad)) latch.used.delete(pad)
+    const pressed = mirror.status === 'hall' ? mirror.pressedPads : mirror.activePads
+    for (const pad of [...pressed].sort((a, b) => a - b)) {
+      if (latch.used.has(pad)) continue
+      latch.used.add(pad)
+      selectSoundPad(pad, audioEnabled)
+      // A preset audition is monophonic; select only one new pad per frame.
+      for (const other of pressed) latch.used.add(other)
+      break
+    }
+  })
+
+  // Use actual incoming MIDI pitches, not the simulated pad note mapping.
+  // MIDI and USB serve different purposes: sound vs. physical position.
+  useEffect(() => {
+    const player = livePlayer.current
+    const visible = Boolean(visualizerRef.current?.getClientRects().length)
+    if (!audioEnabled || !player || !visible || !midiEnabled || !midi.opened ||
+        view !== 'play' || activeMode !== 'melodic') {
+      if (liveArmed.current || liveNotes.current.size) stopLiveNotes()
+      return
+    }
+    const notes = new Set<number>()
+    for (let note = 0; note < 128; note++) if (midi.activeNotes.has(note)) notes.add(note)
+    if (!liveArmed.current) {
+      if (notes.size === 0) liveArmed.current = true
+      return
+    }
+    for (const note of liveNotes.current) {
+      if (!notes.has(note)) {
+        player.noteOff(note)
+        liveNotes.current.delete(note)
+      }
+    }
+    const selection = makeSelection(modeTrack('melodic'))
+    if (!selection) return
+    for (const note of notes) {
+      if (liveNotes.current.has(note)) continue
+      player.noteOn(note, selection.record, 100 / 127)
+      liveNotes.current.add(note)
+    }
+  })
+
+  // App keeps pages mounted when hidden. Stop audio on navigation, blur or
+  // hidden windows, without depending on a change to the parent App.tsx.
+  useEffect(() => {
+    const stop = () => { stopLiveNotes(); stopAudition() }
+    const onVisibility = () => { if (document.hidden) stop() }
+    const observer = new MutationObserver(() => {
+      if (!visualizerRef.current?.getClientRects().length) stop()
+    })
+    for (let el = visualizerRef.current?.parentElement; el; el = el.parentElement) {
+      observer.observe(el, { attributes: true, attributeFilter: ['style', 'hidden', 'class'] })
+    }
+    window.addEventListener('blur', stop)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('blur', stop)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [])
+
   return (
     <>
       <div className="snt-panel snt-preview-panel">
         <TilesAmbient />
-        <section className="tiles-visualizer">
+        <section className="tiles-visualizer" ref={visualizerRef}>
           <div className="tiles-preview-workspace">
         <div className="tiles-device-and-notes">
       <div className={`tiles-device ${soundView ? 'tiles-sound-device' : ''}`} style={soundView ? { '--sound-track-color': trackColors[soundTrack-1] } as CSSProperties : undefined}>
-        <div className="tiles-device-header">
-          <span className="tiles-brand"></span>
+        <div className="tiles-device-header" style={{ flexWrap: 'wrap', gap: 8 }}>
+          <div className="tiles-midi-input" style={{ flexWrap: 'wrap' }}>
+            <HardwareAudioMonitor onActiveChange={handleHardwareMonitoring} />
+          </div>
           <div className="tiles-buttons">
             {BUTTONS.map((button, index) => (
               <button key={button.symbol} type="button"
                 className={`tiles-function-button ${(index === 2 && view === 'modes') || (index === 3 && soundView) ? 'is-selected' : ''} ${index === 5 && shiftArmed ? 'is-selected' : ''}`}
+                disabled={hardware !== null}
                 onClick={() => handleButton(index)}
                 title={index === 3 && standalonePreview && activeMode !== 'sequencer' ? 'Sound Menu / circle + diamond: effects' : button.hint} aria-label={index === 3 && standalonePreview && activeMode !== 'sequencer' ? 'Diamond: Sound Menu' : `${button.name}: ${button.hint}`}
                 aria-pressed={(index === 2 && view === 'modes') || (index === 3 && soundView) || (index === 5 && shiftArmed)}>
@@ -549,19 +870,26 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
         <div className="tiles-pad-grid">
           {Array.from({ length: 24 }, (_, index) => {
             const pad = index + 1
-            const padInfo = getMelodicPadInfo(pad, layout, intervals, octave)
+            const padInfo = hardware && activeMode === 'melodic' ? hardware.pads[index] : getMelodicPadInfo(pad, layout, intervals, octave)
             const role = padInfo.role
             const override = padColors[String(pad).padStart(2, '0')]
             const isActive = activePad === pad
+            const isHardwareActive = mirrorEnabled && mirror.activePads.has(pad)
+            const isMidiActive = (!mirrorEnabled || mirror.status === 'simulator')
+              && midiEnabled && view === 'play' && activeMode === 'melodic'
+              && padInfo.midi !== null && midi.activeNotes.has(padInfo.midi)
             const menuMode = padInModeMenu(pad)
             const enabled = menuMode ? modeEnabled(menuMode) : false
             let baseColor = ''
             let label = String(pad)
             let selected = isActive
-            if (view === 'sounds') {
+            if (view === 'other') {
+              baseColor = '#242735'
+              selected = false
+            } else if (view === 'sounds') {
               const slot = slotAt(soundPage, pad)
               label = slotName(slot) || 'Empty'
-              selected = slot === chosenSlot && Boolean(slotName(slot))
+              selected = slot === editingSoundSlot
               baseColor = slotName(slot) ? pageColors[soundPage][Math.floor(index / 6)] : '#242735'
             } else if (view === 'effects') {
               const col = index % 6
@@ -594,25 +922,27 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
             } else {
               const result = modePadPreview(activeMode, pad, selectedPads)
               baseColor = selectedPads.has(pad) ? dimColor(result.color, 1) : result.color
-              label = result.text
+              const drumSlot = activeMode === 'drums' ? drumSlotForPad(pad) : null
+              const drumSample = drumSlot === null ? undefined : drumSlots.find(item => item.slot === drumSlot)
+              label = drumSample ? (drumSample.name || `D${drumSlot} · Empty`) : result.text
               selected = selectedPads.has(pad)
             }
             const color = dimColor(baseColor, look['look.led_intensity_percent'] / 100)
             return (
               <button key={pad} type="button"
                 className={`tiles-pad ${selected ? 'is-active' : ''} ${view === 'play' && activeMode === 'melodic' && selected ? 'is-edit-selected' : ''} ${view === 'modes' && selected ? 'is-current-mode' : ''} ${view === 'modes' && !menuMode ? (onEditModeProject ? 'tiles-mode-empty' : 'is-disabled-preview') : ''} ${view === 'modes' && menuMode && !enabled ? 'tiles-mode-off' : ''} ${view === 'scales' && scaleUploadsSupported && !scaleLibrary[pad - 1]?.intervals.length ? 'tiles-scale-empty' : ''}`}
+                data-midi-active={isHardwareActive || isMidiActive ? 'true' : undefined}
                 style={{ '--pad-color': color } as CSSProperties}
                 disabled={view === 'scales' ? (!scaleLibrary[pad - 1]?.intervals.length && !scaleUploadsSupported) : (view === 'modes' && !enabled && !onEditModeProject)}
                 data-empty={view==='sounds'&&!slotName(slotAt(soundPage,pad))?'true':undefined}
                 onContextMenu={e => {
-                  if (view === 'sounds') { e.preventDefault(); setManageSlot(slotAt(soundPage,pad)) }
-                  else if (view === 'modes' && menuMode && enabled) { e.preventDefault(); previewModeSelection(menuMode) }
+                  if (view === 'modes' && menuMode && enabled) { e.preventDefault(); previewModeSelection(menuMode) }
                 }}
                 title={view === 'scales' ? (scaleLibrary[pad - 1]?.intervals.length ? `Edit ${scaleLibrary[pad - 1].name}` : `Custom scale ${pad - 15}${scaleUploadsSupported ? ': create' : ': unavailable'}`) : (view === 'sounds' ? `Slot ${slotAt(soundPage,pad)} · ${label}` : view === 'effects' ? label : view === 'modes' ? (menuMode ? `${menuMode.name} · Open mode editor${enabled ? ' · Right-click to preview' : ' · Disabled'}` : onEditModeProject ? 'Name a new mode preset' : 'Unavailable')
                   : activeMode === 'melodic' ? `Pad ${pad} · ${padInfo.noteLabel} · ${role}`
                   : `Pad ${pad} · ${mode.name}`)}
                 aria-label={view === 'scales' ? (scaleLibrary[pad - 1]?.intervals.length ? `Edit ${scaleLibrary[pad - 1].name}` : `Custom scale ${pad - 15}${scaleUploadsSupported ? ': create' : ': unavailable'}`) : (view === 'sounds' ? `Preset ${slotAt(soundPage,pad)}: ${label}` : view === 'effects' ? label : view === 'modes' ? (menuMode ? `Open ${menuMode.name} mode editor` : 'New mode preset') : `Preview pad ${pad} in ${mode.name}`)}
-                aria-pressed={selected}
+                aria-pressed={selected || isHardwareActive || isMidiActive}
                 onKeyDown={event => {
                   if (view === 'modes' && menuMode && enabled && event.shiftKey && event.key === 'Enter') {
                     event.preventDefault(); previewModeSelection(menuMode)
@@ -626,39 +956,63 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
           })}
         </div>
       </div>
-      {soundView && <div className="tiles-sound-toolbar" data-revision={soundRevision}>
-        <div className="tiles-sound-nav">
-          <label>Track <select value={soundTrack} onChange={e => {
-            stopAudition(); const t = Number(e.currentTarget.value); setSoundTrack(t); setSoundPage(slotPage(selectedSlot(t)))
-          }}>{[1,2,3,4].map(t => <option key={t} value={t}>Track {t}</option>)}</select></label>
-          {view === 'sounds' && <label>Page <select value={soundPage} onChange={e => { stopAudition(); setSoundPage(Number(e.currentTarget.value)) }}>
-            {[0,1,2,3].map(p => <option key={p} value={p}>{p+1} · {p*24+1}–{p*24+24}</option>)}
-          </select></label>}
-          <button type="button" onClick={() => openSoundView(view === 'sounds' ? 'effects' : 'sounds')}>{view === 'sounds' ? 'Effects' : 'Sounds'}</button>
-        </div>
-        <strong>Track {soundTrack} · Slot {chosenSlot} · {slotName(chosenSlot)}</strong>
-        {view === 'effects' && <div className="tiles-fx-readout">{fxNames.map((fx,i) => <span key={fx}>{fx} {Math.round(soundFx[i]*100)}%</span>)}</div>}
-        <small role="status">{soundMessage}</small>
-        {view==='sounds'&&<>
-          <button type="button" disabled={!slotName(chosenSlot)} onClick={()=>void auditionSound(soundTrack,Math.floor(((chosenSlot-1)%24)/6))}>Audition current sound</button>
-          <label>Manage slot <select value={manageSlot??chosenSlot} onChange={e=>setManageSlot(Number(e.target.value))}>{Array.from({length:96},(_,i)=><option key={i} value={i+1}>{i+1} · {slotName(i+1)||'Empty'}</option>)}</select></label>
-          {(()=>{const s=manageSlot??chosenSlot;return <div className="tiles-sound-nav">
-            <button type="button" disabled={!slotName(s)} onClick={()=>{if(window.confirm(`Remove ${slotName(s)} from simulator slot ${s}? It will be archived for restoration.`)){stopAudition();try{removeVirtualPreset(s);setSoundRevision(n=>n+1);setSoundMessage(`Slot ${s} archived.`)}catch(e){setSoundMessage(String(e));setSoundRevision(n=>n+1)}}}}>Remove / archive</button>
-            <button type="button" disabled={!hasArchive(s)} onClick={()=>{if(slotName(s)&&!window.confirm(`Replace slot ${s} with its archived sound?`))return;try{restoreVirtualPreset(s);setSoundRevision(n=>n+1);setSoundMessage(`Restored slot ${s}.`)}catch(e){setSoundMessage(String(e));setSoundRevision(n=>n+1)}}}>Restore archived{hasArchive(s)?` (${archivedName(s)})`:''}</button>
-            <button type="button" disabled={!hasFactory(s)} onClick={()=>{if(!window.confirm(`Restore original factory sound in slot ${s}?`))return;try{restoreFactory(s);setSoundRevision(n=>n+1);setSoundMessage(`Factory slot ${s} restored.`)}catch(e){setSoundMessage(String(e));setSoundRevision(n=>n+1)}}}>Restore factory</button>
-          </div>})()}
-        </>}
-        <small>{exactFactory?'Development firmware factory records':'Partial factory preview records'} · simulator only · no hardware commands</small>
-      </div>}
-
-
         </div>
                 </div>
       </section>
     </div>
 
     <div className="snt-mode-editor-anchor" ref={editorAnchor}>
-      {newModeSlot !== null ? (
+         {soundView ? (
+          <aside className="snt-panel snt-sound-editor">
+            <div className="melodic-editor-heading">
+              <div className="snt-sound-editor-title">
+                <h3>
+                  {view === 'effects' ? 'Synth Effects' : editingSoundName || 'New sound preset'}
+                </h3>
+
+              </div>
+              {view === 'sounds' && (
+                <div className="snt-mode-preview-action">
+                  <button
+                    type="button"
+                    disabled={!editingSoundName}
+                    onClick={auditionSelectedSound}
+                    title="Audition current sound"
+                    aria-label="Audition current sound"
+                  >
+                    <WorkspaceIcon kind="speaker" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!onEditSound}
+                    onClick={editSelectedSound}
+                    title={editingSoundName ? 'Edit Preset' : 'Create Preset'}
+                    aria-label={editingSoundName ? 'Edit Preset' : 'Create Preset'}
+                  >
+                    <WorkspaceIcon kind="edit" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!hasFactory(editingSoundSlot)}
+                    onClick={restoreSelectedSound}
+                    title="Restore factory preset"
+                    aria-label="Restore factory preset"
+                  >
+                    <WorkspaceIcon kind="reset" />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="tiles-sound-toolbar" data-revision={soundRevision}>
+              <div className="tiles-sound-nav">
+
+                <button type="button" onClick={() => openSoundView(view === 'sounds' ? 'effects' : 'sounds')}>{view === 'sounds' ? 'Effects' : 'Sounds'}</button>
+              </div>
+
+             </div>
+          </aside>
+        ) : newModeSlot !== null ? (
         <aside className="melodic-editor snt-melodic-compact snt-mode-context" aria-label="New mode preset">
           <form onSubmit={event => { event.preventDefault(); editSelectedModePreset() }}>
             <div className="melodic-editor-heading">
@@ -681,11 +1035,29 @@ export function TilesVisualizer({ onEditSound, onEditModeProject }: { onEditSoun
           <div className="melodic-editor-heading">
             <h3>{editingMode.name}</h3>
             <div className="snt-mode-preview-action">
-              <button type="button" className="snt-subtle-button" disabled={!modeEnabled(editingMode)} onClick={() => previewModeSelection(editingMode)}>Preview mode</button>
-              <button type="button" className="snt-subtle-button" disabled={!onEditModeProject} onClick={editSelectedModePreset}>Edit Preset</button>
+              <button
+                type="button"
+                disabled={!modeEnabled(editingMode)}
+                onClick={() => previewModeSelection(editingMode)}
+                title="Preview Mode"
+              >
+                <WorkspaceIcon kind="preview" />
+              </button>
+
+              <button
+                type="button"
+                disabled={!onEditModeProject}
+                onClick={editSelectedModePreset}
+                title="Edit Preset"
+              >
+                <WorkspaceIcon kind="edit" />
+              </button>
             </div>
           </div>
           <SchemaSettings key={editingMode.setting} onlyModeKey={editingMode.setting} />
+          {editorMode === 'drums' && <>
+            <DrumSampleEditor onSlotsChange={setDrumSlots} />
+          </>}
         </aside>
       )}
     </div>

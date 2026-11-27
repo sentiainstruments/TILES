@@ -60,7 +60,6 @@ export function DeviceControl({ setting, label, value, busy, onUpdate,   onReset
       ) : (
         <label htmlFor={id}>{label}</label>
       )}
-      {!setting.persist && <span title="The device resets this setting on reboot">Session only</span>}
     </div>
     {setting.type === 'bool' && <button type="button" id={id}
       className={`snt-toggle ${value === '1' ? 'active' : ''}`} role="switch"

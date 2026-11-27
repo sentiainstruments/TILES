@@ -62,7 +62,7 @@
 .snt-system-message { background: #292d3b; border-radius: 8px; padding: 10px; }
 .snt-error { font-size: 12px; padding: 9px 11px; border: 1px solid #a85b6d; background: #402531; border-radius: 8px; color: #f8bac6; overflow-wrap: anywhere; margin-bottom: 12px; }
 .snt-control-stack { display: grid; gap: 15px; }
-.snt-device-control { display: grid; gap: 8px; }
+.snt-device-control { display: grid; gap: 6px; }
 .snt-device-control-heading { display: flex; align-items: center; justify-content: space-between; }
 .snt-device-control-heading label { font-size: 12px; color: #cfd0dd; }
 .snt-device-control-heading span { font-size: 10px; color: #8d92a8; }

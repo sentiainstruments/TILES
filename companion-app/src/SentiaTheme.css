@@ -73,7 +73,7 @@ body { background: var(--sentia-backdrop); background-attachment: fixed; }
 #root .snt-schema-settings .snt-schema-card { border-color: var(--sentia-line); }
 #root .snt-schema-settings .snt-device-control-heading label,
 #root .snt-schema-settings .snt-device-control-heading .snt-reset-label,
-.snt-floating-panel .snt-device-control-heading label { color: var(--sentia-muted); font-size: 12px; line-height: 1.4; }
+.snt-floating-panel .snt-device-control-heading label { color: var(--sentia-muted); font-size: 10px; line-height: 1.4; }
 #root .snt-schema-settings .snt-device-control-heading .snt-reset-label:hover:not(:disabled) { color: var(--sentia-control); }
 #root .snt-muted, #root .snt-schema-count, #root .snt-panel-title-row p, #root .snt-scales-details summary span,
 #root .snt-schema-meta small, #root .snt-device-control-heading span, #root .snt-curve-heading p,
@@ -164,3 +164,39 @@ body .snt-floating-titlebar .snt-floating-close:hover { background: #5c2858; }
 /* Keyboard visibility; do not replace the pad's color-coded focus styles. */
 #root :is(button,select,input,summary):focus-visible, .snt-floating-panel :is(button,select,input):focus-visible { outline: 2px solid var(--sentia-blue); outline-offset: 2px; }
 #root .tiles-pad:focus-visible { outline-color: #edf5ff; }
+/* Synth sound editor */
+
+#root .snt-mode-editor-anchor > .snt-sound-editor {
+  width: 100%;
+  min-width: 0;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+#root .snt-sound-editor .melodic-editor-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 0 10px;
+  margin: 0;
+  gap: 12px;
+  border-bottom: 1px solid var(--sentia-line);
+}
+
+#root .snt-sound-editor .melodic-editor-heading h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+#root .snt-sound-editor .tiles-sound-toolbar {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 14px 0 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
